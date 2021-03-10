@@ -5,6 +5,7 @@
 package authentication
 
 // User interface provides core user information
+//go:generate mockery --name=User --inpackage --case underscore
 type User interface {
 	// GetRoles returns the roles granted to the user.
 	GetRoles() []string
@@ -26,4 +27,17 @@ type User interface {
 
 	// IsCredentialsExpired indicates whether the user's credentials (password) has expired.
 	IsCredentialsExpired() bool
+}
+
+// PasswordSalt interface
+type PasswordSalt interface {
+	GetSalt() string
+	SaltPassword(password string, salt string) string
+}
+
+// UserPasswordSalt interface
+//go:generate mockery --name=UserPasswordSalt --inpackage --case underscore
+type UserPasswordSalt interface {
+	User
+	PasswordSalt
 }

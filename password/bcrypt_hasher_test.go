@@ -11,10 +11,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func TestBCryptEncoderEncode(t *testing.T) {
-	e := NewBCryptEncoder(10)
+func TestBCryptHasherHash(t *testing.T) {
+	e := NewBCryptHasher(10)
 
-	hash, err := e.Encode("foo")
+	hash, err := e.Hash("foo")
 	assert.NoError(t, err)
 
 	cost, err := bcrypt.Cost([]byte(hash))
@@ -24,4 +24,6 @@ func TestBCryptEncoderEncode(t *testing.T) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte("foo"))
 	assert.NoError(t, err)
+
+	assert.True(t, e.Verify(hash, "foo"))
 }

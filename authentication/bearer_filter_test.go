@@ -47,3 +47,16 @@ func TestBearerFilterWithBadAuthorizationType(t *testing.T) {
 	auth := FromContext(r.Context())
 	assert.Nil(t, auth)
 }
+
+func BenchmarkBearerFilter(b *testing.B) {
+	f := NewBearerFilter()
+
+	r := httptest.NewRequest(http.MethodGet, "/path", nil)
+	r.Header.Set("Authorization", "Bearer foo")
+
+	b.ResetTimer()
+
+	for n := 0; n < b.N; n++ {
+		r = f.OnFilter(r)
+	}
+}

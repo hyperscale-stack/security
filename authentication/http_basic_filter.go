@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var _ Filter = (*HTTPBasicFilter)(nil)
+
 // HTTPBasicFilter struct
 type HTTPBasicFilter struct {
 }

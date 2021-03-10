@@ -7,24 +7,23 @@ package authentication
 import (
 	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/hyperscale-stack/security/password"
 )
 
 // DaoProvider struct
 type DaoProvider struct {
-	passwordEncoder password.Encoder
-	userProvider    UserProvider
+	passwordHasher password.Hasher
+	userProvider   UserProvider
 }
 
 var _ Provider = (*DaoProvider)(nil)
 
 // NewDaoProvider constructor
-func NewDaoProvider(passwordEncoder password.Encoder, userProvider UserProvider) *DaoProvider {
+func NewDaoProvider(passwordHasher password.Hasher, userProvider UserProvider) *DaoProvider {
 	return &DaoProvider{
-		passwordEncoder: passwordEncoder,
-		userProvider:    userProvider,
+		passwordHasher: passwordHasher,
+		userProvider:   userProvider,
 	}
 }
 
@@ -47,12 +46,13 @@ func (p *DaoProvider) Authenticate(authentication Authentication) (Authenticatio
 		return authentication, fmt.Errorf("user provider failed: %w", err)
 	}
 
-	hash, err := p.passwordEncoder.Encode(auth.GetCredentials().(string))
-	if err != nil {
-		return authentication, fmt.Errorf("password encoder failed: %w", err)
+	userPassword := auth.GetCredentials().(string)
+
+	if us, ok := interface{}(user).(PasswordSalt); ok {
+		userPassword = us.SaltPassword(userPassword, us.GetSalt())
 	}
 
-	if !reflect.DeepEqual(user.GetPassword(), hash) {
+	if !p.passwordHasher.Verify(user.GetPassword(), userPassword) {
 		return authentication, errors.New("bad password")
 	}
 
