@@ -47,10 +47,8 @@ func (p *DaoAuthenticationProvider) Authenticate(creds credential.Credential) er
 		return fmt.Errorf("user provider failed: %w", err)
 	}
 
-	userPassword, ok := auth.GetCredentials().(string)
-	if !ok {
-		return ErrCredentialsMustStringType
-	}
+	//nolint:forcetypeassert
+	userPassword := auth.GetCredentials().(string)
 
 	if us, ok := interface{}(u).(user.PasswordSalt); ok {
 		userPassword = us.SaltPassword(userPassword, us.GetSalt())
