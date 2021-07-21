@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/http/header"
 	"github.com/rs/zerolog"
 )
@@ -62,7 +63,7 @@ func (f *HTTPBasicFilter) OnFilter(r *http.Request) *http.Request {
 		return r
 	}
 
-	token := NewUsernamePasswordAuthentication(username, password)
+	token := credential.NewUsernamePasswordCredential(username, password)
 
-	return r.WithContext(ToContext(ctx, token))
+	return r.WithContext(credential.ToContext(ctx, token))
 }

@@ -2,16 +2,17 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package authentication
+package credential
 
 import (
 	"testing"
 
+	"github.com/hyperscale-stack/security/user"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewUsernamePasswordAuthentication(t *testing.T) {
-	a := NewUsernamePasswordAuthentication("my-login", "my-password")
+func TestNewUsernamePasswordCredential(t *testing.T) {
+	a := NewUsernamePasswordCredential("my-login", "my-password")
 
 	assert.Equal(t, "my-login", a.GetPrincipal())
 
@@ -19,7 +20,11 @@ func TestNewUsernamePasswordAuthentication(t *testing.T) {
 
 	assert.False(t, a.IsAuthenticated())
 
+	userMock := &user.MockUser{}
+
 	a.SetAuthenticated(true)
+	a.SetUser(userMock)
 
 	assert.True(t, a.IsAuthenticated())
+	assert.Equal(t, userMock, a.GetUser())
 }

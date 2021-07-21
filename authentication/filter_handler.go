@@ -4,7 +4,11 @@
 
 package authentication
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/hyperscale-stack/security/authentication/credential"
+)
 
 // FilterHandler apply filters to http requests
 func FilterHandler(filters ...Filter) func(next http.Handler) http.Handler {
@@ -13,7 +17,7 @@ func FilterHandler(filters ...Filter) func(next http.Handler) http.Handler {
 			for _, filter := range filters {
 				r = filter.OnFilter(r)
 
-				if token := FromContext(r.Context()); token != nil {
+				if token := credential.FromContext(r.Context()); token != nil {
 					next.ServeHTTP(w, r)
 
 					return

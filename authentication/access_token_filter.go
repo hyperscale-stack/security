@@ -8,29 +8,23 @@ import (
 	"net/http"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
-	"github.com/hyperscale-stack/security/http/header"
 )
 
-// BearerFilter struct
-type BearerFilter struct {
+// AccessTokenFilter struct
+type AccessTokenFilter struct {
 }
 
-// NewBearerFilter constructor
-func NewBearerFilter() Filter {
-	return &BearerFilter{}
+// NewAccessTokenFilter constructor
+func NewAccessTokenFilter() Filter {
+	return &AccessTokenFilter{}
 }
 
 // OnFilter implements Filter
-func (f *BearerFilter) OnFilter(r *http.Request) *http.Request {
+func (f *AccessTokenFilter) OnFilter(r *http.Request) *http.Request {
 	ctx := r.Context()
 
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return r
-	}
-
-	creds, ok := header.ExtractAuthorizationValue("Bearer", auth)
-	if !ok {
+	creds := r.URL.Query().Get("access_token")
+	if creds == "" {
 		return r
 	}
 

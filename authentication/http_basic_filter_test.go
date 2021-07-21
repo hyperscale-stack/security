@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,9 +21,9 @@ func TestHTTPBasicFilter(t *testing.T) {
 
 	r = f.OnFilter(r)
 
-	auth := FromContext(r.Context())
+	auth := credential.FromContext(r.Context())
 
-	assert.IsType(t, &UsernamePasswordAuthentication{}, auth)
+	assert.IsType(t, &credential.UsernamePasswordCredential{}, auth)
 }
 
 func TestHTTPBasicFilterWithoutAuthorizationHeader(t *testing.T) {
@@ -32,7 +33,7 @@ func TestHTTPBasicFilterWithoutAuthorizationHeader(t *testing.T) {
 
 	r = f.OnFilter(r)
 
-	auth := FromContext(r.Context())
+	auth := credential.FromContext(r.Context())
 	assert.Nil(t, auth)
 }
 
@@ -44,7 +45,7 @@ func TestHTTPBasicFilterWithBadAuthorizationType(t *testing.T) {
 
 	r = f.OnFilter(r)
 
-	auth := FromContext(r.Context())
+	auth := credential.FromContext(r.Context())
 	assert.Nil(t, auth)
 }
 
@@ -56,7 +57,7 @@ func TestHTTPBasicFilterWithBadBase64(t *testing.T) {
 
 	r = f.OnFilter(r)
 
-	auth := FromContext(r.Context())
+	auth := credential.FromContext(r.Context())
 	assert.Nil(t, auth)
 }
 
@@ -68,7 +69,7 @@ func TestHTTPBasicFilterWithBadFormat(t *testing.T) {
 
 	r = f.OnFilter(r)
 
-	auth := FromContext(r.Context())
+	auth := credential.FromContext(r.Context())
 	assert.Nil(t, auth)
 }
 

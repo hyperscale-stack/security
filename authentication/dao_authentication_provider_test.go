@@ -8,17 +8,19 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/password"
+	"github.com/hyperscale-stack/security/user"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDaoProvider(t *testing.T) {
+func TestDaoAuthenticationProvider(t *testing.T) {
 	ph := password.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
 
-	u := &MockUser{}
+	u := &user.MockUser{}
 
 	u.On("GetPassword").Return(hash).Once()
 
@@ -26,29 +28,29 @@ func TestDaoProvider(t *testing.T) {
 
 	up.On("LoadUserByUsername", "foo").Return(u, nil).Once()
 
-	p := NewDaoProvider(ph, up)
+	p := NewDaoAuthenticationProvider(ph, up)
 
-	a := NewUsernamePasswordAuthentication("foo", "bar")
+	c := credential.NewUsernamePasswordCredential("foo", "bar")
 
-	assert.True(t, p.IsSupported(a))
+	assert.True(t, p.IsSupported(c))
 
-	b, err := p.Authenticate(a)
+	err = p.Authenticate(c)
 	assert.NoError(t, err)
 
-	assert.True(t, b.IsAuthenticated())
+	assert.True(t, c.IsAuthenticated())
 
 	u.AssertExpectations(t)
 
 	up.AssertExpectations(t)
 }
 
-func TestDaoProviderWithBadAuthentication(t *testing.T) {
+func TestDaoAuthenticationProviderWithBadAuthentication(t *testing.T) {
 	ph := password.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
 
-	u := &MockUser{}
+	u := &user.MockUser{}
 
 	u.On("GetPassword").Return(hash)
 
@@ -56,50 +58,50 @@ func TestDaoProviderWithBadAuthentication(t *testing.T) {
 
 	up.On("LoadUserByUsername", "foo").Return(u, nil)
 
-	p := NewDaoProvider(ph, up)
+	p := NewDaoAuthenticationProvider(ph, up)
 
-	a := NewTokenAuthentication("foo")
+	c := credential.NewTokenCredential("foo")
 
-	assert.False(t, p.IsSupported(a))
+	assert.False(t, p.IsSupported(c))
 
-	b, err := p.Authenticate(a)
+	err = p.Authenticate(c)
 	assert.EqualError(t, err, "bad authentication format")
 
-	assert.False(t, b.IsAuthenticated())
+	assert.False(t, c.IsAuthenticated())
 
 	u.AssertNotCalled(t, "GetPassword")
 
 	up.AssertNotCalled(t, "LoadUserByUsername")
 }
 
-func TestDaoProviderWithUserNotFound(t *testing.T) {
+func TestDaoAuthenticationProviderWithUserNotFound(t *testing.T) {
 	ph := password.NewBCryptHasher(5)
 
 	up := &MockUserProvider{}
 
 	up.On("LoadUserByUsername", "foo").Return(nil, errors.New("user not found")).Once()
 
-	p := NewDaoProvider(ph, up)
+	p := NewDaoAuthenticationProvider(ph, up)
 
-	a := NewUsernamePasswordAuthentication("foo", "bar")
+	c := credential.NewUsernamePasswordCredential("foo", "bar")
 
-	assert.True(t, p.IsSupported(a))
+	assert.True(t, p.IsSupported(c))
 
-	b, err := p.Authenticate(a)
+	err := p.Authenticate(c)
 	assert.EqualError(t, err, "user provider failed: user not found")
 
-	assert.False(t, b.IsAuthenticated())
+	assert.False(t, c.IsAuthenticated())
 
 	up.AssertExpectations(t)
 }
 
-func TestDaoProviderWithBadPassword(t *testing.T) {
+func TestDaoAuthenticationProviderWithBadPassword(t *testing.T) {
 	ph := password.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
 
-	u := &MockUser{}
+	u := &user.MockUser{}
 
 	u.On("GetPassword").Return(hash).Once()
 
@@ -107,29 +109,29 @@ func TestDaoProviderWithBadPassword(t *testing.T) {
 
 	up.On("LoadUserByUsername", "foo").Return(u, nil).Once()
 
-	p := NewDaoProvider(ph, up)
+	p := NewDaoAuthenticationProvider(ph, up)
 
-	a := NewUsernamePasswordAuthentication("foo", "bad")
+	c := credential.NewUsernamePasswordCredential("foo", "bad")
 
-	assert.True(t, p.IsSupported(a))
+	assert.True(t, p.IsSupported(c))
 
-	b, err := p.Authenticate(a)
+	err = p.Authenticate(c)
 	assert.EqualError(t, err, "bad password")
 
-	assert.False(t, b.IsAuthenticated())
+	assert.False(t, c.IsAuthenticated())
 
 	u.AssertExpectations(t)
 
 	up.AssertExpectations(t)
 }
 
-func TestDaoProviderWithUserPasswordSalt(t *testing.T) {
+func TestDaoAuthenticationProviderWithUserPasswordSalt(t *testing.T) {
 	ph := password.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar:$Oo$")
 	assert.NoError(t, err)
 
-	u := &MockUserPasswordSalt{}
+	u := &user.MockUserPasswordSalt{}
 
 	u.On("GetPassword").Return(hash).Once()
 
@@ -141,16 +143,16 @@ func TestDaoProviderWithUserPasswordSalt(t *testing.T) {
 
 	up.On("LoadUserByUsername", "foo").Return(u, nil)
 
-	p := NewDaoProvider(ph, up)
+	p := NewDaoAuthenticationProvider(ph, up)
 
-	a := NewUsernamePasswordAuthentication("foo", "bar")
+	c := credential.NewUsernamePasswordCredential("foo", "bar")
 
-	assert.True(t, p.IsSupported(a))
+	assert.True(t, p.IsSupported(c))
 
-	b, err := p.Authenticate(a)
+	err = p.Authenticate(c)
 	assert.NoError(t, err)
 
-	assert.True(t, b.IsAuthenticated())
+	assert.True(t, c.IsAuthenticated())
 
 	u.AssertExpectations(t)
 

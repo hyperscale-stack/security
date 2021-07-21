@@ -12,14 +12,15 @@ import (
 	"testing"
 
 	"github.com/gilcrest/alice"
+	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFilterHandlerWithAuthorizationBasic(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		auth := FromContext(r.Context())
+		auth := credential.FromContext(r.Context())
 
-		assert.IsType(t, &UsernamePasswordAuthentication{}, auth)
+		assert.IsType(t, &credential.UsernamePasswordCredential{}, auth)
 
 		io.WriteString(w, "OK")
 	}
@@ -44,9 +45,9 @@ func TestFilterHandlerWithAuthorizationBasic(t *testing.T) {
 
 func TestFilterHandlerWithAuthorizationBearer(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		auth := FromContext(r.Context())
+		auth := credential.FromContext(r.Context())
 
-		assert.IsType(t, &TokenAuthentication{}, auth)
+		assert.IsType(t, &credential.TokenCredential{}, auth)
 
 		io.WriteString(w, "OK")
 	}
@@ -71,7 +72,7 @@ func TestFilterHandlerWithAuthorizationBearer(t *testing.T) {
 
 func TestFilterHandlerWithoutAuthorizationHeader(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		auth := FromContext(r.Context())
+		auth := credential.FromContext(r.Context())
 
 		assert.Nil(t, auth)
 

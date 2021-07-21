@@ -13,21 +13,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBearerFilter(t *testing.T) {
-	f := NewBearerFilter()
+func TestAccessTokenFilter(t *testing.T) {
+	f := NewAccessTokenFilter()
 
-	r := httptest.NewRequest(http.MethodGet, "/path", nil)
-	r.Header.Set("Authorization", "Bearer foo")
+	r := httptest.NewRequest(http.MethodGet, "/path?access_token=foo", nil)
 
 	r = f.OnFilter(r)
 
 	auth := credential.FromContext(r.Context())
 
 	assert.IsType(t, &credential.TokenCredential{}, auth)
+	assert.Equal(t, "foo", auth.GetPrincipal())
 }
 
-func TestBearerFilterWithoutAuthorizationHeader(t *testing.T) {
-	f := NewBearerFilter()
+func TestAccessTokenFilterWithoutAccessTokenInQueryString(t *testing.T) {
+	f := NewAccessTokenFilter()
 
 	r := httptest.NewRequest(http.MethodGet, "/path", nil)
 
@@ -37,11 +37,10 @@ func TestBearerFilterWithoutAuthorizationHeader(t *testing.T) {
 	assert.Nil(t, auth)
 }
 
-func TestBearerFilterWithBadAuthorizationType(t *testing.T) {
-	f := NewBearerFilter()
+func TestAccessTokenFilterWithEmptyAccessTokenInQueryString(t *testing.T) {
+	f := NewAccessTokenFilter()
 
-	r := httptest.NewRequest(http.MethodGet, "/path", nil)
-	r.Header.Set("Authorization", "Basic Zm9vOnBhc3M=")
+	r := httptest.NewRequest(http.MethodGet, "/path?access_token=", nil)
 
 	r = f.OnFilter(r)
 
@@ -49,11 +48,10 @@ func TestBearerFilterWithBadAuthorizationType(t *testing.T) {
 	assert.Nil(t, auth)
 }
 
-func BenchmarkBearerFilter(b *testing.B) {
-	f := NewBearerFilter()
+func BenchmarkAccessTokenFilter(b *testing.B) {
+	f := NewAccessTokenFilter()
 
-	r := httptest.NewRequest(http.MethodGet, "/path", nil)
-	r.Header.Set("Authorization", "Bearer foo")
+	r := httptest.NewRequest(http.MethodGet, "/path?access_token=foo", nil)
 
 	b.ResetTimer()
 

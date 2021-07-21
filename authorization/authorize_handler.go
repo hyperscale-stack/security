@@ -2,27 +2,37 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package authentication
+package authorization
 
 import (
 	"net/http"
+
+	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
 // AuthorizeHandler check if user is authorize to access to resource
-func AuthorizeHandler() func(next http.Handler) http.Handler {
+func AuthorizeHandler(options ...Option) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := FromContext(r.Context())
-			if auth == nil {
-				http.Error(w, "Access denied", http.StatusForbidden)
+			creds := credential.FromContext(r.Context())
+			if creds == nil {
+				http.Error(w, "Access denied", http.StatusUnauthorized)
 
 				return
 			}
 
-			if !auth.IsAuthenticated() {
+			if !creds.IsAuthenticated() {
 				http.Error(w, "Access denied", http.StatusUnauthorized)
 
 				return
+			}
+
+			for _, opt := range options {
+				if !opt(creds) {
+					http.Error(w, "Access denied", http.StatusForbidden)
+
+					return
+				}
 			}
 
 			next.ServeHTTP(w, r)
