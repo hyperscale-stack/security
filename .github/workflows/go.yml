@@ -26,7 +26,10 @@ jobs:
       run: go build -race -v ./...
 
     - name: Test
-      run: go test -race -cover -coverprofile ./coverage.out ./...
+      run: |
+        go test -race -cover -coverprofile ./coverage.out.tmp ./...
+        cat ./coverage.out.tmp | grep -v '.pb.go' | grep -v 'mock_' > ./coverage.out
+        rm ./coverage.out.tmp
 
     - name: Run golangci-lint
       uses: golangci/golangci-lint-action@v2
