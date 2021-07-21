@@ -6,7 +6,7 @@ package credential
 
 import "github.com/hyperscale-stack/security/user"
 
-// TokenCredential struct
+// TokenCredential struct.
 type TokenCredential struct {
 	isAuthenticated bool
 	principal       interface{}
@@ -15,14 +15,14 @@ type TokenCredential struct {
 
 var _ Credential = (*TokenCredential)(nil)
 
-// NewTokenCredential constructor
+// NewTokenCredential constructor.
 func NewTokenCredential(t string) Credential {
 	return &TokenCredential{
 		principal: t,
 	}
 }
 
-// GetCredentials that prove the principal is correct, this is usually a password
+// GetCredentials that prove the principal is correct, this is usually a password.
 func (a *TokenCredential) GetCredentials() interface{} {
 	return nil
 }
@@ -34,22 +34,22 @@ func (a *TokenCredential) GetPrincipal() interface{} {
 	return a.principal
 }
 
-// IsAuthenticated returns true if token is authenticated
+// IsAuthenticated returns true if token is authenticated.
 func (a *TokenCredential) IsAuthenticated() bool {
 	return a.isAuthenticated
 }
 
-// SetAuthenticated change token to authenticated
+// SetAuthenticated change token to authenticated.
 func (a *TokenCredential) SetAuthenticated(isAuthenticated bool) {
 	a.isAuthenticated = isAuthenticated
 }
 
-// SetUser set user authenticated
+// SetUser set user authenticated.
 func (a *TokenCredential) SetUser(user user.User) {
 	a.user = user
 }
 
-// GetUser return authenticated
+// GetUser return authenticated.
 func (a *TokenCredential) GetUser() user.User {
 	return a.user
 }

@@ -23,8 +23,14 @@ coverage.out: $(shell find . -type f -print | grep -v vendor | grep "\.go")
 
 test: coverage.out
 
+.PHONY: lint
 lint:
-	@golangci-lint run
+ifeq (, $(shell which golangci-lint))
+	@echo "Install golangci-lint..."
+	@curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | sh -s -- -b ${GOPATH}/bin v1.41.1
+endif
+	@echo "lint..."
+	@golangci-lint run --timeout=300s ./...
 
 cover: coverage.out
 	@echo ""

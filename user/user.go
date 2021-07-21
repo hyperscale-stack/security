@@ -29,14 +29,15 @@ type User interface {
 	IsCredentialsExpired() bool
 }
 
-// PasswordSalt interface
+// PasswordSalt interface.
 type PasswordSalt interface {
 	GetSalt() string
 	SaltPassword(password string, salt string) string
 }
 
-// UserPasswordSalt interface
+// UserPasswordSalt interface.
 //go:generate mockery --name=UserPasswordSalt --inpackage --case underscore
+//nolint:golint
 type UserPasswordSalt interface {
 	User
 	PasswordSalt

@@ -10,7 +10,7 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
-// AuthorizeHandler check if user is authorize to access to resource
+// AuthorizeHandler check if user is authorize to access to resource.
 func AuthorizeHandler(options ...Option) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -13,7 +13,7 @@ type BCryptHasher struct {
 	cost int
 }
 
-// NewBCryptHasher constructor
+// NewBCryptHasher constructor.
 func NewBCryptHasher(cost int) Hasher {
 	return &BCryptHasher{
 		cost: cost,
@@ -27,7 +27,7 @@ func (e *BCryptHasher) Hash(password string) (string, error) {
 	return string(pwd), err
 }
 
-// Verify the hashed and clear password is equals
+// Verify the hashed and clear password is equals.
 func (e *BCryptHasher) Verify(hashed string, password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hashed), []byte(password))
 

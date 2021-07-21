@@ -7,6 +7,7 @@ package authentication
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -15,13 +16,15 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var ErrBadUsernamePasswordFormat = errors.New("bad username/password format")
+
 var _ Filter = (*HTTPBasicFilter)(nil)
 
-// HTTPBasicFilter struct
+// HTTPBasicFilter struct.
 type HTTPBasicFilter struct {
 }
 
-// NewHTTPBasicFilter constructor
+// NewHTTPBasicFilter constructor.
 func NewHTTPBasicFilter() Filter {
 	return &HTTPBasicFilter{}
 }
@@ -29,19 +32,20 @@ func NewHTTPBasicFilter() Filter {
 func (f HTTPBasicFilter) decodeCreds(creds string) (string, string, error) {
 	c, err := base64.StdEncoding.DecodeString(creds)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("base64 decode failed: %w", err)
 	}
 
 	cs := string(c)
 	s := strings.IndexByte(cs, ':')
+
 	if s < 0 {
-		return "", "", errors.New("bad username/password format")
+		return "", "", ErrBadUsernamePasswordFormat
 	}
 
 	return cs[:s], cs[s+1:], nil
 }
 
-// OnFilter implements Filter
+// OnFilter implements Filter.
 func (f *HTTPBasicFilter) OnFilter(r *http.Request) *http.Request {
 	ctx := r.Context()
 
@@ -60,6 +64,7 @@ func (f *HTTPBasicFilter) OnFilter(r *http.Request) *http.Request {
 	username, password, err := f.decodeCreds(creds)
 	if err != nil {
 		log.Error().Err(err).Msg("deocde http basic auth failed")
+
 		return r
 	}
 

@@ -19,8 +19,9 @@ linters-settings:
         check-blank: false
     govet:
         check-shadowing: false
-    golint:
-        min-confidence: 0.8
+    revive:
+        ignore-generated-header: true
+        severity: warning
     gofmt:
         simplify: true
     gocyclo:
@@ -32,34 +33,60 @@ linters-settings:
     goconst:
         min-len: 3
         min-occurrences: 2
-  # depguard:
-  #   list-type: blacklist
-  #   include-go-root: false
-  #   packages:
-  #     - github.com/davecgh/go-spew/spew
+    depguard:
+      list-type: blacklist
+      include-go-root: false
+      packages:
+        - github.com/davecgh/go-spew/spew
 
 linters:
     disable-all: true
     enable:
-        # deadcode currently fails with tests
-        # https://github.com/golangci/golangci-lint/issues/116
-        # - deadcode
-        #- depguard
+        - deadcode
+        - depguard
         - errcheck
         - gas
         - goconst
         - gocyclo
         - gofmt
-        - golint
+        - revive
         - govet
         - ineffassign
-        - interfacer
         - megacheck
         - misspell
         - structcheck
         - typecheck
         - unconvert
         - varcheck
+        - gosimple
+        - staticcheck
+        - unused
+        - asciicheck
+        - bodyclose
+        - dogsled
+        - dupl
+        - durationcheck
+        - errorlint
+        - exhaustive
+        - exportloopref
+        - forbidigo
+        - forcetypeassert
+        - gocritic
+        - godot
+        - goerr113
+        - gosec
+        - ifshort
+        - nestif
+        - nilerr
+        - nlreturn
+        - noctx
+        - prealloc
+        - predeclared
+        - sqlclosecheck
+        - tagliatelle
+        - whitespace
+        - wrapcheck
+        - wsl
     fast: false
 
 issues:

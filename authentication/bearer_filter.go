@@ -11,16 +11,16 @@ import (
 	"github.com/hyperscale-stack/security/http/header"
 )
 
-// BearerFilter struct
+// BearerFilter struct.
 type BearerFilter struct {
 }
 
-// NewBearerFilter constructor
+// NewBearerFilter constructor.
 func NewBearerFilter() Filter {
 	return &BearerFilter{}
 }
 
-// OnFilter implements Filter
+// OnFilter implements Filter.
 func (f *BearerFilter) OnFilter(r *http.Request) *http.Request {
 	ctx := r.Context()
 

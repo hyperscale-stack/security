@@ -10,16 +10,16 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
-// AccessTokenFilter struct
+// AccessTokenFilter struct.
 type AccessTokenFilter struct {
 }
 
-// NewAccessTokenFilter constructor
+// NewAccessTokenFilter constructor.
 func NewAccessTokenFilter() Filter {
 	return &AccessTokenFilter{}
 }
 
-// OnFilter implements Filter
+// OnFilter implements Filter.
 func (f *AccessTokenFilter) OnFilter(r *http.Request) *http.Request {
 	ctx := r.Context()
 

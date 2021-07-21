@@ -17,7 +17,7 @@ func FromContext(ctx context.Context) Credential {
 	return nil
 }
 
-// ToContext returns new context with Credential
+// ToContext returns new context with Credential.
 func ToContext(ctx context.Context, creds Credential) context.Context {
 	return context.WithValue(ctx, credentialCtxKey{}, creds)
 }

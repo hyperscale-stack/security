@@ -6,7 +6,7 @@ package authentication
 
 import "net/http"
 
-// Filter interface
+// Filter interface.
 type Filter interface {
 	OnFilter(r *http.Request) *http.Request
 }

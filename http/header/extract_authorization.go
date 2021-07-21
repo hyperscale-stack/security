@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ExtractAuthorizationValue returns the value without t
+// ExtractAuthorizationValue returns the value without t.
 func ExtractAuthorizationValue(t string, value string) (string, bool) {
 	prefix := t + " "
 

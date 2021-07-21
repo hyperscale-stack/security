@@ -6,7 +6,7 @@ package authorization
 
 import "github.com/hyperscale-stack/security/authentication/credential"
 
-// HasRole check if user has role
+// HasRole check if user has role.
 func HasRole(role string) Option {
 	return func(creds credential.Credential) bool {
 		user := creds.GetUser()

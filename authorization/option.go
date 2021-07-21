@@ -6,5 +6,5 @@ package authorization
 
 import "github.com/hyperscale-stack/security/authentication/credential"
 
-// Option type
+// Option type.
 type Option func(creds credential.Credential) bool

@@ -6,7 +6,7 @@ package credential
 
 import "github.com/hyperscale-stack/security/user"
 
-// Credential interface
+// Credential interface.
 type Credential interface {
 	GetPrincipal() interface{}
 	GetCredentials() interface{}

@@ -6,7 +6,7 @@ package credential
 
 import "github.com/hyperscale-stack/security/user"
 
-// UsernamePasswordCredential struct
+// UsernamePasswordCredential struct.
 type UsernamePasswordCredential struct {
 	isAuthenticated bool
 	credentials     interface{}
@@ -16,7 +16,7 @@ type UsernamePasswordCredential struct {
 
 var _ Credential = (*UsernamePasswordCredential)(nil)
 
-// NewUsernamePasswordCredential constructor
+// NewUsernamePasswordCredential constructor.
 func NewUsernamePasswordCredential(principal string, credentials string) Credential {
 	return &UsernamePasswordCredential{
 		credentials: credentials,
@@ -24,7 +24,7 @@ func NewUsernamePasswordCredential(principal string, credentials string) Credent
 	}
 }
 
-// GetCredentials that prove the principal is correct, this is usually a password
+// GetCredentials that prove the principal is correct, this is usually a password.
 func (a *UsernamePasswordCredential) GetCredentials() interface{} {
 	return a.credentials
 }
@@ -36,22 +36,22 @@ func (a *UsernamePasswordCredential) GetPrincipal() interface{} {
 	return a.principal
 }
 
-// IsAuthenticated returns true if token is authenticated
+// IsAuthenticated returns true if token is authenticated.
 func (a *UsernamePasswordCredential) IsAuthenticated() bool {
 	return a.isAuthenticated
 }
 
-// SetAuthenticated change token to authenticated
+// SetAuthenticated change token to authenticated.
 func (a *UsernamePasswordCredential) SetAuthenticated(isAuthenticated bool) {
 	a.isAuthenticated = isAuthenticated
 }
 
-// SetUser set user authenticated
+// SetUser set user authenticated.
 func (a *UsernamePasswordCredential) SetUser(user user.User) {
 	a.user = user
 }
 
-// GetUser return authenticated
+// GetUser return authenticated.
 func (a *UsernamePasswordCredential) GetUser() user.User {
 	return a.user
 }
