@@ -37,3 +37,12 @@ jobs:
       uses: shogo82148/actions-goveralls@v1
       with:
         path-to-profile: coverage.out
+
+  finish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Coveralls Finished
+      uses: coverallsapp/github-action@master
+      with:
+        parallel-finished: true
