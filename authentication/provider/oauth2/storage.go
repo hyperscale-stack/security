@@ -7,7 +7,10 @@ package oauth2
 import "errors"
 
 var (
-	ErrClientNotFound = errors.New("oauth2 client not found")
+	ErrClientNotFound    = errors.New("oauth2 client not found")
+	ErrAccessNotFound    = errors.New("oauth2 access token not found")
+	ErrRefreshNotFound   = errors.New("oauth2 refresh token not found")
+	ErrAuthorizeNotFound = errors.New("oauth2 authorize code not found")
 )
 
 type ClientStorage interface {
