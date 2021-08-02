@@ -4,6 +4,12 @@
 
 package oauth2
 
+import "errors"
+
+var (
+	ErrClientNotFound = errors.New("oauth2 client not found")
+)
+
 type ClientStorage interface {
 	SaveClient(Client) error
 	LoadClient(id string) (Client, error)
