@@ -29,6 +29,8 @@ type ClientSecretMatcher interface {
 	SecretMatches(secret string) bool
 }
 
+var _ ClientSecretMatcher = (*DefaultClient)(nil)
+
 // DefaultClient stores all data in struct variables
 type DefaultClient struct {
 	ID          string
@@ -54,7 +56,7 @@ func (d *DefaultClient) GetUserData() interface{} {
 }
 
 // Implement the ClientSecretMatcher interface
-func (d *DefaultClient) ClientSecretMatches(secret string) bool {
+func (d *DefaultClient) SecretMatches(secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(d.Secret), []byte(secret)) == 1
 }
 

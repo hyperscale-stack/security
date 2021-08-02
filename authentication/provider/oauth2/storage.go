@@ -4,7 +4,9 @@
 
 package oauth2
 
-import "errors"
+import (
+	"errors"
+)
 
 var (
 	ErrClientNotFound    = errors.New("oauth2 client not found")
@@ -37,6 +39,7 @@ type AuthorizeStorage interface {
 	RemoveAuthorize(code string) error
 }
 
+//go:generate mockery --name=Storage --inpackage --case underscore
 type Storage interface {
 	ClientStorage
 	AccessStorage

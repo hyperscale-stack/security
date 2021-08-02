@@ -67,12 +67,16 @@ func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, cred
 }
 
 func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, creds *credential.UsernamePasswordCredential) error {
-	_, err := p.storage.LoadClient(creds.GetPrincipal().(string))
+	client, err := p.storage.LoadClient(creds.GetPrincipal().(string))
 	if err != nil {
 		return fmt.Errorf("load client info failed: %w", err)
 	}
 
-	creds.SetAuthenticated(true)
+	if c, ok := client.(ClientSecretMatcher); ok {
+		if c.SecretMatches(creds.GetCredentials().(string)) {
+			creds.SetAuthenticated(true)
+		}
+	}
 
 	return nil
 }

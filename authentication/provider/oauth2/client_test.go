@@ -22,7 +22,7 @@ func TestDefaultClient(t *testing.T) {
 	assert.Equal(t, "MfpCIRnFcwA5GiKPtAMZdXb2ayehhEj9", dc.GetSecret())
 	assert.Equal(t, "https://connect.myservice.tld/", dc.GetRedirectURI())
 	assert.Equal(t, "foo", dc.GetUserData())
-	assert.True(t, dc.ClientSecretMatches("MfpCIRnFcwA5GiKPtAMZdXb2ayehhEj9"))
+	assert.True(t, dc.SecretMatches("MfpCIRnFcwA5GiKPtAMZdXb2ayehhEj9"))
 
 	dc1 := &DefaultClient{}
 
@@ -32,6 +32,6 @@ func TestDefaultClient(t *testing.T) {
 	assert.Equal(t, dc.GetSecret(), dc1.GetSecret())
 	assert.Equal(t, dc.GetRedirectURI(), dc1.GetRedirectURI())
 	assert.Equal(t, dc.GetUserData(), dc1.GetUserData())
-	assert.True(t, dc1.ClientSecretMatches(dc.GetSecret()))
+	assert.True(t, dc1.SecretMatches(dc.GetSecret()))
 
 }
