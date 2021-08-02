@@ -11,6 +11,8 @@ import (
 	"github.com/hyperscale-stack/security/http/header"
 )
 
+var _ Filter = (*BearerFilter)(nil)
+
 // BearerFilter struct.
 type BearerFilter struct {
 }

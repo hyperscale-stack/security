@@ -4,6 +4,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gilcrest/alice v1.0.0 h1:5+CasxidJEUHmgghQxLOl09uYhOlavDfDgNZhyR62LU=
 github.com/gilcrest/alice v1.0.0/go.mod h1:q5HRhK5WEyU1pDBIIfmYapVGLd/IAAPwiO8LNxKADpw=
+github.com/hyperscale-stack/secure v1.0.0 h1:ayGoa/Y/0RcAcP767WKjla1r9KlR+Tul5DPI/jE9dP0=
+github.com/hyperscale-stack/secure v1.0.0/go.mod h1:PY+BMJQI2aP+YYA3C7R0bFTS/XGJ4xPCYjBp9rEqmtQ=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

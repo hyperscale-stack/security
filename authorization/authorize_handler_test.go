@@ -23,7 +23,7 @@ type TestAuthenticationProvider struct {
 	user          user.User
 }
 
-func (p *TestAuthenticationProvider) Authenticate(creds credential.Credential) error {
+func (p *TestAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
 	creds.SetAuthenticated(p.authenticated)
 
 	if p.user != nil {

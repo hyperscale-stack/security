@@ -10,6 +10,8 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
+var _ Filter = (*AccessTokenFilter)(nil)
+
 // AccessTokenFilter struct.
 type AccessTokenFilter struct {
 }

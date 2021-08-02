@@ -98,7 +98,7 @@ func TestHandlerWithBadAuthorizationBasic(t *testing.T) {
 
 	authenticationProviderMock := &MockProvider{}
 
-	authenticationProviderMock.On("Authenticate", mock.MatchedBy(func(c credential.Credential) bool {
+	authenticationProviderMock.On("Authenticate", mock.AnythingOfType("*http.Request"), mock.MatchedBy(func(c credential.Credential) bool {
 		if c.GetPrincipal().(string) != "foo" {
 			return false
 		}
@@ -148,7 +148,7 @@ func TestHandlerWithAuthorizationBasic(t *testing.T) {
 
 	authenticationProviderMock := &MockProvider{}
 
-	authenticationProviderMock.On("Authenticate", mock.MatchedBy(func(c credential.Credential) bool {
+	authenticationProviderMock.On("Authenticate", mock.AnythingOfType("*http.Request"), mock.MatchedBy(func(c credential.Credential) bool {
 		if c.GetPrincipal().(string) != "foo" {
 			return false
 		}
@@ -182,7 +182,7 @@ func TestHandlerWithAuthorizationBasic(t *testing.T) {
 
 type TestAuthenticationProvider struct{}
 
-func (p *TestAuthenticationProvider) Authenticate(creds credential.Credential) error {
+func (p *TestAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
 	return nil
 }
 

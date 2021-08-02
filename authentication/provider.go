@@ -5,20 +5,14 @@
 package authentication
 
 import (
-	"errors"
+	"net/http"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
-)
-
-var (
-	ErrBadAuthenticationFormat   = errors.New("bad authentication format")
-	ErrBadPassword               = errors.New("bad password")
-	ErrCredentialsMustStringType = errors.New("credentials type must string type")
 )
 
 // Provider Service interface for encoding passwords
 //go:generate mockery --name=Provider --inpackage --case underscore
 type Provider interface {
-	Authenticate(creds credential.Credential) error
+	Authenticate(r *http.Request, creds credential.Credential) error
 	IsSupported(creds credential.Credential) bool
 }

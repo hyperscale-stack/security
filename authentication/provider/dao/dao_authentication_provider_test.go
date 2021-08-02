@@ -2,10 +2,11 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package authentication
+package dao
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
@@ -34,7 +35,10 @@ func TestDaoAuthenticationProvider(t *testing.T) {
 
 	assert.True(t, p.IsSupported(c))
 
-	err = p.Authenticate(c)
+	r, err := http.NewRequest(http.MethodGet, "", nil)
+	assert.NoError(t, err)
+
+	err = p.Authenticate(r, c)
 	assert.NoError(t, err)
 
 	assert.True(t, c.IsAuthenticated())
@@ -64,7 +68,10 @@ func TestDaoAuthenticationProviderWithBadAuthentication(t *testing.T) {
 
 	assert.False(t, p.IsSupported(c))
 
-	err = p.Authenticate(c)
+	r, err := http.NewRequest(http.MethodGet, "", nil)
+	assert.NoError(t, err)
+
+	err = p.Authenticate(r, c)
 	assert.EqualError(t, err, "bad authentication format")
 
 	assert.False(t, c.IsAuthenticated())
@@ -87,7 +94,10 @@ func TestDaoAuthenticationProviderWithUserNotFound(t *testing.T) {
 
 	assert.True(t, p.IsSupported(c))
 
-	err := p.Authenticate(c)
+	r, err := http.NewRequest(http.MethodGet, "", nil)
+	assert.NoError(t, err)
+
+	err = p.Authenticate(r, c)
 	assert.EqualError(t, err, "user provider failed: user not found")
 
 	assert.False(t, c.IsAuthenticated())
@@ -115,7 +125,10 @@ func TestDaoAuthenticationProviderWithBadPassword(t *testing.T) {
 
 	assert.True(t, p.IsSupported(c))
 
-	err = p.Authenticate(c)
+	r, err := http.NewRequest(http.MethodGet, "", nil)
+	assert.NoError(t, err)
+
+	err = p.Authenticate(r, c)
 	assert.EqualError(t, err, "bad password")
 
 	assert.False(t, c.IsAuthenticated())
@@ -149,7 +162,10 @@ func TestDaoAuthenticationProviderWithUserPasswordSalt(t *testing.T) {
 
 	assert.True(t, p.IsSupported(c))
 
-	err = p.Authenticate(c)
+	r, err := http.NewRequest(http.MethodGet, "", nil)
+	assert.NoError(t, err)
+
+	err = p.Authenticate(r, c)
 	assert.NoError(t, err)
 
 	assert.True(t, c.IsAuthenticated())

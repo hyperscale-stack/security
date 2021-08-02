@@ -2,14 +2,23 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package authentication
+package dao
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/hyperscale-stack/security/authentication"
 	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/password"
 	"github.com/hyperscale-stack/security/user"
+)
+
+var (
+	ErrBadAuthenticationFormat   = errors.New("bad authentication format")
+	ErrBadPassword               = errors.New("bad password")
+	ErrCredentialsMustStringType = errors.New("credentials type must string type")
 )
 
 // DaoAuthenticationProvider struct.
@@ -18,7 +27,7 @@ type DaoAuthenticationProvider struct {
 	userProvider   UserProvider
 }
 
-var _ Provider = (*DaoAuthenticationProvider)(nil)
+var _ authentication.Provider = (*DaoAuthenticationProvider)(nil)
 
 // NewDaoAuthenticationProvider constructor.
 func NewDaoAuthenticationProvider(passwordHasher password.Hasher, userProvider UserProvider) *DaoAuthenticationProvider {
@@ -29,14 +38,14 @@ func NewDaoAuthenticationProvider(passwordHasher password.Hasher, userProvider U
 }
 
 // IsSupported returns true if credential.Credential is supported.
-func (p *DaoAuthenticationProvider) IsSupported(authentication credential.Credential) bool {
-	_, ok := authentication.(*credential.UsernamePasswordCredential)
+func (p *DaoAuthenticationProvider) IsSupported(creds credential.Credential) bool {
+	_, ok := creds.(*credential.UsernamePasswordCredential)
 
 	return ok
 }
 
 // Authenticate implements Provider.
-func (p *DaoAuthenticationProvider) Authenticate(creds credential.Credential) error {
+func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
 	auth, ok := creds.(*credential.UsernamePasswordCredential)
 	if !ok {
 		return ErrBadAuthenticationFormat

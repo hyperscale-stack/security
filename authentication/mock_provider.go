@@ -3,7 +3,10 @@
 package authentication
 
 import (
+	http "net/http"
+
 	credential "github.com/hyperscale-stack/security/authentication/credential"
+
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -12,13 +15,13 @@ type MockProvider struct {
 	mock.Mock
 }
 
-// Authenticate provides a mock function with given fields: creds
-func (_m *MockProvider) Authenticate(creds credential.Credential) error {
-	ret := _m.Called(creds)
+// Authenticate provides a mock function with given fields: r, creds
+func (_m *MockProvider) Authenticate(r *http.Request, creds credential.Credential) error {
+	ret := _m.Called(r, creds)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(credential.Credential) error); ok {
-		r0 = rf(creds)
+	if rf, ok := ret.Get(0).(func(*http.Request, credential.Credential) error); ok {
+		r0 = rf(r, creds)
 	} else {
 		r0 = ret.Error(0)
 	}

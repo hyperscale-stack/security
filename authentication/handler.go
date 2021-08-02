@@ -26,7 +26,7 @@ func Handler(providers ...Provider) func(next http.Handler) http.Handler {
 					continue
 				}
 
-				if err := provider.Authenticate(creds); err != nil {
+				if err := provider.Authenticate(r, creds); err != nil {
 					//TODO: bad creds
 					http.Error(w, "Access denied", http.StatusUnauthorized)
 
