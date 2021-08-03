@@ -6,7 +6,7 @@ package oauth2
 
 import "time"
 
-// AuthorizeInfo info
+// AuthorizeInfo info.
 type AuthorizeInfo struct {
 	// Client information
 	Client Client
@@ -39,17 +39,17 @@ type AuthorizeInfo struct {
 	CodeChallengeMethod string
 }
 
-// IsExpired is true if authorization expired
+// IsExpired is true if authorization expired.
 func (i *AuthorizeInfo) IsExpired() bool {
 	return i.IsExpiredAt(time.Now())
 }
 
-// IsExpired is true if authorization expires at time 't'
+// IsExpired is true if authorization expires at time 't'.
 func (i *AuthorizeInfo) IsExpiredAt(t time.Time) bool {
 	return i.ExpireAt().Before(t)
 }
 
-// ExpireAt returns the expiration date
+// ExpireAt returns the expiration date.
 func (i *AuthorizeInfo) ExpireAt() time.Time {
 	return i.CreatedAt.Add(time.Duration(i.ExpiresIn) * time.Second)
 }

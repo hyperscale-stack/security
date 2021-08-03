@@ -264,3 +264,45 @@ func TestOAuth2AuthenticationProviderAuthenticateWithBadCredentialType(t *testin
 
 	assert.Same(t, req, r)
 }
+
+func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithBadUserDataType(t *testing.T) {
+	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
+
+	userMock := &user.MockUser{}
+
+	userStorageMock := &MockUserProvider{}
+
+	userStorageMock.On("LoadUser", "8c87a032-755d-42f6-be96-0421948f6e94").Return(userMock, nil)
+
+	accessStorageMock := &MockAccessProvider{}
+
+	client := &DefaultClient{
+		ID:          "5cc06c3b-5755-4229-958c-a515a245aaeb",
+		Secret:      "WTvuAztPD2XBauomleRzGFYuZawS07Ym",
+		RedirectURI: "https://connect.myservice.tld",
+	}
+
+	access := &AccessInfo{
+		Client:      client,
+		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
+		ExpiresIn:   60,
+		CreatedAt:   time.Now(),
+		UserData:    12345,
+	}
+
+	accessStorageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
+
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, userStorageMock, nil, accessStorageMock, nil, nil)
+
+	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
+
+	creds := credential.NewTokenCredential("wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR")
+
+	r, err := p.Authenticate(req, creds)
+	assert.EqualError(t, err, "bad type for user data")
+
+	assert.NotNil(t, r.Context())
+
+	accessStorageMock.AssertExpectations(t)
+	userStorageMock.AssertNotCalled(t, "LoadUser")
+}

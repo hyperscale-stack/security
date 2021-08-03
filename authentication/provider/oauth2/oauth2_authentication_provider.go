@@ -17,6 +17,7 @@ import (
 var (
 	ErrBadAuthenticationFormat = errors.New("bad authentication format")
 	ErrTokenExpired            = errors.New("token expired")
+	ErrBadTypeForUserData      = errors.New("bad type for user data")
 )
 
 // OAuth2AuthenticationProvider struct.
@@ -52,8 +53,7 @@ func NewOAuth2AuthenticationProvider(
 
 // IsSupported returns true if credential.Credential is supported.
 func (p *OAuth2AuthenticationProvider) IsSupported(creds credential.Credential) bool {
-	//TODO multiple support (ClientCreds, etc...)
-
+	// TODO multiple support (ClientCreds, etc...)
 	switch creds.(type) {
 	case *credential.TokenCredential, *credential.UsernamePasswordCredential:
 		return true
@@ -74,7 +74,10 @@ func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, cred
 		return r, ErrTokenExpired
 	}
 
-	userID := token.UserData.(string)
+	userID, ok := token.UserData.(string)
+	if !ok {
+		return r, ErrBadTypeForUserData
+	}
 
 	u, err := p.userStorage.LoadUser(userID)
 	if err != nil {
@@ -114,7 +117,7 @@ func (p *OAuth2AuthenticationProvider) Authenticate(r *http.Request, creds crede
 	switch auth := creds.(type) {
 	case *credential.TokenCredential:
 		return p.authenticateByToken(r, auth)
-	case *credential.UsernamePasswordCredential: //@TODO: use ClientCredential
+	case *credential.UsernamePasswordCredential: // @TODO: use ClientCredential
 		return p.authenticateByClient(r, auth)
 	default:
 		return r, ErrBadAuthenticationFormat

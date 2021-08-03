@@ -25,7 +25,7 @@ func ClientToContext(ctx context.Context, client Client) context.Context {
 	return context.WithValue(ctx, clientCtxKey{}, client)
 }
 
-// Client information
+// Client information.
 type Client interface {
 	// Client ID
 	GetID() string
@@ -42,7 +42,7 @@ type Client interface {
 
 // ClientSecretMatcher is an optional interface clients can implement
 // which allows them to be the one to determine if a secret matches.
-// If a Client implements ClientSecretMatcher, the framework will never call GetSecret
+// If a Client implements ClientSecretMatcher, the framework will never call GetSecret.
 type ClientSecretMatcher interface {
 	// SecretMatches returns true if the given secret matches
 	SecretMatches(secret string) bool
@@ -50,7 +50,7 @@ type ClientSecretMatcher interface {
 
 var _ ClientSecretMatcher = (*DefaultClient)(nil)
 
-// DefaultClient stores all data in struct variables
+// DefaultClient stores all data in struct variables.
 type DefaultClient struct {
 	ID          string
 	Secret      string
@@ -74,7 +74,7 @@ func (d *DefaultClient) GetUserData() interface{} {
 	return d.UserData
 }
 
-// Implement the ClientSecretMatcher interface
+// Implement the ClientSecretMatcher interface.
 func (d *DefaultClient) SecretMatches(secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(d.Secret), []byte(secret)) == 1
 }

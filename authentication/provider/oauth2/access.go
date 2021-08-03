@@ -32,7 +32,7 @@ func AccessTokenToContext(ctx context.Context, access *AccessInfo) context.Conte
 	return context.WithValue(ctx, accessCtxKey{}, access)
 }
 
-// AccessInfo represents an access grant (tokens, expiration, client, etc)
+// AccessInfo represents an access grant (tokens, expiration, client, etc).
 type AccessInfo struct {
 	// Client information
 	Client Client
@@ -65,17 +65,17 @@ type AccessInfo struct {
 	UserData interface{}
 }
 
-// IsExpired returns true if access expired
+// IsExpired returns true if access expired.
 func (i *AccessInfo) IsExpired() bool {
 	return i.IsExpiredAt(time.Now())
 }
 
-// IsExpiredAt returns true if access expires at time 't'
+// IsExpiredAt returns true if access expires at time 't'.
 func (i *AccessInfo) IsExpiredAt(t time.Time) bool {
 	return i.ExpireAt().Before(t)
 }
 
-// ExpireAt returns the expiration date
+// ExpireAt returns the expiration date.
 func (i *AccessInfo) ExpireAt() time.Time {
 	return i.CreatedAt.Add(time.Duration(i.ExpiresIn) * time.Second)
 }

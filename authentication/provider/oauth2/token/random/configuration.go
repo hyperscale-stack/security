@@ -4,7 +4,7 @@
 
 package random
 
-// Configuration struct
+// Configuration struct.
 type Configuration struct {
 	AccessTokenSize  int `mapstructure:"access_token_size"`
 	RefreshTokenSize int `mapstructure:"refresh_token_size"`
