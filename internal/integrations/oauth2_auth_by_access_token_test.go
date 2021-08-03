@@ -13,6 +13,7 @@ import (
 
 	"github.com/gilcrest/alice"
 	"github.com/hyperscale-stack/security/authentication"
+	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/storage"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
@@ -120,6 +121,9 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 
 	userMock := &user.MockUser{}
 
+	userMock.On("GetRoles").Return([]string{"ROLE_USER"})
+	userMock.On("GetUsername").Return("euskadi31")
+
 	userProvider := &oauth2.MockUserProvider{}
 
 	userProvider.On("LoadUser", "8c87a032-755d-42f6-be96-0421948f6e94").Return(userMock, nil)
@@ -157,8 +161,16 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 	handler := private.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
 		// private route
 
-		token := oauth2.AccessTokenFromContext(r.Context())
+		ctx := r.Context()
+
+		token := oauth2.AccessTokenFromContext(ctx)
 		assert.NotNil(t, token)
+
+		user := credential.FromContext(ctx)
+		assert.NotNil(t, user)
+
+		assert.Equal(t, "euskadi31", user.GetUser().GetUsername())
+		assert.Equal(t, []string{"ROLE_USER"}, user.GetUser().GetRoles())
 
 		err := json.NewEncoder(w).Encode(token)
 		assert.NoError(t, err)
@@ -191,4 +203,5 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 	assert.Equal(t, "WTvuAztPD2XBauomleRzGFYuZawS07Ym", token.Client.Secret)
 
 	userProvider.AssertExpectations(t)
+	userMock.AssertExpectations(t)
 }
