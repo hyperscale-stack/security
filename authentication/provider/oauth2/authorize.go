@@ -6,6 +6,17 @@ package oauth2
 
 import "time"
 
+// AuthorizeRequestType is the type for OAuth param `response_type`
+type AuthorizeRequestType string
+
+const (
+	CODE  AuthorizeRequestType = "code"
+	TOKEN AuthorizeRequestType = "token"
+
+	PKCE_PLAIN = "plain"
+	PKCE_S256  = "S256"
+)
+
 // AuthorizeInfo info.
 type AuthorizeInfo struct {
 	// Client information

@@ -6,14 +6,56 @@ package oauth2
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
-type AccessToken interface {
-	GetClient() Client
-	GetToken() string
-	IsExpired() bool
-	GetUserID() string
+// AccessRequestType is the type for OAuth2 param `grant_type`
+type AccessRequestType string
+
+const (
+	AUTHORIZATION_CODE AccessRequestType = "authorization_code"
+	REFRESH_TOKEN      AccessRequestType = "refresh_token"
+	PASSWORD           AccessRequestType = "password"
+	CLIENT_CREDENTIALS AccessRequestType = "client_credentials"
+	ASSERTION          AccessRequestType = "assertion"
+	IMPLICIT           AccessRequestType = "__implicit"
+)
+
+// AccessRequest is a request for access tokens
+type AccessRequest struct {
+	Type          AccessRequestType
+	Code          string
+	Client        Client
+	AuthorizeInfo *AuthorizeInfo
+	AccessInfo    *AccessInfo
+
+	// Force finish to use this access data, to allow access data reuse
+	ForceAccessInfo *AccessInfo
+	RedirectURI     string
+	Scope           string
+	Username        string
+	Password        string
+	AssertionType   string
+	Assertion       string
+
+	// Set if request is authorized
+	Authorized bool
+
+	// Token expiration in seconds. Change if different from default
+	Expiration int32
+
+	// Set if a refresh token should be generated
+	GenerateRefresh bool
+
+	// Data to be passed to storage. Not used by the library.
+	UserData interface{}
+
+	// HttpRequest *http.Request for special use
+	HttpRequest *http.Request
+
+	// Optional code_verifier as described in rfc7636
+	CodeVerifier string
 }
 
 type accessCtxKey struct{}
