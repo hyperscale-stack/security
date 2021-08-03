@@ -45,15 +45,15 @@ func (p *DaoAuthenticationProvider) IsSupported(creds credential.Credential) boo
 }
 
 // Authenticate implements Provider.
-func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
+func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error) {
 	auth, ok := creds.(*credential.UsernamePasswordCredential)
 	if !ok {
-		return ErrBadAuthenticationFormat
+		return r, ErrBadAuthenticationFormat
 	}
 
 	u, err := p.userProvider.LoadUserByUsername(auth.GetPrincipal().(string))
 	if err != nil {
-		return fmt.Errorf("user provider failed: %w", err)
+		return r, fmt.Errorf("user provider failed: %w", err)
 	}
 
 	//nolint:forcetypeassert
@@ -64,11 +64,11 @@ func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credenti
 	}
 
 	if !p.passwordHasher.Verify(u.GetPassword(), userPassword) {
-		return ErrBadPassword
+		return r, ErrBadPassword
 	}
 
 	creds.SetAuthenticated(true)
 	creds.SetUser(u)
 
-	return nil
+	return r, nil
 }

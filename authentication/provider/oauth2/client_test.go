@@ -5,6 +5,7 @@
 package oauth2
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,4 +35,29 @@ func TestDefaultClient(t *testing.T) {
 	assert.Equal(t, dc.GetUserData(), dc1.GetUserData())
 	assert.True(t, dc1.SecretMatches(dc.GetSecret()))
 
+}
+
+func TestClientContext(t *testing.T) {
+	ctx := context.Background()
+
+	dc := &DefaultClient{
+		ID:          "01c1c799-81a8-4bd0-9998-c6abae3cc473",
+		Secret:      "MfpCIRnFcwA5GiKPtAMZdXb2ayehhEj9",
+		RedirectURI: "https://connect.myservice.tld/",
+		UserData:    "foo",
+	}
+
+	ctx = ClientToContext(ctx, dc)
+
+	dc2 := ClientFromContext(ctx)
+
+	assert.Equal(t, dc, dc2)
+}
+
+func TestClientFromContextWithEmptyContext(t *testing.T) {
+	ctx := context.Background()
+
+	dc := ClientFromContext(ctx)
+
+	assert.Nil(t, dc)
 }

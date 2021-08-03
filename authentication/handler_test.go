@@ -110,7 +110,7 @@ func TestHandlerWithBadAuthorizationBasic(t *testing.T) {
 		c.SetAuthenticated(false)
 
 		return true
-	})).Return(errors.New("fail"))
+	})).Return(req, errors.New("fail"))
 
 	authenticationProviderMock.On("IsSupported", mock.AnythingOfType("*credential.UsernamePasswordCredential")).Return(true)
 
@@ -144,6 +144,16 @@ func TestHandlerWithAuthorizationBasic(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com/v1/me", nil)
 	req.Header.Set("Authorization", "Basic Zm9vOmJhcg==")
 
+	ctx := req.Context()
+
+	creds := credential.NewUsernamePasswordCredential("foo", "bar")
+
+	creds.SetAuthenticated(true)
+
+	ctx = credential.ToContext(ctx, creds)
+
+	req = req.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 
 	authenticationProviderMock := &MockProvider{}
@@ -160,7 +170,7 @@ func TestHandlerWithAuthorizationBasic(t *testing.T) {
 		c.SetAuthenticated(true)
 
 		return true
-	})).Return(nil)
+	})).Return(req, nil)
 
 	authenticationProviderMock.On("IsSupported", mock.AnythingOfType("*credential.UsernamePasswordCredential")).Return(true)
 
@@ -182,8 +192,8 @@ func TestHandlerWithAuthorizationBasic(t *testing.T) {
 
 type TestAuthenticationProvider struct{}
 
-func (p *TestAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
-	return nil
+func (p *TestAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error) {
+	return r, nil
 }
 
 func (p *TestAuthenticationProvider) IsSupported(creds credential.Credential) bool {

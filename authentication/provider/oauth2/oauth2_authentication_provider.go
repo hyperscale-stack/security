@@ -12,7 +12,6 @@ import (
 	"github.com/hyperscale-stack/security/authentication"
 	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
-	"github.com/hyperscale-stack/security/user"
 )
 
 var (
@@ -22,17 +21,32 @@ var (
 
 // OAuth2AuthenticationProvider struct.
 type OAuth2AuthenticationProvider struct {
-	tokenGenerator token.Generator
-	storage        Storage
+	tokenGenerator   token.Generator
+	userStorage      UserProvider
+	clientStorage    ClientProvider
+	accessStorage    AccessProvider
+	refreshStorage   RefreshProvider
+	authorizeStorage AuthorizeProvider
 }
 
 var _ authentication.Provider = (*OAuth2AuthenticationProvider)(nil)
 
 // NewOAuth2AuthenticationProvider constructor.
-func NewOAuth2AuthenticationProvider(tokenGenerator token.Generator, storage Storage) *OAuth2AuthenticationProvider {
+func NewOAuth2AuthenticationProvider(
+	tokenGenerator token.Generator,
+	userStorage UserProvider,
+	clientStorage ClientProvider,
+	accessStorage AccessProvider,
+	refreshStorage RefreshProvider,
+	authorizeStorage AuthorizeProvider,
+) *OAuth2AuthenticationProvider {
 	return &OAuth2AuthenticationProvider{
-		tokenGenerator: tokenGenerator,
-		storage:        storage,
+		userStorage:      userStorage,
+		tokenGenerator:   tokenGenerator,
+		clientStorage:    clientStorage,
+		accessStorage:    accessStorage,
+		refreshStorage:   refreshStorage,
+		authorizeStorage: authorizeStorage,
 	}
 }
 
@@ -48,28 +62,40 @@ func (p *OAuth2AuthenticationProvider) IsSupported(creds credential.Credential) 
 	}
 }
 
-func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, creds *credential.TokenCredential) error {
-	token, err := p.storage.LoadAccess(creds.GetPrincipal().(string))
+func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, creds *credential.TokenCredential) (*http.Request, error) {
+	ctx := r.Context()
+
+	token, err := p.accessStorage.LoadAccess(creds.GetPrincipal().(string))
 	if err != nil {
-		return fmt.Errorf("load access token failed: %w", err)
+		return r, fmt.Errorf("load access token failed: %w", err)
 	}
 
 	if token.IsExpired() {
-		return ErrTokenExpired
+		return r, ErrTokenExpired
 	}
 
-	u := token.UserData.(user.User)
+	userID := token.UserData.(string)
+
+	u, err := p.userStorage.LoadUser(userID)
+	if err != nil {
+		return r, fmt.Errorf("load user failed: %w", err)
+	}
 
 	creds.SetAuthenticated(true)
 	creds.SetUser(u)
 
-	return nil
+	ctx = AccessTokenToContext(ctx, token)
+	ctx = ClientToContext(ctx, token.Client)
+
+	return r.WithContext(ctx), nil
 }
 
-func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, creds *credential.UsernamePasswordCredential) error {
-	client, err := p.storage.LoadClient(creds.GetPrincipal().(string))
+func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, creds *credential.UsernamePasswordCredential) (*http.Request, error) {
+	ctx := r.Context()
+
+	client, err := p.clientStorage.LoadClient(creds.GetPrincipal().(string))
 	if err != nil {
-		return fmt.Errorf("load client info failed: %w", err)
+		return r, fmt.Errorf("load client info failed: %w", err)
 	}
 
 	if c, ok := client.(ClientSecretMatcher); ok {
@@ -78,17 +104,19 @@ func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, cre
 		}
 	}
 
-	return nil
+	ctx = ClientToContext(ctx, client)
+
+	return r.WithContext(ctx), nil
 }
 
 // Authenticate implements Provider.
-func (p *OAuth2AuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) error {
+func (p *OAuth2AuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error) {
 	switch auth := creds.(type) {
 	case *credential.TokenCredential:
 		return p.authenticateByToken(r, auth)
 	case *credential.UsernamePasswordCredential: //@TODO: use ClientCredential
 		return p.authenticateByClient(r, auth)
 	default:
-		return ErrBadAuthenticationFormat
+		return r, ErrBadAuthenticationFormat
 	}
 }

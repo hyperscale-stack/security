@@ -10,7 +10,7 @@ import (
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2"
 )
 
-var _ oauth2.Storage = (*InMemoryStorage)(nil)
+var _ oauth2.StorageProvider = (*InMemoryStorage)(nil)
 
 type InMemoryStorage struct {
 	clients    sync.Map

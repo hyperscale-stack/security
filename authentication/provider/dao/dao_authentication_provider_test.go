@@ -38,8 +38,10 @@ func TestDaoAuthenticationProvider(t *testing.T) {
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	assert.NoError(t, err)
 
-	err = p.Authenticate(r, c)
+	r2, err := p.Authenticate(r, c)
 	assert.NoError(t, err)
+
+	assert.Same(t, r, r2)
 
 	assert.True(t, c.IsAuthenticated())
 
@@ -71,8 +73,10 @@ func TestDaoAuthenticationProviderWithBadAuthentication(t *testing.T) {
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	assert.NoError(t, err)
 
-	err = p.Authenticate(r, c)
+	r2, err := p.Authenticate(r, c)
 	assert.EqualError(t, err, "bad authentication format")
+
+	assert.Same(t, r, r2)
 
 	assert.False(t, c.IsAuthenticated())
 
@@ -97,8 +101,10 @@ func TestDaoAuthenticationProviderWithUserNotFound(t *testing.T) {
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	assert.NoError(t, err)
 
-	err = p.Authenticate(r, c)
+	r2, err := p.Authenticate(r, c)
 	assert.EqualError(t, err, "user provider failed: user not found")
+
+	assert.Same(t, r, r2)
 
 	assert.False(t, c.IsAuthenticated())
 
@@ -128,8 +134,10 @@ func TestDaoAuthenticationProviderWithBadPassword(t *testing.T) {
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	assert.NoError(t, err)
 
-	err = p.Authenticate(r, c)
+	r2, err := p.Authenticate(r, c)
 	assert.EqualError(t, err, "bad password")
+
+	assert.Same(t, r, r2)
 
 	assert.False(t, c.IsAuthenticated())
 
@@ -165,8 +173,10 @@ func TestDaoAuthenticationProviderWithUserPasswordSalt(t *testing.T) {
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	assert.NoError(t, err)
 
-	err = p.Authenticate(r, c)
+	r2, err := p.Authenticate(r, c)
 	assert.NoError(t, err)
+
+	assert.Same(t, r, r2)
 
 	assert.True(t, c.IsAuthenticated())
 

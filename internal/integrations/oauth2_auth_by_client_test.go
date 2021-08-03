@@ -5,6 +5,7 @@
 package integrations
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,6 +22,8 @@ import (
 func TestOauth2AuthByClientWithNoAuthHeader(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
+	userProvider := &oauth2.MockUserProvider{}
+
 	storageProvider := storage.NewInMemoryStorage()
 
 	storageProvider.SaveClient(&oauth2.DefaultClient{
@@ -34,7 +37,7 @@ func TestOauth2AuthByClientWithNoAuthHeader(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
@@ -56,6 +59,8 @@ func TestOauth2AuthByClientWithNoAuthHeader(t *testing.T) {
 func TestOauth2AuthByClientWithBadClientID(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
+	userProvider := &oauth2.MockUserProvider{}
+
 	storageProvider := storage.NewInMemoryStorage()
 
 	storageProvider.SaveClient(&oauth2.DefaultClient{
@@ -71,7 +76,7 @@ func TestOauth2AuthByClientWithBadClientID(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
@@ -94,6 +99,8 @@ func TestOauth2AuthByClientWithBadClientID(t *testing.T) {
 func TestOauth2AuthByClientWithBadPassword(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
+	userProvider := &oauth2.MockUserProvider{}
+
 	storageProvider := storage.NewInMemoryStorage()
 
 	storageProvider.SaveClient(&oauth2.DefaultClient{
@@ -109,7 +116,7 @@ func TestOauth2AuthByClientWithBadPassword(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
@@ -132,6 +139,8 @@ func TestOauth2AuthByClientWithBadPassword(t *testing.T) {
 func TestOauth2AuthByClient(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
+	userProvider := &oauth2.MockUserProvider{}
+
 	storageProvider := storage.NewInMemoryStorage()
 
 	storageProvider.SaveClient(&oauth2.DefaultClient{
@@ -147,13 +156,19 @@ func TestOauth2AuthByClient(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
 
 	handler := private.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
 		// private route
+
+		client := oauth2.ClientFromContext(r.Context())
+		assert.NotNil(t, client)
+
+		err := json.NewEncoder(w).Encode(client)
+		assert.NoError(t, err)
 	})
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
@@ -164,5 +179,16 @@ func TestOauth2AuthByClient(t *testing.T) {
 
 	resp := w.Result()
 
+	client := struct {
+		ID     string
+		Secret string
+	}{}
+
+	err := json.NewDecoder(resp.Body).Decode(&client)
+	assert.NoError(t, err)
+
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, "5cc06c3b-5755-4229-958c-a515a245aaeb", client.ID)
+	assert.Equal(t, "WTvuAztPD2XBauomleRzGFYuZawS07Ym", client.Secret)
 }

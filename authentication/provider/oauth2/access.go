@@ -4,7 +4,33 @@
 
 package oauth2
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+type AccessToken interface {
+	GetClient() Client
+	GetToken() string
+	IsExpired() bool
+	GetUserID() string
+}
+
+type accessCtxKey struct{}
+
+// AccessTokenFromContext returns the Access Token info associated with the ctx.
+func AccessTokenFromContext(ctx context.Context) *AccessInfo {
+	if a, ok := ctx.Value(accessCtxKey{}).(*AccessInfo); ok {
+		return a
+	}
+
+	return nil
+}
+
+// AccessTokenToContext returns new context with Access Token info.
+func AccessTokenToContext(ctx context.Context, access *AccessInfo) context.Context {
+	return context.WithValue(ctx, accessCtxKey{}, access)
+}
 
 // AccessInfo represents an access grant (tokens, expiration, client, etc)
 type AccessInfo struct {

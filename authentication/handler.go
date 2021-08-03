@@ -14,6 +14,8 @@ import (
 func Handler(providers ...Provider) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var err error
+
 			creds := credential.FromContext(r.Context())
 			if creds == nil {
 				next.ServeHTTP(w, r)
@@ -26,7 +28,8 @@ func Handler(providers ...Provider) func(next http.Handler) http.Handler {
 					continue
 				}
 
-				if err := provider.Authenticate(r, creds); err != nil {
+				r, err = provider.Authenticate(r, creds)
+				if err != nil {
 					//TODO: bad creds
 					http.Error(w, "Access denied", http.StatusUnauthorized)
 

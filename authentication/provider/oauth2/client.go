@@ -4,7 +4,26 @@
 
 package oauth2
 
-import "crypto/subtle"
+import (
+	"context"
+	"crypto/subtle"
+)
+
+type clientCtxKey struct{}
+
+// ClientFromContext returns the Client associated with the ctx.
+func ClientFromContext(ctx context.Context) Client {
+	if c, ok := ctx.Value(clientCtxKey{}).(Client); ok {
+		return c
+	}
+
+	return nil
+}
+
+// ClientToContext returns new context with Client.
+func ClientToContext(ctx context.Context, client Client) context.Context {
+	return context.WithValue(ctx, clientCtxKey{}, client)
+}
 
 // Client information
 type Client interface {

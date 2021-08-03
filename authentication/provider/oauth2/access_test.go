@@ -5,6 +5,7 @@
 package oauth2
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -21,4 +22,27 @@ func TestAccessInfo(t *testing.T) {
 	}
 
 	assert.True(t, ai.IsExpired())
+}
+
+func TestAccessTokenContext(t *testing.T) {
+	ctx := context.Background()
+
+	ai := &AccessInfo{
+		CreatedAt: time.Now(),
+		ExpiresIn: 10,
+	}
+
+	ctx = AccessTokenToContext(ctx, ai)
+
+	ai2 := AccessTokenFromContext(ctx)
+
+	assert.Equal(t, ai, ai2)
+}
+
+func TestFromContextWithEmptyContext(t *testing.T) {
+	ctx := context.Background()
+
+	ai := AccessTokenFromContext(ctx)
+
+	assert.Nil(t, ai)
 }

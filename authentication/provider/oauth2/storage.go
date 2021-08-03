@@ -6,6 +6,8 @@ package oauth2
 
 import (
 	"errors"
+
+	"github.com/hyperscale-stack/security/user"
 )
 
 var (
@@ -13,36 +15,46 @@ var (
 	ErrAccessNotFound    = errors.New("oauth2 access token not found")
 	ErrRefreshNotFound   = errors.New("oauth2 refresh token not found")
 	ErrAuthorizeNotFound = errors.New("oauth2 authorize code not found")
+	ErrUserNotFound      = errors.New("oauth2 user not found")
 )
 
-type ClientStorage interface {
+//go:generate mockery --name=ClientProvider --inpackage --case underscore
+type ClientProvider interface {
 	SaveClient(Client) error
 	LoadClient(id string) (Client, error)
 	RemoveClient(id string) error
 }
 
-type AccessStorage interface {
+//go:generate mockery --name=AccessProvider --inpackage --case underscore
+type AccessProvider interface {
 	SaveAccess(*AccessInfo) error
 	LoadAccess(token string) (*AccessInfo, error)
 	RemoveAccess(token string) error
 }
 
-type RefreshStorage interface {
+//go:generate mockery --name=RefreshProvider --inpackage --case underscore
+type RefreshProvider interface {
 	SaveRefresh(*AccessInfo) error
 	LoadRefresh(token string) (*AccessInfo, error)
 	RemoveRefresh(token string) error
 }
 
-type AuthorizeStorage interface {
+//go:generate mockery --name=AuthorizeProvider --inpackage --case underscore
+type AuthorizeProvider interface {
 	SaveAuthorize(*AuthorizeInfo) error
 	LoadAuthorize(code string) (*AuthorizeInfo, error)
 	RemoveAuthorize(code string) error
 }
 
-//go:generate mockery --name=Storage --inpackage --case underscore
-type Storage interface {
-	ClientStorage
-	AccessStorage
-	RefreshStorage
-	AuthorizeStorage
+//go:generate mockery --name=UserProvider --inpackage --case underscore
+type UserProvider interface {
+	LoadUser(id string) (user.User, error)
+}
+
+//go:generate mockery --name=StorageProvider --inpackage --case underscore
+type StorageProvider interface {
+	ClientProvider
+	AccessProvider
+	RefreshProvider
+	AuthorizeProvider
 }

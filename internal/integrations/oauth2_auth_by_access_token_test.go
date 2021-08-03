@@ -5,6 +5,7 @@
 package integrations
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,11 +17,14 @@ import (
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/storage"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
 	"github.com/hyperscale-stack/security/authorization"
+	"github.com/hyperscale-stack/security/user"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestOauth2AuthByAccessTokenWithNoAuthHeader(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
+
+	userProvider := &oauth2.MockUserProvider{}
 
 	storageProvider := storage.NewInMemoryStorage()
 
@@ -35,6 +39,7 @@ func TestOauth2AuthByAccessTokenWithNoAuthHeader(t *testing.T) {
 	storageProvider.SaveAccess(&oauth2.AccessInfo{
 		Client:      client,
 		AccessToken: "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU",
+		UserData:    "8c87a032-755d-42f6-be96-0421948f6e94",
 	})
 
 	private := alice.New(
@@ -42,7 +47,7 @@ func TestOauth2AuthByAccessTokenWithNoAuthHeader(t *testing.T) {
 			authentication.NewAccessTokenFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
@@ -59,10 +64,14 @@ func TestOauth2AuthByAccessTokenWithNoAuthHeader(t *testing.T) {
 	resp := w.Result()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	userProvider.AssertNotCalled(t, "LoadUser")
 }
 
 func TestOauth2AuthByAccessTokenWithBadToken(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
+
+	userProvider := &oauth2.MockUserProvider{}
 
 	storageProvider := storage.NewInMemoryStorage()
 
@@ -86,7 +95,7 @@ func TestOauth2AuthByAccessTokenWithBadToken(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
@@ -109,6 +118,12 @@ func TestOauth2AuthByAccessTokenWithBadToken(t *testing.T) {
 func TestOauth2AuthByAccessToken(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
+	userMock := &user.MockUser{}
+
+	userProvider := &oauth2.MockUserProvider{}
+
+	userProvider.On("LoadUser", "8c87a032-755d-42f6-be96-0421948f6e94").Return(userMock, nil)
+
 	storageProvider := storage.NewInMemoryStorage()
 
 	client := &oauth2.DefaultClient{
@@ -124,6 +139,7 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 		AccessToken: "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU",
 		ExpiresIn:   60,
 		CreatedAt:   time.Now(),
+		UserData:    "8c87a032-755d-42f6-be96-0421948f6e94",
 	})
 
 	private := alice.New(
@@ -133,13 +149,19 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 			authentication.NewHTTPBasicFilter(),
 		),
 		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, storageProvider),
+			oauth2.NewOAuth2AuthenticationProvider(tokenGenerator, userProvider, storageProvider, storageProvider, storageProvider, storageProvider),
 		),
 		authorization.AuthorizeHandler(),
 	)
 
 	handler := private.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
 		// private route
+
+		token := oauth2.AccessTokenFromContext(r.Context())
+		assert.NotNil(t, token)
+
+		err := json.NewEncoder(w).Encode(token)
+		assert.NoError(t, err)
 	})
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
@@ -150,5 +172,23 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 
 	resp := w.Result()
 
+	token := struct {
+		Client struct {
+			ID     string
+			Secret string
+		}
+		AccessToken string
+	}{}
+
+	err := json.NewDecoder(resp.Body).Decode(&token)
+	assert.NoError(t, err)
+
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU", token.AccessToken)
+
+	assert.Equal(t, "5cc06c3b-5755-4229-958c-a515a245aaeb", token.Client.ID)
+	assert.Equal(t, "WTvuAztPD2XBauomleRzGFYuZawS07Ym", token.Client.Secret)
+
+	userProvider.AssertExpectations(t)
 }

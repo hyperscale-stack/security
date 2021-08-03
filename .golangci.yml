@@ -95,16 +95,3 @@ linters:
     - wrapcheck
     - wsl
   fast: false
-
-issues:
-  exclude:
-    # hack for go-service, fixed in v1.1.0
-    #- "Errors unhandled."
-    #- "Error return value of `container.Set` is not checked"
-    #- "composite literal uses unkeyed fields" # govet
-  #   exclude-use-default: true
-  #   max-per-linter: 0
-  #   max-same: 0
-  #   new: false
-  #   new-from-rev: ""
-  #   new-from-patch: ""

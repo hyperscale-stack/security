@@ -82,7 +82,7 @@ func TestOAuth2AuthenticationProviderIsSupported(t *testing.T) {
 func TestOAuth2AuthenticationProviderAuthenticateByClient(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
-	storageMock := &MockStorage{}
+	clientStorageMock := &MockClientProvider{}
 
 	client := &DefaultClient{
 		ID:          "5cc06c3b-5755-4229-958c-a515a245aaeb",
@@ -90,56 +90,62 @@ func TestOAuth2AuthenticationProviderAuthenticateByClient(t *testing.T) {
 		RedirectURI: "https://connect.myservice.tld",
 	}
 
-	storageMock.On("LoadClient", "5cc06c3b-5755-4229-958c-a515a245aaeb").Return(client, nil)
+	clientStorageMock.On("LoadClient", "5cc06c3b-5755-4229-958c-a515a245aaeb").Return(client, nil)
 
-	p := NewOAuth2AuthenticationProvider(tokenGenerator, storageMock)
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, nil, clientStorageMock, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
 	creds := credential.NewUsernamePasswordCredential("5cc06c3b-5755-4229-958c-a515a245aaeb", "WTvuAztPD2XBauomleRzGFYuZawS07Ym")
 
-	err := p.Authenticate(req, creds)
+	r, err := p.Authenticate(req, creds)
 	assert.NoError(t, err)
 
-	storageMock.AssertExpectations(t)
+	assert.NotNil(t, r.Context())
+
+	clientStorageMock.AssertExpectations(t)
 }
 
 func TestOAuth2AuthenticationProviderAuthenticateByClientWithClientNotFound(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
-	storageMock := &MockStorage{}
+	clientStorageMock := &MockClientProvider{}
 
-	storageMock.On("LoadClient", "bad").Return(nil, ErrClientNotFound)
+	clientStorageMock.On("LoadClient", "bad").Return(nil, ErrClientNotFound)
 
-	p := NewOAuth2AuthenticationProvider(tokenGenerator, storageMock)
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, nil, clientStorageMock, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
 	creds := credential.NewUsernamePasswordCredential("bad", "bad")
 
-	err := p.Authenticate(req, creds)
+	r, err := p.Authenticate(req, creds)
 	assert.EqualError(t, err, "load client info failed: oauth2 client not found")
 
-	storageMock.AssertExpectations(t)
+	assert.Same(t, req, r)
+
+	clientStorageMock.AssertExpectations(t)
 }
 
 func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenNotFound(t *testing.T) {
 	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
 
-	storageMock := &MockStorage{}
+	accessStorageMock := &MockAccessProvider{}
 
-	storageMock.On("LoadAccess", "bad").Return(nil, ErrAccessNotFound)
+	accessStorageMock.On("LoadAccess", "bad").Return(nil, ErrAccessNotFound)
 
-	p := NewOAuth2AuthenticationProvider(tokenGenerator, storageMock)
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, nil, nil, accessStorageMock, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
 	creds := credential.NewTokenCredential("bad")
 
-	err := p.Authenticate(req, creds)
+	r, err := p.Authenticate(req, creds)
 	assert.EqualError(t, err, "load access token failed: oauth2 access token not found")
 
-	storageMock.AssertExpectations(t)
+	assert.Same(t, req, r)
+
+	accessStorageMock.AssertExpectations(t)
 }
 
 func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenExpired(t *testing.T) {
@@ -147,7 +153,7 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenExpired(t
 
 	userMock := &user.MockUser{}
 
-	storageMock := &MockStorage{}
+	accessStorageMock := &MockAccessProvider{}
 
 	access := &AccessInfo{
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
@@ -155,18 +161,53 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenExpired(t
 		UserData:    userMock,
 	}
 
-	storageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
+	accessStorageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
 
-	p := NewOAuth2AuthenticationProvider(tokenGenerator, storageMock)
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, nil, nil, accessStorageMock, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
 	creds := credential.NewTokenCredential("wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR")
 
-	err := p.Authenticate(req, creds)
+	r, err := p.Authenticate(req, creds)
 	assert.EqualError(t, err, "token expired")
 
-	storageMock.AssertExpectations(t)
+	assert.Same(t, req, r)
+
+	accessStorageMock.AssertExpectations(t)
+}
+
+func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithUserNotFound(t *testing.T) {
+	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
+
+	userStorageMock := &MockUserProvider{}
+
+	userStorageMock.On("LoadUser", "8c87a032-755d-42f6-be96-0421948f6e94").Return(nil, ErrUserNotFound)
+
+	accessStorageMock := &MockAccessProvider{}
+
+	access := &AccessInfo{
+		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
+		ExpiresIn:   60,
+		CreatedAt:   time.Now(),
+		UserData:    "8c87a032-755d-42f6-be96-0421948f6e94",
+	}
+
+	accessStorageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
+
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, userStorageMock, nil, accessStorageMock, nil, nil)
+
+	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
+
+	creds := credential.NewTokenCredential("wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR")
+
+	r, err := p.Authenticate(req, creds)
+	assert.EqualError(t, err, "load user failed: oauth2 user not found")
+
+	assert.Same(t, req, r)
+
+	accessStorageMock.AssertExpectations(t)
+	userStorageMock.AssertExpectations(t)
 }
 
 func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithToken(t *testing.T) {
@@ -174,37 +215,52 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithToken(t *testi
 
 	userMock := &user.MockUser{}
 
-	storageMock := &MockStorage{}
+	userStorageMock := &MockUserProvider{}
+
+	userStorageMock.On("LoadUser", "8c87a032-755d-42f6-be96-0421948f6e94").Return(userMock, nil)
+
+	accessStorageMock := &MockAccessProvider{}
+
+	client := &DefaultClient{
+		ID:          "5cc06c3b-5755-4229-958c-a515a245aaeb",
+		Secret:      "WTvuAztPD2XBauomleRzGFYuZawS07Ym",
+		RedirectURI: "https://connect.myservice.tld",
+	}
 
 	access := &AccessInfo{
+		Client:      client,
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
 		ExpiresIn:   60,
 		CreatedAt:   time.Now(),
-		UserData:    userMock,
+		UserData:    "8c87a032-755d-42f6-be96-0421948f6e94",
 	}
 
-	storageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
+	accessStorageMock.On("LoadAccess", "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR").Return(access, nil)
 
-	p := NewOAuth2AuthenticationProvider(tokenGenerator, storageMock)
+	p := NewOAuth2AuthenticationProvider(tokenGenerator, userStorageMock, nil, accessStorageMock, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
 	creds := credential.NewTokenCredential("wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR")
 
-	err := p.Authenticate(req, creds)
+	r, err := p.Authenticate(req, creds)
 	assert.NoError(t, err)
 
-	storageMock.AssertExpectations(t)
+	assert.NotNil(t, r.Context())
+
+	accessStorageMock.AssertExpectations(t)
+	userStorageMock.AssertExpectations(t)
 }
 
 func TestOAuth2AuthenticationProviderAuthenticateWithBadCredentialType(t *testing.T) {
 	creds := &BadCredential{}
 
-	p := NewOAuth2AuthenticationProvider(nil, nil)
+	p := NewOAuth2AuthenticationProvider(nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://example.com/foo", nil)
 
-	err := p.Authenticate(req, creds)
-
+	r, err := p.Authenticate(req, creds)
 	assert.EqualError(t, err, "bad authentication format")
+
+	assert.Same(t, req, r)
 }
