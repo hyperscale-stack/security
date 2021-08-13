@@ -4,6 +4,7 @@
 
 package token
 
+//go:generate mockery --name=Generator --inpackage --case underscore
 type Generator interface {
 	GenerateAccessToken(generateRefresh bool) (accessToken string, refreshToken string, err error)
 }

@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/gilcrest/alice v1.0.0
+	github.com/hyperscale-stack/logger v1.0.0 // indirect
 	github.com/hyperscale-stack/secure v1.0.0 // indirect
 	github.com/rs/zerolog v1.20.0
 	github.com/stretchr/objx v0.3.0 // indirect

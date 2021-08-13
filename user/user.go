@@ -7,6 +7,8 @@ package user
 // User interface provides core user information
 //go:generate mockery --name=User --inpackage --case underscore
 type User interface {
+	GetID() string
+
 	// GetRoles returns the roles granted to the user.
 	GetRoles() []string
 

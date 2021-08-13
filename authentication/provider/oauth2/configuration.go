@@ -35,15 +35,46 @@ func (t AllowedAccessType) Exists(rt AccessRequestType) bool {
 }
 
 type Configuration struct {
+	PrefixURI string
+
+	// Token type to return
+	TokenType string
+
+	// old
+
 	AuthorizationExpiration time.Duration
 
 	AccessExpiration time.Duration
 
-	AllowGetAccessRequest bool
-
-	// List of allowed authorize types (only CODE by default)
+	// List of allowed authorize types (only CODE by default).
 	AllowedAuthorizeTypes AllowedAuthorizeType
 
-	// List of allowed access types (only AUTHORIZATION_CODE by default)
+	// List of allowed access types (only AUTHORIZATION_CODE by default).
 	AllowedAccessTypes AllowedAccessType
+
+	// HTTP status code to return for errors - default 200
+	// Only used if response was created from server.
+	ErrorStatusCode int
+
+	// If true allows client secret also in params, else only in
+	// Authorization header - default false.
+	AllowClientSecretInParams bool
+
+	// If true allows access request using GET, else only POST - default false.
+	AllowGetAccessRequest bool
+
+	// Require PKCE for code flows for public OAuth clients - default false.
+	RequirePKCEForPublicClients bool
+
+	// Separator to support multiple URIs in Client.GetRedirectUri().
+	// If blank (the default), don't allow multiple URIs.
+	RedirectUriSeparator string
+
+	// RetainTokenAfter Refresh allows the server to retain the access and
+	// refresh token for re-use - default false.
+	RetainTokenAfterRefresh bool
+}
+
+func NewConfiguration() *Configuration {
+	return &Configuration{}
 }

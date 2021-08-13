@@ -49,6 +49,8 @@ type AuthorizeProvider interface {
 //go:generate mockery --name=UserProvider --inpackage --case underscore
 type UserProvider interface {
 	LoadUser(id string) (user.User, error)
+	LoadByUsername(username string) (user.User, error)
+	Authenticate(username string, password string) (user.User, error)
 }
 
 //go:generate mockery --name=StorageProvider --inpackage --case underscore

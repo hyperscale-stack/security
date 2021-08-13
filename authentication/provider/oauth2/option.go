@@ -4,6 +4,11 @@
 
 package oauth2
 
+import (
+	"github.com/hyperscale-stack/logger"
+	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
+)
+
 // Option type.
 type Option func(server *Server)
 
@@ -16,6 +21,24 @@ func WithConfig(cfg *Configuration) Option {
 
 func WithStorage(storage StorageProvider) Option {
 	return func(server *Server) {
+		server.storage = storage
+	}
+}
 
+func WithUserProvider(userProvider UserProvider) Option {
+	return func(server *Server) {
+		server.userProvider = userProvider
+	}
+}
+
+func WithLogger(logger logger.Logger) Option {
+	return func(server *Server) {
+		server.logger = logger
+	}
+}
+
+func WithTokenGenerator(tokenGenerator token.Generator) Option {
+	return func(server *Server) {
+		server.tokenGenerator = tokenGenerator
 	}
 }

@@ -43,7 +43,7 @@ type AccessRequest struct {
 	Authorized bool
 
 	// Token expiration in seconds. Change if different from default
-	Expiration int32
+	Expiration time.Duration
 
 	// Set if a refresh token should be generated
 	GenerateRefresh bool
@@ -80,7 +80,7 @@ type AccessInfo struct {
 	Client Client
 
 	// Authorize data, for authorization code
-	AuthorizeData *AuthorizeInfo
+	AuthorizeInfo *AuthorizeInfo
 
 	// Previous access data, for refresh token
 	AccessInfo *AccessInfo
@@ -92,7 +92,7 @@ type AccessInfo struct {
 	RefreshToken string
 
 	// Token expiration in seconds
-	ExpiresIn int32
+	ExpiresIn int64
 
 	// Requested scope
 	Scope string
