@@ -12,11 +12,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAccessInfo(t *testing.T) {
+func TestAccessData(t *testing.T) {
 	cat, err := time.Parse("2006-01-02T15:04:05.000Z", "2014-11-12T11:45:26.371Z")
 	assert.NoError(t, err)
 
-	ai := &AccessInfo{
+	ai := &AccessData{
 		CreatedAt: cat,
 		ExpiresIn: 10,
 	}
@@ -27,7 +27,7 @@ func TestAccessInfo(t *testing.T) {
 func TestAccessTokenContext(t *testing.T) {
 	ctx := context.Background()
 
-	ai := &AccessInfo{
+	ai := &AccessData{
 		CreatedAt: time.Now(),
 		ExpiresIn: 10,
 	}

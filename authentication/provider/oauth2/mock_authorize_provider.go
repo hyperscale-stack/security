@@ -10,15 +10,15 @@ type MockAuthorizeProvider struct {
 }
 
 // LoadAuthorize provides a mock function with given fields: code
-func (_m *MockAuthorizeProvider) LoadAuthorize(code string) (*AuthorizeInfo, error) {
+func (_m *MockAuthorizeProvider) LoadAuthorize(code string) (*AuthorizeData, error) {
 	ret := _m.Called(code)
 
-	var r0 *AuthorizeInfo
-	if rf, ok := ret.Get(0).(func(string) *AuthorizeInfo); ok {
+	var r0 *AuthorizeData
+	if rf, ok := ret.Get(0).(func(string) *AuthorizeData); ok {
 		r0 = rf(code)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*AuthorizeInfo)
+			r0 = ret.Get(0).(*AuthorizeData)
 		}
 	}
 
@@ -47,11 +47,11 @@ func (_m *MockAuthorizeProvider) RemoveAuthorize(code string) error {
 }
 
 // SaveAuthorize provides a mock function with given fields: _a0
-func (_m *MockAuthorizeProvider) SaveAuthorize(_a0 *AuthorizeInfo) error {
+func (_m *MockAuthorizeProvider) SaveAuthorize(_a0 *AuthorizeData) error {
 	ret := _m.Called(_a0)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*AuthorizeInfo) error); ok {
+	if rf, ok := ret.Get(0).(func(*AuthorizeData) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)

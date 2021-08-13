@@ -5,11 +5,16 @@
 package oauth2
 
 import (
+	"errors"
 	"time"
 
 	"github.com/hyperscale-stack/logger"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
+)
+
+var (
+	ErrRequestMustBePost = errors.New("request must be POST")
 )
 
 type Server struct {
@@ -36,4 +41,12 @@ func NewServer(options ...Option) *Server {
 	}
 
 	return s
+}
+
+// NewResponse creates a new response for the server
+func (s *Server) NewResponse() *Response {
+	r := NewResponse(s.storage)
+	r.ErrorStatusCode = s.cfg.ErrorStatusCode
+
+	return r
 }

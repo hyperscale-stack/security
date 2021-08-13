@@ -43,15 +43,15 @@ func (s *InMemoryStorage) RemoveClient(id string) error {
 	return nil
 }
 
-func (s *InMemoryStorage) SaveAccess(access *oauth2.AccessInfo) error {
+func (s *InMemoryStorage) SaveAccess(access *oauth2.AccessData) error {
 	s.accesses.Store(access.AccessToken, access)
 
 	return nil
 }
 
-func (s *InMemoryStorage) LoadAccess(token string) (*oauth2.AccessInfo, error) {
+func (s *InMemoryStorage) LoadAccess(token string) (*oauth2.AccessData, error) {
 	if access, ok := s.accesses.Load(token); ok {
-		return access.(*oauth2.AccessInfo), nil
+		return access.(*oauth2.AccessData), nil
 	}
 
 	return nil, oauth2.ErrAccessNotFound
@@ -63,15 +63,15 @@ func (s *InMemoryStorage) RemoveAccess(token string) error {
 	return nil
 }
 
-func (s *InMemoryStorage) SaveRefresh(access *oauth2.AccessInfo) error {
+func (s *InMemoryStorage) SaveRefresh(access *oauth2.AccessData) error {
 	s.refreshs.Store(access.RefreshToken, access)
 
 	return nil
 }
 
-func (s *InMemoryStorage) LoadRefresh(token string) (*oauth2.AccessInfo, error) {
+func (s *InMemoryStorage) LoadRefresh(token string) (*oauth2.AccessData, error) {
 	if access, ok := s.refreshs.Load(token); ok {
-		return access.(*oauth2.AccessInfo), nil
+		return access.(*oauth2.AccessData), nil
 	}
 
 	return nil, oauth2.ErrRefreshNotFound
@@ -83,15 +83,15 @@ func (s *InMemoryStorage) RemoveRefresh(token string) error {
 	return nil
 }
 
-func (s *InMemoryStorage) SaveAuthorize(authorize *oauth2.AuthorizeInfo) error {
+func (s *InMemoryStorage) SaveAuthorize(authorize *oauth2.AuthorizeData) error {
 	s.authorizes.Store(authorize.Code, authorize)
 
 	return nil
 }
 
-func (s *InMemoryStorage) LoadAuthorize(code string) (*oauth2.AuthorizeInfo, error) {
+func (s *InMemoryStorage) LoadAuthorize(code string) (*oauth2.AuthorizeData, error) {
 	if authorize, ok := s.authorizes.Load(code); ok {
-		return authorize.(*oauth2.AuthorizeInfo), nil
+		return authorize.(*oauth2.AuthorizeData), nil
 	}
 
 	return nil, oauth2.ErrAuthorizeNotFound

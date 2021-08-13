@@ -52,7 +52,7 @@ func NewResponse(storage StorageProvider) *Response {
 		Output:          make(ResponseData),
 		Headers:         make(http.Header),
 		IsError:         false,
-		// Storage:         storage.Clone(),
+		Storage:         storage, // Clone ?
 	}
 	r.Headers.Add(
 		"Cache-Control",
@@ -159,8 +159,4 @@ func (r *Response) GetRedirectURL() (string, error) {
 	u.Fragment = ""
 
 	return u.String(), nil
-}
-
-func (r *Response) Close() {
-	// r.Storage.Close()
 }

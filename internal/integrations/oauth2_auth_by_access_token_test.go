@@ -37,7 +37,7 @@ func TestOauth2AuthByAccessTokenWithNoAuthHeader(t *testing.T) {
 
 	storageProvider.SaveClient(client)
 
-	storageProvider.SaveAccess(&oauth2.AccessInfo{
+	storageProvider.SaveAccess(&oauth2.AccessData{
 		Client:      client,
 		AccessToken: "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU",
 		UserData:    "8c87a032-755d-42f6-be96-0421948f6e94",
@@ -84,7 +84,7 @@ func TestOauth2AuthByAccessTokenWithBadToken(t *testing.T) {
 
 	storageProvider.SaveClient(client)
 
-	storageProvider.SaveAccess(&oauth2.AccessInfo{
+	storageProvider.SaveAccess(&oauth2.AccessData{
 		Client:      client,
 		AccessToken: "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU",
 	})
@@ -138,7 +138,7 @@ func TestOauth2AuthByAccessToken(t *testing.T) {
 
 	storageProvider.SaveClient(client)
 
-	storageProvider.SaveAccess(&oauth2.AccessInfo{
+	storageProvider.SaveAccess(&oauth2.AccessData{
 		Client:      client,
 		AccessToken: "I3SoKTVXi6QzMZAmDW2Fgw2MLX0msPGRN58bCDLDFthJmy6Qoy8FH5v10dbewR6PfAV3brKhepjnTJVhDplSHFe6qbF3J4YDkI5EzXG0S8X7snSoB6FtrPNFMmISuEmU",
 		ExpiresIn:   60,

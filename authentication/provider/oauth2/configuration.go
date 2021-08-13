@@ -68,7 +68,7 @@ type Configuration struct {
 
 	// Separator to support multiple URIs in Client.GetRedirectUri().
 	// If blank (the default), don't allow multiple URIs.
-	RedirectUriSeparator string
+	RedirectURISeparator string
 
 	// RetainTokenAfter Refresh allows the server to retain the access and
 	// refresh token for re-use - default false.
