@@ -7,6 +7,7 @@ package oauth2
 import (
 	"testing"
 
+	"github.com/euskadi31/go-eventemitter"
 	"github.com/hyperscale-stack/logger"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
 	"github.com/stretchr/testify/assert"
@@ -70,4 +71,16 @@ func TestWithTokenGenerator(t *testing.T) {
 	opt(server)
 
 	assert.Same(t, tokenGeneratorMock, server.tokenGenerator)
+}
+
+func TestWithEventEmitter(t *testing.T) {
+	emitter := eventemitter.New()
+
+	opt := WithEventEmitter(emitter)
+
+	server := &Server{}
+
+	opt(server)
+
+	assert.Same(t, emitter, server.emitter)
 }

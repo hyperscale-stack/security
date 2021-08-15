@@ -5,6 +5,7 @@
 package oauth2
 
 import (
+	"github.com/euskadi31/go-eventemitter"
 	"github.com/hyperscale-stack/logger"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
 )
@@ -40,5 +41,11 @@ func WithLogger(logger logger.Logger) Option {
 func WithTokenGenerator(tokenGenerator token.Generator) Option {
 	return func(server *Server) {
 		server.tokenGenerator = tokenGenerator
+	}
+}
+
+func WithEventEmitter(emitter eventemitter.EventEmitter) Option {
+	return func(server *Server) {
+		server.emitter = emitter
 	}
 }

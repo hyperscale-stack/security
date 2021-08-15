@@ -7,6 +7,7 @@ package oauth2
 import (
 	"time"
 
+	"github.com/euskadi31/go-eventemitter"
 	"github.com/hyperscale-stack/logger"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
@@ -18,6 +19,7 @@ type Server struct {
 	storage        StorageProvider
 	userProvider   UserProvider
 	tokenGenerator token.Generator
+	emitter        eventemitter.EventEmitter
 	now            func() time.Time
 }
 
@@ -29,6 +31,7 @@ func NewServer(options ...Option) *Server {
 		logger:         &logger.Nop{},
 		tokenGenerator: random.NewTokenGenerator(&random.Configuration{}),
 		now:            time.Now,
+		emitter:        eventemitter.New(),
 	}
 
 	for _, opt := range options {
