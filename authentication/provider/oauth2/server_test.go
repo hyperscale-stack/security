@@ -5,6 +5,7 @@
 package oauth2
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,4 +16,16 @@ func TestServer(t *testing.T) {
 	server := NewServer(WithConfig(cfg))
 
 	assert.Same(t, cfg, server.cfg)
+}
+
+func TestServerNewResponse(t *testing.T) {
+	cfg := &Configuration{
+		ErrorStatusCode: http.StatusOK,
+	}
+	server := NewServer(WithConfig(cfg))
+
+	response := server.NewResponse()
+	assert.NotNil(t, response)
+
+	assert.Equal(t, cfg.ErrorStatusCode, response.ErrorStatusCode)
 }

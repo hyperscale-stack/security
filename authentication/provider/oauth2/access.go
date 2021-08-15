@@ -17,6 +17,10 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
+var (
+	ErrRequestMustBePost = errors.New("request must be POST")
+)
+
 // AccessRequestType is the type for OAuth2 param `grant_type`
 type AccessRequestType string
 
@@ -134,12 +138,12 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 	// Only allow GET or POST
 	if r.Method == http.MethodGet {
 		if !s.cfg.AllowGetAccessRequest {
-			s.setErrorAndLog(w, E_INVALID_REQUEST, errors.New("Request must be POST"), "access_request=%s", "GET request not allowed")
+			s.setErrorAndLog(w, E_INVALID_REQUEST, ErrRequestMustBePost, "access_request=%s", "GET request not allowed")
 
 			return nil
 		}
 	} else if r.Method != http.MethodPost {
-		s.setErrorAndLog(w, E_INVALID_REQUEST, errors.New("Request must be POST"), "access_request=%s", "request must be POST")
+		s.setErrorAndLog(w, E_INVALID_REQUEST, ErrRequestMustBePost, "access_request=%s", "request must be POST")
 
 		return nil
 	}

@@ -81,6 +81,14 @@ func TestURIValidate(t *testing.T) {
 
 	invalid := [][]string{
 		{
+			"",
+			"",
+		},
+		{
+			"\n",
+			"\n",
+		},
+		{
 			// Doesn't satisfy base path
 			"http://localhost:14000/appauth",
 			"http://localhost:14000/app",
@@ -153,6 +161,11 @@ func TestURIListValidate(t *testing.T) {
 	if _, err := ValidateURIList("http://xxx:14000/appauth;http://localhost:14000/appauth", "http://localhost:14000/app", ";"); err == nil {
 		t.Error("V4 should have failed")
 	}
+
+	// V5
+	if _, err := ValidateURIList("\n", "\n", ";"); err == nil {
+		t.Error("V5 should have failed")
+	}
 }
 
 func TestFirstURI(t *testing.T) {
@@ -160,4 +173,37 @@ func TestFirstURI(t *testing.T) {
 	assert.Equal(t, "mybundle://connect", FirstURI("mybundle://connect", " "))
 	assert.Equal(t, "mybundle://connect", FirstURI("mybundle://connect", ""))
 	assert.Equal(t, "", FirstURI("", " "))
+	assert.Equal(t, "mybundle://connect", FirstURI("mybundle://connect", ";"))
+}
+
+func TestNewURIValidationError(t *testing.T) {
+	err := newURIValidationError("scheme mismatch", "http://www.google.com/myapp", "http://www.google.com/myapp../test")
+
+	assert.EqualError(t, err, "scheme mismatch: http://www.google.com/myapp / http://www.google.com/myapp../test")
+}
+
+func TestParseURLs(t *testing.T) {
+	invalid := [][]string{
+		{
+			"\n",
+			"\n",
+		},
+		{
+			"https://google.com",
+			"\n",
+		},
+		{
+			"https://google.com#foo",
+			"https://google.com#foo",
+		},
+		{
+			"http://google.com",
+			"https://google.com",
+		},
+	}
+	for _, v := range invalid {
+		if _, err := ValidateURI(v[0], v[1]); err == nil {
+			t.Errorf("Expected ValidateURI(%s, %s) to fail", v[0], v[1])
+		}
+	}
 }

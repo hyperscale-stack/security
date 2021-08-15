@@ -17,7 +17,7 @@ type UsernamePasswordCredential struct {
 var _ Credential = (*UsernamePasswordCredential)(nil)
 
 // NewUsernamePasswordCredential constructor.
-func NewUsernamePasswordCredential(principal string, credentials string) Credential {
+func NewUsernamePasswordCredential(principal string, credentials string) *UsernamePasswordCredential {
 	return &UsernamePasswordCredential{
 		credentials: credentials,
 		principal:   principal,

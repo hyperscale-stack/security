@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	ErrNotARedirectResponse = errors.New("Not a redirect response")
+	ErrNotARedirectResponse = errors.New("not a redirect response")
 )
 
 // Data for response output

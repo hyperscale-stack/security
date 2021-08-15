@@ -8,11 +8,18 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
+	"github.com/hyperscale-stack/security/http/header"
+)
+
+var (
+	ErrInvalidAuthorizationHeader  = errors.New("invalid authorization header")
+	ErrInvalidAuthorizationMessage = errors.New("invalid authorization message")
 )
 
 // Parse basic authentication header
@@ -45,18 +52,19 @@ func CheckBasicAuth(r *http.Request) (*BasicAuth, error) {
 		return nil, nil
 	}
 
-	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
-	if len(s) != 2 || s[0] != "Basic" {
-		return nil, errors.New("Invalid authorization header")
+	b64, ok := header.ExtractAuthorizationValue("Basic", r.Header.Get("Authorization"))
+	if !ok {
+		return nil, ErrInvalidAuthorizationHeader
 	}
 
-	b, err := base64.StdEncoding.DecodeString(s[1])
+	b, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode basic auth failed: %w", err)
 	}
+
 	pair := strings.SplitN(string(b), ":", 2)
 	if len(pair) != 2 {
-		return nil, errors.New("Invalid authorization message")
+		return nil, ErrInvalidAuthorizationMessage
 	}
 
 	// Decode the client_id and client_secret pairs as per
@@ -113,7 +121,7 @@ func (s Server) getClientAuth(w *Response, r *http.Request, allowQueryParams boo
 			)
 
 			if auth.GetPrincipal() != "" {
-				return auth.(*credential.UsernamePasswordCredential)
+				return auth
 			}
 		}
 	}

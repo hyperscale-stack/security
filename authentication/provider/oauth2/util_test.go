@@ -14,11 +14,13 @@ import (
 )
 
 const (
-	badAuthValue           = "Digest XHHHHHHH"
-	badUsernameInAuthValue = "Basic dSUyc2VybmFtZTpwYXNzd29yZA==" // u%2sername:password
-	badPasswordInAuthValue = "Basic dXNlcm5hbWU6cGElMnN3b3Jk"     // username:pa%2sword
-	goodAuthValue          = "Basic Y2xpZW50K25hbWU6Y2xpZW50KyUyNGVjcmV0"
-	goodBearerAuthValue    = "Bearer BGFVTDUJDp0ZXN0"
+	badAuthValue              = "Digest XHHHHHHH"
+	badBasicAuthValue         = "Basic €€€"
+	badBasicAuthWithBadFormat = "Basic Zm9vCg=="                     // foo
+	badUsernameInAuthValue    = "Basic dSUyc2VybmFtZTpwYXNzd29yZA==" // u%2sername:password
+	badPasswordInAuthValue    = "Basic dXNlcm5hbWU6cGElMnN3b3Jk"     // username:pa%2sword
+	goodAuthValue             = "Basic Y2xpZW50K25hbWU6Y2xpZW50KyUyNGVjcmV0"
+	goodBearerAuthValue       = "Bearer BGFVTDUJDp0ZXN0"
 )
 
 func TestBasicAuth(t *testing.T) {
@@ -32,6 +34,22 @@ func TestBasicAuth(t *testing.T) {
 	// with invalid header
 	r.Header.Set("Authorization", badAuthValue)
 	b, err := CheckBasicAuth(r)
+	if b != nil || err == nil {
+		t.Errorf("Validated invalid auth")
+		return
+	}
+
+	// with invalid value
+	r.Header.Set("Authorization", badBasicAuthValue)
+	b, err = CheckBasicAuth(r)
+	if b != nil || err == nil {
+		t.Errorf("Validated invalid auth")
+		return
+	}
+
+	// with invalid format
+	r.Header.Set("Authorization", badBasicAuthWithBadFormat)
+	b, err = CheckBasicAuth(r)
 	if b != nil || err == nil {
 		t.Errorf("Validated invalid auth")
 		return

@@ -5,16 +5,11 @@
 package oauth2
 
 import (
-	"errors"
 	"time"
 
 	"github.com/hyperscale-stack/logger"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
-)
-
-var (
-	ErrRequestMustBePost = errors.New("request must be POST")
 )
 
 type Server struct {

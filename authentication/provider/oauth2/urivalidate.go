@@ -11,7 +11,11 @@ import (
 	"strings"
 )
 
-// error returned when validation don't match
+var (
+	ErrNoBlank = errors.New("urls cannot be blank")
+)
+
+// error returned when validation don't match.
 type URIValidationError string
 
 func (e URIValidationError) Error() string {
@@ -22,17 +26,17 @@ func newURIValidationError(msg string, base string, redirect string) URIValidati
 	return URIValidationError(fmt.Sprintf("%s: %s / %s", msg, base, redirect))
 }
 
-// Parse urls, resolving uri references to base url
+// ParseURLs resolving uri references to base url.
 func ParseURLs(baseUrl, redirectUrl string) (retBaseUrl, retRedirectUrl *url.URL, err error) {
 	var base, redirect *url.URL
 	// parse base url
 	if base, err = url.Parse(baseUrl); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parse base url failed: %w", err)
 	}
 
 	// parse redirect url
 	if redirect, err = url.Parse(redirectUrl); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parse redirect url failed: %w", err)
 	}
 
 	// must not have fragment
@@ -89,7 +93,7 @@ func ValidateURIList(baseUriList string, redirectUri string, separator string) (
 // ValidateURI validates that redirectUri is contained in baseUri.
 func ValidateURI(baseUri string, redirectUri string) (realRedirectUri string, err error) {
 	if baseUri == "" || redirectUri == "" {
-		return "", errors.New("urls cannot be blank")
+		return "", ErrNoBlank
 	}
 
 	base, redirect, err := ParseURLs(baseUri, redirectUri)
@@ -117,9 +121,5 @@ func FirstURI(baseUriList string, separator string) string {
 		return baseUriList
 	}
 
-	if slist := strings.Split(baseUriList, separator); len(slist) > 0 {
-		return slist[0]
-	}
-
-	return ""
+	return strings.Split(baseUriList, separator)[0]
 }
