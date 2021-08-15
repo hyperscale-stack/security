@@ -6,10 +6,10 @@ package oauth2
 
 import "time"
 
-// AllowedAuthorizeType is a collection of allowed auth request types
+// AllowedAuthorizeType is a collection of allowed auth request types.
 type AllowedAuthorizeType []AuthorizeRequestType
 
-// Exists returns true if the auth type exists in the list
+// Exists returns true if the auth type exists in the list.
 func (t AllowedAuthorizeType) Exists(rt AuthorizeRequestType) bool {
 	for _, k := range t {
 		if k == rt {
@@ -20,10 +20,10 @@ func (t AllowedAuthorizeType) Exists(rt AuthorizeRequestType) bool {
 	return false
 }
 
-// AllowedAccessType is a collection of allowed access request types
+// AllowedAccessType is a collection of allowed access request types.
 type AllowedAccessType []AccessRequestType
 
-// Exists returns true if the access type exists in the list
+// Exists returns true if the access type exists in the list.
 func (t AllowedAccessType) Exists(rt AccessRequestType) bool {
 	for _, k := range t {
 		if k == rt {

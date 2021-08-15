@@ -20,21 +20,22 @@ import (
 var (
 	ErrInvalidAuthorizationHeader  = errors.New("invalid authorization header")
 	ErrInvalidAuthorizationMessage = errors.New("invalid authorization message")
+	ErrClientAuthenticationNotSent = errors.New("Client authentication not sent")
 )
 
-// Parse basic authentication header
+// Parse basic authentication header.
 type BasicAuth struct {
 	Username string
 	Password string
 }
 
-// Parse bearer authentication header
+// Parse bearer authentication header.
 type BearerAuth struct {
 	Code string
 }
 
 // CheckClientSecret determines whether the given secret matches a secret held by the client.
-// Public clients return true for a secret of ""
+// Public clients return true for a secret of "".
 func CheckClientSecret(client Client, secret string) bool {
 	switch client := client.(type) {
 	case ClientSecretMatcher:
@@ -46,7 +47,7 @@ func CheckClientSecret(client Client, secret string) bool {
 	}
 }
 
-// Return authorization header data
+// Return authorization header data.
 func CheckBasicAuth(r *http.Request) (*BasicAuth, error) {
 	if r.Header.Get("Authorization") == "" {
 		return nil, nil
@@ -72,12 +73,12 @@ func CheckBasicAuth(r *http.Request) (*BasicAuth, error) {
 
 	username, err := url.QueryUnescape(pair[0])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unescape username failed: %w", err)
 	}
 
 	password, err := url.QueryUnescape(pair[1])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unescape password failed: %w", err)
 	}
 
 	return &BasicAuth{Username: username, Password: password}, nil
@@ -87,20 +88,22 @@ func CheckBasicAuth(r *http.Request) (*BasicAuth, error) {
 func CheckBearerAuth(r *http.Request) *BearerAuth {
 	authHeader := r.Header.Get("Authorization")
 	authForm := r.FormValue("code")
+
 	if authHeader == "" && authForm == "" {
 		return nil
 	}
+
 	token := authForm
+
 	if authHeader != "" {
-		s := strings.SplitN(authHeader, " ", 2)
-		if (len(s) != 2 || strings.ToLower(s[0]) != "bearer") && token == "" {
+		v, ok := header.ExtractAuthorizationValue("Bearer", authHeader)
+		if !ok {
 			return nil
 		}
-		//Use authorization header token only if token type is bearer else query string access token would be returned
-		if len(s) > 0 && strings.ToLower(s[0]) == "bearer" {
-			token = s[1]
-		}
+
+		token = v
 	}
+
 	return &BearerAuth{Code: token}
 }
 
@@ -128,7 +131,7 @@ func (s Server) getClientAuth(w *Response, r *http.Request, allowQueryParams boo
 
 	auth := credential.FromContext(ctx)
 	if auth == nil {
-		s.setErrorAndLog(w, E_INVALID_REQUEST, errors.New("Client authentication not sent"), "get_client_auth=%s", "client authentication not sent")
+		s.setErrorAndLog(w, E_INVALID_REQUEST, ErrClientAuthenticationNotSent, "get_client_auth=%s", "client authentication not sent")
 
 		return nil
 	}

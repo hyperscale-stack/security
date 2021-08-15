@@ -9,7 +9,7 @@ import (
 	"net/http"
 )
 
-// OutputJSON encodes the Response to JSON and writes to the http.ResponseWriter
+// OutputJSON encodes the Response to JSON and writes to the http.ResponseWriter.
 func OutputJSON(rs *Response, w http.ResponseWriter, r *http.Request) error {
 	// Add headers
 	for i, k := range rs.Headers {
@@ -29,7 +29,6 @@ func OutputJSON(rs *Response, w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(302)
 
 		return nil
-
 	}
 
 	// set content type if the response doesn't already have one associated with it
@@ -39,6 +38,6 @@ func OutputJSON(rs *Response, w http.ResponseWriter, r *http.Request) error {
 
 	w.WriteHeader(rs.StatusCode)
 
+	//nolint:wrapcheck
 	return json.NewEncoder(w).Encode(rs.Output)
-
 }

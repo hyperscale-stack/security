@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// AuthorizeRequestType is the type for OAuth param `response_type`
+// AuthorizeRequestType is the type for OAuth param `response_type`.
 type AuthorizeRequestType string
 
 const (
@@ -25,7 +25,7 @@ var (
 	pkceMatcher = regexp.MustCompile("^[a-zA-Z0-9~._-]{43,128}$")
 )
 
-// Authorize request information
+// Authorize request information.
 type AuthorizeRequest struct {
 	Type        AuthorizeRequestType
 	Client      Client

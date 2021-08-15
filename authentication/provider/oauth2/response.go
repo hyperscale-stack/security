@@ -15,10 +15,10 @@ var (
 	ErrNotARedirectResponse = errors.New("not a redirect response")
 )
 
-// Data for response output
+// Data for response output.
 type ResponseData map[string]interface{}
 
-// Response type enum
+// Response type enum.
 type ResponseType int
 
 const (
@@ -26,7 +26,7 @@ const (
 	REDIRECT
 )
 
-// Server response
+// Server response.
 type Response struct {
 	Type               ResponseType
 	StatusCode         int
@@ -65,18 +65,18 @@ func NewResponse(storage StorageProvider) *Response {
 }
 
 // SetError sets an error id and description on the Response
-// state and uri are left blank
+// state and uri are left blank.
 func (r *Response) SetError(id DefaultErrorID, description string) {
 	r.SetErrorURI(id, description, "", "")
 }
 
 // SetErrorState sets an error id, description, and state on the Response
-// uri is left blank
+// uri is left blank.
 func (r *Response) SetErrorState(id DefaultErrorID, description string, state string) {
 	r.SetErrorURI(id, description, "", state)
 }
 
-// SetErrorURI sets an error id, description, state, and uri on the Response
+// SetErrorURI sets an error id, description, state, and uri on the Response.
 func (r *Response) SetErrorURI(id DefaultErrorID, description string, uri string, state string) {
 	// get default error message
 	if description == "" {
@@ -107,19 +107,19 @@ func (r *Response) SetErrorURI(id DefaultErrorID, description string, uri string
 	}
 }
 
-// SetRedirect changes the response to redirect to the given url
+// SetRedirect changes the response to redirect to the given url.
 func (r *Response) SetRedirect(url string) {
 	// set redirect parameters
 	r.Type = REDIRECT
 	r.URL = url
 }
 
-// SetRedirectFragment sets redirect values to be passed in fragment instead of as query parameters
+// SetRedirectFragment sets redirect values to be passed in fragment instead of as query parameters.
 func (r *Response) SetRedirectFragment(f bool) {
 	r.RedirectInFragment = f
 }
 
-// GetRedirectURL returns the redirect url with all query string parameters
+// GetRedirectURL returns the redirect url with all query string parameters.
 func (r *Response) GetRedirectURL() (string, error) {
 	if r.Type != REDIRECT {
 		return "", ErrNotARedirectResponse

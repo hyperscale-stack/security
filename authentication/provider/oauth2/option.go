@@ -12,7 +12,7 @@ import (
 // Option type.
 type Option func(server *Server)
 
-// WithConfig add config to server
+// WithConfig add config to server.
 func WithConfig(cfg *Configuration) Option {
 	return func(server *Server) {
 		server.cfg = cfg

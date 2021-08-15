@@ -82,6 +82,7 @@ func ValidateURIList(baseUriList string, redirectUri string, separator string) (
 		}
 
 		// if there was an error that is not a validation error, return it
+		//nolint:errorlint
 		if _, iok := err.(URIValidationError); !iok {
 			return "", err
 		}

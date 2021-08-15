@@ -38,7 +38,7 @@ func NewServer(options ...Option) *Server {
 	return s
 }
 
-// NewResponse creates a new response for the server
+// NewResponse creates a new response for the server.
 func (s *Server) NewResponse() *Response {
 	r := NewResponse(s.storage)
 	r.ErrorStatusCode = s.cfg.ErrorStatusCode

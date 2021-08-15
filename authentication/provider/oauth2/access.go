@@ -18,10 +18,15 @@ import (
 )
 
 var (
-	ErrRequestMustBePost = errors.New("request must be POST")
+	ErrRequestMustBePost         = errors.New("request must be POST")
+	ErrExtraScope                = errors.New("the requested scope must not include any scope not originally granted by the resource owner")
+	ErrClientIDNotSame           = errors.New("client id must be the same from previous token")
+	ErrCodeChallengeNotSame      = errors.New("code_verifier failed comparison with code_challenge")
+	ErrCodeVerifierInvalidFormat = errors.New("code_verifier has invalid format")
+	ErrRedirectURINotSame        = errors.New("redirect uri is different")
 )
 
-// AccessRequestType is the type for OAuth2 param `grant_type`
+// AccessRequestType is the type for OAuth2 param `grant_type`.
 type AccessRequestType string
 
 const (
@@ -33,7 +38,7 @@ const (
 	IMPLICIT           AccessRequestType = "__implicit"
 )
 
-// AccessRequest is a request for access tokens
+// AccessRequest is a request for access tokens.
 type AccessRequest struct {
 	Type          AccessRequestType
 	Code          string
@@ -133,7 +138,7 @@ func (i *AccessData) ExpireAt() time.Time {
 	return i.CreatedAt.Add(time.Duration(i.ExpiresIn) * time.Second)
 }
 
-// HandleAccessRequest is the http.HandlerFunc for handling access token requests
+// HandleAccessRequest is the http.HandlerFunc for handling access token requests.
 func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessRequest {
 	// Only allow GET or POST
 	if r.Method == http.MethodGet {
@@ -161,6 +166,7 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 		return nil
 	}
 
+	//nolint: exhaustive
 	switch grantType {
 	case AUTHORIZATION_CODE:
 		return s.handleAuthorizationCodeRequest(w, r)
@@ -170,8 +176,12 @@ func (s *Server) HandleAccessRequest(w *Response, r *http.Request) *AccessReques
 		return s.handlePasswordRequest(w, r)
 	case CLIENT_CREDENTIALS:
 		return s.handleClientCredentialsRequest(w, r)
-	default:
+	case ASSERTION:
 		return s.handleAssertionRequest(w, r)
+	default:
+		s.setErrorAndLog(w, E_UNSUPPORTED_GRANT_TYPE, nil, "access_request=%s", "unknown grant type")
+
+		return nil
 	}
 }
 
@@ -250,15 +260,17 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 	if ret.RedirectURI == "" {
 		ret.RedirectURI = FirstURI(ret.Client.GetRedirectURI(), s.cfg.RedirectURISeparator)
 	}
-	if realRedirectURI, err := ValidateURIList(ret.Client.GetRedirectURI(), ret.RedirectURI, s.cfg.RedirectURISeparator); err != nil {
 
+	if realRedirectURI, err := ValidateURIList(ret.Client.GetRedirectURI(), ret.RedirectURI, s.cfg.RedirectURISeparator); err != nil {
 		s.setErrorAndLog(w, E_INVALID_REQUEST, err, "auth_code_request=%s", "error validating client redirect")
+
 		return nil
 	} else {
 		ret.RedirectURI = realRedirectURI
 	}
+
 	if ret.AuthorizeData.RedirectURI != ret.RedirectURI {
-		s.setErrorAndLog(w, E_INVALID_REQUEST, errors.New("Redirect uri is different"), "auth_code_request=%s", "client redirect does not match authorization data")
+		s.setErrorAndLog(w, E_INVALID_REQUEST, ErrRedirectURINotSame, "auth_code_request=%s", "client redirect does not match authorization data")
 
 		return nil
 	}
@@ -270,7 +282,7 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 			s.setErrorAndLog(
 				w,
 				E_INVALID_REQUEST,
-				errors.New("code_verifier has invalid format"),
+				ErrCodeVerifierInvalidFormat,
 				"auth_code_request=%s",
 				"pkce code challenge verifier does not match",
 			)
@@ -280,6 +292,7 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 
 		// https: //tools.ietf.org/html/rfc7636#section-4.6
 		codeVerifier := ""
+
 		switch ret.AuthorizeData.CodeChallengeMethod {
 		case "", PKCE_PLAIN:
 			codeVerifier = ret.CodeVerifier
@@ -302,7 +315,7 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 			s.setErrorAndLog(
 				w,
 				E_INVALID_GRANT,
-				errors.New("code_verifier failed comparison with code_challenge"),
+				ErrCodeChallengeNotSame,
 				"auth_code_request=%s",
 				"pkce code verifier does not match challenge",
 			)
@@ -407,7 +420,7 @@ func (s *Server) handleRefreshTokenRequest(w *Response, r *http.Request) *Access
 		s.setErrorAndLog(
 			w,
 			E_INVALID_CLIENT,
-			errors.New("Client id must be the same from previous token"),
+			ErrClientIDNotSame,
 			"refresh_token=%s, current=%v, previous=%v",
 			"client mismatch",
 			ret.Client.GetID(),
@@ -426,8 +439,7 @@ func (s *Server) handleRefreshTokenRequest(w *Response, r *http.Request) *Access
 	}
 
 	if extraScopes(ret.AccessData.Scope, ret.Scope) {
-		msg := "the requested scope must not include any scope not originally granted by the resource owner"
-		s.setErrorAndLog(w, E_ACCESS_DENIED, errors.New(msg), "refresh_token=%s", msg)
+		s.setErrorAndLog(w, E_ACCESS_DENIED, ErrExtraScope, "refresh_token=%s", ErrExtraScope.Error())
 
 		return nil
 	}
@@ -435,6 +447,7 @@ func (s *Server) handleRefreshTokenRequest(w *Response, r *http.Request) *Access
 	return ret
 }
 
+//nolint:dupl
 func (s *Server) handlePasswordRequest(w *Response, r *http.Request) *AccessRequest {
 	// get client authentication
 	auth := s.getClientAuth(w, r, s.cfg.AllowClientSecretInParams)
@@ -498,6 +511,7 @@ func (s *Server) handleClientCredentialsRequest(w *Response, r *http.Request) *A
 	return ret
 }
 
+//nolint:dupl
 func (s *Server) handleAssertionRequest(w *Response, r *http.Request) *AccessRequest {
 	// get client authentication
 	auth := s.getClientAuth(w, r, s.cfg.AllowClientSecretInParams)
@@ -547,70 +561,85 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 		redirectUri = ar.RedirectURI
 	}
 
-	if ar.Authorized {
-		var ret *AccessData
-		var err error
+	if !ar.Authorized {
+		s.setErrorAndLog(w, E_ACCESS_DENIED, nil, "finish_access_request=%s", "authorization failed")
 
-		if ar.ForceAccessData == nil {
-			// generate access token
-			ret = &AccessData{
-				Client:        ar.Client,
-				AuthorizeData: ar.AuthorizeData,
-				AccessData:    ar.AccessData,
-				RedirectURI:   redirectUri,
-				CreatedAt:     s.now(),
-				ExpiresIn:     int64(ar.Expiration.Seconds()),
-				UserData:      ar.UserData,
-				Scope:         ar.Scope,
-			}
+		return
+	}
 
-			// generate access token
-			// @TODO: add ret at first arg for GenerateAccessToken
-			ret.AccessToken, ret.RefreshToken, err = s.tokenGenerator.GenerateAccessToken(ar.GenerateRefresh)
-			if err != nil {
-				s.setErrorAndLog(w, E_SERVER_ERROR, err, "finish_access_request=%s", "error generating token")
+	var ret *AccessData
 
-				return
-			}
-		} else {
-			ret = ar.ForceAccessData
+	var err error
+
+	if ar.ForceAccessData == nil {
+		// generate access token
+		ret = &AccessData{
+			Client:        ar.Client,
+			AuthorizeData: ar.AuthorizeData,
+			AccessData:    ar.AccessData,
+			RedirectURI:   redirectUri,
+			CreatedAt:     s.now(),
+			ExpiresIn:     int64(ar.Expiration.Seconds()),
+			UserData:      ar.UserData,
+			Scope:         ar.Scope,
 		}
 
-		// save access token
-		if err = w.Storage.SaveAccess(ret); err != nil {
-			s.setErrorAndLog(w, E_SERVER_ERROR, err, "finish_access_request=%s", "error saving access token")
+		// generate access token
+		// @TODO: add ret at first arg for GenerateAccessToken
+		ret.AccessToken, ret.RefreshToken, err = s.tokenGenerator.GenerateAccessToken(ar.GenerateRefresh)
+		if err != nil {
+			s.setErrorAndLog(w, E_SERVER_ERROR, err, "finish_access_request=%s", "error generating token")
 
 			return
 		}
-
-		// remove authorization token
-		if ret.AuthorizeData != nil {
-			w.Storage.RemoveAuthorize(ret.AuthorizeData.Code)
-		}
-
-		// remove previous access token
-		if ret.AccessData != nil && !s.cfg.RetainTokenAfterRefresh {
-			if ret.AccessData.RefreshToken != "" {
-				w.Storage.RemoveRefresh(ret.AccessData.RefreshToken)
-			}
-
-			w.Storage.RemoveAccess(ret.AccessData.AccessToken)
-		}
-
-		// output data
-		w.Output["access_token"] = ret.AccessToken
-		w.Output["token_type"] = s.cfg.TokenType
-		w.Output["expires_in"] = ret.ExpiresIn
-
-		if ret.RefreshToken != "" {
-			w.Output["refresh_token"] = ret.RefreshToken
-		}
-
-		if ret.Scope != "" {
-			w.Output["scope"] = ret.Scope
-		}
 	} else {
-		s.setErrorAndLog(w, E_ACCESS_DENIED, nil, "finish_access_request=%s", "authorization failed")
+		ret = ar.ForceAccessData
+	}
+
+	// save access token
+	if err = w.Storage.SaveAccess(ret); err != nil {
+		s.setErrorAndLog(w, E_SERVER_ERROR, err, "finish_access_request=%s", "error saving access token")
+
+		return
+	}
+
+	// remove authorization token
+	if ret.AuthorizeData != nil {
+		if err := w.Storage.RemoveAuthorize(ret.AuthorizeData.Code); err != nil {
+			s.logger.Error("oauth2: remove autorize code failed", logger.WithLabels(map[string]interface{}{
+				"code": ret.AuthorizeData.Code,
+			}))
+		}
+	}
+
+	// remove previous access token
+	if ret.AccessData != nil && !s.cfg.RetainTokenAfterRefresh {
+		if ret.AccessData.RefreshToken != "" {
+			if err := w.Storage.RemoveRefresh(ret.AccessData.RefreshToken); err != nil {
+				s.logger.Error("oauth2: remove refresh token failed", logger.WithLabels(map[string]interface{}{
+					"refresh_token": ret.AccessData.RefreshToken,
+				}))
+			}
+		}
+
+		if err := w.Storage.RemoveAccess(ret.AccessData.AccessToken); err != nil {
+			s.logger.Error("oauth2: remove access token failed", logger.WithLabels(map[string]interface{}{
+				"access_token": ret.AccessData.AccessToken,
+			}))
+		}
+	}
+
+	// output data
+	w.Output["access_token"] = ret.AccessToken
+	w.Output["token_type"] = s.cfg.TokenType
+	w.Output["expires_in"] = ret.ExpiresIn
+
+	if ret.RefreshToken != "" {
+		w.Output["refresh_token"] = ret.RefreshToken
+	}
+
+	if ret.Scope != "" {
+		w.Output["scope"] = ret.Scope
 	}
 }
 

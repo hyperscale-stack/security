@@ -27,7 +27,7 @@ var (
 	deferror *DefaultErrors = NewDefaultErrors()
 )
 
-// Default errors and messages
+// Default errors and messages.
 type DefaultErrors struct {
 	errormap map[DefaultErrorID]string
 }
