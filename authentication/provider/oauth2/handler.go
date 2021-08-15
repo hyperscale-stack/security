@@ -14,6 +14,8 @@ var (
 )
 
 func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	//nolint:wsl,gocritic
+	//@TODO: WIP
 	switch r.URL.Path {
 	case s.cfg.PrefixURI + "/token":
 		s.handleTokenRequest(w, r)
@@ -32,6 +34,7 @@ func (s Server) handleTokenRequest(w http.ResponseWriter, r *http.Request) {
 	if ar := s.HandleAccessRequest(resp, r); ar != nil {
 		requestType = string(ar.Type)
 
+		//nolint:exhaustive
 		switch ar.Type {
 		case AUTHORIZATION_CODE:
 			ar.Authorized = true
