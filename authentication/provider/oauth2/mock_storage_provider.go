@@ -10,15 +10,15 @@ type MockStorageProvider struct {
 }
 
 // LoadAccess provides a mock function with given fields: token
-func (_m *MockStorageProvider) LoadAccess(token string) (*AccessInfo, error) {
+func (_m *MockStorageProvider) LoadAccess(token string) (*AccessData, error) {
 	ret := _m.Called(token)
 
-	var r0 *AccessInfo
-	if rf, ok := ret.Get(0).(func(string) *AccessInfo); ok {
+	var r0 *AccessData
+	if rf, ok := ret.Get(0).(func(string) *AccessData); ok {
 		r0 = rf(token)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*AccessInfo)
+			r0 = ret.Get(0).(*AccessData)
 		}
 	}
 
@@ -33,15 +33,15 @@ func (_m *MockStorageProvider) LoadAccess(token string) (*AccessInfo, error) {
 }
 
 // LoadAuthorize provides a mock function with given fields: code
-func (_m *MockStorageProvider) LoadAuthorize(code string) (*AuthorizeInfo, error) {
+func (_m *MockStorageProvider) LoadAuthorize(code string) (*AuthorizeData, error) {
 	ret := _m.Called(code)
 
-	var r0 *AuthorizeInfo
-	if rf, ok := ret.Get(0).(func(string) *AuthorizeInfo); ok {
+	var r0 *AuthorizeData
+	if rf, ok := ret.Get(0).(func(string) *AuthorizeData); ok {
 		r0 = rf(code)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*AuthorizeInfo)
+			r0 = ret.Get(0).(*AuthorizeData)
 		}
 	}
 
@@ -79,15 +79,15 @@ func (_m *MockStorageProvider) LoadClient(id string) (Client, error) {
 }
 
 // LoadRefresh provides a mock function with given fields: token
-func (_m *MockStorageProvider) LoadRefresh(token string) (*AccessInfo, error) {
+func (_m *MockStorageProvider) LoadRefresh(token string) (*AccessData, error) {
 	ret := _m.Called(token)
 
-	var r0 *AccessInfo
-	if rf, ok := ret.Get(0).(func(string) *AccessInfo); ok {
+	var r0 *AccessData
+	if rf, ok := ret.Get(0).(func(string) *AccessData); ok {
 		r0 = rf(token)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*AccessInfo)
+			r0 = ret.Get(0).(*AccessData)
 		}
 	}
 
@@ -158,11 +158,11 @@ func (_m *MockStorageProvider) RemoveRefresh(token string) error {
 }
 
 // SaveAccess provides a mock function with given fields: _a0
-func (_m *MockStorageProvider) SaveAccess(_a0 *AccessInfo) error {
+func (_m *MockStorageProvider) SaveAccess(_a0 *AccessData) error {
 	ret := _m.Called(_a0)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*AccessInfo) error); ok {
+	if rf, ok := ret.Get(0).(func(*AccessData) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)
@@ -172,11 +172,11 @@ func (_m *MockStorageProvider) SaveAccess(_a0 *AccessInfo) error {
 }
 
 // SaveAuthorize provides a mock function with given fields: _a0
-func (_m *MockStorageProvider) SaveAuthorize(_a0 *AuthorizeInfo) error {
+func (_m *MockStorageProvider) SaveAuthorize(_a0 *AuthorizeData) error {
 	ret := _m.Called(_a0)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*AuthorizeInfo) error); ok {
+	if rf, ok := ret.Get(0).(func(*AuthorizeData) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)
@@ -200,11 +200,11 @@ func (_m *MockStorageProvider) SaveClient(_a0 Client) error {
 }
 
 // SaveRefresh provides a mock function with given fields: _a0
-func (_m *MockStorageProvider) SaveRefresh(_a0 *AccessInfo) error {
+func (_m *MockStorageProvider) SaveRefresh(_a0 *AccessData) error {
 	ret := _m.Called(_a0)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*AccessInfo) error); ok {
+	if rf, ok := ret.Get(0).(func(*AccessData) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)

@@ -4,3 +4,5 @@
 vendor/
 
 *.swp
+
+*.go_

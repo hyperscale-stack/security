@@ -12,6 +12,52 @@ type MockUserProvider struct {
 	mock.Mock
 }
 
+// Authenticate provides a mock function with given fields: username, password
+func (_m *MockUserProvider) Authenticate(username string, password string) (user.User, error) {
+	ret := _m.Called(username, password)
+
+	var r0 user.User
+	if rf, ok := ret.Get(0).(func(string, string) user.User); ok {
+		r0 = rf(username, password)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(user.User)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = rf(username, password)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LoadByUsername provides a mock function with given fields: username
+func (_m *MockUserProvider) LoadByUsername(username string) (user.User, error) {
+	ret := _m.Called(username)
+
+	var r0 user.User
+	if rf, ok := ret.Get(0).(func(string) user.User); ok {
+		r0 = rf(username)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(user.User)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(string) error); ok {
+		r1 = rf(username)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // LoadUser provides a mock function with given fields: id
 func (_m *MockUserProvider) LoadUser(id string) (user.User, error) {
 	ret := _m.Called(id)

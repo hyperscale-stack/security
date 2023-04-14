@@ -40,7 +40,7 @@ func TestInMemoryStorage(t *testing.T) {
 	assert.Nil(t, client2)
 
 	// Access Token
-	access := &oauth2.AccessInfo{
+	access := &oauth2.AccessData{
 		AccessToken: "OKjQ0VjYmJxP8N0TzXH5lxvIOZj4bCM0DlsCvuiL96HCQEhJ8A9ozY8jJ5Ep38vaVvn082fgApThX7NZ7pktKn57A667kEeWLPW0KVA3x1flYdBvkIvHOAZYyvUeKK9q",
 	}
 
@@ -63,7 +63,7 @@ func TestInMemoryStorage(t *testing.T) {
 	assert.Nil(t, access2)
 
 	// Refresh Token
-	access = &oauth2.AccessInfo{
+	access = &oauth2.AccessData{
 		RefreshToken: "2oQDkOWnbqtJoEs24MkVEB4WNJnqyoAIErvSJRhjg562K8GznWLbLZuStQodKvReSedAqufswaSZduhlgOuCNcQj9aGbCKPAnXUVvmX7Vmgvryp9PaZVbuqj0HfzN9tD",
 	}
 
@@ -86,7 +86,7 @@ func TestInMemoryStorage(t *testing.T) {
 	assert.Nil(t, access2)
 
 	// Authorize Code
-	authorize := &oauth2.AuthorizeInfo{
+	authorize := &oauth2.AuthorizeData{
 		Code: "Je4dJ5RFPRJwuSmuitSo8tX7s3uFOP84sEufxjdqJhiiPABdbxeGofGvvX7LBdvy2ZrwDZy3a6cOF8vgquUlr8yAvA9VpDz4Kv2bZxm0WEl4y3SJSvYPnwBOxRHI5pxK",
 	}
 

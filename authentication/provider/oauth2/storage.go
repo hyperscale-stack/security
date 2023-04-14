@@ -27,28 +27,30 @@ type ClientProvider interface {
 
 //go:generate mockery --name=AccessProvider --inpackage --case underscore
 type AccessProvider interface {
-	SaveAccess(*AccessInfo) error
-	LoadAccess(token string) (*AccessInfo, error)
+	SaveAccess(*AccessData) error
+	LoadAccess(token string) (*AccessData, error)
 	RemoveAccess(token string) error
 }
 
 //go:generate mockery --name=RefreshProvider --inpackage --case underscore
 type RefreshProvider interface {
-	SaveRefresh(*AccessInfo) error
-	LoadRefresh(token string) (*AccessInfo, error)
+	SaveRefresh(*AccessData) error
+	LoadRefresh(token string) (*AccessData, error)
 	RemoveRefresh(token string) error
 }
 
 //go:generate mockery --name=AuthorizeProvider --inpackage --case underscore
 type AuthorizeProvider interface {
-	SaveAuthorize(*AuthorizeInfo) error
-	LoadAuthorize(code string) (*AuthorizeInfo, error)
+	SaveAuthorize(*AuthorizeData) error
+	LoadAuthorize(code string) (*AuthorizeData, error)
 	RemoveAuthorize(code string) error
 }
 
 //go:generate mockery --name=UserProvider --inpackage --case underscore
 type UserProvider interface {
 	LoadUser(id string) (user.User, error)
+	LoadByUsername(username string) (user.User, error)
+	Authenticate(username string, password string) (user.User, error)
 }
 
 //go:generate mockery --name=StorageProvider --inpackage --case underscore

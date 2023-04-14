@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAuthorizeInfo(t *testing.T) {
+func TestAuthorizeData(t *testing.T) {
 	cat, err := time.Parse("2006-01-02T15:04:05.000Z", "2014-11-12T11:45:26.371Z")
 	assert.NoError(t, err)
 
-	ai := &AuthorizeInfo{
+	ai := &AuthorizeData{
 		CreatedAt: cat,
 		ExpiresIn: 10,
 	}

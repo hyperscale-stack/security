@@ -155,7 +155,7 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenExpired(t
 
 	accessStorageMock := &MockAccessProvider{}
 
-	access := &AccessInfo{
+	access := &AccessData{
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
 		ExpiresIn:   60,
 		UserData:    userMock,
@@ -186,7 +186,7 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithUserNotFound(t
 
 	accessStorageMock := &MockAccessProvider{}
 
-	access := &AccessInfo{
+	access := &AccessData{
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
 		ExpiresIn:   60,
 		CreatedAt:   time.Now(),
@@ -227,7 +227,7 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithToken(t *testi
 		RedirectURI: "https://connect.myservice.tld",
 	}
 
-	access := &AccessInfo{
+	access := &AccessData{
 		Client:      client,
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
 		ExpiresIn:   60,
@@ -282,7 +282,7 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithBadUserDataTyp
 		RedirectURI: "https://connect.myservice.tld",
 	}
 
-	access := &AccessInfo{
+	access := &AccessData{
 		Client:      client,
 		AccessToken: "wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR",
 		ExpiresIn:   60,

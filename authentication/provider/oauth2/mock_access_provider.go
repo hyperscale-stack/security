@@ -10,15 +10,15 @@ type MockAccessProvider struct {
 }
 
 // LoadAccess provides a mock function with given fields: token
-func (_m *MockAccessProvider) LoadAccess(token string) (*AccessInfo, error) {
+func (_m *MockAccessProvider) LoadAccess(token string) (*AccessData, error) {
 	ret := _m.Called(token)
 
-	var r0 *AccessInfo
-	if rf, ok := ret.Get(0).(func(string) *AccessInfo); ok {
+	var r0 *AccessData
+	if rf, ok := ret.Get(0).(func(string) *AccessData); ok {
 		r0 = rf(token)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*AccessInfo)
+			r0 = ret.Get(0).(*AccessData)
 		}
 	}
 
@@ -47,11 +47,11 @@ func (_m *MockAccessProvider) RemoveAccess(token string) error {
 }
 
 // SaveAccess provides a mock function with given fields: _a0
-func (_m *MockAccessProvider) SaveAccess(_a0 *AccessInfo) error {
+func (_m *MockAccessProvider) SaveAccess(_a0 *AccessData) error {
 	ret := _m.Called(_a0)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*AccessInfo) error); ok {
+	if rf, ok := ret.Get(0).(func(*AccessData) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)
