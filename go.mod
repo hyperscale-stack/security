@@ -7,5 +7,5 @@ require (
 	github.com/hyperscale-stack/secure v1.0.0
 	github.com/rs/zerolog v1.30.0
 	github.com/stretchr/testify v1.8.3
-	golang.org/x/crypto v0.11.0
+	golang.org/x/crypto v0.14.0
 )
