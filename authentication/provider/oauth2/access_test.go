@@ -17,7 +17,6 @@ import (
 
 	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/stretchr/testify/assert"
-	mock "github.com/stretchr/testify/mock"
 )
 
 func TestAccessData(t *testing.T) {
@@ -88,29 +87,7 @@ func TestServerHandleAccessRequestWithBadMethod(t *testing.T) {
 	assert.Equal(t, E_INVALID_REQUEST, w.ErrorID)
 }
 
-type mockReadCloser struct {
-	mock.Mock
-}
-
-func (m *mockReadCloser) Read(p []byte) (n int, err error) {
-	args := m.Called(p)
-
-	return args.Int(0), args.Error(1)
-}
-
-func (m *mockReadCloser) Close() error {
-	args := m.Called()
-
-	return args.Error(0)
-}
-
 func TestServerHandleAccessRequestWithBadBody(t *testing.T) {
-	/*mockReadCloser := &mockReadCloser{}
-	// if Read is called, it will return error
-	mockReadCloser.On("Read", mock.AnythingOfType("[]uint8")).Return(0, fmt.Errorf("error reading"))
-	// if Close is called, it will return error
-	mockReadCloser.On("Close").Return(fmt.Errorf("error closing"))
-	*/
 	cfg := &Configuration{
 		ErrorStatusCode:       http.StatusOK,
 		AllowGetAccessRequest: false,

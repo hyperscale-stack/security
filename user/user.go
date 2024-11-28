@@ -5,6 +5,7 @@
 package user
 
 // User interface provides core user information
+//
 //go:generate mockery --name=User --inpackage --case underscore
 type User interface {
 	GetID() string
@@ -38,6 +39,7 @@ type PasswordSalt interface {
 }
 
 // UserPasswordSalt interface.
+//
 //go:generate mockery --name=UserPasswordSalt --inpackage --case underscore
 //nolint:golint
 type UserPasswordSalt interface {

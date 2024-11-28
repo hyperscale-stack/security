@@ -11,6 +11,7 @@ import (
 )
 
 // Provider Service interface for encoding passwords
+//
 //go:generate mockery --name=Provider --inpackage --case underscore
 type Provider interface {
 	Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error)
