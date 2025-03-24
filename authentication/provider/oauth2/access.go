@@ -648,6 +648,7 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 // getClient looks up and authenticates the basic auth using the given
 // storage. Sets an error on the response if auth fails or a server error occurs.
 func (s Server) getClient(creds *credential.UsernamePasswordCredential, storage StorageProvider, w *Response) Client {
+	// nolint:forcetypeassert
 	client, err := storage.LoadClient(creds.GetPrincipal().(string))
 	if errors.Is(err, ErrClientNotFound) {
 		s.setErrorAndLog(w, E_UNAUTHORIZED_CLIENT, nil, "get_client=%s", "not found")
@@ -667,6 +668,7 @@ func (s Server) getClient(creds *credential.UsernamePasswordCredential, storage 
 		return nil
 	}
 
+	// nolint:forcetypeassert
 	if !CheckClientSecret(client, creds.GetCredentials().(string)) {
 		s.setErrorAndLog(w, E_UNAUTHORIZED_CLIENT, nil, "get_client=%s, client_id=%v", "client check failed", client.GetID())
 

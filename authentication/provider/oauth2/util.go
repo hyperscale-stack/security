@@ -136,5 +136,5 @@ func (s Server) getClientAuth(w *Response, r *http.Request, allowQueryParams boo
 		return nil
 	}
 
-	return auth.(*credential.UsernamePasswordCredential)
+	return auth.(*credential.UsernamePasswordCredential) // nolint:forcetypeassert
 }

@@ -31,7 +31,7 @@ func (s *InMemoryStorage) SaveClient(client oauth2.Client) error {
 
 func (s *InMemoryStorage) LoadClient(id string) (oauth2.Client, error) {
 	if client, ok := s.clients.Load(id); ok {
-		return client.(oauth2.Client), nil
+		return client.(oauth2.Client), nil // nolint:forcetypeassert
 	}
 
 	return nil, oauth2.ErrClientNotFound
@@ -51,7 +51,7 @@ func (s *InMemoryStorage) SaveAccess(access *oauth2.AccessData) error {
 
 func (s *InMemoryStorage) LoadAccess(token string) (*oauth2.AccessData, error) {
 	if access, ok := s.accesses.Load(token); ok {
-		return access.(*oauth2.AccessData), nil
+		return access.(*oauth2.AccessData), nil // nolint:forcetypeassert
 	}
 
 	return nil, oauth2.ErrAccessNotFound
@@ -71,7 +71,7 @@ func (s *InMemoryStorage) SaveRefresh(access *oauth2.AccessData) error {
 
 func (s *InMemoryStorage) LoadRefresh(token string) (*oauth2.AccessData, error) {
 	if access, ok := s.refreshs.Load(token); ok {
-		return access.(*oauth2.AccessData), nil
+		return access.(*oauth2.AccessData), nil // nolint:forcetypeassert
 	}
 
 	return nil, oauth2.ErrRefreshNotFound
@@ -91,7 +91,7 @@ func (s *InMemoryStorage) SaveAuthorize(authorize *oauth2.AuthorizeData) error {
 
 func (s *InMemoryStorage) LoadAuthorize(code string) (*oauth2.AuthorizeData, error) {
 	if authorize, ok := s.authorizes.Load(code); ok {
-		return authorize.(*oauth2.AuthorizeData), nil
+		return authorize.(*oauth2.AuthorizeData), nil // nolint:forcetypeassert
 	}
 
 	return nil, oauth2.ErrAuthorizeNotFound

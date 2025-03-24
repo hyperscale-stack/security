@@ -51,6 +51,7 @@ func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credenti
 		return r, ErrBadAuthenticationFormat
 	}
 
+	// nolint:forcetypeassert
 	u, err := p.userProvider.LoadUserByUsername(auth.GetPrincipal().(string))
 	if err != nil {
 		return r, fmt.Errorf("user provider failed: %w", err)
