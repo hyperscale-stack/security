@@ -4,3 +4,4 @@
 vendor/
 
 *.swp
+mock_*
