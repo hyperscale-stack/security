@@ -102,6 +102,7 @@ func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, cre
 	}
 
 	if c, ok := client.(ClientSecretMatcher); ok {
+		// nolint:forcetypeassert
 		if c.SecretMatches(creds.GetCredentials().(string)) {
 			creds.SetAuthenticated(true)
 		}

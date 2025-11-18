@@ -2,6 +2,7 @@
 *.out
 
 vendor/
+build/
 
 *.swp
 mock_*

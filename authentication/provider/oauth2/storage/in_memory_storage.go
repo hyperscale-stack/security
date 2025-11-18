@@ -91,7 +91,7 @@ func (s *InMemoryStorage) SaveAuthorize(authorize *oauth2.AuthorizeInfo) error {
 
 func (s *InMemoryStorage) LoadAuthorize(code string) (*oauth2.AuthorizeInfo, error) {
 	if authorize, ok := s.authorizes.Load(code); ok {
-		return authorize.(*oauth2.AuthorizeInfo), nil
+		return authorize.(*oauth2.AuthorizeInfo), nil // nolint:forcetypeassert
 	}
 
 	return nil, oauth2.ErrAuthorizeNotFound

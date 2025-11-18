@@ -1,16 +1,48 @@
-.PHONY: all clean test cover travis lint
+GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
+BUILD_DIR := build
 
+.PHONY: all
 all: test
 
+.PHONY: clean
 clean:
 	@go clean -i ./...
 
-coverage.out: $(shell find . -type f -print | grep -v vendor | grep "\.go")
-	@go test -race -cover -coverprofile ./coverage.out.tmp ./...
-	@cat ./coverage.out.tmp | grep -v '.pb.go' | grep -v 'mock_' > ./coverage.out
-	@rm ./coverage.out.tmp
+_build:
+	@mkdir -p ${BUILD_DIR}
 
-test: coverage.out
+.PHONY: build
+build:
+	@echo "Building..."
+	@go build -race -v ./...
+
+.PHONY: generate
+generate:
+	@echo "Generating code..."
+	@go generate ./...
+
+$(BUILD_DIR)/coverage.out: _build $(GO_FILES)
+	@go test -cover -race -coverprofile $(BUILD_DIR)/coverage.out.tmp -timeout 300s ./...
+	@cat $(BUILD_DIR)/coverage.out.tmp | grep -v '.pb.go' | grep -v 'mock_' > $(BUILD_DIR)/coverage.out
+	@rm $(BUILD_DIR)/coverage.out.tmp
+
+.PHONY: test
+test: $(BUILD_DIR)/coverage.out
+
+.PHONY: coverage
+coverage: $(BUILD_DIR)/coverage.out
+	@echo ""
+	@go tool cover -func ./$(BUILD_DIR)/coverage.out
+
+.PHONY: coverage-html
+coverage-html: $(BUILD_DIR)/coverage.out
+	@go tool cover -html ./$(BUILD_DIR)/coverage.out
+
+.PHONY: bench
+bench:
+	@echo "Running benchmarks..."
+	@go test -bench=. -benchmem -benchtime=5s -timeout 300s ./...
+
 
 .PHONY: lint
 lint:
@@ -21,10 +53,8 @@ endif
 	@echo "lint..."
 	@golangci-lint run --timeout=300s ./...
 
-cover: coverage.out
-	@echo ""
-	@go tool cover -func ./coverage.out
 
+.PHONY: release
 release:
 	@echo "Release v$(version)"
 	@git pull

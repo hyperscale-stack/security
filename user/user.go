@@ -4,7 +4,7 @@
 
 package user
 
-// User interface provides core user information
+// User interface provides core user information.
 type User interface {
 	// GetRoles returns the roles granted to the user.
 	GetRoles() []string

@@ -6,7 +6,7 @@ mockname: 'Mock{{.InterfaceName}}'
 outpkg: '{{.PackageName}}'
 filename: 'mock_{{ .InterfaceName | snakecase }}.go'
 packages:
-  github.com/mailstone/platform/api-v2:
+  github.com/hyperscale-stack/security:
     config:
       recursive: True
 

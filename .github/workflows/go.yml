@@ -22,13 +22,13 @@ jobs:
         id: go
 
       - name: Build
-        run: go build -race -v ./...
+        run: make build
+
+      - name: Generate
+        run: make generate
 
       - name: Test
-        run: |
-          go test -race -cover -coverprofile ./coverage.out.tmp ./...
-          cat ./coverage.out.tmp | grep -v '.pb.go' | grep -v 'mock_' > ./coverage.out
-          rm ./coverage.out.tmp
+        run: make test
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -39,7 +39,7 @@ jobs:
       - name: Coveralls
         uses: shogo82148/actions-goveralls@v1
         with:
-          path-to-profile: coverage.out
+          path-to-profile: build/coverage.out
 
   finish:
     needs: build

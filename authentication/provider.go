@@ -10,7 +10,7 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
-// Provider Service interface for encoding passwords
+// Provider Service interface for encoding passwords.
 type Provider interface {
 	Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error)
 	IsSupported(creds credential.Credential) bool
