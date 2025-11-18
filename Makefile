@@ -1,16 +1,5 @@
 .PHONY: all clean test cover travis lint
 
-release:
-	@echo "Release v$(version)"
-	@git pull
-	@git checkout master
-	@git pull
-	@git checkout develop
-	@git flow release start $(version)
-	@git flow release finish $(version) -p -m "Release v$(version)"
-	@git checkout develop
-	@echo "Release v$(version) finished."
-
 all: test
 
 clean:
@@ -36,3 +25,13 @@ cover: coverage.out
 	@echo ""
 	@go tool cover -func ./coverage.out
 
+release:
+	@echo "Release v$(version)"
+	@git pull
+	@git checkout master
+	@git pull
+	@git checkout develop
+	@git flow release start $(version)
+	@git flow release finish $(version) -p -m "Release v$(version)"
+	@git checkout develop
+	@echo "Release v$(version) finished."
