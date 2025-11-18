@@ -18,40 +18,34 @@ var (
 	ErrUserNotFound      = errors.New("oauth2 user not found")
 )
 
-//go:generate mockery --name=ClientProvider --inpackage --case underscore
 type ClientProvider interface {
 	SaveClient(Client) error
 	LoadClient(id string) (Client, error)
 	RemoveClient(id string) error
 }
 
-//go:generate mockery --name=AccessProvider --inpackage --case underscore
 type AccessProvider interface {
 	SaveAccess(*AccessInfo) error
 	LoadAccess(token string) (*AccessInfo, error)
 	RemoveAccess(token string) error
 }
 
-//go:generate mockery --name=RefreshProvider --inpackage --case underscore
 type RefreshProvider interface {
 	SaveRefresh(*AccessInfo) error
 	LoadRefresh(token string) (*AccessInfo, error)
 	RemoveRefresh(token string) error
 }
 
-//go:generate mockery --name=AuthorizeProvider --inpackage --case underscore
 type AuthorizeProvider interface {
 	SaveAuthorize(*AuthorizeInfo) error
 	LoadAuthorize(code string) (*AuthorizeInfo, error)
 	RemoveAuthorize(code string) error
 }
 
-//go:generate mockery --name=UserProvider --inpackage --case underscore
 type UserProvider interface {
 	LoadUser(id string) (user.User, error)
 }
 
-//go:generate mockery --name=StorageProvider --inpackage --case underscore
 type StorageProvider interface {
 	ClientProvider
 	AccessProvider

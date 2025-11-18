@@ -65,7 +65,7 @@ func (p *OAuth2AuthenticationProvider) IsSupported(creds credential.Credential) 
 func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, creds *credential.TokenCredential) (*http.Request, error) {
 	ctx := r.Context()
 
-	token, err := p.accessStorage.LoadAccess(creds.GetPrincipal().(string))
+	token, err := p.accessStorage.LoadAccess(creds.GetPrincipal().(string)) // nolint:forcetypeassert
 	if err != nil {
 		return r, fmt.Errorf("load access token failed: %w", err)
 	}
@@ -96,7 +96,7 @@ func (p *OAuth2AuthenticationProvider) authenticateByToken(r *http.Request, cred
 func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, creds *credential.UsernamePasswordCredential) (*http.Request, error) {
 	ctx := r.Context()
 
-	client, err := p.clientStorage.LoadClient(creds.GetPrincipal().(string))
+	client, err := p.clientStorage.LoadClient(creds.GetPrincipal().(string)) // nolint:forcetypeassert
 	if err != nil {
 		return r, fmt.Errorf("load client info failed: %w", err)
 	}

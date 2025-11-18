@@ -1,0 +1,15 @@
+inpackage: True
+with-expecter: True
+all: True
+dir: '{{.InterfaceDir}}'
+mockname: 'Mock{{.InterfaceName}}'
+outpkg: '{{.PackageName}}'
+filename: 'mock_{{ .InterfaceName | snakecase }}.go'
+packages:
+  github.com/mailstone/platform/api-v2:
+    config:
+      recursive: True
+
+issue-845-fix: True
+resolve-type-alias: False
+disable-version-string: True
