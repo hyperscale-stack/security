@@ -43,11 +43,14 @@ type AccessInfo struct {
 	// Previous access data, for refresh token
 	AccessInfo *AccessInfo
 
-	// Access token
-	AccessToken string
+	// Access token.
+	// Stored verbatim in the legacy MVP; Phase 7 will replace this struct
+	// with a model that only holds a one-way hash (see LIMITATIONS.md).
+	AccessToken string //nolint:gosec // G117 deferred to Phase 7
 
-	// Refresh Token. Can be blank
-	RefreshToken string
+	// Refresh Token. Can be blank.
+	// Same Phase 7 caveat as AccessToken.
+	RefreshToken string //nolint:gosec // G117 deferred to Phase 7
 
 	// Token expiration in seconds
 	ExpiresIn int32

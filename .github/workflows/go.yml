@@ -8,35 +8,37 @@ on:
 
 jobs:
   build:
-    name: Build
+    name: Build & test (workspace)
     runs-on: ubuntu-latest
     steps:
-      - name: Check out code into the Go module directory
+      - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Go 1.x
+      - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: "1.x"
           check-latest: true
         id: go
 
-      - name: Build
-        run: make build
+      - name: Workspace sync
+        run: make sync
 
-      - name: Generate
+      - name: Generate mocks
         run: make generate
 
-      - name: Test
+      - name: Build all modules
+        run: make build
+
+      - name: Test all modules (race + coverage)
         run: make test
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-          skip-cache: true
+      # Lint runs in a dedicated step so that gosec/golangci output is easy to
+      # read. The Makefile iterates over every module with the shared config.
+      - name: Lint all modules
+        run: make lint
 
-      - name: Coveralls
+      - name: Upload aggregated coverage to Coveralls
         uses: shogo82148/actions-goveralls@v1
         with:
           path-to-profile: build/coverage.out
@@ -45,7 +47,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Coveralls Finished
+      - name: Coveralls finished
         uses: coverallsapp/github-action@master
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

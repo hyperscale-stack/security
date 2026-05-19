@@ -1,0 +1,16 @@
+go 1.25.0
+
+use (
+	.
+	./basic
+	./bearer
+	./example/oauth2
+	./examples
+	./grpc
+	./http
+	./jwt
+	./oauth2
+	./oauth2/store/redis
+	./oauth2/store/sql
+	./session
+)

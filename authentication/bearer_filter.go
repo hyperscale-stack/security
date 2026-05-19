@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
-	"github.com/hyperscale-stack/security/http/header"
+	"github.com/hyperscale-stack/security/internal/header"
 )
 
 var _ Filter = (*BearerFilter)(nil)

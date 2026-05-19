@@ -52,8 +52,11 @@ var _ ClientSecretMatcher = (*DefaultClient)(nil)
 
 // DefaultClient stores all data in struct variables.
 type DefaultClient struct {
-	ID          string
-	Secret      string
+	ID string
+	// Secret is the registered client secret.
+	// Stored verbatim in the legacy MVP; Phase 7 will replace this with a
+	// hashed form (see LIMITATIONS.md).
+	Secret      string //nolint:gosec // G117 deferred to Phase 7
 	RedirectURI string
 	UserData    interface{}
 }

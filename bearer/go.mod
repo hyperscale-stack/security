@@ -1,0 +1,5 @@
+module github.com/hyperscale-stack/security/bearer
+
+go 1.25.0
+
+replace github.com/hyperscale-stack/security => ../
