@@ -1,37 +1,57 @@
-GO_FILES := $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 BUILD_DIR := build
+LINT_CONFIG := $(CURDIR)/.golangci.yml
+
+# All Go modules in the workspace, derived from go.work to stay in sync.
+# Note: the leading "./" is required for find -execdir / cd targets.
+MODULES := $(shell find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*' -not -path '*/build/*' | sort | sed 's|/go.mod||')
 
 .PHONY: all
 all: test
 
 .PHONY: clean
 clean:
-	@go clean -i ./...
+	@rm -rf $(BUILD_DIR)
+	@for mod in $(MODULES); do (cd "$$mod" && go clean -i ./...); done
 
 _build:
-	@mkdir -p ${BUILD_DIR}
+	@mkdir -p $(BUILD_DIR)
+
+.PHONY: sync
+sync:
+	@echo "Syncing workspace..."
+	@go work sync
 
 .PHONY: build
 build:
-	@echo "Building..."
-	@go build -race -v ./...
+	@for mod in $(MODULES); do \
+		echo "==> build $$mod"; \
+		(cd "$$mod" && go build -v ./...) || exit 1; \
+	done
 
 .PHONY: generate
 generate:
-	@echo "Generating code..."
+	@echo "Generating mocks..."
 	@go generate ./...
 
-$(BUILD_DIR)/coverage.out: _build $(GO_FILES)
-	@go test -cover -race -coverprofile $(BUILD_DIR)/coverage.out.tmp -timeout 300s ./...
-	@cat $(BUILD_DIR)/coverage.out.tmp | grep -v '.pb.go' | grep -v 'mock_' > $(BUILD_DIR)/coverage.out
-	@rm $(BUILD_DIR)/coverage.out.tmp
-
 .PHONY: test
-test: $(BUILD_DIR)/coverage.out
+test: _build
+	@: > $(BUILD_DIR)/coverage.out
+	@for mod in $(MODULES); do \
+		echo "==> test $$mod"; \
+		mod_safe=$$(echo "$$mod" | sed 's|/|_|g; s|^\._||; s|^\.$$|root|'); \
+		(cd "$$mod" && go test -cover -race \
+			-coverprofile="$(CURDIR)/$(BUILD_DIR)/$$mod_safe.cover" \
+			-timeout 300s ./...) || exit 1; \
+	done
+	@grep -h -v '^mode:' $(BUILD_DIR)/*.cover 2>/dev/null \
+		| grep -v 'mock_' | grep -v '.pb.go' \
+		> $(BUILD_DIR)/coverage.body || true
+	@echo 'mode: atomic' > $(BUILD_DIR)/coverage.out
+	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
+	@rm -f $(BUILD_DIR)/*.cover $(BUILD_DIR)/coverage.body
 
 .PHONY: coverage
 coverage: $(BUILD_DIR)/coverage.out
-	@echo ""
 	@go tool cover -func ./$(BUILD_DIR)/coverage.out
 
 .PHONY: coverage-html
@@ -40,19 +60,30 @@ coverage-html: $(BUILD_DIR)/coverage.out
 
 .PHONY: bench
 bench:
-	@echo "Running benchmarks..."
-	@go test -bench=. -benchmem -benchtime=5s -timeout 300s ./...
-
+	@for mod in $(MODULES); do \
+		echo "==> bench $$mod"; \
+		(cd "$$mod" && go test -bench=. -benchmem -benchtime=5s -timeout 300s ./...) || exit 1; \
+	done
 
 .PHONY: lint
 lint:
 ifeq (, $(shell which golangci-lint))
 	@echo "Install golangci-lint..."
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+		| sh -s -- -b $$(go env GOPATH)/bin v2.6.2
 endif
-	@echo "lint..."
-	@golangci-lint run --timeout=300s ./...
+	@for mod in $(MODULES); do \
+		echo "==> lint $$mod"; \
+		(cd "$$mod" && golangci-lint run --timeout=300s --config="$(LINT_CONFIG)" ./...) || exit 1; \
+	done
 
+.PHONY: tidy
+tidy:
+	@for mod in $(MODULES); do \
+		echo "==> tidy $$mod"; \
+		(cd "$$mod" && go mod tidy) || exit 1; \
+	done
+	@go work sync
 
 .PHONY: release
 release:

@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
-	"github.com/hyperscale-stack/security/http/header"
+	"github.com/hyperscale-stack/security/internal/header"
 	"github.com/rs/zerolog"
 )
 
