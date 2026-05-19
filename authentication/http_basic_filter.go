@@ -63,7 +63,7 @@ func (f *HTTPBasicFilter) OnFilter(r *http.Request) *http.Request {
 
 	username, password, err := f.decodeCreds(creds)
 	if err != nil {
-		log.Error().Err(err).Msg("deocde http basic auth failed")
+		log.Error().Err(err).Msg("decode http basic auth failed")
 
 		return r
 	}

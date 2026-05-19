@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
 	"github.com/hyperscale-stack/security/user"
@@ -170,7 +171,8 @@ func TestOAuth2AuthenticationProviderAuthenticateByAccessTokenWithTokenExpired(t
 	creds := credential.NewTokenCredential("wSxJOjDWo7qQ7kF5Tlg2l9XZYat6gq6GssF5D5I9aKtcEipJzoTba77vRhfscn1vNr0gBM9rSj5sZ3R6252FTlJpxWPUM1c8w2KkvaAAcyrWqNPVNNFX2qAxhpcatdbR")
 
 	r, err := p.Authenticate(req, creds)
-	assert.EqualError(t, err, "token expired")
+	assert.ErrorIs(t, err, security.ErrTokenExpired)
+	assert.ErrorIs(t, err, ErrTokenExpired)
 
 	assert.Same(t, req, r)
 
