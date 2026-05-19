@@ -34,6 +34,7 @@ type OAuth2AuthenticationProvider struct {
 	authorizeStorage AuthorizeProvider
 }
 
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 var _ authentication.Provider = (*OAuth2AuthenticationProvider)(nil)
 
 // NewOAuth2AuthenticationProvider constructor.
@@ -56,6 +57,8 @@ func NewOAuth2AuthenticationProvider(
 }
 
 // IsSupported returns true if credential.Credential is supported.
+//
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 func (p *OAuth2AuthenticationProvider) IsSupported(creds credential.Credential) bool {
 	// TODO multiple support (ClientCreds, etc...)
 	switch creds.(type) {
@@ -127,6 +130,8 @@ func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, cre
 }
 
 // Authenticate implements Provider.
+//
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 func (p *OAuth2AuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error) {
 	switch auth := creds.(type) {
 	case *credential.TokenCredential:

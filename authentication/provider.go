@@ -10,8 +10,16 @@ import (
 	"github.com/hyperscale-stack/security/authentication/credential"
 )
 
-// Provider Service interface for encoding passwords.
+// Provider is the legacy credential-validation interface.
+//
+// Deprecated: use [security.Authenticator] (in the parent module) with the
+// new HTTP middleware in github.com/hyperscale-stack/security/http.
+// Scheduled for removal at the end of Phase 7.
 type Provider interface {
+	// Authenticate validates the legacy credential.
+	//nolint:staticcheck // legacy package, scheduled removal Phase 7
 	Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error)
+	// IsSupported reports whether this provider can handle the credential.
+	//nolint:staticcheck // legacy package, scheduled removal Phase 7
 	IsSupported(creds credential.Credential) bool
 }

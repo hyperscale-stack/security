@@ -8,6 +8,7 @@ import "github.com/hyperscale-stack/security/authentication/credential"
 
 // HasRole check if user has role.
 func HasRole(role string) Option {
+	//nolint:staticcheck // legacy package, scheduled removal Phase 7
 	return func(creds credential.Credential) bool {
 		user := creds.GetUser()
 
