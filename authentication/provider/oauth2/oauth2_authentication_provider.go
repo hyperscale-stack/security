@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/authentication"
 	"github.com/hyperscale-stack/security/authentication/credential"
 	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token"
@@ -16,8 +17,11 @@ import (
 
 var (
 	ErrBadAuthenticationFormat = errors.New("bad authentication format")
-	ErrTokenExpired            = errors.New("token expired")
-	ErrBadTypeForUserData      = errors.New("bad type for user data")
+	// ErrTokenExpired is the local alias for security.ErrTokenExpired. It is
+	// kept exported for backward compatibility; new code SHOULD compare against
+	// security.ErrTokenExpired via errors.Is — both work transparently.
+	ErrTokenExpired       = fmt.Errorf("oauth2: %w", security.ErrTokenExpired)
+	ErrBadTypeForUserData = errors.New("bad type for user data")
 )
 
 // OAuth2AuthenticationProvider struct.
@@ -101,12 +105,21 @@ func (p *OAuth2AuthenticationProvider) authenticateByClient(r *http.Request, cre
 		return r, fmt.Errorf("load client info failed: %w", err)
 	}
 
-	if c, ok := client.(ClientSecretMatcher); ok {
-		// nolint:forcetypeassert
-		if c.SecretMatches(creds.GetCredentials().(string)) {
-			creds.SetAuthenticated(true)
-		}
+	matcher, ok := client.(ClientSecretMatcher)
+	if !ok {
+		// A client that cannot verify its own secret cannot be authenticated
+		// with the client_credentials grant. Surface it as a security error
+		// instead of silently leaving the credential unauthenticated.
+		return r, fmt.Errorf("oauth2: client %q does not implement ClientSecretMatcher: %w",
+			client.GetID(), security.ErrClientSecretMismatch)
 	}
+
+	// nolint:forcetypeassert
+	if !matcher.SecretMatches(creds.GetCredentials().(string)) {
+		return r, fmt.Errorf("oauth2: client %q: %w", client.GetID(), security.ErrClientSecretMismatch)
+	}
+
+	creds.SetAuthenticated(true)
 
 	ctx = ClientToContext(ctx, client)
 

@@ -44,7 +44,7 @@ func (i *AuthorizeInfo) IsExpired() bool {
 	return i.IsExpiredAt(time.Now())
 }
 
-// IsExpired is true if authorization expires at time 't'.
+// IsExpiredAt is true if authorization expires at time 't'.
 func (i *AuthorizeInfo) IsExpiredAt(t time.Time) bool {
 	return i.ExpireAt().Before(t)
 }
