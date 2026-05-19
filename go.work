@@ -10,6 +10,7 @@ use (
 	./http
 	./jwt
 	./oauth2
+	./oauth2/storage/memory
 	./oauth2/store/redis
 	./oauth2/store/sql
 	./password
