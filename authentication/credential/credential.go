@@ -6,7 +6,12 @@ package credential
 
 import "github.com/hyperscale-stack/security/user"
 
-// Credential interface.
+// Credential is the legacy mutable credential interface based on interface{}
+// principals/credentials.
+//
+// Deprecated: use [security.Authentication] (in the parent module) instead.
+// It is immutable and type-safe through scheme-specific helpers.
+// Scheduled for removal at the end of Phase 7.
 type Credential interface {
 	GetPrincipal() interface{}
 	GetCredentials() interface{}

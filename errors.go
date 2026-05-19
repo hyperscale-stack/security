@@ -38,6 +38,27 @@ var (
 	// ErrUnsupportedCredential indicates that no provider recognized the
 	// credential type. Maps to HTTP 400.
 	ErrUnsupportedCredential = newSentinel("security: unsupported credential type")
+
+	// ErrNoExtractor indicates that the [Engine] was configured without any
+	// [Extractor]. The Engine returns the anonymous authentication and this
+	// error so that the caller can distinguish "no extractor" from "all
+	// extractors found nothing".
+	ErrNoExtractor = newSentinel("security: no extractor configured")
+
+	// ErrAuthenticatorRefused is the umbrella error returned by [Manager]
+	// when every supporting [Authenticator] rejected the credential. The
+	// individual errors are joined via errors.Join and reachable through
+	// errors.Is / errors.As.
+	ErrAuthenticatorRefused = newSentinel("security: every authenticator refused the credential")
+
+	// ErrAccessDenied indicates that authorisation voting denied access.
+	// Maps to HTTP 403 / gRPC PermissionDenied.
+	ErrAccessDenied = newSentinel("security: access denied")
+
+	// ErrInsufficientScope indicates that the principal is authenticated but
+	// does not carry the OAuth2 scope required for the resource. Maps to
+	// HTTP 403 with the "insufficient_scope" WWW-Authenticate parameter.
+	ErrInsufficientScope = newSentinel("security: insufficient scope")
 )
 
 // sentinelError is the concrete type backing every package-level sentinel.

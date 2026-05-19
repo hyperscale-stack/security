@@ -24,9 +24,10 @@ jobs:
       - name: Workspace sync
         run: make sync
 
-      - name: Generate mocks
-        run: make generate
-
+      # NOTE: `make generate` is intentionally NOT run in CI yet — the
+      # .mockery.yaml is being migrated to v3 syntax while the tool pin
+      # (vektra/mockery v2.53.5) is still v2. Re-enable once the config /
+      # tool are aligned (tracked in LIMITATIONS.md, slated for Phase 4).
       - name: Build all modules
         run: make build
 

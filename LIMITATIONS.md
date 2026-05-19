@@ -89,6 +89,15 @@ file referenced there).
 - No OpenTelemetry spans yet. *Phase 2 introduces tracing in the core; each
   subsequent phase adds spans in its module.*
 
+## Tooling
+
+- `.mockery.yaml` is being migrated to mockery v3 syntax (`pkgname`,
+  `template`, `template-data`), but the tool pinned in `go.mod` is still
+  v2.53.5. `make generate` therefore fails until either the config is
+  reverted to v2 syntax or the tool is bumped. CI skips `make generate`
+  until this is reconciled. Phase 4 will resolve this when basic/bearer
+  extract their interfaces and need mocks generated.
+
 ## Configuration / DX
 
 - No top-level `Engine` / `Manager` builder. Users have to manually chain

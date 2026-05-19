@@ -27,6 +27,7 @@ type DaoAuthenticationProvider struct {
 	userProvider   UserProvider
 }
 
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 var _ authentication.Provider = (*DaoAuthenticationProvider)(nil)
 
 // NewDaoAuthenticationProvider constructor.
@@ -38,6 +39,8 @@ func NewDaoAuthenticationProvider(passwordHasher password.Hasher, userProvider U
 }
 
 // IsSupported returns true if credential.Credential is supported.
+//
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 func (p *DaoAuthenticationProvider) IsSupported(creds credential.Credential) bool {
 	_, ok := creds.(*credential.UsernamePasswordCredential)
 
@@ -45,6 +48,8 @@ func (p *DaoAuthenticationProvider) IsSupported(creds credential.Credential) boo
 }
 
 // Authenticate implements Provider.
+//
+//nolint:staticcheck // legacy package, scheduled removal Phase 7
 func (p *DaoAuthenticationProvider) Authenticate(r *http.Request, creds credential.Credential) (*http.Request, error) {
 	auth, ok := creds.(*credential.UsernamePasswordCredential)
 	if !ok {
