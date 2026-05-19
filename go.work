@@ -12,5 +12,6 @@ use (
 	./oauth2
 	./oauth2/store/redis
 	./oauth2/store/sql
+	./password
 	./session
 )
