@@ -11,7 +11,7 @@ import (
 
 	"github.com/hyperscale-stack/security/authentication"
 	"github.com/hyperscale-stack/security/authentication/credential"
-	"github.com/hyperscale-stack/security/password"
+	"github.com/hyperscale-stack/security/internal/legacypassword"
 	"github.com/hyperscale-stack/security/user"
 )
 
@@ -23,7 +23,7 @@ var (
 
 // DaoAuthenticationProvider struct.
 type DaoAuthenticationProvider struct {
-	passwordHasher password.Hasher
+	passwordHasher legacypassword.Hasher
 	userProvider   UserProvider
 }
 
@@ -31,7 +31,7 @@ type DaoAuthenticationProvider struct {
 var _ authentication.Provider = (*DaoAuthenticationProvider)(nil)
 
 // NewDaoAuthenticationProvider constructor.
-func NewDaoAuthenticationProvider(passwordHasher password.Hasher, userProvider UserProvider) *DaoAuthenticationProvider {
+func NewDaoAuthenticationProvider(passwordHasher legacypassword.Hasher, userProvider UserProvider) *DaoAuthenticationProvider {
 	return &DaoAuthenticationProvider{
 		passwordHasher: passwordHasher,
 		userProvider:   userProvider,

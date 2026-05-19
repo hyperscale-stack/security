@@ -10,13 +10,13 @@ import (
 	"testing"
 
 	"github.com/hyperscale-stack/security/authentication/credential"
-	"github.com/hyperscale-stack/security/password"
+	"github.com/hyperscale-stack/security/internal/legacypassword"
 	"github.com/hyperscale-stack/security/user"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestDaoAuthenticationProvider(t *testing.T) {
-	ph := password.NewBCryptHasher(5)
+	ph := legacypassword.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
@@ -51,7 +51,7 @@ func TestDaoAuthenticationProvider(t *testing.T) {
 }
 
 func TestDaoAuthenticationProviderWithBadAuthentication(t *testing.T) {
-	ph := password.NewBCryptHasher(5)
+	ph := legacypassword.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
@@ -86,7 +86,7 @@ func TestDaoAuthenticationProviderWithBadAuthentication(t *testing.T) {
 }
 
 func TestDaoAuthenticationProviderWithUserNotFound(t *testing.T) {
-	ph := password.NewBCryptHasher(5)
+	ph := legacypassword.NewBCryptHasher(5)
 
 	up := &MockUserProvider{}
 
@@ -112,7 +112,7 @@ func TestDaoAuthenticationProviderWithUserNotFound(t *testing.T) {
 }
 
 func TestDaoAuthenticationProviderWithBadPassword(t *testing.T) {
-	ph := password.NewBCryptHasher(5)
+	ph := legacypassword.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar")
 	assert.NoError(t, err)
@@ -147,7 +147,7 @@ func TestDaoAuthenticationProviderWithBadPassword(t *testing.T) {
 }
 
 func TestDaoAuthenticationProviderWithUserPasswordSalt(t *testing.T) {
-	ph := password.NewBCryptHasher(5)
+	ph := legacypassword.NewBCryptHasher(5)
 
 	hash, err := ph.Hash("bar:$Oo$")
 	assert.NoError(t, err)
