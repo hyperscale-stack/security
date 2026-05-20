@@ -1,4 +1,4 @@
-# Example — OAuth2 server + Bearer resource server
+# OAuth2 server + Bearer resource server
 
 End-to-end wiring of the v2 security library running in a single binary:
 
@@ -66,10 +66,5 @@ curl -s http://localhost:1337/.well-known/oauth-authorization-server | jq
 - Persistent storage (memory store — every restart wipes tokens).
 - `private_key_jwt` client authentication.
 
-## Migration from the v0 demo
-
-The v0 demo in this folder wired the legacy `authentication.FilterHandler`
-+ `authentication.Handler` + `authorization.AuthorizeHandler` chain
-against the legacy `oauth2.OAuth2AuthenticationProvider`. That whole tree
-has been removed in Phase 7e; the new demo exercises the modular Server
-(authorization side) and the Bearer middleware (resource side) instead.
+See [docs/migration-from-v0.md](../../docs/migration-from-v0.md) for the
+mapping from the removed v0 stack to this wiring.

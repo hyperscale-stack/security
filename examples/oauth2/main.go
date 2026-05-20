@@ -9,7 +9,7 @@
 //
 // Run:
 //
-//	go run ./example/oauth2
+//	go run ./examples/oauth2
 //
 // Probe — request an access token:
 //

@@ -84,8 +84,8 @@ validation. v2 separates them:
 - **Resource server** — validate incoming bearer tokens with `bearer` +
   a `TokenVerifier` (`jwtsec` for JWT access tokens, or introspection).
 
-See [example/oauth2](../example/oauth2) for both halves wired together, and
-the [examples/](../examples) directory for per-scenario demos.
+See [examples/oauth2](../examples/oauth2) for both halves wired together,
+and the [examples/](../examples) directory for the other per-scenario demos.
 
 ## Transport imports
 

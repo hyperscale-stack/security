@@ -4,7 +4,6 @@ use (
 	.
 	./basic
 	./bearer
-	./example/oauth2
 	./examples
 	./grpc
 	./http
