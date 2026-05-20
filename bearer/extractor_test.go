@@ -86,25 +86,3 @@ func TestExtractorIgnoresEmptyToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got, "Bearer with empty token must let downstream extractors try")
 }
-
-func TestQueryExtractorParsesNamedParameter(t *testing.T) {
-	t.Parallel()
-
-	c := newCarrier()
-	c.Set("access_token", "deadbeef")
-
-	got, err := bearer.NewQueryExtractor("").Extract(context.Background(), c)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-
-	ba := got.(bearer.Authentication)
-	assert.Equal(t, "deadbeef", ba.Token())
-}
-
-func TestQueryExtractorReturnsNilWhenAbsent(t *testing.T) {
-	t.Parallel()
-
-	got, err := bearer.NewQueryExtractor("custom_token").Extract(context.Background(), newCarrier())
-	require.NoError(t, err)
-	assert.Nil(t, got)
-}

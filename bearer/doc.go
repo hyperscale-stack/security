@@ -9,8 +9,9 @@
 // (calling a remote introspection endpoint), a local JWT verifier (see the
 // jwt sub-module), or any custom scheme.
 //
-// A legacy NewQueryExtractor is offered for the deprecated "?access_token="
-// query parameter (RFC 6750 §2.3); its godoc warns against using it.
+// Only the Authorization-header scheme (RFC 6750 §2.1) is supported;
+// query-parameter tokens (§2.3) are intentionally not offered — they leak
+// into access logs, browser history, and Referer headers.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
