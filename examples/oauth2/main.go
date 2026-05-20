@@ -143,6 +143,8 @@ func buildServer() (http.Handler, error) {
 	)
 	protect := httpsec.Middleware(engine, httpsec.WithRealm("api"))
 
+	// The mount paths must match ServerConfig.RoutePrefix (default
+	// "/oauth2") so the metadata document advertises the right URLs.
 	mux := http.NewServeMux()
 	mux.Handle("POST /oauth2/token", srv.TokenHandler())
 	mux.Handle("POST /oauth2/revoke", srv.RevokeHandler())

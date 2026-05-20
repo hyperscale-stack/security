@@ -497,3 +497,72 @@ func introspect(t *testing.T, srv *oauth2.Server, raw string) map[string]any {
 
 	return body
 }
+
+func TestMetadataRoutePrefix(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "https://auth.example"
+
+	build := func(t *testing.T, prefix string) *oauth2.Server {
+		t.Helper()
+
+		srv, err := oauth2.NewServer(oauth2.ServerConfig{
+			Storage:        memory.New(),
+			ClientStore:    &staticClientStore{},
+			IssuerResolver: oauth2.StaticIssuer(issuer, "api"),
+			ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+			RoutePrefix:    prefix,
+		})
+		require.NoError(t, err)
+
+		return srv
+	}
+
+	doc := func(t *testing.T, srv *oauth2.Server) map[string]any {
+		t.Helper()
+
+		rec := httptest.NewRecorder()
+		srv.MetadataHandler().ServeHTTP(rec,
+			httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+		return body
+	}
+
+	cases := []struct {
+		name   string
+		prefix string
+		want   string // normalized prefix
+	}{
+		{"default", "", "/oauth2"},
+		{"custom", "/auth", "/auth"},
+		{"missing leading slash", "auth", "/auth"},
+		{"trailing slash", "/auth/", "/auth"},
+		{"root mount", "/", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := build(t, tc.prefix)
+
+			// The normalized prefix is what the config reports back.
+			assert.Equal(t, tc.want, srv.Config().RoutePrefix)
+
+			body := doc(t, srv)
+			routes := issuer + tc.want
+
+			assert.Equal(t, routes+"/token", body["token_endpoint"])
+			assert.Equal(t, routes+"/revoke", body["revocation_endpoint"])
+			assert.Equal(t, routes+"/introspect", body["introspection_endpoint"])
+			assert.Equal(t, routes+"/authorize", body["authorization_endpoint"])
+
+			// jwks_uri keeps the host-root .well-known location regardless.
+			assert.Equal(t, issuer+"/.well-known/jwks.json", body["jwks_uri"])
+		})
+	}
+}

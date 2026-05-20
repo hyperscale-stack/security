@@ -44,6 +44,17 @@ type ServerConfig struct {
 	// (and /revoke, /introspect). The Server consults them in order and
 	// uses the first one whose Match returns true.
 	ClientAuth []ClientAuthenticator
+	// RoutePrefix is the path prefix under which the token / revoke /
+	// introspect / authorize endpoints are mounted. It is used solely to
+	// build the endpoint URLs published by the RFC 8414 metadata document,
+	// so the discovery document stays consistent with wherever the handlers
+	// are actually mounted.
+	//
+	// The value is normalized at construction: an empty prefix defaults to
+	// "/oauth2", a missing leading slash is added, and a trailing slash is
+	// trimmed ("/" yields a root mount). The .well-known endpoints are not
+	// affected — they live at the host root per RFC 8615.
+	RoutePrefix string
 	// Now is the clock used to stamp issuance / expiry. Defaults to
 	// time.Now (wall clock); inject a fixed clock in tests.
 	Now func() time.Time
@@ -83,6 +94,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+
+	cfg.RoutePrefix = normalizeRoutePrefix(cfg.RoutePrefix)
 
 	s := &Server{cfg: cfg, dispatch: make(map[string]Grant, len(cfg.Grants))}
 	for _, g := range cfg.Grants {
