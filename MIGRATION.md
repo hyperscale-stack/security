@@ -7,23 +7,26 @@ released on its own cadence.
 
 ## Modules
 
-| Path                      | Module                                                          | Purpose                                                              | Status (post-Phase 7e) |
-| ------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------- |
-| `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) | Done (Phases 2 & 5)    |
-| `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       | Done (Phase 3)         |
-| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           | Empty (Phase 9)        |
-| `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 | Done (Phase 4)         |
-| `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               | Done (Phase 4)         |
-| `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            | Done (Phase 4)         |
-| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`                      | `jwtsec` — JWT signer/verifier + JWKS                                | Done (Phase 6)         |
-| `./session`               | `github.com/hyperscale-stack/security/session`                  | Cookie sessions + CSRF                                               | Empty (Phase 10)       |
-| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          | Done (Phase 7a-7d)     |
-| `./oauth2/storage/memory` | `github.com/hyperscale-stack/security/oauth2/storage/memory`    | In-memory `oauth2.Storage` (dev/tests)                               | Done (Phase 7a)        |
-| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 | Empty (Phase 8)        |
-| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          | Empty (Phase 8)        |
-| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Use-case demos (one sub-package per scenario)                        | Empty (Phase 11)       |
-| `./example/oauth2`        | `github.com/hyperscale-stack/security/example/oauth2`           | OAuth2 server + Bearer resource-server demo (v2 stack)               | Working                |
-| `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              | Working                |
+| Path                      | Module                                                          | Purpose                                                              |
+| ------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) |
+| `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       |
+| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           |
+| `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 |
+| `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               |
+| `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            |
+| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`                      | `jwtsec` — JWT signer/verifier + JWKS                                |
+| `./session`               | `github.com/hyperscale-stack/security/session`                  | Stateless encrypted cookie sessions + CSRF                           |
+| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          |
+| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 |
+| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          |
+| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos                                              |
+| `./example/oauth2`        | `github.com/hyperscale-stack/security/example/oauth2`           | OAuth2 server + Bearer resource-server demo                          |
+| `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              |
+
+`oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
+standalone module): it ships the in-memory `oauth2.Storage` used for dev
+and tests.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
@@ -40,12 +43,13 @@ basic/                  ← core + password
 bearer/                 ← core
 password/               ← golang.org/x/crypto
 jwt/                    ← core + bearer + oauth2 + go-jose/v4 + otel
-session/                ← core + golang.org/x/crypto
-oauth2/                 ← core + otel
-oauth2/storage/memory/  ← oauth2
+session/                ← core + golang.org/x/crypto + otel
+oauth2/                 ← core + stdlib
 oauth2/store/sql/       ← oauth2 + database/sql
 oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
+
+(`oauth2/storage/memory` is a sub-package of the `oauth2` module.)
 ```
 
 The core MUST NOT depend on: gRPC, JWT/JOSE libs, OAuth2, Redis, SQL drivers,
