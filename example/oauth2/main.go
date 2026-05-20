@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -91,7 +92,10 @@ type principal struct{ sub string }
 
 func (p principal) Subject() string { return p.sub }
 
-func main() {
+// buildServer wires the authorization server and the Bearer-protected
+// resource server onto a single mux. It is separate from main so the
+// end-to-end test can exercise the exact same wiring.
+func buildServer() (http.Handler, error) {
 	// Storage shared between the authorization server and the resource
 	// server. In a multi-process deployment each side uses its own
 	// storage implementation (SQL / Redis / introspection HTTP call).
@@ -127,7 +131,7 @@ func main() {
 		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost()},
 	})
 	if err != nil {
-		log.Fatalf("oauth2.NewServer: %v", err)
+		return nil, fmt.Errorf("oauth2.NewServer: %w", err)
 	}
 
 	// Resource server: Bearer middleware backed by the introspection
@@ -150,12 +154,21 @@ func main() {
 		_, _ = w.Write([]byte("public\n"))
 	})
 
+	return mux, nil
+}
+
+func main() {
+	handler, err := buildServer()
+	if err != nil {
+		log.Fatalf("example/oauth2: %v", err)
+	}
+
 	addr := ":1337"
 	log.Printf("listening on %s", addr)
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
