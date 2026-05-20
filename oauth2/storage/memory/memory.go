@@ -15,7 +15,6 @@ package memory
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 )
@@ -28,32 +27,16 @@ type Store struct {
 	access   map[string]oauth2.AccessToken
 	refresh  map[string]oauth2.RefreshToken
 	families map[string][]string // familyID -> refresh-token hashes (for revocation)
-	clock    func() time.Time
-}
-
-// Option configures the Store at construction time.
-type Option func(*Store)
-
-// WithClock injects a clock for deterministic tests. Defaults to time.Now.
-func WithClock(now func() time.Time) Option {
-	return func(s *Store) { s.clock = now }
 }
 
 // New returns a fresh [Store].
-func New(opts ...Option) *Store {
-	s := &Store{
+func New() *Store {
+	return &Store{
 		codes:    make(map[string]oauth2.AuthorizationCode),
 		access:   make(map[string]oauth2.AccessToken),
 		refresh:  make(map[string]oauth2.RefreshToken),
 		families: make(map[string][]string),
-		clock:    time.Now,
 	}
-
-	for _, o := range opts {
-		o(s)
-	}
-
-	return s
 }
 
 // SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore].
@@ -83,10 +66,10 @@ func (s *Store) ConsumeAuthorizationCode(_ context.Context, codeHash string) (*o
 
 	delete(s.codes, codeHash)
 
-	if c.IsExpired(s.clock()) {
-		return nil, oauth2.ErrInvalidGrant.WithDescription("authorization code expired")
-	}
-
+	// Expiry is NOT checked here: the store only guarantees atomic
+	// single-use read+delete. The grant handler validates IsExpired with
+	// its injected clock — keeping the check in one place avoids the
+	// store and the grant disagreeing on "now".
 	cp := c
 
 	return &cp, nil

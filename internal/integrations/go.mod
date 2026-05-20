@@ -7,7 +7,6 @@ require (
 	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/http v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
-	github.com/hyperscale-stack/security/oauth2/storage/memory v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -32,4 +31,3 @@ replace github.com/hyperscale-stack/security/http => ../../http
 
 replace github.com/hyperscale-stack/security/oauth2 => ../../oauth2
 
-replace github.com/hyperscale-stack/security/oauth2/storage/memory => ../../oauth2/storage/memory
