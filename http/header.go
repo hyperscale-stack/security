@@ -12,8 +12,9 @@ import "strings"
 // not start with the expected scheme — the canonical fast-path for
 // scheme-specific extractors (Basic, Bearer, etc.).
 //
-// This is the v2 replacement of the legacy internal/header.ExtractAuthorizationValue
-// helper; sub-modules (basic, bearer) MUST consume this version.
+// Scheme-specific extractors (basic, bearer) carry their own copy of this
+// helper to stay free of an httpsec dependency; this exported version is
+// the one application code should reach for.
 func ExtractAuthorizationValue(scheme, header string) (string, bool) {
 	prefix := scheme + " "
 	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {

@@ -1,106 +1,150 @@
-// Copyright 2021 Hyperscale. All rights reserved.
+// Copyright 2026 Hyperscale. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-// Package main demonstrates wiring of the security library with an OAuth2
-// client-credentials flow over plain net/http.
+// Package main demonstrates wiring of the v2 security library: an OAuth2
+// authorization server (client_credentials + refresh_token) plus a
+// resource server protected by a bearer middleware sharing the same
+// storage as the auth server.
 //
 // Run:
 //
 //	go run ./example/oauth2
 //
-// Probe (replace credentials if you change main()):
+// Probe — request an access token:
 //
-//	curl -i http://localhost:1337/                 # public
 //	curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
-//	    http://localhost:1337/protected            # private
+//	    -d 'grant_type=client_credentials&scope=api:read' \
+//	    http://localhost:1337/oauth2/token
+//
+// Probe — call the protected resource with the issued token:
+//
+//	TOKEN=...  # from the previous response
+//	curl -i -H "Authorization: Bearer $TOKEN" http://localhost:1337/protected
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
 	"net/http"
 	"time"
 
-	"github.com/gilcrest/alice"
-	"github.com/hyperscale-stack/security/authentication"
-	"github.com/hyperscale-stack/security/authentication/provider/oauth2"
-	"github.com/hyperscale-stack/security/authentication/provider/oauth2/storage"
-	"github.com/hyperscale-stack/security/authentication/provider/oauth2/token/random"
-	"github.com/hyperscale-stack/security/authorization"
-	"github.com/hyperscale-stack/security/user"
+	"github.com/hyperscale-stack/security"
+	"github.com/hyperscale-stack/security/bearer"
+	httpsec "github.com/hyperscale-stack/security/http"
+	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/clientauth"
+	"github.com/hyperscale-stack/security/oauth2/grant"
+	"github.com/hyperscale-stack/security/oauth2/storage/memory"
+	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
-// noopUserProvider is sufficient for a pure client_credentials demo: only the
-// access-token grant path queries it, and we never issue access tokens here.
-type noopUserProvider struct{}
-
-func (noopUserProvider) LoadUser(string) (user.User, error) {
-	return nil, oauth2.ErrUserNotFound
-}
-
-// Demo credentials. Hard-coded for the example; in real usage these come from
-// a client store seeded out-of-band.
+// Demo credentials. Hard-coded for the example; in real usage these come
+// from a client store seeded out-of-band.
 const (
 	demoClientID     = "5cc06c3b-5755-4229-958c-a515a245aaeb"
 	demoClientSecret = "WTvuAztPD2XBauomleRzGFYuZawS07Ym" //nolint:gosec // demo
 )
 
-func main() {
-	tokenGenerator := random.NewTokenGenerator(&random.Configuration{})
+// pepper is the server-wide secret used to hash tokens before persistence.
+// In production load it from a secret store; never commit it.
+var pepper = []byte("demo-pepper-do-not-use-in-production")
 
-	storageProvider := storage.NewInMemoryStorage()
+// staticClientStore is a tiny in-memory [oauth2.ClientStore] suitable for
+// dev / demos. Production deployments plug a database-backed store.
+type staticClientStore struct{ clients map[string]oauth2.Client }
 
-	if err := storageProvider.SaveClient(&oauth2.DefaultClient{
-		ID:          demoClientID,
-		Secret:      demoClientSecret,
-		RedirectURI: "https://connect.myservice.tld",
-	}); err != nil {
-		log.Fatalf("seed client: %v", err)
+func (s *staticClientStore) LoadClient(_ context.Context, id string) (oauth2.Client, error) {
+	c, ok := s.clients[id]
+	if !ok {
+		return nil, nil
 	}
 
-	// userStorageProvider is queried by the access-token grant path. A noop
-	// implementation is fine for this client_credentials demo, where access
-	// tokens are not issued.
-	userStorageProvider := noopUserProvider{}
+	return c, nil
+}
 
-	authChain := alice.New(
-		authentication.FilterHandler(
-			authentication.NewBearerFilter(),
-			authentication.NewAccessTokenFilter(),
-			authentication.NewHTTPBasicFilter(),
-		),
-		authentication.Handler(
-			oauth2.NewOAuth2AuthenticationProvider(
-				tokenGenerator,
-				userStorageProvider,
-				storageProvider, // ClientProvider
-				storageProvider, // AccessProvider
-				storageProvider, // RefreshProvider
-				storageProvider, // AuthorizeProvider
-			),
-		),
+// localIntrospectVerifier is the in-process verifier used by the resource
+// server. It hashes the bearer token and queries the OAuth2 storage —
+// the local equivalent of an RFC 7662 introspection call.
+type localIntrospectVerifier struct {
+	store  oauth2.AccessTokenStore
+	pepper []byte
+}
+
+// Verify implements [bearer.TokenVerifier].
+func (v *localIntrospectVerifier) Verify(ctx context.Context, tok string) (security.Authentication, error) {
+	hash := oauth2.HashToken(v.pepper, tok)
+
+	at, err := v.store.LookupAccessToken(ctx, hash)
+	if err != nil {
+		return nil, security.ErrTokenNotFound
+	}
+
+	if at.IsExpired(time.Now()) {
+		return nil, security.ErrTokenExpired
+	}
+
+	return bearer.New(tok).WithAuthenticated(principal{sub: at.Subject}, nil, at.Subject), nil
+}
+
+type principal struct{ sub string }
+
+func (p principal) Subject() string { return p.sub }
+
+func main() {
+	// Storage shared between the authorization server and the resource
+	// server. In a multi-process deployment each side uses its own
+	// storage implementation (SQL / Redis / introspection HTTP call).
+	store := memory.New()
+
+	// Seed a demo confidential client.
+	clients := &staticClientStore{clients: map[string]oauth2.Client{
+		demoClientID: &oauth2.DefaultClient{
+			IDValue:           demoClientID,
+			Secret:            demoClientSecret,
+			TypeValue:         oauth2.ClientConfidential,
+			RedirectURIValues: []string{"https://connect.myservice.tld"},
+			ScopeValues:       []string{"api:read"},
+		},
+	}}
+
+	// Authorization server.
+	gcfg := grant.Config{
+		Storage:             store,
+		AccessTokens:        token.NewOpaque(pepper, 32),
+		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(pepper, 32)},
+		AccessTTL:           time.Hour,
+		RefreshTTL:          24 * time.Hour,
+		RotateRefreshTokens: true,
+	}
+
+	srv, err := oauth2.NewServer(oauth2.ServerConfig{
+		Profile:        oauth2.Profile20BCP,
+		Storage:        store,
+		ClientStore:    clients,
+		IssuerResolver: oauth2.StaticIssuer("http://localhost:1337", "api"),
+		Grants:         []oauth2.Grant{grant.NewClientCredentials(gcfg), grant.NewRefreshToken(gcfg)},
+		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost()},
+	})
+	if err != nil {
+		log.Fatalf("oauth2.NewServer: %v", err)
+	}
+
+	// Resource server: Bearer middleware backed by the introspection
+	// verifier that consults the shared storage.
+	verifier := &localIntrospectVerifier{store: store, pepper: pepper}
+	engine := security.NewEngine(
+		security.NewManager(bearer.NewAuthenticator(verifier)),
+		bearer.NewExtractor(),
 	)
-
-	private := authChain.Append(authorization.AuthorizeHandler())
+	protect := httpsec.Middleware(engine, httpsec.WithRealm("api"))
 
 	mux := http.NewServeMux()
-
-	mux.Handle("GET /protected", private.ThenFunc(func(w http.ResponseWriter, r *http.Request) {
-		client := oauth2.ClientFromContext(r.Context())
-		if client == nil {
-			http.Error(w, "no client in context", http.StatusInternalServerError)
-
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		// client.GetID is server-controlled (loaded from the in-memory client
-		// store, not from user input), so reflecting it back is safe in this
-		// demo context. The taint analyzer cannot prove this and flags G705.
-		_, _ = fmt.Fprintf(w, "hello %s\n", client.GetID()) //nolint:gosec // demo
-	}))
-
+	mux.Handle("POST /oauth2/token", srv.TokenHandler())
+	mux.Handle("POST /oauth2/revoke", srv.RevokeHandler())
+	mux.Handle("POST /oauth2/introspect", srv.IntrospectHandler())
+	mux.Handle("GET /.well-known/oauth-authorization-server", srv.MetadataHandler())
+	mux.Handle("GET /protected", protect(http.HandlerFunc(protectedHandler)))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("public\n"))
@@ -118,4 +162,11 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+func protectedHandler(w http.ResponseWriter, r *http.Request) {
+	auth, _ := security.FromContext(r.Context())
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("hello " + auth.Principal().Subject() + "\n")) //nolint:gosec // demo
 }

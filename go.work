@@ -8,6 +8,7 @@ use (
 	./examples
 	./grpc
 	./http
+	./internal/integrations
 	./jwt
 	./oauth2
 	./oauth2/storage/memory

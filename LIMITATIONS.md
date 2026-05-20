@@ -1,112 +1,59 @@
-# Known limitations (as of Phase 0 stabilisation)
+# Known limitations (as of Phase 7e)
 
-This document captures the gaps of the current MVP that are not yet addressed.
-Each item is scheduled for one of the upcoming phases of the architecture
-refactor (see [ARCHITECTURE_REPORT.md](ARCHITECTURE_REPORT.md) and the plan
-file referenced there).
-
-## Transport coupling
-
-- The core types (`authentication.Filter`, `authentication.Provider`) are bound
-  to `*http.Request`. No gRPC support yet. *Addressed in Phase 2 (Carrier) and
-  Phase 9 (grpcsec).*
-
-## Credential model
-
-- `credential.Credential` uses `interface{}` for principal and credentials with
-  no type-safe helpers. *Addressed in Phase 2 (`security.Authentication`).*
-- `Credential` is mutable in place via `SetAuthenticated`/`SetUser`. *Replaced
-  by an immutable model in Phase 2.*
-
-## Context propagation
-
-- `Filter.OnFilter`, `Provider.Authenticate`, `password.Hasher.Hash/Verify`,
-  `dao.UserProvider.LoadUserByUsername`, `oauth2.*.Load*` do not take a
-  `context.Context`. *Addressed in Phase 2/4 with new interfaces.*
-
-## Time injection
-
-- `oauth2.AccessInfo.IsExpired()` and `oauth2.AuthorizeInfo.IsExpired()` call
-  `time.Now()` directly. The additive `IsExpiredAt(t time.Time)` is available
-  for deterministic tests, but the `Clock` interface is not yet plumbed
-  through the OAuth2 provider. *Phase 7.*
-
-## Password hashing
-
-- `password.Hasher.Verify` returns `bool` instead of `(bool, error)`, swallowing
-  malformed-hash errors. *Phase 4: new signature with ctx + error.*
-- No `NeedsRehash`, no Argon2id implementation. *Phase 4.*
-- `NewBCryptHasher(cost)` does not validate `cost` (a 0 will fail at runtime).
-  *Phase 4.*
+The legacy MVP (`authentication/`, `authorization/`, the old `password/`
+package and the old `oauth2` provider) has been removed. This document
+tracks what the v2 stack does **not** yet cover, mapped to the phase that
+will address it.
 
 ## OAuth2 server
 
-- No `/authorize`, `/token`, `/revoke`, `/introspect`, `/.well-known/...`
-  endpoints. The provider only validates HTTP Basic client credentials and
-  bearer access tokens; it does not *issue* them. *Phase 7.*
-- No PKCE verifier (S256 / plain).
-- No refresh-token rotation, no reuse detection.
-- No introspection (RFC 7662) or revocation (RFC 7009).
-- Tokens are stored verbatim in `InMemoryStorage` (no hashing of access /
-  refresh tokens / authorization codes). *Phase 7.*
-- `OAuth2AuthenticationProvider.IsSupported` advertises support for
-  `UsernamePasswordCredential` and treats it as client credentials. This will
-  be split into a dedicated `ClientCredential` type in Phase 7.
-- `StorageProvider` operations (`ConsumeAuthorizationCode`,
-  `RotateRefreshToken`) are not atomic. *Phase 7/8.*
-- `InMemoryStorage` is the only implementation; no production SQL/Redis store.
-  *Phase 8.*
+- `/oauth2/authorize` (authorization-code issuance + consent flow) is not
+  implemented. The /token endpoint already covers `client_credentials` and
+  `refresh_token` end-to-end; `authorization_code` works at the grant level
+  (see `oauth2/grant`) but no HTTP endpoint mints the code yet.
+  *Follow-up slice of Phase 7.*
+- `private_key_jwt` client authentication (RFC 7523) is not implemented;
+  `client_secret_basic`, `client_secret_post` and `none` are.
+  *Follow-up slice of Phase 7.*
+- No `/.well-known/jwks.json` endpoint — it depends on a server-side public
+  key store. *Follow-up slice of Phase 7.*
 
-## Authentication providers
+## Production storage
 
-- No JWT provider, no LDAP provider, no session/cookie provider, no API key
-  provider. *Phases 4 (basic/bearer), 6 (jwt), 10 (session).*
-- No `HTTPDigestFilter`. *Probably never (RFC 7616 is rare in 2026); to be
-  decided.*
+- The only `oauth2.Storage` implementation is the in-memory store
+  (`oauth2/storage/memory`); it loses all state on restart. Production SQL
+  and Redis stores with real atomicity (transactions / Lua scripts) and a
+  shared conformance test suite are *Phase 8*.
 
-## Authorization
+## Transports
 
-- Only `HasRole(role string)` is provided. No `HasAnyRole`, `HasScope`,
-  `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`, composition
-  voters (`And`/`Or`/`Not`). *Phase 5.*
-- The `Option func(Credential) bool` signature has no access to the request,
-  no error channel, no asynchronous I/O. *Replaced by `Voter` /
-  `AccessDecisionManager` in Phase 5.*
+- No gRPC adapter yet — the `grpc/` module is an empty placeholder.
+  *Phase 9.*
 
-## Errors
+## Sessions
 
-- Sentinels (`ErrInvalidCredentials`, `ErrClientSecretMismatch`,
-  `ErrTokenExpired`, `ErrTokenNotFound`, `ErrUnsupportedCredential`) exist at
-  the root since Phase 0, but most internal packages still expose their own
-  sentinels (`oauth2.ErrAccessNotFound`, `dao.ErrBadPassword`, …) that are not
-  yet wrapped through the root ones. *Progressive in Phases 2-7.*
-- The HTTP response body is the hard-coded string `"Access denied"`. No
-  `ErrorMapper`, no JSON error format, no `WWW-Authenticate` challenge.
-  *Phase 3 (httpsec.ErrorMapper).*
+- No cookie-session module — the `session/` module is an empty placeholder.
+  *Phase 10.*
 
-## Observability
+## Examples & docs
 
-- No OpenTelemetry spans yet. *Phase 2 introduces tracing in the core; each
-  subsequent phase adds spans in its module.*
+- Only `example/oauth2` is wired to the v2 stack. The per-use-case examples
+  (basic-http, bearer-jwt, grpc-bearer, session-web, multi-tenant…) and the
+  `docs/` set (core concepts, observability catalog, migration guide) are
+  *Phase 11*.
 
 ## Tooling
 
 - `.mockery.yaml` is being migrated to mockery v3 syntax (`pkgname`,
-  `template`, `template-data`), but the tool pinned in `go.mod` is still
-  v2.53.5. `make generate` therefore fails until either the config is
-  reverted to v2 syntax or the tool is bumped. CI skips `make generate`
-  until this is reconciled. Phase 4 will resolve this when basic/bearer
-  extract their interfaces and need mocks generated.
+  `template`, `template-data`) while the tool pinned in `go.mod` is still
+  v2.53.5. `make generate` therefore fails until the config and the tool
+  pin are reconciled. CI skips `make generate`. No module currently relies
+  on generated mocks — every test uses hand-written fakes — so this is not
+  on the critical path. *To resolve before the v1 tag (Phase 11).*
 
-## Configuration / DX
+## Not planned
 
-- No top-level `Engine` / `Manager` builder. Users have to manually chain
-  `FilterHandler` + `Handler` + `AuthorizeHandler`. *Phase 2 introduces
-  `security.NewEngine(...)`.*
-- The OAuth2 provider constructor takes 6 storage parameters of similar types,
-  which is error-prone. *Phase 7 replaces it with `oauth2.NewServer(cfg)`.*
-
-## Multi-tenancy
-
-- A single global issuer / single client store. *Phase 7 introduces
-  `IssuerResolver`.*
+- `HTTPDigestFilter` (RFC 7616) — Digest auth is effectively dead in 2026;
+  it will not be implemented unless a concrete need surfaces.
+- LDAP / API-key authenticators — easy to add downstream as `security.Authenticator`
+  implementations; not shipped in the core library.
