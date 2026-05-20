@@ -71,6 +71,7 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		Issuer:   issuer,
 		Audience: audience,
 		Now:      s.cfg.Now(),
+		Profile:  s.cfg.Profile,
 	})
 	if err != nil {
 		writeOAuthError(w, err)

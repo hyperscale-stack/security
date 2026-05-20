@@ -102,16 +102,14 @@ func TestAuthorizationCodeMissingVerifier(t *testing.T) {
 	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
 }
 
-func TestAuthorizationCodePlainPKCEMethodDefault(t *testing.T) {
-	t.Parallel()
+// plainPKCECode seeds a code whose challenge method is empty (the grant
+// defaults to "plain", where the verifier equals the challenge verbatim)
+// and returns the matching /token form.
+func plainPKCECode(t *testing.T, store oauth2.Storage) url.Values {
+	t.Helper()
 
-	store := newStore()
-	ctx := context.Background()
-
-	// A code whose challenge method is empty: the grant defaults to "plain",
-	// where the verifier equals the challenge verbatim.
 	raw := "raw-plain-code"
-	require.NoError(t, store.SaveAuthorizationCode(ctx, &oauth2.AuthorizationCode{
+	require.NoError(t, store.SaveAuthorizationCode(context.Background(), &oauth2.AuthorizationCode{
 		Code: raw, CodeHash: oauth2.HashToken(nil, raw),
 		ClientID: clientID, Subject: subject, RedirectURI: redirectURI, Scope: "read:mail",
 		CodeChallenge: "shared-plain-secret", CodeChallengeMethod: "",
@@ -119,6 +117,68 @@ func TestAuthorizationCodePlainPKCEMethodDefault(t *testing.T) {
 		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
 	}))
 
+	form := url.Values{}
+	form.Set("code", raw)
+	form.Set("redirect_uri", redirectURI)
+	form.Set("code_verifier", "shared-plain-secret")
+
+	return form
+}
+
+func TestAuthorizationCodePlainPKCEAcceptedUnderProfile20(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	form := plainPKCECode(t, store)
+
+	g := grant.NewAuthorizationCode(grant.Config{
+		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour,
+	})
+
+	resp, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: form, Profile: oauth2.Profile20,
+		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.Pair.Access.Token)
+}
+
+func TestAuthorizationCodePlainPKCERefusedUnderBCP(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	form := plainPKCECode(t, store)
+
+	g := grant.NewAuthorizationCode(grant.Config{
+		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour,
+	})
+
+	// Profile20BCP (and 21Draft) mandate S256 — "plain" must be refused.
+	_, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP,
+		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
+	})
+	require.Error(t, err)
+	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+}
+
+func TestAuthorizationCodeProfileRequiresPKCE(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	ctx := context.Background()
+
+	// A code minted with no PKCE challenge at all.
+	raw := "raw-no-pkce-code"
+	require.NoError(t, store.SaveAuthorizationCode(ctx, &oauth2.AuthorizationCode{
+		Code: raw, CodeHash: oauth2.HashToken(nil, raw),
+		ClientID: clientID, Subject: subject, RedirectURI: redirectURI, Scope: "read:mail",
+		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
+		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
+	}))
+
+	// The grant itself does not force PKCE (RequirePKCE false), but the
+	// BCP profile does — the request must still be refused.
 	g := grant.NewAuthorizationCode(grant.Config{
 		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour,
 	})
@@ -126,13 +186,13 @@ func TestAuthorizationCodePlainPKCEMethodDefault(t *testing.T) {
 	form := url.Values{}
 	form.Set("code", raw)
 	form.Set("redirect_uri", redirectURI)
-	form.Set("code_verifier", "shared-plain-secret")
 
-	resp, err := g.Handle(ctx, grant.Request{
-		Client: newClient(), Form: form, Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
+	_, err := g.Handle(ctx, grant.Request{
+		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP,
+		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
 	})
-	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Pair.Access.Token)
+	require.Error(t, err)
+	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
 }
 
 func TestAuthorizationCodeWithoutRefreshGenerator(t *testing.T) {
