@@ -19,6 +19,11 @@ type GrantRequest struct {
 	Issuer   string
 	Audience string
 	Now      time.Time
+	// Profile is the server's active security profile. Grants use it to
+	// enforce the profile-mandated rules at runtime (e.g. PKCE required,
+	// "plain" PKCE refused). A profile can only tighten a grant's own
+	// configuration, never loosen it.
+	Profile Profile
 }
 
 // GrantResponse is what a grant hands back to the server. The HTTP layer

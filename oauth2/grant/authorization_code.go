@@ -81,8 +81,13 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCode) error {
 	verifier := req.Form.Get("code_verifier")
 
+	// PKCE is required when the grant is explicitly configured for it OR
+	// the active profile mandates it (BCP / OAuth 2.1). The profile can
+	// only tighten this, never relax it.
+	pkceRequired := g.cfg.RequirePKCE || req.Profile.RequiresPKCE()
+
 	if code.CodeChallenge == "" {
-		if g.cfg.RequirePKCE {
+		if pkceRequired {
 			return oauth2.ErrInvalidGrant.WithDescription("PKCE required")
 		}
 
@@ -96,6 +101,12 @@ func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCo
 	method := pkce.Method(code.CodeChallengeMethod)
 	if method == "" {
 		method = pkce.MethodPlain
+	}
+
+	// The "plain" transformation is accepted only when the profile tolerates
+	// it (Profile20). BCP and OAuth 2.1 mandate S256.
+	if method == pkce.MethodPlain && !req.Profile.AllowsPKCEPlain() {
+		return oauth2.ErrInvalidGrant.WithDescription(`PKCE method "plain" is refused by the active profile`)
 	}
 
 	if !pkce.Verify(method, verifier, code.CodeChallenge) {
