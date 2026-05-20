@@ -566,3 +566,74 @@ func TestMetadataRoutePrefix(t *testing.T) {
 		})
 	}
 }
+
+// passwordVerifier is a ResourceOwnerVerifier accepting a single account.
+type passwordVerifier struct{}
+
+func (passwordVerifier) VerifyResourceOwner(_ context.Context, username, password string) (string, error) {
+	if username == "alice" && password == "s3cr3t" {
+		return "alice", nil
+	}
+
+	return "", errors.New("invalid credentials")
+}
+
+// TestTokenEndpointLegacyPasswordGrant wires the opt-in legacy password
+// grant under Profile20 and exercises it end-to-end through /token.
+func TestTokenEndpointLegacyPasswordGrant(t *testing.T) {
+	t.Parallel()
+
+	store := memory.New()
+	cfg := grant.Config{
+		Storage: store, AccessTokens: token.NewOpaque([]byte("p"), 32), AccessTTL: time.Hour,
+	}
+
+	srv, err := oauth2.NewServer(oauth2.ServerConfig{
+		Profile: oauth2.Profile20, // legacy grants are accepted only here
+		Storage: store,
+		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
+			testClientID: &oauth2.DefaultClient{
+				IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+			},
+		}},
+		IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
+		Grants:         []oauth2.Grant{grant.NewLegacyPassword(cfg, passwordVerifier{})},
+		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	srv.TokenHandler().ServeHTTP(rec, formRequest("/oauth2/token",
+		url.Values{"grant_type": {"password"}, "username": {"alice"}, "password": {"s3cr3t"}}, true))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.NotEmpty(t, body["access_token"])
+	assert.Equal(t, "Bearer", body["token_type"])
+}
+
+// TestNewServerRefusesLegacyPasswordOutsideProfile20 confirms the opt-in
+// legacy grant is rejected at construction under the BCP / 2.1 profiles.
+func TestNewServerRefusesLegacyPasswordOutsideProfile20(t *testing.T) {
+	t.Parallel()
+
+	store := memory.New()
+	cfg := grant.Config{
+		Storage: store, AccessTokens: token.NewOpaque([]byte("p"), 32), AccessTTL: time.Hour,
+	}
+
+	for _, profile := range []oauth2.Profile{oauth2.Profile20BCP, oauth2.Profile21Draft} {
+		_, err := oauth2.NewServer(oauth2.ServerConfig{
+			Profile:        profile,
+			Storage:        store,
+			ClientStore:    &staticClientStore{},
+			IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
+			Grants:         []oauth2.Grant{grant.NewLegacyPassword(cfg, passwordVerifier{})},
+			ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+		})
+		require.Error(t, err, profile)
+		assert.Contains(t, err.Error(), "password")
+	}
+}
