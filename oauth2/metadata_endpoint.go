@@ -15,10 +15,9 @@ import (
 // payload is derived from the active ServerConfig so adding a grant or
 // changing the issuer is automatically reflected.
 //
-// Endpoint URLs in the document use the request's URL as a prefix. This
-// works for the simple "mount under /oauth2" topology; deployments that
-// expose endpoints under different paths can override by writing their
-// own handler that calls [Server.Metadata] and adjusts the URLs.
+// Endpoint URLs are built as issuer + ServerConfig.RoutePrefix + "/<name>",
+// so the document stays consistent with wherever the handlers are mounted.
+// The jwks_uri keeps the host-root .well-known location per RFC 8615.
 func (s *Server) MetadataHandler() http.Handler {
 	return http.HandlerFunc(s.serveMetadata)
 }
@@ -31,15 +30,16 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix := strings.TrimSuffix(issuer, "/")
+	base := strings.TrimSuffix(issuer, "/")
+	routes := base + s.cfg.RoutePrefix
 
 	doc := metadataDoc{
 		Issuer:                            issuer,
-		AuthorizationEndpoint:             prefix + "/oauth2/authorize",
-		TokenEndpoint:                     prefix + "/oauth2/token",
-		RevocationEndpoint:                prefix + "/oauth2/revoke",
-		IntrospectionEndpoint:             prefix + "/oauth2/introspect",
-		JWKSURI:                           prefix + "/.well-known/jwks.json",
+		AuthorizationEndpoint:             routes + "/authorize",
+		TokenEndpoint:                     routes + "/token",
+		RevocationEndpoint:                routes + "/revoke",
+		IntrospectionEndpoint:             routes + "/introspect",
+		JWKSURI:                           base + "/.well-known/jwks.json",
 		GrantTypesSupported:               s.grantTypes(),
 		ResponseTypesSupported:            []string{"code"},
 		TokenEndpointAuthMethodsSupported: s.clientAuthMethods(),
@@ -94,4 +94,20 @@ func (s *Server) pkceMethods() []string {
 	}
 
 	return []string{"S256"}
+}
+
+// normalizeRoutePrefix cleans a user-supplied [ServerConfig.RoutePrefix]:
+// an empty value defaults to "/oauth2", a missing leading slash is added,
+// and a trailing slash is trimmed. The result is either "" (root mount) or
+// a clean "/path".
+func normalizeRoutePrefix(prefix string) string {
+	if prefix == "" {
+		return "/oauth2"
+	}
+
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+
+	return strings.TrimRight(prefix, "/")
 }
