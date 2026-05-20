@@ -78,14 +78,39 @@ func authorizeQuery() url.Values {
 	}
 }
 
-// runAuthorize drives the /authorize handler with the given query and
-// consent callback and returns the recorder.
-func runAuthorize(srv *oauth2.Server, q url.Values, consent oauth2.ConsentFunc) *httptest.ResponseRecorder {
+// implicitQuery is a valid /authorize query for the implicit flow.
+func implicitQuery() url.Values {
+	return url.Values{
+		"response_type": {"token"},
+		"client_id":     {testClientID},
+		"redirect_uri":  {redirectURI},
+		"scope":         {"read"},
+		"state":         {"impl-state"},
+	}
+}
+
+// implicitTokens is an OpaqueTokenGenerator for the implicit-flow tests.
+func implicitTokens() oauth2.OpaqueTokenGenerator {
+	return token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("implicit-pepper"), 32)}
+}
+
+// runAuthorizeCfg drives the /authorize handler with an explicit config.
+func runAuthorizeCfg(
+	srv *oauth2.Server,
+	cfg oauth2.AuthorizeConfig,
+	q url.Values,
+	consent oauth2.ConsentFunc,
+) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil)
-	srv.AuthorizeHandler(oauth2.AuthorizeConfig{}, consent).ServeHTTP(rec, req)
+	srv.AuthorizeHandler(cfg, consent).ServeHTTP(rec, req)
 
 	return rec
+}
+
+// runAuthorize drives the /authorize handler with the default config.
+func runAuthorize(srv *oauth2.Server, q url.Values, consent oauth2.ConsentFunc) *httptest.ResponseRecorder {
+	return runAuthorizeCfg(srv, oauth2.AuthorizeConfig{}, q, consent)
 }
 
 // approve is a ConsentFunc that always grants, as alice.
@@ -385,6 +410,102 @@ var assertAnError = errAuthorizeTest("consent backend down")
 type errAuthorizeTest string
 
 func (e errAuthorizeTest) Error() string { return string(e) }
+
+// --- implicit flow (legacy, opt-in) -------------------------------------
+
+func TestAuthorizeHandlerPanicsOnImplicitMisconfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("implicit on a non-Profile20 server", func(t *testing.T) {
+		t.Parallel()
+
+		bcp := newAuthorizeServer(t, oauth2.Profile20BCP)
+		assert.Panics(t, func() {
+			bcp.AuthorizeHandler(
+				oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}, approve)
+		})
+	})
+
+	t.Run("implicit without a token generator", func(t *testing.T) {
+		t.Parallel()
+
+		p20 := newAuthorizeServer(t, oauth2.Profile20)
+		assert.Panics(t, func() {
+			p20.AuthorizeHandler(oauth2.AuthorizeConfig{AllowImplicit: true}, approve)
+		})
+	})
+}
+
+func TestAuthorizeImplicitHappyPath(t *testing.T) {
+	t.Parallel()
+
+	srv := newAuthorizeServer(t, oauth2.Profile20)
+	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}
+
+	rec := runAuthorizeCfg(srv, cfg, implicitQuery(), approve)
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	loc := mustLocation(t, rec)
+	assert.Empty(t, loc.RawQuery, "the implicit response uses the fragment, not the query")
+
+	frag, err := url.ParseQuery(loc.Fragment)
+	require.NoError(t, err)
+	assert.NotEmpty(t, frag.Get("access_token"))
+	assert.Equal(t, "Bearer", frag.Get("token_type"))
+	assert.NotEmpty(t, frag.Get("expires_in"))
+	assert.Equal(t, "read", frag.Get("scope"))
+	assert.Equal(t, "impl-state", frag.Get("state"))
+}
+
+func TestAuthorizeImplicitRefusedWhenNotEnabled(t *testing.T) {
+	t.Parallel()
+
+	srv := newAuthorizeServer(t, oauth2.Profile20)
+
+	// The default config leaves AllowImplicit false.
+	rec := runAuthorize(srv, implicitQuery(), approve)
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	loc := mustLocation(t, rec)
+	assert.Equal(t, oauth2.CodeUnsupportedResponseType, loc.Query().Get("error"))
+	assert.Empty(t, loc.Fragment)
+}
+
+func TestAuthorizeImplicitConsentDenied(t *testing.T) {
+	t.Parallel()
+
+	srv := newAuthorizeServer(t, oauth2.Profile20)
+	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}
+
+	rec := runAuthorizeCfg(srv, cfg, implicitQuery(),
+		func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+			return &oauth2.Consent{Approved: false}, nil
+		})
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	// Implicit errors also travel in the fragment (RFC 6749 §4.2.2.1).
+	frag, err := url.ParseQuery(mustLocation(t, rec).Fragment)
+	require.NoError(t, err)
+	assert.Equal(t, oauth2.CodeAccessDenied, frag.Get("error"))
+}
+
+func TestAuthorizeImplicitRejectsBroadenedScope(t *testing.T) {
+	t.Parallel()
+
+	srv := newAuthorizeServer(t, oauth2.Profile20)
+	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}
+
+	// implicitQuery requests "read"; the consent tries to grant "read write".
+	rec := runAuthorizeCfg(srv, cfg, implicitQuery(),
+		func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+			return &oauth2.Consent{Approved: true, Subject: "alice", Scope: "read write"}, nil
+		})
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	frag, err := url.ParseQuery(mustLocation(t, rec).Fragment)
+	require.NoError(t, err)
+	assert.Equal(t, oauth2.CodeInvalidScope, frag.Get("error"))
+}
 
 // mustLocation parses the Location header of a redirect response.
 func mustLocation(t *testing.T, rec *httptest.ResponseRecorder) *url.URL {
