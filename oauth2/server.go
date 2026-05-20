@@ -29,8 +29,8 @@ type ServerConfig struct {
 	// is [Profile20BCP] — the recommended default.
 	Profile Profile
 	// Storage is the persistence backend (codes / access tokens / refresh
-	// tokens). Use storage/memory for dev/tests and storage/sql or
-	// storage/redis for production (Phase 8).
+	// tokens). Use storage/memory for dev/tests and store/sql or
+	// store/redis for production.
 	Storage Storage
 	// ClientStore resolves client records by ID.
 	ClientStore ClientStore

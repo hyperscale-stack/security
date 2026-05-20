@@ -8,9 +8,9 @@ package security
 // could be extracted from a [Carrier]. It is safe to call from any goroutine;
 // the returned value is shared and immutable.
 //
-// Voters that opt-in to anonymous access (see voter.Anonymous in Phase 5)
-// match this value; the default policy of [AccessDecisionManager] is to deny
-// when no voter grants, so anonymous calls fail closed by default.
+// Voters that opt-in to anonymous access (see the voter package's
+// Anonymous) match this value; the default policy of [AccessDecisionManager]
+// is to deny when no voter grants, so anonymous calls fail closed by default.
 func Anonymous() Authentication { return anonymousAuth }
 
 // anonymousAuth is the package-wide singleton returned by Anonymous().

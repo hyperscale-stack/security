@@ -5,6 +5,7 @@ go 1.25.0
 replace github.com/hyperscale-stack/security => ../
 
 require (
+	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.43.0
 )

@@ -7,7 +7,6 @@ package jwtsec
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -96,6 +95,3 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 
 	return out, nil
 }
-
-// Unwrap-aware helper for the unused errors import in this file.
-var _ = errors.Is

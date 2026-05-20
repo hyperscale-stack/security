@@ -6,10 +6,8 @@
 // real atomicity (transactional ConsumeAuthorizationCode and
 // RotateRefreshToken). Dialects supported: PostgreSQL, MySQL, SQLite.
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2
 //   - database/sql
 //   - stdlib only (drivers are pluggable; users bring their own)
-//
-// Real implementation lands in Phase 8.
 package sqlstore

@@ -22,7 +22,7 @@
 //
 // Both implementations are safe for concurrent use and never log secrets.
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - golang.org/x/crypto
 //   - stdlib only
 package password

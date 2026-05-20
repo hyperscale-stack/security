@@ -12,9 +12,7 @@
 // A legacy NewQueryExtractor is offered for the deprecated "?access_token="
 // query parameter (RFC 6750 §2.3); its godoc warns against using it.
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
 //   - stdlib only
-//
-// Real implementation lands in Phase 4.
 package bearer

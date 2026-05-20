@@ -73,7 +73,9 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 	)
 
 	if !v.cfg.algorithmAllowed(alg) {
-		err := fmt.Errorf("%w: %s", ErrAlgorithmNotAllowed, alg)
+		// errAlgorithmDisallowed wraps ErrAlgorithmNotAllowed and keeps the
+		// offending alg reachable via AsAlgorithmName for telemetry.
+		err := &errAlgorithmDisallowed{alg: string(alg)}
 
 		span.SetStatus(codes.Error, "alg")
 		span.RecordError(err)

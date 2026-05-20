@@ -14,7 +14,7 @@ import (
 // [security.Authentication] it represents. Implementations come from other
 // modules:
 //
-//   - github.com/hyperscale-stack/security/jwt  (Phase 6) — local JWT verifier
+//   - github.com/hyperscale-stack/security/jwt — local JWT verifier
 //   - introspection-backed verifiers calling RFC 7662 endpoints
 //   - custom verifiers calling an internal auth service
 //

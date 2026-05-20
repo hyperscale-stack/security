@@ -5,7 +5,7 @@
 // Package memory ships an in-process [oauth2.Storage] implementation
 // suitable for tests, examples and small single-instance deployments.
 // Production deployments MUST use the SQL or Redis implementations
-// (Phase 8) instead — the in-memory store loses all state on restart.
+// instead — the in-memory store loses all state on restart.
 //
 // All operations are guarded by a single sync.Mutex; the resulting
 // throughput is fine for tens of thousands of req/s but the structure is
