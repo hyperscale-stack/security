@@ -20,8 +20,7 @@ released on its own cadence.
 | `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          |
 | `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 |
 | `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          |
-| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos                                              |
-| `./example/oauth2`        | `github.com/hyperscale-stack/security/example/oauth2`           | OAuth2 server + Bearer resource-server demo                          |
+| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos (one sub-package per scenario)               |
 | `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a

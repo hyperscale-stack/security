@@ -28,6 +28,7 @@ require (
 	github.com/hyperscale-stack/security/grpc v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/http v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/jwt v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/password v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/session v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
@@ -40,7 +41,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

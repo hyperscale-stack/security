@@ -16,7 +16,5 @@
 //   - bearer-jwt   — JWT issuance and Bearer-token validation, scope gating.
 //   - grpc-bearer  — gRPC unary interceptors authenticating a Bearer JWT.
 //   - session-web  — cookie-session login form with a CSRF-protected logout.
-//
-// A complete OAuth2 authorization-server + resource-server demo lives in the
-// repository's example/oauth2 directory.
+//   - oauth2       — OAuth2 authorization server + Bearer resource server.
 package examples

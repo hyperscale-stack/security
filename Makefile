@@ -43,8 +43,12 @@ test: _build
 			-coverprofile="$(CURDIR)/$(BUILD_DIR)/$$mod_safe.cover" \
 			-timeout 300s ./...) || exit 1; \
 	done
+	@# Aggregate coverage excludes generated mocks, protobuf, and the
+	@# example programs: their main() binds a socket and blocks, so it is
+	@# not unit-testable and would skew the library coverage figure. The
+	@# examples are still built, tested, and linted above.
 	@grep -h -v '^mode:' $(BUILD_DIR)/*.cover 2>/dev/null \
-		| grep -v 'mock_' | grep -v '.pb.go' \
+		| grep -v 'mock_' | grep -v '.pb.go' | grep -v '/example' \
 		> $(BUILD_DIR)/coverage.body || true
 	@echo 'mode: atomic' > $(BUILD_DIR)/coverage.out
 	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
