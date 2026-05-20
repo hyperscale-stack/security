@@ -6,7 +6,6 @@ package basic
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/hyperscale-stack/security"
@@ -15,8 +14,8 @@ import (
 
 // AuthorityResolver maps a [PasswordUser] to the authorities (roles, scopes,
 // claims) attached to the resulting [security.Authentication]. The default
-// resolver returns nil; applications that ship role-based authorisation
-// (Phase 5 voters) provide one that reads from the user record.
+// resolver returns nil; applications that ship role-based authorization
+// provide one that reads the authorities from the user record.
 type AuthorityResolver func(PasswordUser) []string
 
 // Authenticator implements [security.Authenticator] for the HTTP Basic
@@ -111,14 +110,3 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 
 // Compile-time interface check.
 var _ security.Authenticator = (*Authenticator)(nil)
-
-// Sentinel returned to callers that want to distinguish the "user not found"
-// branch in tests; production code SHOULD only check
-// [security.ErrInvalidCredentials].
-var errUserNotFound = errors.New("basic: user not found")
-
-// ErrUserNotFound is the exported alias for the not-found sentinel. Kept
-// private through errUserNotFound so the loader contract stays "return
-// (nil, nil) when unknown"; this var is only for tests / mocks that want a
-// concrete error.
-var ErrUserNotFound = errUserNotFound

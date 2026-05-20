@@ -25,10 +25,10 @@ than future refactor phases.
 
 ## Sessions
 
-- The only `session.Store` is the stateless encrypted cookie. A server-side
-  store (Redis/SQL) is not shipped — the cookie store covers the common
-  case without server state. Add one downstream by implementing
-  `session.Store` if you need server-side revocation lists.
+- The session module is stateless: the whole session lives in an encrypted
+  cookie, there is no server-side session store. This covers the common
+  case without server state, but a session cannot be revoked server-side
+  before its cookie expires. A server-side store (Redis/SQL) is not shipped.
 
 ## Tooling
 

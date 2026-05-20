@@ -30,4 +30,3 @@ replace github.com/hyperscale-stack/security/bearer => ../../bearer
 replace github.com/hyperscale-stack/security/http => ../../http
 
 replace github.com/hyperscale-stack/security/oauth2 => ../../oauth2
-

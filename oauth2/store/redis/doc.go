@@ -6,10 +6,8 @@
 // of ConsumeAuthorizationCode and RotateRefreshToken is guaranteed by Lua
 // scripts loaded via EVALSHA (with EVAL fallback).
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2
 //   - github.com/redis/go-redis/v9
 //   - stdlib only
-//
-// Real implementation lands in Phase 8.
 package redisstore

@@ -8,10 +8,8 @@
 // Carrier, and an Authenticator that consumes a UserLoader + a Hasher to
 // validate the username/password pair against a backing store.
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
 //   - github.com/hyperscale-stack/security/password (for password hashing)
 //   - stdlib only
-//
-// Real implementation lands in Phase 4.
 package basic

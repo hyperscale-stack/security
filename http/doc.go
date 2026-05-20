@@ -10,15 +10,11 @@
 // accepts http.Handler — net/http.ServeMux, chi, gorilla/mux, gin's http
 // adapter, etc.
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
 //   - go.opentelemetry.io/otel
 //   - stdlib only
 //
 // Forbidden dependencies: gRPC, any HTTP router (the package is router-
 // agnostic), any concrete logger.
-//
-// This package is intentionally empty in Phase 1: it materializes the module
-// boundary so transports can evolve in isolation. The real implementation
-// lands in Phase 3.
 package httpsec

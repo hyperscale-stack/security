@@ -10,10 +10,8 @@
 // store uses AES-GCM with HMAC and supports key rotation (multi-key reader,
 // single active writer).
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
 //   - golang.org/x/crypto
 //   - stdlib only
-//
-// Real implementation lands in Phase 10.
 package session

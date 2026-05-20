@@ -23,8 +23,8 @@ func Anonymous() security.Voter { return authStateVoter{requireAuth: false} }
 // FullyAuthenticated is a stricter variant of [Authenticated] reserved for
 // flows where "remember-me" / passive sessions must NOT be enough (e.g.
 // password change, billing changes). It currently behaves like
-// Authenticated; once the session module ships a "remember-me" flag in
-// Phase 10, this voter will refuse it.
+// Authenticated; it is the hook a future "remember-me" session flag would
+// key off to refuse passively-authenticated requests.
 func FullyAuthenticated() security.Voter { return authStateVoter{requireAuth: true, fully: true} }
 
 type authStateVoter struct {

@@ -8,11 +8,9 @@
 // (the Carrier) to the core Engine and map security errors to the appropriate
 // gRPC status codes (codes.Unauthenticated, codes.PermissionDenied, …).
 //
-// Allowed dependencies (per architecture plan):
+// Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)
 //   - google.golang.org/grpc
 //   - go.opentelemetry.io/otel
 //   - stdlib only
-//
-// Real implementation lands in Phase 9.
 package grpcsec
