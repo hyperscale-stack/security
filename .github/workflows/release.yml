@@ -1,0 +1,64 @@
+name: Release
+
+# Each module of the workspace is released independently. Go's multi-module
+# convention puts the module path in the tag:
+#
+#   v1.2.3            -> the root module (github.com/hyperscale-stack/security)
+#   http/v1.2.3       -> the github.com/hyperscale-stack/security/http module
+#   oauth2/v1.2.3     -> the github.com/hyperscale-stack/security/oauth2 module
+#
+# Pushing such a tag validates the tagged state and publishes a GitHub
+# release. Nothing is force-pushed and no tag is created by this workflow.
+on:
+  push:
+    tags:
+      - "v*"
+      - "*/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.x"
+          check-latest: true
+
+      - name: Resolve the released module
+        id: mod
+        run: |
+          tag='${{ github.ref_name }}'
+          case "$tag" in
+            */v*) echo "dir=${tag%/v*}" >> "$GITHUB_OUTPUT" ;;
+            *)    echo "dir=." >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Workspace sync
+        run: make sync
+
+      # The whole workspace is built and tested so a tag can never publish a
+      # module whose dependencies (sibling modules) are in a broken state.
+      - name: Build all modules
+        run: make build
+
+      - name: Test all modules (race + coverage)
+        run: make test
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Release of the `${{ steps.mod.outputs.dir }}` module.
+
+            See [CHANGELOG.md](https://github.com/hyperscale-stack/security/blob/master/CHANGELOG.md)
+            for the consolidated history.

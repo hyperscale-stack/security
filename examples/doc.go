@@ -3,13 +3,20 @@
 // license that can be found in the LICENSE file.
 
 // Package examples is a container module hosting the use-case examples
-// shipped alongside the security library. Each example is a sub-package with
-// a runnable main and a README documenting the curl/grpc probes.
+// shipped alongside the security library. Each example is a sub-package
+// with a runnable main; the package doc comment of every main documents the
+// curl / grpcurl probes.
 //
 // The examples module is free to depend on every other module of the
 // workspace (this is the only place where doing so is acceptable).
 //
-// Real examples land progressively: basic-http (Phase 4), bearer-jwt
-// (Phase 6), oauth2-server / oauth2-resource-server (Phase 7-8), grpc-bearer
-// (Phase 9), session-web (Phase 10), multi-tenant (Phase 11).
+// Available examples:
+//
+//   - basic-http   — HTTP Basic authentication + role-based authorization.
+//   - bearer-jwt   — JWT issuance and Bearer-token validation, scope gating.
+//   - grpc-bearer  — gRPC unary interceptors authenticating a Bearer JWT.
+//   - session-web  — cookie-session login form with a CSRF-protected logout.
+//
+// A complete OAuth2 authorization-server + resource-server demo lives in the
+// repository's example/oauth2 directory.
 package examples
