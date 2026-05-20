@@ -1,9 +1,13 @@
-# Example — OAuth2 client_credentials over HTTP
+# Example — OAuth2 server + Bearer resource server
 
-Minimal end-to-end wiring of the security library: HTTP Basic carrying the
-OAuth2 client_id / client_secret pair, the `OAuth2AuthenticationProvider`
-verifying it against an in-memory client store, and an `AuthorizeHandler`
-gating a private route.
+End-to-end wiring of the v2 security library running in a single binary:
+
+- an OAuth2 authorization server exposing `/oauth2/token`, `/oauth2/revoke`,
+  `/oauth2/introspect`, and `/.well-known/oauth-authorization-server`
+  (Profile 2.0 BCP — PKCE / refresh rotation mandatory when relevant);
+- a Bearer-protected resource at `GET /protected`, sharing the OAuth2
+  storage so it can validate opaque tokens locally (the in-process
+  equivalent of RFC 7662 introspection).
 
 ## Run
 
@@ -13,43 +17,59 @@ go run .
 
 The server listens on `:1337`.
 
-## Probe
-
-Public route:
+## Probe — public
 
 ```sh
 curl -i http://localhost:1337/
 ```
 
-Private route, no credentials → `401 Unauthorized`:
+## Probe — protected without token → `401 Unauthorized`
 
 ```sh
 curl -i http://localhost:1337/protected
 ```
 
-Private route, wrong secret → `401 Unauthorized` (now mapped from
-`security.ErrClientSecretMismatch`, previously a silent
-`AuthorizeHandler` rejection):
-
-```sh
-curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:wrong http://localhost:1337/protected
-```
-
-Private route, valid credentials → `200 OK` with `hello <client_id>`:
+## Probe — mint a client_credentials token
 
 ```sh
 curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
-    http://localhost:1337/protected
+    -d 'grant_type=client_credentials&scope=api:read' \
+    http://localhost:1337/oauth2/token
+```
+
+Response body shape (RFC 6749 §5.1):
+
+```json
+{"access_token":"<opaque>","token_type":"Bearer","expires_in":3599,"scope":"api:read"}
+```
+
+## Probe — call the protected resource with the issued token
+
+```sh
+TOKEN=$(curl -s -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
+    -d 'grant_type=client_credentials&scope=api:read' \
+    http://localhost:1337/oauth2/token | jq -r .access_token)
+curl -i -H "Authorization: Bearer $TOKEN" http://localhost:1337/protected
+```
+
+## Probe — discovery document (RFC 8414)
+
+```sh
+curl -s http://localhost:1337/.well-known/oauth-authorization-server | jq
 ```
 
 ## What this example does NOT cover
 
-- access-token issuance (`/oauth2/token` endpoint),
-- authorization code grant, PKCE,
-- refresh token rotation,
-- persistent storage,
-- JWT-formatted access tokens.
+- `/oauth2/authorize` (consent flow) — deferred to a follow-up slice.
+- JWT-formatted access tokens (`jwt.OAuth2AccessTokenSigner` adapter wires
+  the JWT module into the token generator; not enabled here).
+- Persistent storage (memory store — every restart wipes tokens).
+- `private_key_jwt` client authentication.
 
-These are slated for Phase 7 of the security library refactor (see
-[`../../docs/`](../../docs/) once written, or the architecture report at
-[`../../ARCHITECTURE_REPORT.md`](../../ARCHITECTURE_REPORT.md)).
+## Migration from the v0 demo
+
+The v0 demo in this folder wired the legacy `authentication.FilterHandler`
++ `authentication.Handler` + `authorization.AuthorizeHandler` chain
+against the legacy `oauth2.OAuth2AuthenticationProvider`. That whole tree
+has been removed in Phase 7e; the new demo exercises the modular Server
+(authorization side) and the Bearer middleware (resource side) instead.

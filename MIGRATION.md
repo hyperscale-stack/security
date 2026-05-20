@@ -7,25 +7,28 @@ released on its own cadence.
 
 ## Modules
 
-| Path                      | Module                                                   | Purpose                                                              | Status (post-Phase 1) |
-| ------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- | --------------------- |
-| `.`                       | `github.com/hyperscale-stack/security`                   | Core: transport-agnostic primitives (Authentication, Engine, Voter…) | Legacy MVP in place; new core lands in Phase 2 |
-| `./http`                  | `github.com/hyperscale-stack/security/http`              | `httpsec` — `net/http` adapter                                       | Empty (Phase 3)       |
-| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`              | `grpcsec` — gRPC unary/stream interceptors                           | Empty (Phase 9)       |
-| `./basic`                 | `github.com/hyperscale-stack/security/basic`             | HTTP Basic extractor + authenticator                                 | Empty (Phase 4)       |
-| `./bearer`                | `github.com/hyperscale-stack/security/bearer`            | Bearer extractor + `TokenVerifier`-based authenticator               | Empty (Phase 4)       |
-| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`               | `jwtsec` — JWT signer/verifier + JWKS                                | Empty (Phase 6)       |
-| `./session`               | `github.com/hyperscale-stack/security/session`           | Cookie sessions + CSRF                                               | Empty (Phase 10)      |
-| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`            | OAuth2 server (profiles, grants, endpoints)                          | Empty (Phase 7)       |
-| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`  | Production storage on `database/sql`                                 | Empty (Phase 8)       |
-| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`| Production storage on Redis (Lua atomicity)                          | Empty (Phase 8)       |
-| `./examples`              | `github.com/hyperscale-stack/security/examples`          | Use-case demos (one sub-package per scenario)                        | Empty (Phase 11)      |
-| `./example/oauth2`        | `github.com/hyperscale-stack/security/example/oauth2`    | **Legacy** client_credentials demo (kept until Phase 11 rename)      | Working               |
+| Path                      | Module                                                          | Purpose                                                              | Status (post-Phase 7e) |
+| ------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------- |
+| `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) | Done (Phases 2 & 5)    |
+| `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       | Done (Phase 3)         |
+| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           | Empty (Phase 9)        |
+| `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 | Done (Phase 4)         |
+| `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               | Done (Phase 4)         |
+| `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            | Done (Phase 4)         |
+| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`                      | `jwtsec` — JWT signer/verifier + JWKS                                | Done (Phase 6)         |
+| `./session`               | `github.com/hyperscale-stack/security/session`                  | Cookie sessions + CSRF                                               | Empty (Phase 10)       |
+| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          | Done (Phase 7a-7d)     |
+| `./oauth2/storage/memory` | `github.com/hyperscale-stack/security/oauth2/storage/memory`    | In-memory `oauth2.Storage` (dev/tests)                               | Done (Phase 7a)        |
+| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 | Empty (Phase 8)        |
+| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          | Empty (Phase 8)        |
+| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Use-case demos (one sub-package per scenario)                        | Empty (Phase 11)       |
+| `./example/oauth2`        | `github.com/hyperscale-stack/security/example/oauth2`           | OAuth2 server + Bearer resource-server demo (v2 stack)               | Working                |
+| `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              | Working                |
 
-The legacy `password/` package still lives **inside** the core module to avoid
-breaking the in-tree `dao` provider. It will be promoted to its own module
-(`./password` with its own `go.mod`) during Phase 4 when basic + bearer are
-extracted.
+The legacy v0 packages (`authentication/`, `authentication/credential/`,
+`authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
+in-tree `password`) were removed in Phase 7e. The core module now depends
+only on stdlib + `go.opentelemetry.io/otel` (+ `testify` for its tests).
 
 ## Dependency policy (enforced by review until a script lands in Phase 11)
 
@@ -35,21 +38,22 @@ http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 basic/                  ← core + password
 bearer/                 ← core
-password/ (in-tree v0)  ← golang.org/x/crypto
-jwt/                    ← core + JOSE lib
+password/               ← golang.org/x/crypto
+jwt/                    ← core + bearer + oauth2 + go-jose/v4 + otel
 session/                ← core + golang.org/x/crypto
-oauth2/                 ← core + stdlib
+oauth2/                 ← core + otel
+oauth2/storage/memory/  ← oauth2
 oauth2/store/sql/       ← oauth2 + database/sql
 oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
 ```
 
 The core MUST NOT depend on: gRPC, JWT/JOSE libs, OAuth2, Redis, SQL drivers,
-HTTP routers, concrete loggers. Today the core still pulls in `gilcrest/alice`,
-`rs/zerolog`, `hyperscale-stack/secure`, `stretchr/testify`, `golang.org/x/crypto`
-and `hyperscale-stack/security/example/oauth2` via legacy packages
-(`authentication/*`, `password/`); these will be cut progressively as code
-moves out (Phase 4 → Phase 7).
+HTTP routers, concrete loggers. As of Phase 7e the core's direct dependency
+set is exactly stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify`
+scoped to its own tests) — the legacy `gilcrest/alice`, `rs/zerolog`,
+`hyperscale-stack/secure` and `golang.org/x/crypto` dependencies were
+dropped when the legacy packages were removed.
 
 ## Local development
 
@@ -68,10 +72,12 @@ new sub-module is picked up automatically as soon as its `go.mod` lands.
 ## CI
 
 A single GitHub Actions workflow (`.github/workflows/go.yml`) runs `make sync`,
-`make generate`, `make build`, `make test`, and `make lint` against every module
-in one job, then publishes the aggregated coverage to Coveralls. A more granular
-matrix (per-module job, OS spread, testcontainers nightly) will be introduced
-when Phase 8 needs real Postgres/Redis runtimes.
+`make build`, `make test`, and `make lint` against every module in one job,
+then publishes the aggregated coverage to Coveralls. `make generate` is
+intentionally skipped in CI while the mockery config/tool pin are
+reconciled (see LIMITATIONS.md). A more granular matrix (per-module job,
+OS spread, testcontainers nightly) will be introduced when Phase 8 needs
+real Postgres/Redis runtimes.
 
 ## What was moved during Phase 1
 
