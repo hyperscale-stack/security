@@ -13,7 +13,6 @@ import (
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/pkce"
-	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
 // AuthorizationCode implements RFC 6749 §4.1.3 with the RFC 7636 PKCE
@@ -75,7 +74,7 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use authorization_code")
 	}
 
-	return g.issueTokens(ctx, req, code)
+	return issueTokenPair(ctx, g.cfg, req, code.Subject, code.Scope)
 }
 
 func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCode) error {
@@ -114,66 +113,6 @@ func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCo
 	}
 
 	return nil
-}
-
-func (g *AuthorizationCode) issueTokens(ctx context.Context, req Request, code *oauth2.AuthorizationCode) (*Response, error) {
-	familyID, err := newFamilyID()
-	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	expires := req.Now.Add(g.cfg.AccessTTL)
-
-	atRaw, atHash, err := g.cfg.AccessTokens.Generate(ctx, token.AccessTokenClaims{
-		Issuer:    req.Issuer,
-		Subject:   code.Subject,
-		Audience:  req.Audience,
-		ClientID:  req.Client.ID(),
-		Scope:     code.Scope,
-		FamilyID:  familyID,
-		IssuedAt:  req.Now,
-		ExpiresAt: expires,
-	})
-	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	access := &oauth2.AccessToken{
-		Token: atRaw, TokenHash: atHash, ClientID: req.Client.ID(), Subject: code.Subject,
-		Scope: code.Scope, IssuedAt: req.Now, ExpiresAt: expires,
-		FamilyID: familyID, Audience: req.Audience,
-	}
-	if err := g.cfg.Storage.SaveAccessToken(ctx, access); err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	resp := &Response{
-		Pair:      oauth2.TokenPair{Access: *access},
-		Scope:     code.Scope,
-		TokenType: "Bearer",
-	}
-
-	if g.cfg.RefreshTokens == nil {
-		return resp, nil
-	}
-
-	rtRaw, rtHash, err := g.cfg.RefreshTokens.Generate(ctx)
-	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	refresh := &oauth2.RefreshToken{
-		Token: rtRaw, TokenHash: rtHash, ClientID: req.Client.ID(), Subject: code.Subject,
-		Scope: code.Scope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(g.cfg.RefreshTTL),
-		FamilyID: familyID,
-	}
-	if err := g.cfg.Storage.SaveRefreshToken(ctx, refresh); err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	resp.Pair.Refresh = refresh
-
-	return resp, nil
 }
 
 // grantTypeAllowed reports whether the client is configured for grant.
