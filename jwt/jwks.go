@@ -123,7 +123,7 @@ func (r *remoteJWKS) fetch(ctx context.Context) (*staticKeySet, error) {
 	out := &staticKeySet{publics: make([]PublicKey, 0, len(raw.Keys))}
 
 	for _, k := range raw.Keys {
-		if k.Use != "" && k.Use != "sig" {
+		if k.Use != "" && k.Use != keyUseSignature {
 			continue
 		}
 

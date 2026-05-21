@@ -122,13 +122,17 @@ func (s *staticKeySet) Active() (PrivateKey, bool) {
 	return *s.active, true
 }
 
+// keyUseSignature is the RFC 7517 §4.2 "use" parameter value for keys
+// intended for digital signatures.
+const keyUseSignature = "sig"
+
 // toJOSE returns the go-jose JSONWebKey form of the public key. Internal
 // helper used by the verifier.
 func (k PublicKey) toJOSE() jose.JSONWebKey {
-	return jose.JSONWebKey{Key: k.Key, KeyID: k.KeyID, Algorithm: string(k.Algorithm), Use: "sig"}
+	return jose.JSONWebKey{Key: k.Key, KeyID: k.KeyID, Algorithm: string(k.Algorithm), Use: keyUseSignature}
 }
 
 // toJOSE returns the go-jose JSONWebKey form of the private key.
 func (k PrivateKey) toJOSE() jose.JSONWebKey {
-	return jose.JSONWebKey{Key: k.Key, KeyID: k.KeyID, Algorithm: string(k.Algorithm), Use: "sig"}
+	return jose.JSONWebKey{Key: k.Key, KeyID: k.KeyID, Algorithm: string(k.Algorithm), Use: keyUseSignature}
 }
