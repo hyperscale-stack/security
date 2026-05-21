@@ -8,9 +8,9 @@ Hyperscale security [![Last release](https://img.shields.io/github/release/hyper
 | master  | [![Build Status](https://github.com/hyperscale-stack/security/workflows/Go/badge.svg?branch=master)](https://github.com/hyperscale-stack/security/actions?query=workflow%3AGo) | [![Coveralls](https://img.shields.io/coveralls/hyperscale-stack/security/master.svg)](https://coveralls.io/github/hyperscale-stack/security?branch=master) |
 
 A transport-agnostic authentication and authorization toolkit for Go —
-HTTP and gRPC, OAuth2, JWT, sessions, and a composable Voter-based access
-model. It is shipped as a multi-module workspace so you import only what
-you need.
+HTTP, gRPC and ConnectRPC, OAuth2, JWT, sessions, and a composable
+Voter-based access model. It is shipped as a multi-module workspace so you
+import only what you need.
 
 ## Modules
 
@@ -19,6 +19,7 @@ you need.
 | `github.com/hyperscale-stack/security`              | Core: `Authentication`, `Engine`, `Manager`, `Voter`, ADM       |
 | `…/security/http`                                   | `httpsec` — `net/http` middleware + authorization               |
 | `…/security/grpc`                                   | `grpcsec` — unary/stream interceptors                           |
+| `…/security/connectrpc`                             | `connectrpcsec` — ConnectRPC auth + authorize interceptors      |
 | `…/security/basic`                                  | HTTP Basic extractor + authenticator                            |
 | `…/security/bearer`                                 | Bearer extractor + `TokenVerifier` authenticator                |
 | `…/security/password`                               | BCrypt + Argon2id hashers (`NeedsRehash`)                       |

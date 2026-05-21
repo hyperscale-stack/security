@@ -12,6 +12,7 @@ released on its own cadence.
 | `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) |
 | `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       |
 | `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           |
+| `./connectrpc`            | `github.com/hyperscale-stack/security/connectrpc`               | `connectrpcsec` — ConnectRPC auth + authorize interceptors           |
 | `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 |
 | `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               |
 | `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            |
@@ -39,6 +40,7 @@ own tests).
 core (.)                ← stdlib + go.opentelemetry.io/otel
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
+connectrpc/             ← core + otel + connectrpc.com/connect
 basic/                  ← core + password
 bearer/                 ← core
 password/               ← golang.org/x/crypto
@@ -52,8 +54,8 @@ examples/               ← may depend on every module above
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module.)
 ```
 
-The core MUST NOT depend on: gRPC, JWT/JOSE libs, OAuth2, Redis, SQL drivers,
-HTTP routers, or concrete loggers. Its direct dependency set is exactly
+The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
+SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly
 stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify` scoped to its own
 tests). The policy is enforced by review.
 
