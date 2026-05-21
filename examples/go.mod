@@ -9,6 +9,8 @@ replace github.com/hyperscale-stack/security/http => ../http
 
 replace github.com/hyperscale-stack/security/grpc => ../grpc
 
+replace github.com/hyperscale-stack/security/connectrpc => ../connectrpc
+
 replace github.com/hyperscale-stack/security/basic => ../basic
 
 replace github.com/hyperscale-stack/security/bearer => ../bearer
@@ -22,9 +24,12 @@ replace github.com/hyperscale-stack/security/session => ../session
 replace github.com/hyperscale-stack/security/oauth2 => ../oauth2
 
 require (
+	connectrpc.com/connect v1.20.0
+	connectrpc.com/grpchealth v1.4.0
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/basic v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/connectrpc v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/grpc v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/http v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/jwt v0.0.0-00010101000000-000000000000
@@ -51,6 +56,6 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241223144023-3abc09e42ca8 // indirect
-	google.golang.org/protobuf v1.36.1 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
