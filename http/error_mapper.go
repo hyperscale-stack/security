@@ -35,7 +35,9 @@ type ErrorMapper interface {
 //
 // 401 and 403 responses carry a WWW-Authenticate header following RFC 7235
 // (challenge scheme + realm) and RFC 6750 §3 (error / error_description for
-// OAuth2 bearer flows).
+// OAuth2 bearer flows). The error_description is a fixed, generic string per
+// RFC 6750 error code — the underlying error chain is never reflected into
+// the header, so internal wrapping context cannot leak to clients.
 func DefaultErrorMapper(scheme, realm string) ErrorMapper {
 	if scheme == "" {
 		scheme = "Bearer"
@@ -51,10 +53,10 @@ type defaultErrorMapper struct {
 
 // Map implements [ErrorMapper].
 func (m *defaultErrorMapper) Map(w http.ResponseWriter, _ *http.Request, err error) {
-	status, oauthErr := classify(err)
+	status, oauthErr, desc := classify(err)
 
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		w.Header().Set("WWW-Authenticate", m.challenge(oauthErr, err))
+		w.Header().Set("WWW-Authenticate", m.challenge(oauthErr, desc))
 	}
 
 	http.Error(w, http.StatusText(status), status)
@@ -63,7 +65,9 @@ func (m *defaultErrorMapper) Map(w http.ResponseWriter, _ *http.Request, err err
 // challenge formats an RFC 7235 / RFC 6750 challenge string. oauthErr, when
 // non-empty, populates the `error` parameter so OAuth2 clients can react
 // programmatically (typical values: "invalid_token", "insufficient_scope").
-func (m *defaultErrorMapper) challenge(oauthErr string, err error) string {
+// desc is a fixed, generic description: it is never derived from the error
+// chain, so internal wrapping context cannot leak into the header.
+func (m *defaultErrorMapper) challenge(oauthErr, desc string) string {
 	out := m.scheme
 
 	if m.realm != "" {
@@ -78,37 +82,46 @@ func (m *defaultErrorMapper) challenge(oauthErr string, err error) string {
 
 		out += sep + fmt.Sprintf("error=%q", oauthErr)
 
-		if msg := errors.Unwrap(err); msg != nil {
-			out += fmt.Sprintf(`, error_description=%q`, msg.Error())
+		if desc != "" {
+			out += fmt.Sprintf(`, error_description=%q`, desc)
 		}
 	}
 
 	return out
 }
 
-// classify maps an error to (httpStatus, oauthErrorCode). The oauthErrorCode
-// is populated only for the cases RFC 6750 §3.1 calls out.
-func classify(err error) (int, string) {
+// RFC 6750 §3.1 error_description strings. These are intentionally fixed and
+// generic: a verbatim error message would leak internal wrapping context
+// (timestamps, package names, consumer-supplied store errors) to the client.
+const (
+	descInvalidToken      = "The access token is invalid or has expired."
+	descInsufficientScope = "The request requires higher privileges than provided by the access token."
+)
+
+// classify maps an error to (httpStatus, oauthErrorCode, errorDescription).
+// The oauthErrorCode and errorDescription are populated only for the cases
+// RFC 6750 §3.1 calls out; errorDescription is always a fixed string.
+func classify(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, security.ErrUnsupportedCredential):
-		return http.StatusBadRequest, ""
+		return http.StatusBadRequest, "", ""
 
 	case errors.Is(err, security.ErrAccessDenied):
-		return http.StatusForbidden, ""
+		return http.StatusForbidden, "", ""
 
 	case errors.Is(err, security.ErrInsufficientScope):
-		return http.StatusForbidden, "insufficient_scope"
+		return http.StatusForbidden, "insufficient_scope", descInsufficientScope
 
 	case errors.Is(err, security.ErrTokenExpired),
 		errors.Is(err, security.ErrTokenNotFound):
-		return http.StatusUnauthorized, "invalid_token"
+		return http.StatusUnauthorized, "invalid_token", descInvalidToken
 
 	case errors.Is(err, security.ErrInvalidCredentials),
 		errors.Is(err, security.ErrClientSecretMismatch),
 		errors.Is(err, security.ErrAuthenticatorRefused):
-		return http.StatusUnauthorized, ""
+		return http.StatusUnauthorized, "", ""
 
 	default:
-		return http.StatusUnauthorized, ""
+		return http.StatusUnauthorized, "", ""
 	}
 }
