@@ -12,6 +12,10 @@ import (
 	"github.com/hyperscale-stack/security"
 )
 
+// defaultChallengeScheme is the WWW-Authenticate scheme used when none is
+// configured — RFC 6750 bearer tokens.
+const defaultChallengeScheme = "Bearer"
+
 // ErrorMapper translates a security error into an HTTP response. Custom
 // mappers can produce structured (JSON, ProtoBuf) error bodies or emit
 // transport-specific challenges.
@@ -40,7 +44,7 @@ type ErrorMapper interface {
 // the header, so internal wrapping context cannot leak to clients.
 func DefaultErrorMapper(scheme, realm string) ErrorMapper {
 	if scheme == "" {
-		scheme = "Bearer"
+		scheme = defaultChallengeScheme
 	}
 
 	return &defaultErrorMapper{scheme: scheme, realm: realm}
