@@ -13,11 +13,6 @@ than future refactor phases.
 - **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
   depends on a server-side public-key store; the `jwtsec` module already
   provides the building blocks (`NewStaticJWKS`).
-- **`/introspect` and `/revoke` token hashing** — those endpoints look
-  tokens up with a pepper-free hash (`HashToken(nil, …)`), so they only
-  find access tokens issued by a generator configured with a nil pepper.
-  Deployments that pepper their token generators must introspect/revoke
-  through their own storage lookup. To be reconciled.
 
 ## Transports
 

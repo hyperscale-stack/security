@@ -29,27 +29,27 @@ func TestNewJWTAccessTokenGeneratorPanicsOnNilSigner(t *testing.T) {
 	t.Parallel()
 
 	assert.Panics(t, func() {
-		token.NewJWTAccessTokenGenerator(nil, []byte("pepper"))
+		token.NewJWTAccessTokenGenerator(nil)
 	})
 }
 
 func TestJWTAccessTokenGeneratorGenerate(t *testing.T) {
 	t.Parallel()
 
-	pepper := []byte("server-pepper")
-	gen := token.NewJWTAccessTokenGenerator(fakeSigner{token: "signed.jwt.value"}, pepper)
+	gen := token.NewJWTAccessTokenGenerator(fakeSigner{token: "signed.jwt.value"})
 
 	raw, hash, err := gen.Generate(context.Background(), token.AccessTokenClaims{Subject: "alice"})
 	require.NoError(t, err)
 	assert.Equal(t, "signed.jwt.value", raw)
-	// The storage hash is the canonical HMAC of the raw JWT.
-	assert.Equal(t, oauth2.HashToken(pepper, "signed.jwt.value"), hash)
+	// The storage hash is the canonical hash of the raw JWT — the same one
+	// every lookup path computes.
+	assert.Equal(t, oauth2.HashToken(nil, "signed.jwt.value"), hash)
 }
 
 func TestJWTAccessTokenGeneratorSignerError(t *testing.T) {
 	t.Parallel()
 
-	gen := token.NewJWTAccessTokenGenerator(fakeSigner{err: errors.New("key unavailable")}, nil)
+	gen := token.NewJWTAccessTokenGenerator(fakeSigner{err: errors.New("key unavailable")})
 
 	_, _, err := gen.Generate(context.Background(), token.AccessTokenClaims{})
 	require.Error(t, err)
@@ -58,7 +58,7 @@ func TestJWTAccessTokenGeneratorSignerError(t *testing.T) {
 func TestJWTAccessTokenGeneratorContextCancelled(t *testing.T) {
 	t.Parallel()
 
-	gen := token.NewJWTAccessTokenGenerator(fakeSigner{token: "x"}, nil)
+	gen := token.NewJWTAccessTokenGenerator(fakeSigner{token: "x"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

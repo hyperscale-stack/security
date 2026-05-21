@@ -60,8 +60,8 @@ func newServer(t *testing.T) (*oauth2.Server, *memory.Store) {
 
 	cfg := grant.Config{
 		Storage:       store,
-		AccessTokens:  token.NewOpaque([]byte("integration-pepper"), 32),
-		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("integration-pepper"), 32)},
+		AccessTokens:  token.NewOpaque(32),
+		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
 		AccessTTL:     time.Hour,
 		RefreshTTL:    24 * time.Hour,
 		RotateRefreshTokens: true,

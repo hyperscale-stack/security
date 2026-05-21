@@ -72,8 +72,8 @@ func newTestServer(t *testing.T) (*oauth2.Server, *memory.Store) {
 
 	cfg := grant.Config{
 		Storage:             store,
-		AccessTokens:        token.NewOpaque([]byte("test-pepper"), 32),
-		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("test-pepper"), 32)},
+		AccessTokens:        token.NewOpaque(32),
+		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
 		AccessTTL:           time.Hour,
 		RefreshTTL:          24 * time.Hour,
 		RotateRefreshTokens: true,
@@ -250,7 +250,7 @@ func TestTokenEndpointIssuerError(t *testing.T) {
 	store := memory.New()
 	cfg := grant.Config{
 		Storage:      store,
-		AccessTokens: token.NewOpaque([]byte("p"), 32),
+		AccessTokens: token.NewOpaque(32),
 		AccessTTL:    time.Hour,
 	}
 
@@ -585,7 +585,7 @@ func TestTokenEndpointLegacyPasswordGrant(t *testing.T) {
 
 	store := memory.New()
 	cfg := grant.Config{
-		Storage: store, AccessTokens: token.NewOpaque([]byte("p"), 32), AccessTTL: time.Hour,
+		Storage: store, AccessTokens: token.NewOpaque(32), AccessTTL: time.Hour,
 	}
 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
@@ -621,7 +621,7 @@ func TestNewServerRefusesLegacyPasswordOutsideProfile20(t *testing.T) {
 
 	store := memory.New()
 	cfg := grant.Config{
-		Storage: store, AccessTokens: token.NewOpaque([]byte("p"), 32), AccessTTL: time.Hour,
+		Storage: store, AccessTokens: token.NewOpaque(32), AccessTTL: time.Hour,
 	}
 
 	for _, profile := range []oauth2.Profile{oauth2.Profile20BCP, oauth2.Profile21Draft} {

@@ -23,7 +23,7 @@ type AuthorizationCodeStore interface {
 }
 
 // AccessTokenStore persists access tokens. Implementations MUST store hashes
-// (the canonical hash function is HMAC-SHA256(server_pepper, raw_token)).
+// (the canonical hash function is [HashToken]).
 type AccessTokenStore interface {
 	SaveAccessToken(ctx context.Context, t *AccessToken) error
 	// LookupAccessToken returns the token record matching tokenHash, or

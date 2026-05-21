@@ -25,29 +25,22 @@ type AccessTokenSigner interface {
 }
 
 // JWTAccessTokenGenerator adapts an [AccessTokenSigner] to the
-// [AccessTokenGenerator] interface consumed by the OAuth2 server. The hash
-// used for storage lookup is HMAC-SHA256(pepper, token) so revocation /
-// introspection can locate the AccessToken record without persisting the
-// raw JWT (the JWS itself is large; storing only the hash keeps the table
-// compact and removes the leak window).
+// [AccessTokenGenerator] interface consumed by the OAuth2 server. The
+// storage-lookup hash is [oauth2.HashToken](nil, token), so revocation and
+// introspection locate the AccessToken record without persisting the raw
+// JWT (the JWS is large; storing only the hash keeps the table compact and
+// removes the leak window). Every lookup path hashes the same way.
 type JWTAccessTokenGenerator struct {
 	signer AccessTokenSigner
-	pepper []byte
 }
 
-// NewJWTAccessTokenGenerator wraps signer + pepper into an
-// [AccessTokenGenerator]. The pepper SHOULD be the same server-wide secret
-// used by [NewOpaque] and by [oauth2.HashToken] so refresh / revocation
-// paths can compute the lookup hash uniformly.
-func NewJWTAccessTokenGenerator(signer AccessTokenSigner, pepper []byte) *JWTAccessTokenGenerator {
+// NewJWTAccessTokenGenerator wraps signer into an [AccessTokenGenerator].
+func NewJWTAccessTokenGenerator(signer AccessTokenSigner) *JWTAccessTokenGenerator {
 	if signer == nil {
 		panic("oauth2/token.NewJWTAccessTokenGenerator: nil AccessTokenSigner")
 	}
 
-	cp := make([]byte, len(pepper))
-	copy(cp, pepper)
-
-	return &JWTAccessTokenGenerator{signer: signer, pepper: cp}
+	return &JWTAccessTokenGenerator{signer: signer}
 }
 
 // Generate implements [AccessTokenGenerator]. It delegates the JWS
@@ -62,7 +55,7 @@ func (g *JWTAccessTokenGenerator) Generate(ctx context.Context, claims AccessTok
 		return "", "", fmt.Errorf("oauth2: sign access token: %w", err)
 	}
 
-	return token, oauth2.HashToken(g.pepper, token), nil
+	return token, oauth2.HashToken(nil, token), nil
 }
 
 // Compile-time interface check.

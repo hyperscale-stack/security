@@ -30,15 +30,14 @@ import (
 // server and the resource server share an address space (single binary or
 // shared storage).
 type localIntrospectVerifier struct {
-	store  oauth2.AccessTokenStore
-	pepper []byte
+	store oauth2.AccessTokenStore
 }
 
 // Verify implements [bearer.TokenVerifier]. It hashes the raw token,
 // looks it up in storage, and returns an authenticated
 // [bearer.Authentication] on success.
 func (v *localIntrospectVerifier) Verify(ctx context.Context, token string) (security.Authentication, error) {
-	hash := oauth2.HashToken(v.pepper, token)
+	hash := oauth2.HashToken(nil, token)
 
 	at, err := v.store.LookupAccessToken(ctx, hash)
 	if err != nil {
@@ -84,7 +83,7 @@ func TestResourceServerHappyPath(t *testing.T) {
 	require.NotEmpty(t, accessToken)
 
 	// 2. Resource server.
-	verifier := &localIntrospectVerifier{store: store, pepper: []byte("integration-pepper")}
+	verifier := &localIntrospectVerifier{store: store}
 	engine := security.NewEngine(
 		security.NewManager(bearer.NewAuthenticator(verifier)),
 		bearer.NewExtractor(),
