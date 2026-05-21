@@ -91,8 +91,8 @@ func newServer() (http.Handler, error) {
 	}
 
 	store := loader{users: map[string]user{
-		"alice": {subject: "alice", hash: aliceHash, roles: []string{"USER"}},
-		"root":  {subject: "root", hash: rootHash, roles: []string{"USER", "ADMIN"}},
+		"alice": {subject: "alice", hash: aliceHash, roles: []string{"USER"}},        //nolint:goconst // example code, readability over deduplication
+		"root":  {subject: "root", hash: rootHash, roles: []string{"USER", "ADMIN"}}, //nolint:goconst // example code, readability over deduplication
 	}}
 
 	authenticator := basic.NewAuthenticator(store, hasher,
