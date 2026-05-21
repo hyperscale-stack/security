@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/jwt
 
-go 1.25.0
+go 1.26
 
 replace github.com/hyperscale-stack/security => ../
 

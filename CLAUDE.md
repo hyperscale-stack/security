@@ -200,6 +200,6 @@ configurable via `ServerConfig.RoutePrefix`).
   linters including `gosec`, `wrapcheck`, `errorlint`, `wsl_v5`,
   `forcetypeassert`. `gocyclo` max complexity 18. Tests are excluded from
   lint (`run.tests: false`). All wrapped errors must keep `%w`.
-- Go 1.25. Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
+- Go 1.26. Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
   2 spaces in YAML (see `.editorconfig`). All source files carry the MIT
   copyright header.
