@@ -113,6 +113,7 @@ func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse) {
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusOK)
 
+	//nolint:gosec // G117: token response wire fields are mandated by RFC 6749 §5.1
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		// Best-effort: the status code is already on the wire so there's
 		// nothing actionable left to do.

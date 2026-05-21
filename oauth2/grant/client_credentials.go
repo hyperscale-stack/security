@@ -73,7 +73,7 @@ func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response,
 	return &Response{
 		Pair:      oauth2.TokenPair{Access: *access},
 		Scope:     scope,
-		TokenType: "Bearer",
+		TokenType: oauth2.TokenTypeBearer,
 	}, nil
 }
 

@@ -110,7 +110,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	resp := &Response{
 		Pair:      oauth2.TokenPair{Access: *access},
 		Scope:     scope,
-		TokenType: "Bearer",
+		TokenType: oauth2.TokenTypeBearer,
 	}
 
 	if !g.cfg.RotateRefreshTokens || g.cfg.RefreshTokens == nil {

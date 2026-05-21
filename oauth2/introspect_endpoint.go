@@ -85,7 +85,7 @@ func (s *Server) introspect(r *http.Request, rawToken string) introspectResponse
 			Subject:   at.Subject,
 			ExpiresAt: at.ExpiresAt.Unix(),
 			IssuedAt:  at.IssuedAt.Unix(),
-			TokenType: "Bearer",
+			TokenType: TokenTypeBearer,
 			Audience:  at.Audience,
 		}
 	}
