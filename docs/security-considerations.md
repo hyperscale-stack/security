@@ -54,9 +54,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   theft: the whole token family is revoked (`RotateRefreshToken` returns
   `ErrRefreshTokenReused`).
 - **Token storage** — access tokens, refresh tokens, and authorization
-  codes are stored **hashed only**. The store never sees cleartext, so a
-  database compromise does not yield usable tokens. Hashing uses an
-  HMAC-SHA-256 keyed with a server-side pepper.
+  codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
+  store never sees cleartext, so a database compromise does not yield
+  usable tokens. Tokens carry ≥ 128 bits of entropy, so the bare hash is
+  preimage- and brute-force-resistant.
 - **Atomic single-use** — `ConsumeAuthorizationCode` and
   `RotateRefreshToken` are atomic in every `Storage` implementation (SQL
   transactions, Redis Lua scripts). Concurrent use of the same code/token
@@ -110,9 +111,8 @@ span catalog.
 - [ ] Pick a password hasher and review its cost against current hardware.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint.
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
-- [ ] Provide a server-side pepper for OAuth2 token hashing.
-- [ ] Use `Profile20BCP` or stricter; do not enable `implicit`/`password`
-      grants without a documented reason.
+- [ ] Use `Profile20BCP` or stricter; do not enable the `implicit` /
+      `password` legacy grants without a documented reason.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

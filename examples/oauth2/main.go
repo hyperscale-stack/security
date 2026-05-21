@@ -52,10 +52,6 @@ const (
 	demoClientSecret = "WTvuAztPD2XBauomleRzGFYuZawS07Ym" //nolint:gosec // demo
 )
 
-// pepper is the server-wide secret used to hash tokens before persistence.
-// In production load it from a secret store; never commit it.
-var pepper = []byte("demo-pepper-do-not-use-in-production")
-
 // staticClientStore is a tiny in-memory [oauth2.ClientStore] suitable for
 // dev / demos. Production deployments plug a database-backed store.
 type staticClientStore struct{ clients map[string]oauth2.Client }
@@ -73,13 +69,12 @@ func (s *staticClientStore) LoadClient(_ context.Context, id string) (oauth2.Cli
 // server. It hashes the bearer token and queries the OAuth2 storage —
 // the local equivalent of an RFC 7662 introspection call.
 type localIntrospectVerifier struct {
-	store  oauth2.AccessTokenStore
-	pepper []byte
+	store oauth2.AccessTokenStore
 }
 
 // Verify implements [bearer.TokenVerifier].
 func (v *localIntrospectVerifier) Verify(ctx context.Context, tok string) (security.Authentication, error) {
-	hash := oauth2.HashToken(v.pepper, tok)
+	hash := oauth2.HashToken(nil, tok)
 
 	at, err := v.store.LookupAccessToken(ctx, hash)
 	if err != nil {
@@ -121,8 +116,8 @@ func buildServer() (http.Handler, error) {
 	// Authorization server.
 	gcfg := grant.Config{
 		Storage:             store,
-		AccessTokens:        token.NewOpaque(pepper, 32),
-		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(pepper, 32)},
+		AccessTokens:        token.NewOpaque(32),
+		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
 		AccessTTL:           time.Hour,
 		RefreshTTL:          24 * time.Hour,
 		RotateRefreshTokens: true,
@@ -146,7 +141,7 @@ func buildServer() (http.Handler, error) {
 
 	// Resource server: Bearer middleware backed by the introspection
 	// verifier that consults the shared storage.
-	verifier := &localIntrospectVerifier{store: store, pepper: pepper}
+	verifier := &localIntrospectVerifier{store: store}
 	engine := security.NewEngine(
 		security.NewManager(bearer.NewAuthenticator(verifier)),
 		bearer.NewExtractor(),

@@ -170,3 +170,57 @@ func TestProfileBCPRefusesLegacyGrantsAtBoot(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "password")
 }
+
+// clientForm builds a POST form request authenticated as the demo client.
+func clientForm(path string, form url.Values) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, clientSecret)
+
+	return req
+}
+
+// TestIntrospectAndRevokeOnIssuedTokens proves the token-hashing fix: a
+// token minted by a grant is found by /introspect and /revoke — issuance
+// and the lookup endpoints hash the token the same way.
+func TestIntrospectAndRevokeOnIssuedTokens(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newServer(t)
+
+	// Mint an access token over client_credentials.
+	rec := httptest.NewRecorder()
+	srv.TokenHandler().ServeHTTP(rec, clientForm("/oauth2/token",
+		url.Values{"grant_type": {"client_credentials"}, "scope": {"api:read"}}))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var issued map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &issued))
+	accessToken, _ := issued["access_token"].(string)
+	require.NotEmpty(t, accessToken)
+
+	introspect := func(t *testing.T) bool {
+		t.Helper()
+
+		rec := httptest.NewRecorder()
+		srv.IntrospectHandler().ServeHTTP(rec, clientForm("/oauth2/introspect",
+			url.Values{"token": {accessToken}}))
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		active, _ := body["active"].(bool)
+
+		return active
+	}
+
+	// The freshly issued token introspects as active.
+	assert.True(t, introspect(t), "a grant-issued token must be introspectable")
+
+	// Revoking it then makes it introspect as inactive.
+	rec = httptest.NewRecorder()
+	srv.RevokeHandler().ServeHTTP(rec, clientForm("/oauth2/revoke", url.Values{"token": {accessToken}}))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.False(t, introspect(t), "a revoked token must introspect as inactive")
+}

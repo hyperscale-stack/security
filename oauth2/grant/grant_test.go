@@ -43,11 +43,11 @@ func newClient() oauth2.Client {
 func newStore() *memory.Store { return memory.New() }
 
 func newAccessGen() token.AccessTokenGenerator {
-	return token.NewOpaque([]byte("pepper"), 32)
+	return token.NewOpaque(32)
 }
 
 func newRefreshGen() token.RefreshTokenGenerator {
-	return token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("pepper"), 32)}
+	return token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)}
 }
 
 func newAuthCodeReq(ctx context.Context, store *memory.Store, withPKCE bool) (*grant.AuthorizationCode, grant.Request) {

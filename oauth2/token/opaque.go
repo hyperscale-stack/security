@@ -15,19 +15,22 @@ import (
 
 // Opaque is the generator for opaque (random) access, refresh and
 // authorization-code tokens. It writes `size` random bytes (default 32),
-// encodes them as base64-url, and hashes the result with the configured
-// server-wide pepper.
+// encodes them as base64-url, and hashes the result for storage.
+//
+// The storage hash is [oauth2.HashToken](nil, token) — an unkeyed SHA-256.
+// Opaque tokens carry ≥ 128 bits of entropy, so a bare hash is already
+// preimage- and brute-force-resistant; every lookup path (the grants, the
+// /introspect and /revoke endpoints) hashes the same way, so a token issued
+// here is always found again.
 type Opaque struct {
-	size   int
-	pepper []byte
+	size int
 }
 
-// NewOpaque returns an Opaque generator. The pepper SHOULD be a server-wide
-// secret (≥ 32 random bytes) loaded from the operator's configuration. size
-// is clamped to 16 bytes minimum to provide ~128 bits of entropy even for
-// the smallest tokens; 32 bytes (256 bits) is the recommended default and
-// the value used when size == 0.
-func NewOpaque(pepper []byte, size int) *Opaque {
+// NewOpaque returns an Opaque generator. size is clamped to 16 bytes
+// minimum to provide ~128 bits of entropy even for the smallest tokens;
+// 32 bytes (256 bits) is the recommended default and the value used when
+// size == 0.
+func NewOpaque(size int) *Opaque {
 	if size == 0 {
 		size = 32
 	}
@@ -36,10 +39,7 @@ func NewOpaque(pepper []byte, size int) *Opaque {
 		size = 16
 	}
 
-	cp := make([]byte, len(pepper))
-	copy(cp, pepper)
-
-	return &Opaque{size: size, pepper: cp}
+	return &Opaque{size: size}
 }
 
 // Generate implements [AccessTokenGenerator]. The claims are ignored — the
@@ -70,7 +70,7 @@ func (o *Opaque) generateRaw(ctx context.Context) (string, string, error) {
 	}
 
 	token := base64.RawURLEncoding.EncodeToString(buf)
-	hash := oauth2.HashToken(o.pepper, token)
+	hash := oauth2.HashToken(nil, token)
 
 	return token, hash, nil
 }

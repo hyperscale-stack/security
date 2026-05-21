@@ -17,7 +17,7 @@ import (
 func TestOpaqueGenerateProducesUniqueRandomTokens(t *testing.T) {
 	t.Parallel()
 
-	g := token.NewOpaque([]byte("test-pepper"), 32)
+	g := token.NewOpaque(32)
 
 	a, ha, err := g.Generate(context.Background(), token.AccessTokenClaims{})
 	require.NoError(t, err)
@@ -33,19 +33,18 @@ func TestOpaqueGenerateProducesUniqueRandomTokens(t *testing.T) {
 func TestOpaqueHashMatchesPublicHelper(t *testing.T) {
 	t.Parallel()
 
-	pepper := []byte("pepper-123")
-	g := token.NewOpaque(pepper, 16)
+	g := token.NewOpaque(16)
 	tok, hash, err := g.Generate(context.Background(), token.AccessTokenClaims{})
 	require.NoError(t, err)
 
-	assert.Equal(t, oauth2.HashToken(pepper, tok), hash,
-		"the generator's hash MUST match oauth2.HashToken for storage lookup parity")
+	assert.Equal(t, oauth2.HashToken(nil, tok), hash,
+		"the generator's hash MUST match oauth2.HashToken(nil, …) so every lookup path agrees")
 }
 
 func TestOpaqueSizeClamps(t *testing.T) {
 	t.Parallel()
 
-	g := token.NewOpaque(nil, 4) // clamped to 16
+	g := token.NewOpaque(4) // clamped to 16
 	tok, _, err := g.Generate(context.Background(), token.AccessTokenClaims{})
 	require.NoError(t, err)
 	// base64-url-encoded 16 bytes = 22 chars (no padding).
@@ -55,7 +54,7 @@ func TestOpaqueSizeClamps(t *testing.T) {
 func TestOpaqueContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	g := token.NewOpaque(nil, 0)
+	g := token.NewOpaque(0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -67,7 +66,7 @@ func TestOpaqueContextCancellation(t *testing.T) {
 func TestOpaqueRefreshAndCodeAdapters(t *testing.T) {
 	t.Parallel()
 
-	g := token.NewOpaque([]byte("p"), 32)
+	g := token.NewOpaque(32)
 	r := token.OpaqueRefreshAdapter{Opaque: g}
 	c := token.OpaqueCodeAdapter{Opaque: g}
 

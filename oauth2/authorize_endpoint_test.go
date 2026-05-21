@@ -46,8 +46,8 @@ func newAuthorizeServer(t *testing.T, profile oauth2.Profile) *oauth2.Server {
 
 	cfg := grant.Config{
 		Storage:       store,
-		AccessTokens:  token.NewOpaque([]byte("authz-pepper"), 32),
-		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("authz-pepper"), 32)},
+		AccessTokens:  token.NewOpaque(32),
+		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
 		AccessTTL:     time.Hour,
 		RefreshTTL:    24 * time.Hour,
 	}
@@ -91,7 +91,7 @@ func implicitQuery() url.Values {
 
 // implicitTokens is an OpaqueTokenGenerator for the implicit-flow tests.
 func implicitTokens() oauth2.OpaqueTokenGenerator {
-	return token.OpaqueRefreshAdapter{Opaque: token.NewOpaque([]byte("implicit-pepper"), 32)}
+	return token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)}
 }
 
 // runAuthorizeCfg drives the /authorize handler with an explicit config.
