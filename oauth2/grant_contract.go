@@ -26,12 +26,16 @@ type GrantRequest struct {
 	Profile Profile
 }
 
+// TokenTypeBearer is the RFC 6750 §7.1 token type issued by every grant in
+// this library; it is the value of the OAuth2 token_type response field.
+const TokenTypeBearer = "Bearer"
+
 // GrantResponse is what a grant hands back to the server. The HTTP layer
 // projects it onto the RFC 6749 §5.1 JSON body.
 type GrantResponse struct {
 	Pair        TokenPair
 	Scope       string
-	TokenType   string // typically "Bearer"
+	TokenType   string // e.g. TokenTypeBearer
 	ExtraParams map[string]any
 }
 

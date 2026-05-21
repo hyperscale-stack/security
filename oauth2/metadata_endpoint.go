@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/hyperscale-stack/security/oauth2/pkce"
 )
 
 // MetadataHandler returns the http.Handler for RFC 8414's
@@ -41,7 +43,7 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 		IntrospectionEndpoint:             routes + "/introspect",
 		JWKSURI:                           base + "/.well-known/jwks.json",
 		GrantTypesSupported:               s.grantTypes(),
-		ResponseTypesSupported:            []string{"code"},
+		ResponseTypesSupported:            []string{responseTypeCode},
 		TokenEndpointAuthMethodsSupported: s.clientAuthMethods(),
 		CodeChallengeMethodsSupported:     s.pkceMethods(),
 	}
@@ -90,10 +92,10 @@ func (s *Server) clientAuthMethods() []string {
 
 func (s *Server) pkceMethods() []string {
 	if s.cfg.Profile.AllowsPKCEPlain() {
-		return []string{"S256", "plain"}
+		return []string{pkce.MethodS256.String(), pkce.MethodPlain.String()}
 	}
 
-	return []string{"S256"}
+	return []string{pkce.MethodS256.String()}
 }
 
 // normalizeRoutePrefix cleans a user-supplied [ServerConfig.RoutePrefix]:

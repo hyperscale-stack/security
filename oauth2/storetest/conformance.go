@@ -63,6 +63,12 @@ func RunConformance(t *testing.T, newStore Factory) {
 // testSubject is the fixed resource-owner subject used across the suite.
 const testSubject = "alice"
 
+// testClientID is the fixed client identifier used across the suite.
+const testClientID = "client-1"
+
+// testScope is the fixed scope used across the suite.
+const testScope = "read"
+
 func ctx() context.Context { return context.Background() }
 
 func mustNoError(t *testing.T, err error, msg string) {
@@ -81,10 +87,10 @@ func sampleCode(hash string) *oauth2.AuthorizationCode {
 	return &oauth2.AuthorizationCode{
 		Code:        "raw-" + hash,
 		CodeHash:    hash,
-		ClientID:    "client-1",
+		ClientID:    testClientID,
 		Subject:     testSubject,
 		RedirectURI: "https://app.example/cb",
-		Scope:       "read",
+		Scope:       testScope,
 		IssuedAt:    now,
 		ExpiresAt:   now.Add(10 * time.Minute),
 	}
@@ -96,7 +102,7 @@ func testCodeSaveConsume(t *testing.T, s oauth2.Storage) {
 	got, err := s.ConsumeAuthorizationCode(ctx(), "code-1")
 	mustNoError(t, err, "consume")
 
-	if got.ClientID != "client-1" || got.Subject != testSubject || got.Scope != "read" {
+	if got.ClientID != testClientID || got.Subject != testSubject || got.Scope != testScope {
 		t.Fatalf("consumed code lost fields: %+v", got)
 	}
 }
@@ -167,9 +173,9 @@ func sampleAccess(hash, family string) *oauth2.AccessToken {
 	return &oauth2.AccessToken{
 		Token:     "raw-" + hash,
 		TokenHash: hash,
-		ClientID:  "client-1",
+		ClientID:  testClientID,
 		Subject:   testSubject,
-		Scope:     "read",
+		Scope:     testScope,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(time.Hour),
 		FamilyID:  family,
@@ -208,9 +214,9 @@ func sampleRefresh(hash, family string) *oauth2.RefreshToken {
 	return &oauth2.RefreshToken{
 		Token:     "raw-" + hash,
 		TokenHash: hash,
-		ClientID:  "client-1",
+		ClientID:  testClientID,
 		Subject:   testSubject,
-		Scope:     "read",
+		Scope:     testScope,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(24 * time.Hour),
 		FamilyID:  family,

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hyperscale-stack/security/oauth2/pkce"
 )
 
 // Authorization-endpoint defaults applied when the matching
@@ -26,6 +28,14 @@ const (
 	defaultAuthCodeTTL = 10 * time.Minute
 	// defaultImplicitTTL is the implicit-flow access-token lifetime.
 	defaultImplicitTTL = time.Hour
+)
+
+// RFC 6749 §3.1.1 response_type values handled by the authorization
+// endpoint: "code" is the authorization-code flow, "token" the legacy
+// implicit flow.
+const (
+	responseTypeCode  = "code"
+	responseTypeToken = "token"
 )
 
 // authorizeFlow identifies which /authorize flow a request runs.
@@ -245,9 +255,9 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 // implicit flow when it is not enabled.
 func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Error) {
 	switch responseType {
-	case "code":
+	case responseTypeCode:
 		return flowCode, nil
-	case "token":
+	case responseTypeToken:
 		if !cfg.AllowImplicit {
 			return 0, ErrUnsupportedResponseType.WithDescription("the implicit flow is not enabled")
 		}
@@ -300,12 +310,12 @@ func (s *Server) validateAuthorizePKCE(challenge, method string) error {
 		return nil
 	}
 
-	switch method {
-	case "", "plain":
+	switch pkce.Method(method) {
+	case "", pkce.MethodPlain:
 		if !s.cfg.Profile.AllowsPKCEPlain() {
 			return errors.New(`code_challenge_method "plain" is refused by the active profile`)
 		}
-	case "S256":
+	case pkce.MethodS256:
 		// S256 is always acceptable.
 	default:
 		return fmt.Errorf("unsupported code_challenge_method %q", method)
@@ -365,6 +375,7 @@ func (s *Server) issueAuthorizationCode(
 		params.Set("state", ar.State)
 	}
 
+	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
 	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, false), http.StatusFound)
 }
 
@@ -419,7 +430,7 @@ func (s *Server) issueImplicitToken(
 
 	params := url.Values{
 		"access_token": {raw},
-		"token_type":   {"Bearer"},
+		"token_type":   {TokenTypeBearer},
 		"expires_in":   {strconv.Itoa(int(cfg.ImplicitTTL.Seconds()))},
 	}
 	if granted != "" {
@@ -430,6 +441,7 @@ func (s *Server) issueImplicitToken(
 		params.Set("state", ar.State)
 	}
 
+	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
 	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, true), http.StatusFound)
 }
 
@@ -502,6 +514,7 @@ func redirectAuthorizeError(
 		params.Set("state", state)
 	}
 
+	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
 	http.Redirect(w, r, authorizeRedirectTarget(redirectURI, params, useFragment), http.StatusFound)
 }
 

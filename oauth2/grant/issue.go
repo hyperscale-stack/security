@@ -50,7 +50,7 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, subject, scope
 	resp := &Response{
 		Pair:      oauth2.TokenPair{Access: *access},
 		Scope:     scope,
-		TokenType: "Bearer",
+		TokenType: oauth2.TokenTypeBearer,
 	}
 
 	if cfg.RefreshTokens == nil {
