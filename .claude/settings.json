@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(go work *)",
+      "Bash(make build *)",
+      "Bash(make test *)",
+      "Bash(make lint *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Read(//Users/euskadi31/Projects/Github/hyperscale-stack/**)"
+    ]
+  }
+}
