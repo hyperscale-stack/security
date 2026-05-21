@@ -15,20 +15,22 @@ import (
 type Option func(*config)
 
 type config struct {
-	allowed   []Algorithm
-	issuer    string
-	audiences []string
-	skew      time.Duration
-	clock     security.Clock
+	allowed       []Algorithm
+	issuer        string
+	audiences     []string
+	skew          time.Duration
+	clock         security.Clock
+	requireExpiry bool
 }
 
 // defaults seeds the verifier configuration with the strict baseline:
 // asymmetric algorithms only, no issuer / audience restriction (the user
-// MUST opt-in), zero clock skew.
+// MUST opt-in), zero clock skew, and a mandatory `exp` claim.
 func defaults() *config {
 	return &config{
-		allowed: slices.Clone(defaultAllowedAlgorithms),
-		clock:   security.DefaultClock,
+		allowed:       slices.Clone(defaultAllowedAlgorithms),
+		clock:         security.DefaultClock,
+		requireExpiry: true,
 	}
 }
 
@@ -78,6 +80,17 @@ func WithClock(c security.Clock) Option {
 			cfg.clock = c
 		}
 	}
+}
+
+// WithOptionalExpiry allows tokens without an `exp` claim. By default the
+// verifier rejects them with [ErrMissingExpiry] (fail-closed): a token that
+// never expires cannot be invalidated by time and, if leaked, stays valid
+// forever. RFC 9068 §2.2 also makes `exp` REQUIRED for JWT access tokens.
+//
+// Enable this only for general-purpose JWT verification where non-expiring
+// assertions are an expected, deliberate part of the design.
+func WithOptionalExpiry() Option {
+	return func(c *config) { c.requireExpiry = false }
 }
 
 // algorithmAllowed reports whether alg appears in the allowlist.
