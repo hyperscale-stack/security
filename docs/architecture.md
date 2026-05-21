@@ -9,7 +9,7 @@ transitive dependencies.
 ## Design goals
 
 - **Transport-agnostic core.** The authentication pipeline knows nothing
-  about `net/http` or gRPC. Transports are thin adapters.
+  about `net/http`, gRPC, or ConnectRPC. Transports are thin adapters.
 - **Small, immutable interfaces.** `Authentication` is read-only; state
   changes produce new values. No mutable `interface{}` credential bag.
 - **Composable authorization.** A Voter / `AccessDecisionManager` model
@@ -26,6 +26,7 @@ transitive dependencies.
 | `.`                       | `github.com/hyperscale-stack/security`                       | Core: `Authentication`, `Engine`, `Manager`, `Voter`, `AccessDecisionManager` |
 | `./http`                  | `…/security/http`                                            | `httpsec` — `net/http` middleware + carrier                          |
 | `./grpc`                  | `…/security/grpc`                                            | `grpcsec` — unary/stream interceptors + carrier                      |
+| `./connectrpc`            | `…/security/connectrpc`                                      | `connectrpcsec` — ConnectRPC auth + authorize interceptors           |
 | `./basic`                 | `…/security/basic`                                           | HTTP Basic extractor + authenticator                                 |
 | `./bearer`                | `…/security/bearer`                                          | Bearer extractor + `TokenVerifier`-based authenticator               |
 | `./password`              | `…/security/password`                                        | BCrypt + Argon2id hashers (`NeedsRehash`)                            |
@@ -46,6 +47,7 @@ separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
 core (.)                ← stdlib + go.opentelemetry.io/otel
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
+connectrpc/             ← core + otel + connectrpc.com/connect
 basic/                  ← core + password
 bearer/                 ← core
 password/               ← golang.org/x/crypto
@@ -57,9 +59,9 @@ oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
 ```
 
-The core MUST NOT depend on gRPC, JOSE libraries, OAuth2, Redis, SQL
-drivers, HTTP routers, or concrete loggers. This boundary is what keeps the
-core importable from any transport.
+The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,
+Redis, SQL drivers, HTTP routers, or concrete loggers. This boundary is
+what keeps the core importable from any transport.
 
 ## The authentication pipeline
 
@@ -80,7 +82,8 @@ Carrier ──▶ Extractor ──▶ Authentication (pending)
 
 - **`Carrier`** abstracts a transport message — read credentials, write
   challenges. `httpsec.Carrier` wraps `*http.Request`/`http.ResponseWriter`;
-  `grpcsec.Carrier` wraps `metadata.MD`.
+  `grpcsec.Carrier` wraps `metadata.MD`; `connectrpcsec.Carrier` wraps
+  `http.Header`.
 - **`Extractor`** pulls raw, unauthenticated credentials from a `Carrier`.
   Returns `(nil, nil)` when its scheme is absent.
 - **`Authenticator`** validates a pending `Authentication` and returns an
@@ -128,6 +131,10 @@ and a `Carrier`, then map security errors to transport responses.
 - **`grpcsec`** — `UnaryServerInterceptor` / `StreamServerInterceptor`
   authenticate every RPC; `UnaryAuthorize` / `StreamAuthorize` enforce an
   ADM. `ErrorMapper` turns sentinels into `codes.Code`.
+- **`connectrpcsec`** — `NewAuthenticationInterceptor` authenticates every
+  RPC; `NewAuthorizationInterceptor` enforces an ADM. Both return a
+  `connect.Interceptor` covering unary and streaming. `ErrorMapper` turns
+  sentinels into `connect.Code`.
 
 ## OAuth2
 

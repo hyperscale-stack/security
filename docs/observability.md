@@ -10,13 +10,14 @@ application; the library uses the global provider via `otel.Tracer`.
 
 Each module reports under a stable instrumentation scope (the tracer name):
 
-| Module    | Instrumentation scope                          |
-| --------- | ---------------------------------------------- |
-| core      | `github.com/hyperscale-stack/security`         |
-| `httpsec` | `github.com/hyperscale-stack/security/http`    |
-| `grpcsec` | `github.com/hyperscale-stack/security/grpc`    |
-| `jwtsec`  | `github.com/hyperscale-stack/security/jwt`     |
-| `session` | `github.com/hyperscale-stack/security/session` |
+| Module          | Instrumentation scope                             |
+| --------------- | ------------------------------------------------- |
+| core            | `github.com/hyperscale-stack/security`            |
+| `httpsec`       | `github.com/hyperscale-stack/security/http`       |
+| `grpcsec`       | `github.com/hyperscale-stack/security/grpc`       |
+| `connectrpcsec` | `github.com/hyperscale-stack/security/connectrpc` |
+| `jwtsec`        | `github.com/hyperscale-stack/security/jwt`        |
+| `session`       | `github.com/hyperscale-stack/security/session`    |
 
 The `basic`, `bearer`, `password` and `oauth2` modules do not open spans of
 their own — keeping them free of a direct `go.opentelemetry.io/otel`
@@ -59,6 +60,16 @@ it delegates to `security.AccessDecisionManager.Decide`.
 
 `grpcsec` deliberately does **not** open an `rpc` span — that belongs to
 `otelgrpc`, which you compose alongside these interceptors.
+
+### ConnectRPC — `github.com/hyperscale-stack/security/connectrpc`
+
+| Span                         | When                                       | Attributes                                                          | Error status            |
+| ---------------------------- | ------------------------------------------ | -------------------------------------------------------------------- | ----------------------- |
+| `connectrpcsec.Authenticate` | Per RPC, unary and streaming interceptors  | `rpc.method` (string), `security.authenticated` (bool)               | inherited from the core |
+| `connectrpcsec.Authorize`    | The authorization interceptor              | none directly — delegates to `security.AccessDecisionManager.Decide` | inherited from the core |
+
+`connectrpcsec` deliberately does **not** open an `rpc` span — that belongs
+to `otelconnect`, which you compose alongside these interceptors.
 
 ### JWT — `github.com/hyperscale-stack/security/jwt`
 

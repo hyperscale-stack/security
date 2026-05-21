@@ -30,6 +30,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **gRPC adapter** (`grpcsec`): unary and stream server interceptors,
   `UnaryAuthorize`/`StreamAuthorize`, a `metadata.MD` carrier, and an
   `ErrorMapper` to `codes.Code`.
+- **ConnectRPC adapter** (`connectrpcsec`): `NewAuthenticationInterceptor`
+  and `NewAuthorizationInterceptor` returning `connect.Interceptor` values
+  (unary + streaming), an `http.Header` carrier, and an `ErrorMapper` to
+  `connect.Code`.
 - **Schemes**: `basic` (HTTP Basic extractor + authenticator) and `bearer`
   (Bearer extractor + pluggable `TokenVerifier`).
 - **Password hashing** (`password`): `Hasher` interface with bcrypt and
@@ -56,7 +60,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   rotation, a `Manager` (Login/Get/Touch/Rotate/Logout), and a
   synchronizer-token CSRF helper.
 - **Observability**: OpenTelemetry spans emitted directly by the core,
-  `httpsec`, `grpcsec`, `jwtsec`, and `session`. See
+  `httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, and `session`. See
   [docs/observability.md](docs/observability.md).
 - **Documentation**: `docs/architecture.md`, `docs/observability.md`,
   `docs/security-considerations.md`, `docs/migration-from-v0.md`, and a

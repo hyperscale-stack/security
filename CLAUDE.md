@@ -84,6 +84,7 @@ is intentionally skipped in CI.
 | `.`                       | `security`                                 | Core transport-agnostic primitives                   |
 | `./http`                  | `.../http` → `httpsec`                     | `net/http` adapter (middleware, `Authorize`, carrier) |
 | `./grpc`                  | `.../grpc` → `grpcsec`                      | gRPC unary/stream interceptors + `Authorize`         |
+| `./connectrpc`            | `.../connectrpc` → `connectrpcsec`          | ConnectRPC auth + authorize interceptors             |
 | `./basic`                 | `.../basic`                                | HTTP Basic extractor + authenticator                 |
 | `./bearer`                | `.../bearer`                               | Bearer extractor + `TokenVerifier` authenticator     |
 | `./password`              | `.../password`                             | BCrypt + Argon2id hashers (`NeedsRehash`)            |
@@ -93,7 +94,7 @@ is intentionally skipped in CI.
 | `./oauth2/storage/memory` | `.../oauth2/storage/memory`                | In-memory `oauth2.Storage` — **package of `oauth2`** |
 | `./oauth2/store/sql`      | `.../oauth2/store/sql`                      | Production storage on `database/sql` (PG/MySQL/SQLite) |
 | `./oauth2/store/redis`    | `.../oauth2/store/redis`                    | Production storage on Redis (Lua atomicity)          |
-| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, session-web, oauth2 |
+| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2 |
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
@@ -102,8 +103,8 @@ of `oauth2`. The other rows are independent modules (own `go.mod`).
 **The dependency direction is a hard rule** (enforced by review, see
 `MIGRATION.md`): the **core (`.`) must depend only on stdlib +
 `go.opentelemetry.io/otel`** (+ `testify` in its own tests). It MUST NOT
-import gRPC, JOSE/JWT libs, OAuth2, Redis, SQL drivers, HTTP routers, or
-concrete loggers. Adapters depend on the core, never the reverse. The
+import gRPC, ConnectRPC, JOSE/JWT libs, OAuth2, Redis, SQL drivers, HTTP
+routers, or concrete loggers. Adapters depend on the core, never the reverse. The
 `oauth2` module has **no hard dependency on `jwt`** — JWT access tokens are
 wired via an adapter (`jwt` depends on `oauth2`, not the other way). When
 adding code, check the allowed-dependency list in `MIGRATION.md` before
@@ -163,7 +164,7 @@ Conventions baked into the core:
 - **OTel spans live directly in each module** — there is intentionally no
   `EventSink` abstraction and no separate `otel/` module. The core uses
   scope `github.com/hyperscale-stack/security`; each instrumented module
-  (`httpsec`, `grpcsec`, `jwtsec`, `session`) uses its own. See
+  (`httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, `session`) uses its own. See
   `docs/observability.md` for the span catalog.
 
 ## OAuth2 server (`oauth2/`)
@@ -187,8 +188,8 @@ configurable via `ServerConfig.RoutePrefix`).
   the shared `oauth2/storetest` conformance suite.
 
 `examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
-`examples/` also has `basic-http`, `bearer-jwt`, `grpc-bearer`, and
-`session-web` demos.
+`examples/` also has `basic-http`, `bearer-jwt`, `grpc-bearer`,
+`connectrpc-bearer`, and `session-web` demos.
 
 ## Tooling caveats
 
