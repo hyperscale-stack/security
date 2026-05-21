@@ -134,14 +134,20 @@ and a `Carrier`, then map security errors to transport responses.
 The `oauth2` module is an authorization server, not just a provider:
 
 - **`Profile`** — `Profile20`, `Profile20BCP` (default), `Profile21Draft`.
-  The profile gates which grants and PKCE methods are allowed.
-- **Grants** — `authorization_code` (PKCE S256), `client_credentials`,
-  `refresh_token` (rotation + reuse detection), plus legacy `password` /
-  `implicit` (opt-in, refused under stricter profiles).
+  The profile gates which grants and PKCE methods are allowed, and is
+  enforced at runtime on the grants — PKCE is required and the `plain`
+  transformation refused under BCP / 2.1.
+- **Grants** — `authorization_code` (PKCE), `client_credentials`,
+  `refresh_token` (rotation + reuse detection), plus the opt-in legacy
+  `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
 - **Client authentication** — `client_secret_basic`, `client_secret_post`,
   `none` (public clients, PKCE required).
-- **Endpoints** — `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662),
-  `/.well-known/oauth-authorization-server` (RFC 8414).
+- **Endpoints** — `/authorize` (RFC 6749 §3.1, `authorization_code` and the
+  opt-in legacy `implicit` flow, with an application-supplied consent hook),
+  `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662),
+  `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
+  prefix used in the metadata document is configurable via
+  `ServerConfig.RoutePrefix`.
 - **`Storage`** — an interface with explicit atomicity contracts
   (`ConsumeAuthorizationCode`, `RotateRefreshToken`). Three implementations:
   in-memory, SQL (Postgres/MySQL/SQLite), Redis (Lua scripts). All three

@@ -7,10 +7,15 @@
 // The server is organized by responsibility:
 //   - Server aggregates Profile, Storage, Grants, ClientAuth, IssuerResolver.
 //   - Profile selects the security baseline (OAuth2.0, OAuth2.0-BCP,
-//     OAuth2.1-draft). BCP is the recommended default.
-//   - Grants implement authorization_code (PKCE mandatory in BCP/21),
-//     client_credentials, refresh_token, plus opt-in legacy password and
-//     implicit (refused outside Profile20).
+//     OAuth2.1-draft). BCP is the recommended default and is enforced at
+//     runtime on the grants (PKCE required, "plain" PKCE refused).
+//   - Endpoints: AuthorizeHandler runs the RFC 6749 §3.1 authorization
+//     endpoint (authorization_code, and the opt-in legacy implicit flow);
+//     TokenHandler, RevokeHandler, IntrospectHandler and MetadataHandler
+//     cover the remaining RFC endpoints.
+//   - Grants implement authorization_code (with PKCE), client_credentials
+//     and refresh_token. The legacy password grant (grant.NewLegacyPassword)
+//     is opt-in and refused outside Profile20.
 //   - Tokens are opaque by default; refresh tokens and authorization codes
 //     are stored hashed. JWT access tokens are available via an adapter to
 //     the jwt sub-module (no hard dependency from oauth2 to jwt).

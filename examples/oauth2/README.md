@@ -2,9 +2,10 @@
 
 End-to-end wiring of the v2 security library running in a single binary:
 
-- an OAuth2 authorization server exposing `/oauth2/token`, `/oauth2/revoke`,
-  `/oauth2/introspect`, and `/.well-known/oauth-authorization-server`
-  (Profile 2.0 BCP — PKCE / refresh rotation mandatory when relevant);
+- an OAuth2 authorization server exposing `/oauth2/authorize`,
+  `/oauth2/token`, `/oauth2/revoke`, `/oauth2/introspect`, and
+  `/.well-known/oauth-authorization-server` (Profile 2.0 BCP — PKCE /
+  refresh rotation mandatory when relevant);
 - a Bearer-protected resource at `GET /protected`, sharing the OAuth2
   storage so it can validate opaque tokens locally (the in-process
   equivalent of RFC 7662 introspection).
@@ -58,13 +59,31 @@ curl -i -H "Authorization: Bearer $TOKEN" http://localhost:1337/protected
 curl -s http://localhost:1337/.well-known/oauth-authorization-server | jq
 ```
 
+## Probe — the authorization-code flow (browser)
+
+Open this URL in a browser — it carries an RFC 7636 sample PKCE challenge:
+
+```
+http://localhost:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://localhost:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
+```
+
+Approve on the consent page; the browser lands on `/callback?code=…`.
+Exchange that code (the verifier is `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk`):
+
+```sh
+curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
+    -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:1337/callback&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk' \
+    http://localhost:1337/oauth2/token
+```
+
 ## What this example does NOT cover
 
-- `/oauth2/authorize` (consent flow) — deferred to a follow-up slice.
 - JWT-formatted access tokens (`jwt.OAuth2AccessTokenSigner` adapter wires
   the JWT module into the token generator; not enabled here).
 - Persistent storage (memory store — every restart wipes tokens).
 - `private_key_jwt` client authentication.
+- The legacy `password` / `implicit` flows — opt-in, refused under the
+  BCP profile this example uses.
 
 See [docs/migration-from-v0.md](../../docs/migration-from-v0.md) for the
 mapping from the removed v0 stack to this wiring.
