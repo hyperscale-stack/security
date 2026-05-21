@@ -4,6 +4,7 @@ use (
 	.
 	./basic
 	./bearer
+	./connectrpc
 	./examples
 	./grpc
 	./http
