@@ -7,6 +7,7 @@ package jwtsec_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 	"github.com/stretchr/testify/assert"
@@ -21,8 +22,9 @@ func TestBearerVerifierDefaultResolverExposesScopesAsAuthorities(t *testing.T) {
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{
-		Subject: "alice",
-		Scope:   "read:mail write:mail admin",
+		Subject:   "alice",
+		Scope:     "read:mail write:mail admin",
+		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
 	})
 
 	tv := jwtsec.BearerVerifier(verifier, nil)
@@ -44,7 +46,8 @@ func TestBearerVerifierCustomResolver(t *testing.T) {
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{
-		Subject: "alice",
+		Subject:   "alice",
+		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
 	})
 
 	tv := jwtsec.BearerVerifier(verifier, func(c *jwtsec.StandardClaims) []string {

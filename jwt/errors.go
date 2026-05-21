@@ -32,6 +32,12 @@ var (
 	// [security.ErrTokenExpired].
 	ErrTokenExpired = newJWTError("token expired", security.ErrTokenExpired)
 
+	// ErrMissingExpiry signals that the token carries no `exp` claim while
+	// the verifier requires one — the default; see [WithOptionalExpiry].
+	// Wraps [security.ErrTokenExpired] so transport mappers classify a
+	// non-expiring token like any other temporally-invalid token.
+	ErrMissingExpiry = newJWTError("missing exp claim", security.ErrTokenExpired)
+
 	// ErrTokenNotYetValid signals that the `nbf` claim is in the future
 	// (allowing for the configured clock skew).
 	ErrTokenNotYetValid = newJWTError("token not yet valid", security.ErrInvalidCredentials)

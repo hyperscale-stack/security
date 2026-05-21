@@ -10,6 +10,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
+	"time"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 )
@@ -25,11 +26,14 @@ func Example() {
 	// Authorization server side.
 	signer := jwtsec.NewSigner(signing)
 
+	now := time.Now()
 	token, err := signer.Sign(context.Background(), &jwtsec.StandardClaims{
-		Issuer:   "https://auth.example",
-		Subject:  "alice",
-		Audience: jwtsec.Audience{"api"},
-		Scope:    "read:mail",
+		Issuer:    "https://auth.example",
+		Subject:   "alice",
+		Audience:  jwtsec.Audience{"api"},
+		Scope:     "read:mail",
+		IssuedAt:  jwtsec.NewNumericDate(now),
+		ExpiresAt: jwtsec.NewNumericDate(now.Add(time.Hour)),
 	})
 	if err != nil {
 		fmt.Println("sign:", err)

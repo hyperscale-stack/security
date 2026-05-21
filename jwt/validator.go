@@ -14,6 +14,9 @@ import (
 // RFC 7519 §4.1, observing the configured clock skew. iat is informational
 // (no rejection) but tokens with iat in the future beyond the skew window
 // are refused as a defense against tokens forged with a tampered clock.
+//
+// An `exp` claim is mandatory unless the verifier opted into
+// [WithOptionalExpiry]: a token that never expires is rejected fail-closed.
 func validateStandardClaims(c *config, claims *StandardClaims) error {
 	now := c.clock.Now()
 
@@ -28,7 +31,11 @@ func validateStandardClaims(c *config, claims *StandardClaims) error {
 		}
 	}
 
-	if claims.ExpiresAt != nil {
+	if claims.ExpiresAt == nil {
+		if c.requireExpiry {
+			return ErrMissingExpiry
+		}
+	} else {
 		exp := claims.ExpiresAt.Time()
 		if !exp.IsZero() && now.After(exp.Add(c.skew)) {
 			return fmt.Errorf("%w (now=%s exp=%s)", ErrTokenExpired,

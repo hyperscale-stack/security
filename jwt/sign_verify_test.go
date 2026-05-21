@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperscale-stack/security"
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,7 +99,10 @@ func TestVerifyRejectsKeyConfusion(t *testing.T) {
 	// prove the verifier accepts RS256 while rejecting HS256 even when
 	// configured with the same key material:
 	rsSigner := jwtsec.NewSigner(rsaPriv)
-	good, err := rsSigner.Sign(context.Background(), &jwtsec.StandardClaims{Subject: "alice"})
+	good, err := rsSigner.Sign(context.Background(), &jwtsec.StandardClaims{
+		Subject:   "alice",
+		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
+	})
 	require.NoError(t, err)
 	_, err = verifier.Verify(context.Background(), good, nil)
 	require.NoError(t, err, "RS256 allowed by default")
@@ -156,6 +160,41 @@ func TestVerifyClockSkewToleratesNearMissExpiry(t *testing.T) {
 	require.NoError(t, err, "skew window must tolerate near-miss expiries")
 }
 
+func TestVerifyRejectsMissingExpiryByDefault(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	signer := jwtsec.NewSigner(priv)
+	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
+
+	// A validly-signed token with no `exp` claim — a token that never
+	// expires. RFC 9068 §2.2 forbids this for access tokens.
+	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{Subject: "alice"})
+
+	_, err := verifier.Verify(context.Background(), token, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, jwtsec.ErrMissingExpiry)
+	// Bridges to the core sentinel so transport mappers classify it.
+	assert.ErrorIs(t, err, security.ErrTokenExpired)
+}
+
+func TestVerifyOptionalExpiryAllowsMissingExp(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	signer := jwtsec.NewSigner(priv)
+	verifier := jwtsec.NewVerifier(
+		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
+		jwtsec.WithOptionalExpiry(),
+	)
+
+	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{Subject: "alice"})
+
+	claims, err := verifier.Verify(context.Background(), token, nil)
+	require.NoError(t, err, "WithOptionalExpiry must accept a token without exp")
+	assert.Equal(t, "alice", claims.Subject)
+}
+
 func TestVerifyRejectsBadIssuer(t *testing.T) {
 	t.Parallel()
 
@@ -207,8 +246,9 @@ func TestVerifyAcceptsAnyMatchingAudience(t *testing.T) {
 	)
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{
-		Subject:  "alice",
-		Audience: jwtsec.Audience{"other", "api-2"},
+		Subject:   "alice",
+		Audience:  jwtsec.Audience{"other", "api-2"},
+		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
 	})
 
 	_, err := verifier.Verify(context.Background(), token, nil)
@@ -245,8 +285,11 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	}
 
 	token, _ := signer.Sign(context.Background(), custom{
-		StandardClaims: jwtsec.StandardClaims{Subject: "alice"},
-		Tenant:         "acme",
+		StandardClaims: jwtsec.StandardClaims{
+			Subject:   "alice",
+			ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+		Tenant: "acme",
 	})
 
 	var got custom

@@ -73,6 +73,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`Extract`, `Authenticate`, `Hasher.Hash`/`Verify`, `TokenVerifier.Verify`).
 - Password `Verify` returns `(bool, error)`, distinguishing a mismatch from
   a malformed hash; v0 returned a bare `bool`.
+- The JWT verifier (`jwtsec`) now rejects tokens without an `exp` claim by
+  default (`ErrMissingExpiry`), aligning with RFC 9068 §2.2 and the
+  fail-closed doctrine. Opt out with `jwtsec.WithOptionalExpiry()` to verify
+  deliberately non-expiring assertions.
 
 ### Fixed
 
