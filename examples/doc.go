@@ -12,9 +12,10 @@
 //
 // Available examples:
 //
-//   - basic-http   — HTTP Basic authentication + role-based authorization.
-//   - bearer-jwt   — JWT issuance and Bearer-token validation, scope gating.
-//   - grpc-bearer  — gRPC unary interceptors authenticating a Bearer JWT.
-//   - session-web  — cookie-session login form with a CSRF-protected logout.
-//   - oauth2       — OAuth2 authorization server + Bearer resource server.
+//   - basic-http        — HTTP Basic authentication + role-based authorization.
+//   - bearer-jwt        — JWT issuance and Bearer-token validation, scope gating.
+//   - grpc-bearer       — gRPC unary interceptors authenticating a Bearer JWT.
+//   - connectrpc-bearer — ConnectRPC interceptors authenticating a Bearer JWT.
+//   - session-web       — cookie-session login form with a CSRF-protected logout.
+//   - oauth2            — OAuth2 authorization server + Bearer resource server.
 package examples
