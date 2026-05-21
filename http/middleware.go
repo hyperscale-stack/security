@@ -73,7 +73,7 @@ func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.
 // an empty realm and no anonymous fallback (deny-by-default).
 func buildConfig(opts ...Option) *config {
 	cfg := &config{
-		challengeScheme: "Bearer",
+		challengeScheme: defaultChallengeScheme,
 	}
 
 	for _, o := range opts {
