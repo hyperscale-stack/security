@@ -87,3 +87,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - The legacy v0 packages: `authentication/`, `authentication/credential/`,
   `authentication/provider/{dao,oauth2}/`, `authorization/`, and the
   in-tree `password` package.
+
+### Security
+
+- The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
+  into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
+  a fixed, generic string per error code, so internal context (timestamps,
+  package and authenticator names, consumer-supplied `TokenVerifier`/store
+  errors) can no longer leak to clients.

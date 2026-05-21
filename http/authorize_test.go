@@ -63,7 +63,10 @@ func TestAuthorizeInsufficientScopeIncludesOAuthErrorParam(t *testing.T) {
 
 	h.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Result().StatusCode)
-	assert.Contains(t, rec.Header().Get("WWW-Authenticate"), `error="insufficient_scope"`)
+
+	ww := rec.Header().Get("WWW-Authenticate")
+	assert.Contains(t, ww, `error="insufficient_scope"`)
+	assert.Contains(t, ww, `error_description="The request requires higher privileges than provided by the access token."`)
 }
 
 func TestAuthorizeUsesAnonymousWhenNoAuthInContext(t *testing.T) {

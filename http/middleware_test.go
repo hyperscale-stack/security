@@ -6,6 +6,7 @@ package httpsec_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -129,6 +130,35 @@ func TestMiddlewareWWWAuthenticateIncludesRealm(t *testing.T) {
 		"realm must be included; got %q", ww)
 	assert.True(t, strings.Contains(ww, `error="invalid_token"`),
 		"OAuth2 error parameter must be present for token expiry; got %q", ww)
+	assert.True(t, strings.Contains(ww, `error_description="The access token is invalid or has expired."`),
+		"error_description must be the fixed RFC 6750 string; got %q", ww)
+}
+
+// TestMiddlewareWWWAuthenticateDoesNotLeakErrorDetail ensures the challenge
+// never reflects the wrapped error chain — only a fixed RFC 6750 description.
+// A custom TokenVerifier may wrap a sensitive value (token, DSN, DB error)
+// while still wrapping a core sentinel; that context must not reach the header.
+func TestMiddlewareWWWAuthenticateDoesNotLeakErrorDetail(t *testing.T) {
+	t.Parallel()
+
+	const secret = "tok_S3CRET-do-not-leak"
+	leaky := fmt.Errorf("redis GET %q failed: %w", secret, security.ErrTokenExpired)
+
+	engine := security.NewEngine(
+		security.NewManager(&scriptedAuthn{name: "x", err: leaky}),
+		scriptedExtractor{auth: newAuth("alice")},
+	)
+
+	rec := httptest.NewRecorder()
+	httpsec.Middleware(engine, httpsec.WithRealm("hyperscale"))(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }),
+	).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	ww := rec.Header().Get("WWW-Authenticate")
+	assert.NotContains(t, ww, secret, "wrapped error detail must not leak into the header")
+	assert.NotContains(t, ww, "redis GET", "wrapped error context must not leak into the header")
+	assert.Contains(t, ww, `error="invalid_token"`)
+	assert.Contains(t, ww, `error_description="The access token is invalid or has expired."`)
 }
 
 func TestMiddlewareCustomErrorMapperIsHonored(t *testing.T) {
