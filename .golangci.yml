@@ -3,6 +3,11 @@ formatters:
     - gofmt
   exclusions:
     paths:
+      - .github/.*
+      - .claude/.*
+      - .vscode/.*
+      - build/.*
+      - docs/.*
       - .*_mock\.go
       - mock_.*\.go
       - .*/pkg/mod/.*$

@@ -1,15 +1,13 @@
-inpackage: True
-with-expecter: True
-all: True
+all: true
 dir: '{{.InterfaceDir}}'
-mockname: 'Mock{{.InterfaceName}}'
-outpkg: '{{.PackageName}}'
-filename: 'mock_{{ .InterfaceName | snakecase }}.go'
+filename: 'mock_{{.InterfaceName | snakecase}}.go'
+structname: Mock{{.InterfaceName}}
+pkgname: '{{.SrcPackageName}}'
+inpackage: true
+template: testify
+template-data:
+  unroll-variadic: true
 packages:
   github.com/hyperscale-stack/security:
     config:
-      recursive: True
-
-issue-845-fix: True
-resolve-type-alias: False
-disable-version-string: True
+      recursive: true
