@@ -217,6 +217,7 @@ func (m *Manager) Logout(ctx context.Context, c security.Carrier) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "session.Manager.Logout")
 	defer span.End()
 
+	//nolint:gosec // G124: Secure/HttpOnly/SameSite come from the Manager config (secure-by-default: Secure, HttpOnly, SameSiteLax)
 	expired := &http.Cookie{
 		Name:     m.cookieName,
 		Value:    "",
@@ -251,6 +252,7 @@ func (m *Manager) writeCookie(c security.Carrier, s *Session) error {
 		maxAge = 1
 	}
 
+	//nolint:gosec // G124: Secure/HttpOnly/SameSite come from the Manager config (secure-by-default: Secure, HttpOnly, SameSiteLax)
 	cookie := &http.Cookie{
 		Name:     m.cookieName,
 		Value:    value,
