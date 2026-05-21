@@ -77,3 +77,82 @@ func TestExampleOAuth2EndToEnd(t *testing.T) {
 	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
+
+// RFC 7636 Appendix B sample PKCE pair.
+const (
+	pkceVerifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	pkceChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+)
+
+// TestExampleOAuth2AuthorizationCodeFlow drives the browser flow: the
+// consent page, the approval redirect carrying the code, and the code
+// exchange at /token.
+func TestExampleOAuth2AuthorizationCodeFlow(t *testing.T) {
+	t.Parallel()
+
+	handler, err := buildServer()
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // inspect the redirect rather than follow it
+	}
+
+	authz := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {demoClientID},
+		"redirect_uri":          {"http://localhost:1337/callback"},
+		"scope":                 {"api:read"},
+		"state":                 {"demo-state"},
+		"code_challenge":        {pkceChallenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+
+	// 1. GET /authorize renders the consent page.
+	resp, err := client.Get(srv.URL + "/oauth2/authorize?" + authz)
+	require.NoError(t, err)
+	page, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, string(page), "Approve")
+
+	// 2. Approving redirects to the callback with an authorization code.
+	resp, err = client.PostForm(srv.URL+"/oauth2/authorize?"+authz, url.Values{"decision": {"approve"}})
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	require.NoError(t, err)
+
+	code := loc.Query().Get("code")
+	require.NotEmpty(t, code)
+	assert.Equal(t, "demo-state", loc.Query().Get("state"))
+
+	// 3. The code is exchanged for an access token at /token.
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://localhost:1337/callback"},
+		"code_verifier": {pkceVerifier},
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/oauth2/token", strings.NewReader(form.Encode()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(demoClientID, demoClientSecret)
+
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&tok))
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, tok.AccessToken)
+}

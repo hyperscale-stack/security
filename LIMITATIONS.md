@@ -8,15 +8,16 @@ than future refactor phases.
 
 ## OAuth2 server
 
-- **`/authorize` endpoint** — the authorization-code *grant* is implemented
-  and exercised end-to-end (see `oauth2/grant`), but no HTTP endpoint mints
-  the code through a browser redirect + consent flow. `client_credentials`
-  and `refresh_token` are fully served by `TokenHandler`.
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
 - **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
   depends on a server-side public-key store; the `jwtsec` module already
   provides the building blocks (`NewStaticJWKS`).
+- **`/introspect` and `/revoke` token hashing** — those endpoints look
+  tokens up with a pepper-free hash (`HashToken(nil, …)`), so they only
+  find access tokens issued by a generator configured with a nil pepper.
+  Deployments that pepper their token generators must introspect/revoke
+  through their own storage lookup. To be reconciled.
 
 ## Transports
 

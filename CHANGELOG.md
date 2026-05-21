@@ -38,10 +38,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   key rotation, `alg=none` and algorithm-confusion defenses, and a
   `bearer.TokenVerifier` adapter.
 - **OAuth2 server** (`oauth2`): `Profile` (2.0 / 2.0-BCP / 2.1-draft),
-  `authorization_code` (PKCE), `client_credentials`, and `refresh_token`
-  (rotation + reuse detection) grants; `client_secret_basic`/`_post`/`none`
-  client authentication; `/token`, `/revoke`, `/introspect`, and metadata
-  endpoints; a `Storage` interface with explicit atomicity contracts.
+  enforced at runtime on the grants (PKCE required, `plain` PKCE refused
+  under BCP / 2.1). Grants: `authorization_code` (PKCE), `client_credentials`,
+  `refresh_token` (rotation + reuse detection), and the opt-in legacy
+  `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
+  `client_secret_basic`/`_post`/`none` client authentication. Endpoints:
+  `/authorize` (authorization_code + opt-in legacy implicit flow, with an
+  application-supplied consent hook), `/token`, `/revoke`, `/introspect`,
+  and metadata — the metadata endpoint paths are configurable through
+  `ServerConfig.RoutePrefix`. A `Storage` interface with explicit atomicity
+  contracts.
 - **OAuth2 storage backends**: in-memory (`oauth2/storage/memory`), SQL
   (`oauth2/store/sql`, Postgres/MySQL/SQLite), and Redis
   (`oauth2/store/redis`, Lua-script atomicity), all validated by the shared
