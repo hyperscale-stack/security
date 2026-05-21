@@ -74,12 +74,9 @@ lint:
 ifeq (, $(shell which golangci-lint))
 	@echo "Install golangci-lint..."
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-		| sh -s -- -b $$(go env GOPATH)/bin v2.6.2
+		| sh -s -- -b $$(go env GOPATH)/bin v2.12.2
 endif
-	@for mod in $(MODULES); do \
-		echo "==> lint $$mod"; \
-		(cd "$$mod" && golangci-lint run --timeout=300s --config="$(LINT_CONFIG)" ./...) || exit 1; \
-	done
+	@go list -f '{{.Dir}}/...' -m | xargs golangci-lint run --timeout=300s --config="$(LINT_CONFIG)"
 
 .PHONY: tidy
 tidy:
