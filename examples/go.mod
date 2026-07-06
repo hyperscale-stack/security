@@ -25,7 +25,7 @@ replace github.com/hyperscale-stack/security/oauth2 => ../oauth2
 
 require (
 	connectrpc.com/connect v1.20.0
-	connectrpc.com/grpchealth v1.4.0
+	connectrpc.com/grpchealth v1.5.0
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/basic v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000
