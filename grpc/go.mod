@@ -6,7 +6,7 @@ require (
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.44.0
-	google.golang.org/grpc v1.82.0
+	google.golang.org/grpc v1.82.1
 )
 
 require (
