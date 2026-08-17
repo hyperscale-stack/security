@@ -2,7 +2,7 @@ module github.com/hyperscale-stack/security/password
 
 go 1.26
 
-require golang.org/x/crypto v0.54.0
+require golang.org/x/crypto v0.55.0
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
