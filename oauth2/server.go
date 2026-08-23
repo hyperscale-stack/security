@@ -55,8 +55,9 @@ type ServerConfig struct {
 	// trimmed ("/" yields a root mount). The .well-known endpoints are not
 	// affected — they live at the host root per RFC 8615.
 	RoutePrefix string
-	// Now is the clock used to stamp issuance / expiry. Defaults to
-	// time.Now (wall clock); inject a fixed clock in tests.
+	// Now is the clock used to stamp issuance / expiry, and to compute the
+	// expires_in the /token response advertises. Defaults to time.Now
+	// (wall clock); inject a fixed clock in tests.
 	Now func() time.Time
 	// OnError, when set, observes every error the server turns into an
 	// RFC 6749 §5.2 response — including the cause of a server_error, which
