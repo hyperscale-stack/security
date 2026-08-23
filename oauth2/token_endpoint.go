@@ -66,12 +66,17 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One clock read for the whole exchange: the grant stamps the expiry
+	// from it, and expires_in is measured against the very same instant, so
+	// the advertised lifetime is exactly the configured TTL.
+	now := s.cfg.Now()
+
 	resp, err := handler.Handle(r.Context(), GrantRequest{
 		Client:   client,
 		Form:     r.PostForm,
 		Issuer:   issuer,
 		Audience: audience,
-		Now:      s.cfg.Now(),
+		Now:      now,
 		Profile:  s.cfg.Profile,
 	})
 	if err != nil {
@@ -80,7 +85,7 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeTokenResponse(w, resp)
+	writeTokenResponse(w, resp, now)
 }
 
 // tokenResponse is the on-wire JSON body per RFC 6749 §5.1. The
@@ -96,12 +101,14 @@ type tokenResponse struct {
 }
 
 // writeTokenResponse serializes resp to the standard JSON body and adds
-// Cache-Control / Pragma headers per RFC 6749 §5.1.
-func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse) {
+// Cache-Control / Pragma headers per RFC 6749 §5.1. now is the instant the
+// grant was stamped with — the server clock, never the wall clock, so an
+// injected [ServerConfig.Now] stays authoritative on the wire too.
+func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse, now time.Time) {
 	body := tokenResponse{
 		AccessToken: resp.Pair.Access.Token,
 		TokenType:   resp.TokenType,
-		ExpiresIn:   int(time.Until(resp.Pair.Access.ExpiresAt).Seconds()),
+		ExpiresIn:   expiresIn(resp.Pair.Access.ExpiresAt, now),
 		Scope:       resp.Scope,
 	}
 
@@ -120,6 +127,20 @@ func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse) {
 		// nothing actionable left to do.
 		_ = err
 	}
+}
+
+// expiresIn returns the RFC 6749 §5.1 expires_in value: the token lifetime
+// in seconds, rounded to the nearest second so a whole-second TTL is
+// advertised as itself rather than one short. An already-expired token
+// yields 0 — the field is omitempty, so it drops off the wire instead of
+// carrying a negative lifetime the RFC does not allow.
+func expiresIn(expiresAt, now time.Time) int {
+	d := expiresAt.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+
+	return int(d.Round(time.Second).Seconds())
 }
 
 // errorResponse is the on-wire JSON body per RFC 6749 §5.2.

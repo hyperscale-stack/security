@@ -95,6 +95,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   short-circuits on first success and aggregates failures.
 - The OAuth2 client-secret mismatch is now a typed error
   (`ErrClientSecretMismatch`) instead of a silent failure.
+- The OAuth2 `/token` response now computes `expires_in` from
+  `ServerConfig.Now` instead of the wall clock, so an injected clock stays
+  authoritative on the wire; the value is rounded to the nearest second (a
+  1h TTL is advertised as `3600`, not `3599`) and an already-expired token
+  drops the field rather than sending the negative lifetime RFC 6749 §5.1
+  does not allow.
 
 ### Removed
 
