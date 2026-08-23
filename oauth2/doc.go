@@ -21,6 +21,10 @@
 //     the jwt sub-module (no hard dependency from oauth2 to jwt).
 //   - Stores expose atomic ConsumeAuthorizationCode and RotateRefreshToken
 //     to guarantee single-use semantics and reuse-detection.
+//   - ServerConfig.OnError (and grant.Config.OnError) observe the errors the
+//     protocol hides: the cause of a server_error, which never reaches the
+//     wire, and the revocations RFC 7009 §2.2 requires to answer 200 OK
+//     regardless. See ErrorHook.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

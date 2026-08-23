@@ -20,26 +20,26 @@ func (s *Server) IntrospectHandler() http.Handler {
 
 func (s *Server) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeOAuthError(w, ErrInvalidRequest.WithDescription("POST required"))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("POST required"))
 
 		return
 	}
 
 	if err := r.ParseForm(); err != nil {
-		writeOAuthError(w, ErrInvalidRequest.WithCause(err))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithCause(err))
 
 		return
 	}
 
 	if _, err := s.authenticateClient(r.Context(), r); err != nil {
-		writeOAuthError(w, err)
+		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}
 
 	rawToken := r.PostFormValue("token")
 	if rawToken == "" {
-		writeOAuthError(w, ErrInvalidRequest.WithDescription("missing token"))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("missing token"))
 
 		return
 	}

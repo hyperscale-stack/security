@@ -58,6 +58,11 @@ type ServerConfig struct {
 	// Now is the clock used to stamp issuance / expiry. Defaults to
 	// time.Now (wall clock); inject a fixed clock in tests.
 	Now func() time.Time
+	// OnError, when set, observes every error the server turns into an
+	// RFC 6749 §5.2 response — including the cause of a server_error, which
+	// never reaches the wire — plus the errors it swallows on purpose
+	// (best-effort revocation). Optional; see [ErrorHook].
+	OnError ErrorHook
 }
 
 // Server is the OAuth2 authorization server. It exposes one
@@ -116,6 +121,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // Config returns the configuration the server was constructed with. Useful
 // for endpoints (metadata, jwks) that need to introspect it.
 func (s *Server) Config() ServerConfig { return s.cfg }
+
+// notifyError hands err to the configured [ErrorHook], if any. It is a
+// no-op when no hook is registered or when err is nil, so call sites stay
+// free of guards.
+func (s *Server) notifyError(ctx context.Context, err error) {
+	if s.cfg.OnError == nil || err == nil {
+		return
+	}
+
+	s.cfg.OnError(ctx, err)
+}
 
 // authenticateClient runs the configured client-authentication methods in
 // order and returns the first match.

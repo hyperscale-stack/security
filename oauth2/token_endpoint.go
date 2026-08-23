@@ -5,6 +5,7 @@
 package oauth2
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,41 +27,41 @@ func (s *Server) TokenHandler() http.Handler {
 
 func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeOAuthError(w, ErrInvalidRequest.WithDescription("POST required"))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("POST required"))
 
 		return
 	}
 
 	if err := r.ParseForm(); err != nil {
-		writeOAuthError(w, ErrInvalidRequest.WithCause(err))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithCause(err))
 
 		return
 	}
 
 	client, err := s.authenticateClient(r.Context(), r)
 	if err != nil {
-		writeOAuthError(w, err)
+		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}
 
 	grantType := r.PostFormValue("grant_type")
 	if grantType == "" {
-		writeOAuthError(w, ErrInvalidRequest.WithDescription("missing grant_type"))
+		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("missing grant_type"))
 
 		return
 	}
 
 	handler, ok := s.dispatch[grantType]
 	if !ok {
-		writeOAuthError(w, ErrUnsupportedGrantType.WithDescription("grant_type "+grantType+" not supported"))
+		s.writeOAuthError(r.Context(), w, ErrUnsupportedGrantType.WithDescription("grant_type "+grantType+" not supported"))
 
 		return
 	}
 
 	issuer, audience, err := s.resolveIssuer(r.Context(), r)
 	if err != nil {
-		writeOAuthError(w, err)
+		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}
@@ -74,7 +75,7 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		Profile:  s.cfg.Profile,
 	})
 	if err != nil {
-		writeOAuthError(w, err)
+		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}
@@ -130,11 +131,17 @@ type errorResponse struct {
 
 // writeOAuthError serializes err as an RFC 6749 §5.2 envelope. Non-OAuth
 // errors collapse to server_error so the wire response stays compliant.
-func writeOAuthError(w http.ResponseWriter, err error) {
+//
+// The normalized envelope — cause included — is handed to the configured
+// [ErrorHook] before anything is written, since the wire body carries only
+// the code, the description and the URI.
+func (s *Server) writeOAuthError(ctx context.Context, w http.ResponseWriter, err error) {
 	var oe *Error
 	if !errors.As(err, &oe) {
 		oe = ErrServerError.WithCause(err)
 	}
+
+	s.notifyError(ctx, oe)
 
 	body := errorResponse{
 		Error:            oe.Code,

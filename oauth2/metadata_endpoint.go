@@ -27,7 +27,7 @@ func (s *Server) MetadataHandler() http.Handler {
 func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 	issuer, _, err := s.resolveIssuer(r.Context(), r)
 	if err != nil {
-		writeOAuthError(w, err)
+		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}
