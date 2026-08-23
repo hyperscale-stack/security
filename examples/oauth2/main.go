@@ -92,6 +92,18 @@ type principal struct{ sub string }
 
 func (p principal) Subject() string { return p.sub }
 
+// logOAuthError is the [oauth2.ErrorHook] shared by the server and the
+// grants. The RFC 6749 §5.2 body carries no cause, so this is the only
+// place a server_error becomes diagnosable; the expected 4xx traffic is
+// filtered out to keep the log readable.
+func logOAuthError(_ context.Context, err error) {
+	if oauth2.IsCode(err) != oauth2.CodeServerError {
+		return
+	}
+
+	log.Printf("oauth2: server error: %v", err)
+}
+
 // buildServer wires the authorization server and the Bearer-protected
 // resource server onto a single mux. It is separate from main so the
 // end-to-end test can exercise the exact same wiring.
@@ -121,6 +133,7 @@ func buildServer() (http.Handler, error) {
 		AccessTTL:           time.Hour,
 		RefreshTTL:          24 * time.Hour,
 		RotateRefreshTokens: true,
+		OnError:             logOAuthError,
 	}
 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
@@ -134,6 +147,7 @@ func buildServer() (http.Handler, error) {
 			grant.NewRefreshToken(gcfg),
 		},
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost()},
+		OnError:    logOAuthError,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("oauth2.NewServer: %w", err)

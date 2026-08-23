@@ -25,7 +25,52 @@ dependency. Basic/Bearer authentication is still observable: the core
 `security.Manager.Authenticate` span records which authenticator ran via
 the `security.authenticator.name` attribute and an `authenticator.try`
 event per candidate. OAuth2 HTTP endpoints are observable through the host
-server's HTTP instrumentation (e.g. `otelhttp`).
+server's HTTP instrumentation (e.g. `otelhttp`) and, for their errors,
+through the OAuth2 error hook described below.
+
+## OAuth2 error hook
+
+An RFC 6749 §5.2 response carries a code, a description and a URI — never
+the cause. A `server_error` therefore reaches the client as an opaque 500,
+and RFC 7009 §2.2 goes further: a revocation answers `200 OK` even when the
+revocation itself failed. Both are protocol requirements, and both leave an
+operator with nothing to diagnose.
+
+`oauth2.ServerConfig.OnError` closes that gap. It is an `oauth2.ErrorHook`
+(`func(ctx context.Context, err error)`) called with the `*oauth2.Error`
+envelope — cause intact — at the point the server decides on its answer:
+
+```go
+srv, err := oauth2.NewServer(oauth2.ServerConfig{
+    // ...
+    OnError: func(ctx context.Context, err error) {
+        if oauth2.IsCode(err) != oauth2.CodeServerError {
+            return // expected 4xx traffic
+        }
+
+        slog.ErrorContext(ctx, "oauth2 server error", "err", err)
+    },
+})
+```
+
+The hook fires for:
+
+- every error serialized as an RFC 6749 §5.2 body (`/token`, `/revoke`,
+  `/introspect`, metadata) and every error redirected back to the client by
+  `/authorize`, including the pre-redirect refusals answered with a bare
+  400 (unknown client, unregistered `redirect_uri`);
+- the best-effort revocations `/revoke` swallows to honour RFC 7009 §2.2.
+
+`grant.Config.OnError` is the same hook for the errors a grant swallows
+before returning — today, a family revocation that failed during BCP §8.10.3
+reuse detection. Errors a grant *returns* travel to the server and reach
+`ServerConfig.OnError`, so wire both fields to the same sink.
+
+The hook is purely observational: it MUST NOT influence the response, and it
+runs synchronously on the request goroutine, so keep it fast. It receives no
+secret — the envelope carries the code, the description and the wrapped Go
+error, never a token or a client secret — but the cause comes from your own
+storage layer, so apply the same redaction rules you apply to your logs.
 
 ## Span catalog
 

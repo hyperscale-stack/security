@@ -18,6 +18,7 @@
 package grant
 
 import (
+	"context"
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -46,6 +47,21 @@ type Config struct {
 	// /token?grant_type=refresh_token call and marks the old one
 	// consumed; reuse triggers family revocation. Default true in BCP/21.
 	RotateRefreshTokens bool
+	// OnError, when set, observes the errors a grant swallows to keep the
+	// protocol response intact — today, a family revocation that failed
+	// during reuse detection. Errors returned to the server travel to
+	// [oauth2.ServerConfig.OnError] instead, so wire both to the same sink.
+	// Optional; see [oauth2.ErrorHook].
+	OnError oauth2.ErrorHook
+}
+
+// notifyError hands err to the configured [oauth2.ErrorHook], if any.
+func (c Config) notifyError(ctx context.Context, err error) {
+	if c.OnError == nil || err == nil {
+		return
+	}
+
+	c.OnError(ctx, err)
 }
 
 // Request and Response are type aliases anchoring the contract in the

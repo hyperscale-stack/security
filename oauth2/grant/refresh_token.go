@@ -59,8 +59,14 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 	}
 
 	if rt.Consumed {
-		// Reuse detected — revoke the whole family and refuse.
-		_ = g.cfg.Storage.RevokeRefreshFamily(ctx, rt.FamilyID)
+		// Reuse detected — revoke the whole family and refuse. The refusal
+		// stays invalid_grant whatever the revocation did, so a failure
+		// there is only observable through the error hook.
+		if err := g.cfg.Storage.RevokeRefreshFamily(ctx, rt.FamilyID); err != nil {
+			g.cfg.notifyError(ctx, oauth2.ErrServerError.
+				WithDescription("revoke refresh family failed after reuse detection").
+				WithCause(err))
+		}
 
 		return nil, oauth2.ErrRefreshTokenReused
 	}

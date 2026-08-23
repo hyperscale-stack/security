@@ -174,21 +174,25 @@ func (s *Server) AuthorizeHandler(cfg AuthorizeConfig, consent ConsentFunc) http
 
 func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("/authorize requires GET or POST"))
 		http.Error(w, "oauth2: /authorize requires GET or POST", http.StatusMethodNotAllowed)
 
 		return
 	}
 
 	if err := r.ParseForm(); err != nil {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithCause(err))
 		http.Error(w, "oauth2: malformed authorization request", http.StatusBadRequest)
 
 		return
 	}
 
 	// Client and redirect URI come first: a failure here MUST NOT redirect
-	// (the redirect target is not yet trusted).
+	// (the redirect target is not yet trusted). The refusal is deliberately
+	// opaque on the wire, so the hook is the only place the cause shows up.
 	client, err := s.cfg.ClientStore.LoadClient(r.Context(), r.FormValue("client_id"))
 	if err != nil || client == nil {
+		s.notifyError(r.Context(), ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)
 
 		return
@@ -196,6 +200,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	redirectURI, ok := resolveRedirectURI(client, r.FormValue("redirect_uri"))
 	if !ok {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri"))
 		http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
 
 		return
@@ -208,7 +213,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	flow, oerr := resolveFlow(cfg, r.FormValue("response_type"))
 	if oerr != nil {
 		// The response type is unknown — default to a query-string error.
-		redirectAuthorizeError(w, r, redirectURI, state, oerr, false)
+		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, false)
 
 		return
 	}
@@ -217,14 +222,14 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
 	if oerr != nil {
-		redirectAuthorizeError(w, r, redirectURI, state, oerr, useFragment)
+		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, useFragment)
 
 		return
 	}
 
 	decision, err := consent(w, r, ar)
 	if err != nil {
-		redirectAuthorizeError(w, r, redirectURI, ar.State,
+		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
 			ErrServerError.WithDescription("consent handler failed"), useFragment)
 
 		return
@@ -236,7 +241,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	if !decision.Approved {
-		redirectAuthorizeError(w, r, redirectURI, ar.State,
+		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
 			ErrAccessDenied.WithDescription("the resource owner denied the request"), useFragment)
 
 		return
@@ -334,7 +339,7 @@ func (s *Server) issueAuthorizationCode(
 ) {
 	granted, err := grantedScope(ar, decision)
 	if err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
 			ErrInvalidScope.WithDescription("granted scope exceeds the request"), false)
 
 		return
@@ -342,7 +347,7 @@ func (s *Server) issueAuthorizationCode(
 
 	raw, err := randomCode()
 	if err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
 
 		return
 	}
@@ -365,7 +370,7 @@ func (s *Server) issueAuthorizationCode(
 	}
 
 	if err := s.cfg.Storage.SaveAuthorizationCode(r.Context(), code); err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
 
 		return
 	}
@@ -390,7 +395,7 @@ func (s *Server) issueImplicitToken(
 ) {
 	granted, err := grantedScope(ar, decision)
 	if err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
 			ErrInvalidScope.WithDescription("granted scope exceeds the request"), true)
 
 		return
@@ -398,14 +403,14 @@ func (s *Server) issueImplicitToken(
 
 	_, audience, ierr := s.resolveIssuer(r.Context(), r)
 	if ierr != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(ierr), true)
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(ierr), true)
 
 		return
 	}
 
 	raw, hash, err := cfg.ImplicitTokens.Generate(r.Context())
 	if err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
 
 		return
 	}
@@ -423,7 +428,7 @@ func (s *Server) issueImplicitToken(
 	}
 
 	if err := s.cfg.Storage.SaveAccessToken(r.Context(), at); err != nil {
-		redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
 
 		return
 	}
@@ -497,14 +502,18 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 }
 
 // redirectAuthorizeError sends an RFC 6749 §4.1.2.1 / §4.2.2.1 error
-// response by redirecting back to the client's redirect URI.
-func redirectAuthorizeError(
+// response by redirecting back to the client's redirect URI. The envelope —
+// cause included — is handed to the configured [ErrorHook] first: the
+// redirect carries only the code and the description.
+func (s *Server) redirectAuthorizeError(
 	w http.ResponseWriter,
 	r *http.Request,
 	redirectURI, state string,
 	oerr *Error,
 	useFragment bool,
 ) {
+	s.notifyError(r.Context(), oerr)
+
 	params := url.Values{"error": {oerr.Code}}
 	if oerr.Description != "" {
 		params.Set("error_description", oerr.Description)

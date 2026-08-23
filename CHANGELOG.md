@@ -59,6 +59,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **Sessions** (`session`): stateless AES-256-GCM encrypted cookies with key
   rotation, a `Manager` (Login/Get/Touch/Rotate/Logout), and a
   synchronizer-token CSRF helper.
+- **OAuth2 error hook**: `ServerConfig.OnError` and `grant.Config.OnError`
+  (both `oauth2.ErrorHook`) observe every error the authorization server
+  turns into an RFC 6749 §5.2 response — carrying the cause a `server_error`
+  never puts on the wire — plus the errors it swallows on purpose, such as a
+  best-effort revocation (RFC 7009 §2.2) or a family revocation that failed
+  during reuse detection. Purely observational: the responses are unchanged.
 - **Observability**: OpenTelemetry spans emitted directly by the core,
   `httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, and `session`. See
   [docs/observability.md](docs/observability.md).
