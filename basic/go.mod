@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/basic
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
@@ -17,7 +17,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
 
