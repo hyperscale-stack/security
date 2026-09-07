@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/grpc
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
