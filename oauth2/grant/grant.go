@@ -11,7 +11,8 @@
 //   - authorization_code (with PKCE; PKCE is mandatory in
 //     [oauth2.Profile20BCP] and [oauth2.Profile21Draft])
 //   - client_credentials
-//   - refresh_token (with rotation + reuse detection)
+//   - refresh_token (rotation + reuse detection; rotation is mandatory in
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft])
 //
 // Legacy grants (password, implicit) live behind explicit opt-in helpers
 // and are refused outside [oauth2.Profile20].
@@ -31,21 +32,29 @@ type Config struct {
 	Storage oauth2.Storage
 	// AccessTokens issues access tokens (opaque or JWT).
 	AccessTokens token.AccessTokenGenerator
-	// RefreshTokens issues refresh tokens. Optional — when nil, the
-	// grant emits no refresh token.
+	// RefreshTokens issues refresh tokens. Optional for authorization_code
+	// and password, which emit no refresh token without it. Required by
+	// refresh_token whenever it rotates — always under
+	// [oauth2.Profile20BCP] and [oauth2.Profile21Draft] — since the
+	// replacement is minted with it; see [ErrRotationRequiresGenerator].
 	RefreshTokens token.RefreshTokenGenerator
 	// AccessTTL is the access-token expiry window.
 	AccessTTL time.Duration
 	// RefreshTTL is the refresh-token expiry window. Honored when
 	// RefreshTokens is non-nil.
 	RefreshTTL time.Duration
-	// RequirePKCE forces PKCE on authorization_code; default in BCP/21
-	// profiles. The authorization_code grant honors this independently
-	// of public-vs-confidential client type.
+	// RequirePKCE forces PKCE on authorization_code, independently of
+	// public-vs-confidential client type. [oauth2.Profile20BCP] and
+	// [oauth2.Profile21Draft] require PKCE whatever this field says.
 	RequirePKCE bool
-	// RotateRefreshTokens emits a fresh refresh token on every
-	// /token?grant_type=refresh_token call and marks the old one
-	// consumed; reuse triggers family revocation. Default true in BCP/21.
+	// RotateRefreshTokens makes refresh_token issue a fresh refresh token
+	// on every exchange and atomically mark the presented one consumed;
+	// replaying a consumed token revokes the whole family (RFC 9700
+	// §4.14.2). [oauth2.Profile20BCP] and [oauth2.Profile21Draft] mandate
+	// rotation whatever this field says, so it only matters under
+	// [oauth2.Profile20], where false keeps the legacy behavior: the
+	// refresh token stays reusable until it expires. Rotation requires
+	// RefreshTokens.
 	RotateRefreshTokens bool
 	// OnError, when set, observes the errors a grant swallows to keep the
 	// protocol response intact — today, a family revocation that failed

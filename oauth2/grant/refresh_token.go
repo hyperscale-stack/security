@@ -12,8 +12,8 @@ import (
 	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
-// RefreshToken implements RFC 6749 §6 with the OAuth 2.0 BCP §8.10
-// hardening (rotation + reuse detection).
+// RefreshToken implements the RFC 6749 §6 refresh_token grant with the
+// RFC 9700 §4.14.2 hardening: refresh-token rotation with reuse detection.
 //
 // The flow:
 //
@@ -21,12 +21,23 @@ import (
 //     the family.
 //  2. Re-bind client (refresh.ClientID MUST match the authenticated client).
 //  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
-//  4. Issue a fresh access token.
-//  5. If RotateRefreshTokens, issue a fresh refresh token in the same
-//     family AND atomically mark the old one consumed.
+//  4. Decide rotation before minting anything: mandatory under
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
+//     [Config.RotateRefreshTokens] under [oauth2.Profile20]. A rotation
+//     that cannot be honored fails with server_error
+//     ([ErrRotationRequiresGenerator]).
+//  5. Issue a fresh access token.
+//  6. When rotating, issue a fresh refresh token in the same family AND
+//     atomically mark the old one consumed.
 type RefreshToken struct {
 	cfg Config
 }
+
+// ErrRotationRequiresGenerator reports a refresh_token grant that has to
+// rotate refresh tokens but has no [Config.RefreshTokens] generator to mint
+// the replacement. [RefreshToken.Handle] then fails with server_error
+// carrying it as cause, before any token is minted or persisted.
+var ErrRotationRequiresGenerator = errors.New("oauth2/grant: refresh-token rotation requires a RefreshTokens generator")
 
 // NewRefreshToken constructs the handler.
 func NewRefreshToken(cfg Config) *RefreshToken {
@@ -87,7 +98,31 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 	return g.issueRotated(ctx, req, rt, scope)
 }
 
+// rotates reports whether the exchange rotates the refresh token. The
+// profile can only tighten [Config.RotateRefreshTokens], never relax it —
+// the rule authorization_code applies to PKCE. Rotating needs a
+// [Config.RefreshTokens] generator; without one it returns
+// [ErrRotationRequiresGenerator].
+func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
+	if !g.cfg.RotateRefreshTokens && !p.RequiresRefreshRotation() {
+		return false, nil
+	}
+
+	if g.cfg.RefreshTokens == nil {
+		return false, ErrRotationRequiresGenerator
+	}
+
+	return true, nil
+}
+
 func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth2.RefreshToken, scope string) (*Response, error) {
+	// Decided before anything is minted: a rotation that cannot be honored
+	// must not leave an access token behind.
+	rotate, err := g.rotates(req.Profile)
+	if err != nil {
+		return nil, oauth2.ErrServerError.WithCause(err)
+	}
+
 	expires := req.Now.Add(g.cfg.AccessTTL)
 
 	atRaw, atHash, err := g.cfg.AccessTokens.Generate(ctx, token.AccessTokenClaims{
@@ -119,7 +154,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		TokenType: oauth2.TokenTypeBearer,
 	}
 
-	if !g.cfg.RotateRefreshTokens || g.cfg.RefreshTokens == nil {
+	if !rotate {
 		return resp, nil
 	}
 

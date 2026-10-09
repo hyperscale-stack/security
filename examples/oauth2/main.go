@@ -125,15 +125,17 @@ func buildServer() (http.Handler, error) {
 		},
 	}}
 
-	// Authorization server.
+	// Authorization server. Profile20BCP mandates refresh-token rotation:
+	// the refresh_token grant always mints the replacement with
+	// RefreshTokens. RotateRefreshTokens only matters under the legacy
+	// Profile20.
 	gcfg := grant.Config{
-		Storage:             store,
-		AccessTokens:        token.NewOpaque(32),
-		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
-		AccessTTL:           time.Hour,
-		RefreshTTL:          24 * time.Hour,
-		RotateRefreshTokens: true,
-		OnError:             logOAuthError,
+		Storage:       store,
+		AccessTokens:  token.NewOpaque(32),
+		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
+		AccessTTL:     time.Hour,
+		RefreshTTL:    24 * time.Hour,
+		OnError:       logOAuthError,
 	}
 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{

@@ -60,9 +60,9 @@ type AccessToken struct {
 	Scope     string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
-	// FamilyID identifies the token family this access token belongs to,
-	// used for refresh-token rotation and reuse detection. Empty when
-	// rotation is disabled.
+	// FamilyID identifies the refresh-token family the token belongs to,
+	// so revoking the family revokes it too. Empty for tokens issued
+	// outside a family (client_credentials, the implicit flow).
 	FamilyID string
 	// Audience is the configured aud claim (typically the resource server
 	// identifier). Single-valued in this model; servers needing multi-aud
@@ -100,9 +100,11 @@ func (t *RefreshToken) IsExpired(now time.Time) bool {
 	return now.After(t.ExpiresAt)
 }
 
-// TokenPair couples an access token with its companion refresh token (when
-// rotation is enabled). The grant handlers return this; the response writer
-// turns it into the RFC 6749 §5.1 JSON body.
+// TokenPair couples an access token with the refresh token issued alongside
+// it. Refresh is nil when the grant issues none: client_credentials, a grant
+// without a RefreshTokens generator, or a non-rotating refresh under
+// Profile20. The grant handlers return this; the response writer turns it
+// into the RFC 6749 §5.1 JSON body.
 type TokenPair struct {
 	Access  AccessToken
 	Refresh *RefreshToken

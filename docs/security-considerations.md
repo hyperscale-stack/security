@@ -49,10 +49,21 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
 - **PKCE** — `authorization_code` requires PKCE. `S256` is the only method
   allowed under `Profile21Draft`; `plain` is accepted (with a warning) only
   under the looser profiles.
-- **Refresh-token rotation** — every refresh issues a new token and
-  invalidates the old one. Re-use of an already-rotated token is treated as
-  theft: the whole token family is revoked (`RotateRefreshToken` returns
-  `ErrRefreshTokenReused`).
+- **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
+  and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
+  every refresh exchange consumes the presented token and issues a new one
+  in the same family (RFC 9700 §4.14.2). The profiles apply it to every
+  client, stricter than RFC 9700 §2.2.2, which requires rotation — or
+  sender-constrained refresh tokens, which this library does not issue —
+  for public clients only. A `refresh_token` grant that cannot rotate (no
+  `RefreshTokens` generator) fails with `server_error` before minting
+  anything. Re-use of an already-rotated token is treated as theft: the
+  whole family is revoked (`ErrRefreshTokenReused`). Clients MUST keep the
+  refresh token returned by each exchange (RFC 6749 §6) and must not
+  refresh concurrently with the same token, or they lose the family. Under
+  `Profile20` rotation is opt-in (`RotateRefreshTokens`); without it a
+  refresh token stays reusable until it expires, which RFC 9700 §2.2.2
+  forbids for public clients.
 - **Token storage** — access tokens, refresh tokens, and authorization
   codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
   store never sees cleartext, so a database compromise does not yield

@@ -8,7 +8,8 @@ package oauth2
 // are supported:
 //
 //   - Profile20      — vanilla RFC 6749. Allows implicit and password
-//     grants when explicitly registered; PKCE is opt-in.
+//     grants when explicitly registered; PKCE and refresh-token
+//     rotation are opt-in.
 //   - Profile20BCP   — IETF draft-ietf-oauth-security-topics ("OAuth 2.0
 //     Security Best Current Practice"). Refuses implicit
 //     and password grants outright; mandates PKCE on
@@ -52,7 +53,11 @@ func (p Profile) AllowsLegacyGrant() bool { return p == Profile20 }
 func (p Profile) RequiresPKCE() bool { return p != Profile20 }
 
 // RequiresRefreshRotation reports whether the profile mandates refresh-
-// token rotation. True for BCP and 21-draft.
+// token rotation as described in RFC 9700 §4.14.2, for every client —
+// stricter than RFC 9700 §2.2.2, which only requires it (or
+// sender-constrained refresh tokens) for public clients. True for BCP and
+// 21-draft: the refresh_token grant then rotates whatever
+// grant.Config.RotateRefreshTokens says.
 func (p Profile) RequiresRefreshRotation() bool { return p != Profile20 }
 
 // AllowsPKCEPlain reports whether the profile tolerates the "plain" PKCE

@@ -21,8 +21,8 @@ type GrantRequest struct {
 	Now      time.Time
 	// Profile is the server's active security profile. Grants use it to
 	// enforce the profile-mandated rules at runtime (e.g. PKCE required,
-	// "plain" PKCE refused). A profile can only tighten a grant's own
-	// configuration, never loosen it.
+	// "plain" PKCE refused, refresh-token rotation forced). A profile can
+	// only tighten a grant's own configuration, never loosen it.
 	Profile Profile
 }
 
