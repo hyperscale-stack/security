@@ -57,7 +57,8 @@ func (p Profile) RequiresPKCE() bool { return p != Profile20 }
 // stricter than RFC 9700 §2.2.2, which only requires it (or
 // sender-constrained refresh tokens) for public clients. True for BCP and
 // 21-draft: the refresh_token grant then rotates whatever
-// grant.Config.RotateRefreshTokens says.
+// grant.Config.RotateRefreshTokens says, and [NewServer] refuses a refresh
+// grant that cannot rotate.
 func (p Profile) RequiresRefreshRotation() bool { return p != Profile20 }
 
 // AllowsPKCEPlain reports whether the profile tolerates the "plain" PKCE

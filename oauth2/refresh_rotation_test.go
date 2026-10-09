@@ -87,6 +87,50 @@ func nonRotatingConfig(store oauth2.Storage) grant.Config {
 	}
 }
 
+func TestNewServerRefusesRefreshGrantThatCannotRotate(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		profile oauth2.Profile
+		rotate  bool
+		withGen bool
+		wantErr bool
+	}{
+		{"bcp without generator", oauth2.Profile20BCP, false, false, true},
+		{"2.1 without generator", oauth2.Profile21Draft, false, false, true},
+		{"profile20 rotation without generator", oauth2.Profile20, true, false, true},
+		{"bcp with generator", oauth2.Profile20BCP, false, true, false},
+		{"profile20 without rotation nor generator", oauth2.Profile20, false, false, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := memory.New()
+			gcfg := nonRotatingConfig(store)
+			gcfg.RotateRefreshTokens = tc.rotate
+
+			if !tc.withGen {
+				gcfg.RefreshTokens = nil
+			}
+
+			srv, err := oauth2.NewServer(refreshServerConfig(tc.profile, store, grant.NewRefreshToken(gcfg)))
+			if !tc.wantErr {
+				require.NoError(t, err)
+				assert.NotNil(t, srv)
+
+				return
+			}
+
+			assert.Nil(t, srv)
+			require.ErrorIs(t, err, grant.ErrRotationRequiresGenerator)
+			assert.ErrorContains(t, err, `grant "refresh_token"`)
+		})
+	}
+}
+
 func TestTokenEndpointRefreshRotationMandatedByProfile(t *testing.T) {
 	t.Parallel()
 

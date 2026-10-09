@@ -6,6 +6,7 @@ package grant_test
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -121,6 +122,55 @@ func TestRefreshTokenRotationWithoutGeneratorFailsBeforeIssuance(t *testing.T) {
 			presented, err := store.LookupRefreshToken(ctx, oauth2.HashToken(nil, "stranded-rt"))
 			require.NoError(t, err)
 			assert.False(t, presented.Consumed, "the presented token is left untouched")
+		})
+	}
+}
+
+func TestRefreshTokenValidateProfile(t *testing.T) {
+	t.Parallel()
+
+	// The grant cannot honor a profile iff it has to rotate — opted in, or
+	// mandated by any profile but Profile20 — without a refresh generator.
+	cases := []struct {
+		profile oauth2.Profile
+		rotate  bool
+		withGen bool
+		wantErr bool
+	}{
+		{oauth2.Profile20, false, false, false},
+		{oauth2.Profile20, false, true, false},
+		{oauth2.Profile20, true, false, true},
+		{oauth2.Profile20, true, true, false},
+		{oauth2.Profile20BCP, false, false, true},
+		{oauth2.Profile20BCP, false, true, false},
+		{oauth2.Profile20BCP, true, false, true},
+		{oauth2.Profile20BCP, true, true, false},
+		{oauth2.Profile21Draft, false, false, true},
+		{oauth2.Profile21Draft, false, true, false},
+		{oauth2.Profile21Draft, true, false, true},
+		{oauth2.Profile21Draft, true, true, false},
+		{oauth2.Profile(99), false, false, true}, // an unknown profile fails closed
+	}
+
+	for _, tc := range cases {
+		name := fmt.Sprintf("%s/rotate=%t/generator=%t", tc.profile, tc.rotate, tc.withGen)
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := grant.Config{Storage: newStore(), AccessTokens: newAccessGen(), RotateRefreshTokens: tc.rotate}
+			if tc.withGen {
+				cfg.RefreshTokens = newRefreshGen()
+			}
+
+			err := grant.NewRefreshToken(cfg).ValidateProfile(tc.profile)
+			if tc.wantErr {
+				assert.ErrorIs(t, err, grant.ErrRotationRequiresGenerator)
+
+				return
+			}
+
+			assert.NoError(t, err)
 		})
 	}
 }

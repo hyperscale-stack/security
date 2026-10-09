@@ -127,8 +127,8 @@ func buildServer() (http.Handler, error) {
 
 	// Authorization server. Profile20BCP mandates refresh-token rotation:
 	// the refresh_token grant always mints the replacement with
-	// RefreshTokens. RotateRefreshTokens only matters under the legacy
-	// Profile20.
+	// RefreshTokens, and NewServer refuses the wiring without it.
+	// RotateRefreshTokens only matters under the legacy Profile20.
 	gcfg := grant.Config{
 		Storage:       store,
 		AccessTokens:  token.NewOpaque(32),

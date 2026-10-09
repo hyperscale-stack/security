@@ -66,11 +66,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   never puts on the wire — plus the errors it swallows on purpose, such as a
   best-effort revocation (RFC 7009 §2.2) or a family revocation that failed
   during reuse detection. Purely observational: the responses are unchanged.
-- **OAuth2 refresh-rotation guard**: `grant.ErrRotationRequiresGenerator`
-  reports a `refresh_token` grant that has to rotate refresh tokens but has
-  no `grant.Config.RefreshTokens` generator to mint the replacement; it is
-  the cause of the `server_error` such a grant fails with, before any token
-  is minted or persisted.
+- **OAuth2 profile consistency checks**: `oauth2.ProfileValidator`, an
+  optional `Grant` capability: `oauth2.NewServer` asks every registered
+  grant implementing it whether it can honor the active `Profile`, and
+  refuses to build the server otherwise; the shipped `refresh_token` grant
+  implements it. `grant.ErrRotationRequiresGenerator` reports a
+  `refresh_token` grant that has to rotate refresh tokens but has no
+  `grant.Config.RefreshTokens` generator to mint the replacement — returned
+  by `NewServer`, and the cause of the `server_error` such a grant fails
+  with at runtime, before any token is minted or persisted.
 - **Observability**: OpenTelemetry spans emitted directly by the core,
   `httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, and `session`. See
   [docs/observability.md](docs/observability.md).
@@ -132,6 +136,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   token returned by each exchange (RFC 6749 §6). A grant that has to rotate
   but has no `grant.Config.RefreshTokens` generator — including under
   `Profile20` with `RotateRefreshTokens` set, which used to skip the
-  rotation silently — fails with `server_error` before any token is minted
-  or persisted. Non-rotating refresh tokens remain an explicit `Profile20`
+  rotation silently — is refused by `oauth2.NewServer`, and should it run
+  anyway (called directly, or behind a decorator that hides it from
+  `NewServer`) it fails with `server_error` before any token is minted or
+  persisted. Non-rotating refresh tokens remain an explicit `Profile20`
   choice (`RotateRefreshTokens: false`).

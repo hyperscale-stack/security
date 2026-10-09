@@ -35,9 +35,15 @@ type RefreshToken struct {
 
 // ErrRotationRequiresGenerator reports a refresh_token grant that has to
 // rotate refresh tokens but has no [Config.RefreshTokens] generator to mint
-// the replacement. [RefreshToken.Handle] then fails with server_error
+// the replacement. [oauth2.NewServer] refuses such a grant; should
+// [RefreshToken.Handle] run anyway — called directly, or behind a decorator
+// hiding [RefreshToken.ValidateProfile] — it fails with server_error
 // carrying it as cause, before any token is minted or persisted.
 var ErrRotationRequiresGenerator = errors.New("oauth2/grant: refresh-token rotation requires a RefreshTokens generator")
+
+// Compile-time interface check: renaming ValidateProfile would otherwise
+// silently drop the NewServer consistency check.
+var _ oauth2.ProfileValidator = (*RefreshToken)(nil)
 
 // NewRefreshToken constructs the handler.
 func NewRefreshToken(cfg Config) *RefreshToken {
@@ -113,6 +119,16 @@ func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// ValidateProfile implements [oauth2.ProfileValidator]: it returns
+// [ErrRotationRequiresGenerator] when the grant would have to rotate under
+// p without a [Config.RefreshTokens] generator, so [oauth2.NewServer] fails
+// at boot rather than on the first refresh.
+func (g *RefreshToken) ValidateProfile(p oauth2.Profile) error {
+	_, err := g.rotates(p)
+
+	return err
 }
 
 func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth2.RefreshToken, scope string) (*Response, error) {
