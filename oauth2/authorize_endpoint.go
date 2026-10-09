@@ -71,7 +71,9 @@ type AuthorizeRequest struct {
 	State string
 	// CodeChallenge / CodeChallengeMethod carry the PKCE parameters
 	// (RFC 7636). Empty when the request carries no PKCE; unused by the
-	// implicit flow.
+	// implicit flow. For the code flow they are validated before the
+	// ConsentFunc runs: the method is allowed by the profile and the
+	// challenge is well-formed for it (RFC 7636 §4.2).
 	CodeChallenge       string
 	CodeChallengeMethod string
 	// Nonce echoes the OIDC nonce parameter, when present.
@@ -304,8 +306,10 @@ func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectU
 	}, nil
 }
 
-// validateAuthorizePKCE enforces the profile's PKCE policy on the
-// /authorize parameters.
+// validateAuthorizePKCE enforces the profile's PKCE policy and the RFC 7636
+// §4.2 challenge syntax on the /authorize parameters. Presence, method and
+// profile are checked first, so they keep their errors when a request
+// breaks several rules. The descriptions never echo the input.
 func (s *Server) validateAuthorizePKCE(challenge, method string) error {
 	if challenge == "" {
 		if s.cfg.Profile.RequiresPKCE() {
@@ -315,15 +319,25 @@ func (s *Server) validateAuthorizePKCE(challenge, method string) error {
 		return nil
 	}
 
-	switch pkce.Method(method) {
-	case "", pkce.MethodPlain:
+	// RFC 7636 §4.3: an absent code_challenge_method means "plain".
+	m := pkce.Method(method)
+	if m == "" {
+		m = pkce.MethodPlain
+	}
+
+	switch m {
+	case pkce.MethodPlain:
 		if !s.cfg.Profile.AllowsPKCEPlain() {
-			return errors.New(`code_challenge_method "plain" is refused by the active profile`)
+			return errors.New("code_challenge_method plain is refused by the active profile")
 		}
 	case pkce.MethodS256:
 		// S256 is always acceptable.
 	default:
-		return fmt.Errorf("unsupported code_challenge_method %q", method)
+		return errors.New("unsupported code_challenge_method")
+	}
+
+	if !pkce.ValidChallenge(m, challenge) {
+		return fmt.Errorf("malformed %s code_challenge", m)
 	}
 
 	return nil

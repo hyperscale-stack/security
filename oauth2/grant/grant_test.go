@@ -131,11 +131,12 @@ func TestAuthorizationCodePKCEMismatch(t *testing.T) {
 
 	store := newStore()
 	g, req := newAuthCodeReq(context.Background(), store, true)
-	req.Form.Set("code_verifier", "wrong-verifier")
+	req.Form.Set("code_verifier", wellFormedWrongVerifier)
 
 	_, err := g.Handle(context.Background(), req)
 	require.Error(t, err)
 	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+	assert.ErrorContains(t, err, "PKCE verification failed")
 }
 
 func TestAuthorizationCodeRedirectMismatch(t *testing.T) {

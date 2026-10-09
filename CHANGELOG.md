@@ -262,3 +262,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and `/revoke` are unchanged. The `none` method's `error_description` for
   a non-public client no longer contains a double quote, which RFC 6749
   §5.2 forbids. See [MIGRATION.md](MIGRATION.md).
+- The OAuth2 server now enforces the RFC 7636 PKCE syntax, not just the
+  transformation. `/authorize` answers `invalid_request` to a
+  `code_challenge` that is not 43–128 unreserved characters (`plain`) or
+  not the unpadded base64url SHA-256 digest (`S256`); for a code bound to a
+  `code_challenge`, `/token` answers `invalid_grant` to a `code_verifier`
+  that is not 43–128 characters of `A-Z a-z 0-9 - . _ ~`, and the code
+  stays consumed — a one-character verifier whose S256 challenge matched
+  used to be exchanged for tokens.
+  `pkce.Verify`/`VerifyS256` return false for a malformed verifier, and
+  `pkce.ValidVerifier`/`pkce.ValidChallenge` expose the checks. Missing or
+  unsupported methods and the profile ban on `plain` keep their error
+  codes; their `error_description` no longer contains a double quote,
+  which RFC 6749 §4.1.2.1 and §5.2 forbid, and no longer echoes an
+  unsupported `code_challenge_method`.

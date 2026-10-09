@@ -278,7 +278,7 @@ func TestAuthorizeProfile20AllowsNoPKCEAndPlain(t *testing.T) {
 		t.Parallel()
 
 		q := authorizeQuery()
-		q.Set("code_challenge", "a-plain-verifier")
+		q.Set("code_challenge", pkceVerifier) // a plain challenge is the verifier itself
 		q.Set("code_challenge_method", "plain")
 
 		rec := runAuthorize(srv, q, approve)
