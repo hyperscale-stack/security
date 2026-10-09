@@ -27,8 +27,9 @@ import (
 //     that cannot be honored fails with server_error
 //     ([ErrRotationRequiresGenerator]).
 //  5. Issue a fresh access token.
-//  6. When rotating, issue a fresh refresh token in the same family AND
-//     atomically mark the old one consumed.
+//  6. When rotating, issue a fresh refresh token in the same family with
+//     the presented token's scope (RFC 6749 §6) AND atomically mark the
+//     old one consumed.
 type RefreshToken struct {
 	cfg Config
 }
@@ -179,9 +180,11 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
+	// RFC 6749 §6: the new refresh token keeps the scope of the one it
+	// replaces; a narrowed request only narrows the access token.
 	next := &oauth2.RefreshToken{
 		Token: rtRaw, TokenHash: rtHash, ClientID: req.Client.ID(), Subject: old.Subject,
-		Scope: scope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(g.cfg.RefreshTTL),
+		Scope: old.Scope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(g.cfg.RefreshTTL),
 		FamilyID: old.FamilyID,
 	}
 

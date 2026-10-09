@@ -111,6 +111,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   1h TTL is advertised as `3600`, not `3599`) and an already-expired token
   drops the field rather than sending the negative lifetime RFC 6749 §5.1
   does not allow.
+- A rotated OAuth2 refresh token keeps the scope of the token it replaces
+  (RFC 6749 §6); narrowing the scope of a refresh only narrows the issued
+  access token. The replacement used to inherit the narrowed scope, so the
+  grant shrank permanently and a later request for the original scope was
+  refused with `invalid_scope`.
 
 ### Removed
 

@@ -366,6 +366,23 @@ func TestRefreshTokenNarrowsScope(t *testing.T) {
 	resp, err := g.Handle(context.Background(), grant.Request{Client: newClient(), Form: form, Now: time.Now()})
 	require.NoError(t, err)
 	assert.Equal(t, "read:mail", resp.Scope)
+	assert.Equal(t, "read:mail", resp.Pair.Access.Scope)
+
+	// RFC 6749 §6: narrowing only affects the access token; the rotated
+	// refresh token keeps the scope of the one it replaces.
+	require.NotNil(t, resp.Pair.Refresh)
+	assert.Equal(t, "read:mail write:mail", resp.Pair.Refresh.Scope)
+
+	stored, err := store.LookupRefreshToken(context.Background(), resp.Pair.Refresh.TokenHash)
+	require.NoError(t, err)
+	assert.Equal(t, "read:mail write:mail", stored.Scope)
+
+	// So the next exchange without a scope gets the whole original grant back.
+	next, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: url.Values{"refresh_token": {resp.Pair.Refresh.Token}}, Now: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "read:mail write:mail", next.Scope)
 }
 
 func TestRefreshTokenRefusesBroadenedScope(t *testing.T) {
