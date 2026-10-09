@@ -81,6 +81,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **Documentation**: `docs/architecture.md`, `docs/observability.md`,
   `docs/security-considerations.md`, `docs/migration-from-v0.md`, and a
   refreshed `README.md`.
+- **OAuth2 introspection policy**: `ServerConfig.IntrospectionPolicy`
+  (`oauth2.IntrospectionPolicy`) decides which active tokens each caller of
+  `/introspect` may see — the place to enforce resource and tenant
+  boundaries (RFC 7662 §4). It receives the request context, the
+  authenticated confidential caller and an `oauth2.IntrospectedToken` (its
+  `oauth2.TokenKind`, client, subject, scope, audience, issuance and expiry —
+  never the token value). A denial answers a bare `{"active":false}`, the
+  same bytes as an unknown token; a policy error fails closed the same way
+  and reaches `OnError` as a `server_error`. Optional: without a policy, any
+  authenticated confidential client may introspect any token.
 
 ### Changed
 
@@ -147,3 +157,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   it fails with `server_error` before any token is minted or persisted.
   Non-rotating refresh tokens remain an explicit `Profile20` choice
   (`RotateRefreshTokens: false`).
+- The OAuth2 `/introspect` endpoint now answers only clients whose
+  `Type()` is `oauth2.ClientConfidential` (RFC 7662 §2.1 / §4, RFC 6749
+  §2.2, §2.3). It used to answer any client the shared `ClientAuth` chain
+  authenticated, so anyone knowing a public `client_id` — which is not a
+  secret — could read the validity and claims of any token they held,
+  refresh tokens included: through the `none` method, or through
+  `client_secret_basic` / `client_secret_post` with the client's registered
+  secret (Basic: even an empty one), whether or not `none` was registered.
+  Public clients, whatever the method, and untyped clients (`Type() == ""`)
+  authenticated through Basic or Post — `none` already refused them — now
+  get `401 invalid_client`. This breaks deployments whose applications, or
+  resource servers registered without a type, call `/introspect`. `/token`
+  and `/revoke` are unchanged. The `none` method's `error_description` for
+  a non-public client no longer contains a double quote, which RFC 6749
+  §5.2 forbids. See [MIGRATION.md](MIGRATION.md).

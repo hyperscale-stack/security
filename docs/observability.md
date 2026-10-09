@@ -59,7 +59,11 @@ The hook fires for:
   `/introspect`, metadata) and every error redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
   400 (unknown client, unregistered `redirect_uri`);
-- the best-effort revocations `/revoke` swallows to honour RFC 7009 §2.2.
+- the best-effort revocations `/revoke` swallows to honour RFC 7009 §2.2;
+- an `IntrospectionPolicy` that failed: `/introspect` withholds the token
+  behind a bare `{"active":false}` and reports a `server_error`
+  (`introspection policy failed`, the policy's error as cause). A plain
+  refusal by the policy is an expected outcome and is not reported.
 
 `grant.Config.OnError` is the same hook for the errors a grant swallows
 before returning — today, a family revocation that failed during BCP §8.10.3

@@ -18,6 +18,10 @@ import (
 //
 // The server MUST reject confidential clients trying to use "none"; the
 // grant handler enforces PKCE separately.
+//
+// A client_id alone is not a credential (RFC 6749 §2.2): the server's
+// /introspect endpoint, which answers confidential clients only, refuses
+// every caller authenticated this way.
 func NewNone() ClientAuthenticator { return noneAuth{} }
 
 type noneAuth struct{}
@@ -56,7 +60,7 @@ func (noneAuth) Authenticate(ctx context.Context, r *http.Request, store oauth2.
 	}
 
 	if client.Type() != oauth2.ClientPublic {
-		return nil, oauth2.ErrInvalidClient.WithDescription(`"none" reserved to public clients`)
+		return nil, oauth2.ErrInvalidClient.WithDescription("none method reserved to public clients")
 	}
 
 	if !allowsMethod(client, "none") {

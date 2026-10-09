@@ -82,7 +82,30 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   refused outright under the stricter profile.
 - **Client authentication** — `client_secret_basic` / `client_secret_post`
   compare secrets in constant time. Public clients use `none` and MUST use
-  PKCE.
+  PKCE. `/introspect` answers `ClientConfidential` callers only: a public
+  client (whatever the method, `none` included) or an untyped client gets
+  `401 invalid_client`.
+- **Token introspection** — RFC 7662 §4 requires the authorization server
+  to authenticate the protected resources calling `/introspect`. A public
+  client cannot authenticate: its `client_id` ships inside every copy of the
+  app and RFC 6749 §2.2 forbids using it alone, and the authorization server
+  MUST NOT rely on a public client's authentication — even with a secret —
+  to identify it (RFC 6749 §2.3). Accepting one would let anyone read the
+  validity and claims of a token they held — through `none`, or through
+  Basic/Post with the client's registered secret (Basic: even an empty
+  one) — so `/introspect` refuses every caller that is not a confidential
+  client. By default, any authenticated confidential client may then
+  introspect any token. RFC 7662 §4 adds that protected resources SHOULD be
+  specifically authorized, and that when a token can be used only at certain
+  resource servers the authorization server MUST determine whether it can be
+  used at the caller: that decision is `ServerConfig.IntrospectionPolicy`,
+  which sees the authenticated caller and the token's metadata before
+  anything is disclosed. Refuse refresh tokens to resource servers — they are
+  meant for the client alone, and a resource server that ignores
+  `token_type` could accept one as a bearer token. A withheld token and a
+  failed policy answer the same bytes as an unknown token
+  (`{"active":false}`), so the response discloses nothing (its latency may
+  still differ); a policy failure is reported to `OnError`.
 
 ## Sessions
 
@@ -126,6 +149,9 @@ span catalog.
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
 - [ ] Use `Profile20BCP` or stricter; do not enable the `implicit` /
       `password` legacy grants without a documented reason.
+- [ ] Register the resource servers calling `/introspect` as confidential
+      clients, and set `ServerConfig.IntrospectionPolicy` when several
+      resource servers or tenants share the authorization server.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.
