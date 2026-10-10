@@ -101,6 +101,8 @@ func TestAuthorizationCodeMissingVerifier(t *testing.T) {
 	_, err := g.Handle(context.Background(), req)
 	require.Error(t, err)
 	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+	// The presence check answers before the RFC 7636 syntax check.
+	assert.ErrorContains(t, err, "missing code_verifier")
 }
 
 // plainVerifier is a well-formed RFC 7636 §4.1 verifier (52 characters,
