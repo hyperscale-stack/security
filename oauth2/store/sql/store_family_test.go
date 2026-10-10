@@ -382,3 +382,38 @@ func TestSQLRotationReportsTokenReadFailure(t *testing.T) {
 	require.ErrorContains(t, err, "lock refresh token")
 	assert.Empty(t, oauth2.IsCode(err))
 }
+
+// TestSQLFamilyLockWithoutRecordFailsClosed covers the family record that
+// is still missing after the insert-if-absent, the race a concurrent
+// cleanup could cause on PostgreSQL: a trigger turns the insert into a
+// silent no-op. The locking read then finds no row, which reads as a
+// revoked family: neither an issuance nor a rotation goes through, and
+// nothing is persisted.
+func TestSQLFamilyLockWithoutRecordFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	store, db := openSQLite(t)
+	ctx := t.Context()
+
+	first := testPair("norow-0", "fam-norow", time.Hour)
+	require.NoError(t, store.SaveTokenPair(ctx, first))
+
+	_, err := db.ExecContext(ctx, "DELETE FROM oauth2_token_families WHERE family_id = ?", "fam-norow")
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		"CREATE TRIGGER skip BEFORE INSERT ON oauth2_token_families BEGIN SELECT RAISE(IGNORE); END")
+	require.NoError(t, err)
+
+	fresh := testPair("norow-fresh", "fam-norow-fresh", time.Hour)
+	require.ErrorIs(t, store.SaveTokenPair(ctx, fresh), oauth2.ErrTokenFamilyRevoked)
+	requirePersisted(t, db, fresh, 0)
+
+	next := testPair("norow-1", "fam-norow", time.Hour)
+	require.ErrorIs(t, store.RotateRefreshToken(ctx, first.Refresh.TokenHash, next), oauth2.ErrTokenFamilyRevoked)
+	requirePersisted(t, db, next, 0)
+
+	consumed := count(t, db,
+		"SELECT COUNT(*) FROM oauth2_refresh_tokens WHERE token_hash = ? AND consumed = 0", first.Refresh.TokenHash)
+	assert.Equal(t, 1, consumed, "the refused rotation consumed nothing")
+}

@@ -277,6 +277,13 @@ func testRefreshReuse(t *testing.T, s oauth2.Storage) {
 	requireUnusable(t, s, second)
 	requireAbsent(t, s, replay)
 
+	// Once the family is revoked, the revoked state decides before the
+	// consumed one: the next replay is refused as a revoked family.
+	again := newPair("reuse-again", "fam-reuse")
+	err = s.RotateRefreshToken(ctx(), first.Refresh.TokenHash, again)
+	mustErrorIs(t, err, oauth2.ErrTokenFamilyRevoked, "replay into the revoked family")
+	requireAbsent(t, s, again)
+
 	late := newPair("reuse-3", "fam-reuse")
 	mustErrorIs(t, s.SaveTokenPair(ctx(), late), oauth2.ErrTokenFamilyRevoked, "issue into the revoked family")
 	requireAbsent(t, s, late)

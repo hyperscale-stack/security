@@ -37,7 +37,7 @@ func (s *revokeStore) LookupAccessToken(ctx context.Context, hash string) (*oaut
 		return nil, s.accessLookupErr
 	}
 
-	return s.Store.LookupAccessToken(ctx, hash) //nolint:wrapcheck // test double
+	return s.Store.LookupAccessToken(ctx, hash)
 }
 
 func (s *revokeStore) LookupRefreshToken(ctx context.Context, hash string) (*oauth2.RefreshToken, error) {
@@ -45,7 +45,7 @@ func (s *revokeStore) LookupRefreshToken(ctx context.Context, hash string) (*oau
 		return nil, s.refreshLookupErr
 	}
 
-	return s.Store.LookupRefreshToken(ctx, hash) //nolint:wrapcheck // test double
+	return s.Store.LookupRefreshToken(ctx, hash)
 }
 
 func (s *revokeStore) RevokeAccessToken(ctx context.Context, hash string) error {
@@ -53,7 +53,7 @@ func (s *revokeStore) RevokeAccessToken(ctx context.Context, hash string) error 
 		return s.revokeAccessErr
 	}
 
-	return s.Store.RevokeAccessToken(ctx, hash) //nolint:wrapcheck // test double
+	return s.Store.RevokeAccessToken(ctx, hash)
 }
 
 func (s *revokeStore) RevokeRefreshFamily(ctx context.Context, familyID string) error {
@@ -61,7 +61,7 @@ func (s *revokeStore) RevokeRefreshFamily(ctx context.Context, familyID string) 
 		return s.revokeFamilyErr
 	}
 
-	return s.Store.RevokeRefreshFamily(ctx, familyID) //nolint:wrapcheck // test double
+	return s.Store.RevokeRefreshFamily(ctx, familyID)
 }
 
 // revokeServer serves /revoke over store, reporting to sink.

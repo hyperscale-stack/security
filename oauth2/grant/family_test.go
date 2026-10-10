@@ -114,7 +114,7 @@ func (s *familyStore) LookupRefreshToken(ctx context.Context, hash string) (*oau
 		fn(s.Store)
 	}
 
-	return rt, err //nolint:wrapcheck // test double
+	return rt, err
 }
 
 func (s *familyStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
@@ -124,7 +124,7 @@ func (s *familyStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair)
 		return s.saveErr
 	}
 
-	return s.Store.SaveTokenPair(ctx, pair) //nolint:wrapcheck // test double
+	return s.Store.SaveTokenPair(ctx, pair)
 }
 
 func (s *familyStore) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.TokenPair) error {
@@ -134,7 +134,7 @@ func (s *familyStore) RotateRefreshToken(ctx context.Context, oldHash string, ne
 		return s.rotateErr
 	}
 
-	return s.Store.RotateRefreshToken(ctx, oldHash, next) //nolint:wrapcheck // test double
+	return s.Store.RotateRefreshToken(ctx, oldHash, next)
 }
 
 func (s *familyStore) RevokeRefreshFamily(ctx context.Context, familyID string) error {
@@ -145,7 +145,7 @@ func (s *familyStore) RevokeRefreshFamily(ctx context.Context, familyID string) 
 		return s.revokeErr
 	}
 
-	return s.Store.RevokeRefreshFamily(ctx, familyID) //nolint:wrapcheck // test double
+	return s.Store.RevokeRefreshFamily(ctx, familyID)
 }
 
 // revocationFailure is the error a conforming store returns when it cannot
@@ -162,7 +162,7 @@ func (g *recordingAccessGen) Generate(ctx context.Context, c token.AccessTokenCl
 	raw, hash, err := newAccessGen().Generate(ctx, c)
 	g.hashes = append(g.hashes, hash)
 
-	return raw, hash, err //nolint:wrapcheck // test double
+	return raw, hash, err
 }
 
 // failingAccessGen is an access-token generator that always fails.
