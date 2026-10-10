@@ -91,6 +91,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   same bytes as an unknown token; a policy error fails closed the same way
   and reaches `OnError` as a `server_error`. Optional: without a policy, any
   authenticated confidential client may introspect any token.
+- **OAuth2 token-family primitives**: `oauth2.ErrTokenFamilyRevoked`
+  (`invalid_grant`) refuses an operation on a revoked token family;
+  `oauth2.ErrTokenFamilyRevocationFailed`, a plain sentinel that never
+  reaches the wire, reports a family revocation that could not be recorded
+  (the family must then be treated as active and the revocation retried);
+  `oauth2.TokenPair.Validate` rejects a pair no store may persist (a refresh
+  token outside the access token's family, without a family, or already
+  consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
+  `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
+  long a revoked family is remembered.
 
 ### Changed
 
@@ -126,6 +136,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   access token. The replacement used to inherit the narrowed scope, so the
   grant shrank permanently and a later request for the original scope was
   refused with `invalid_scope`.
+- The `error_description` of `oauth2.ErrRefreshTokenReused` is now
+  `refresh token reused`. The former `refresh token reused — family
+  revoked` claimed a revocation that may have failed, and its em dash lies
+  outside the RFC 6749 §5.2 `error_description` charset.
 
 ### Removed
 

@@ -4,7 +4,23 @@
 
 package oauth2
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// FamilyRevocationRetention is the minimum time a [Storage] keeps a token
+// family's revoked state after the revocation; it is never shorter than
+// the expiry of any token of the family. It bounds a revocation recorded
+// before the family's first token is issued.
+const FamilyRevocationRetention = 24 * time.Hour
+
+// MaxFamilyIDLength is the longest token-family identifier, in bytes, a
+// [Storage] accepts: [TokenPair.Validate] and every RevokeRefreshFamily
+// implementation refuse a longer one with invalid_request, so no backend
+// can silently truncate two identifiers into the same family (the SQL
+// store keeps them in a VARCHAR(64) column).
+const MaxFamilyIDLength = 64
 
 // AuthorizationCodeStore persists single-use authorization codes. The
 // Consume* operation MUST be atomic: a code may be returned successfully
