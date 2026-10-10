@@ -158,7 +158,10 @@ never has to find the family's tokens:
   client gets `invalid_grant` either way.
 - **Fail closed.** A token whose family state is missing — expired,
   evicted, deleted by a premature cleanup, or never written by a build
-  predating token families — is treated as revoked.
+  predating token families — is treated as revoked. This protects lookups
+  only: the next issuance into a family whose revoked state was lost records
+  it active again and revives its tokens, so a revoked family's state must
+  never be lost within its retention — no eviction, no early cleanup.
 - **Lost responses look like theft.** When the response to a successful
   rotation is lost, the client retries with the presented token, which is
   now a reuse: the family is revoked and the user re-authenticates. This is
@@ -169,13 +172,15 @@ never has to find the family's tokens:
 These guarantees rest on deployment assumptions, detailed in the package
 documentation of [`store/sql`](../oauth2/store/sql/doc.go) and
 [`store/redis`](../oauth2/store/redis/doc.go): every read reaches the
-primary (no replica reads, no client-side caching), PostgreSQL transactions
-run at READ COMMITTED (the store pins it) and MySQL tables use InnoDB, Redis
-is a standalone server or a Sentinel primary (not Cluster) running 6.0 or
-later, and durability is the backend's: a revocation acknowledged by a
-primary that fails before persisting or replicating it can be lost in a
-failover. Only SQLite is exercised in CI; the PostgreSQL and MySQL
-guarantees rest on their locking semantics.
+primary (no replica reads, no client-side caching), the store's PostgreSQL
+token-family transactions run at READ COMMITTED (it pins the level) and
+MySQL tables use InnoDB, Redis is a standalone server or a Sentinel primary
+(not Cluster) running 6.0 or later with `maxmemory-policy noeviction`, no
+family row or key is deleted before it expires, and durability is the
+backend's: a revocation acknowledged by a primary that fails before
+persisting or replicating it can be lost in a failover. Only SQLite is
+exercised in CI; the PostgreSQL and MySQL guarantees rest on their locking
+semantics.
 
 ### Offline JWT access tokens
 
@@ -245,10 +250,12 @@ span catalog.
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.
-- [ ] With `store/sql`, periodically delete rows past `expires_at` (see
-      the package documentation for a deadlock-free order); with
-      `store/redis`, run Redis 6.0+ standalone or behind Sentinel, read from
-      the primary only, and prefer `maxmemory-policy noeviction`.
+- [ ] With `store/sql`, periodically delete rows past `expires_at` — never
+      a family row before it — in the deadlock-free order the package
+      documentation gives; with `store/redis`, run Redis 6.0+ standalone or
+      behind Sentinel with `maxmemory-policy noeviction`, and read from the
+      primary only. A revoked family whose state is lost before it expires
+      can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.

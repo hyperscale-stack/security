@@ -35,12 +35,16 @@
 //     that fails before persisting (AOF) or replicating it can be lost in a
 //     failover, reviving its tokens. Choose the persistence and failover
 //     settings accordingly.
-//   - maxmemory-policy noeviction is recommended. An evicted family key
-//     fails closed — the store treats the tokens of an unknown family as
-//     revoked — so eviction logs users out but never revives a token.
+//   - maxmemory-policy noeviction. Every family key carries a TTL, so the
+//     volatile-* policies may evict it as well as the allkeys-* ones. A
+//     lost "active" key only logs users out — the store treats the tokens
+//     of an unknown family as revoked — but a lost "revoked" key, within
+//     its retention, is recorded active again by the next issuance into
+//     the family, reviving its tokens.
 //
-// go-redis resends a command whose reply was lost; every script is safe to
-// run twice, and a resent rotation is not mistaken for a reuse.
+// go-redis resends a command whose reply was lost; the token-family
+// scripts are safe to run twice, and a resent rotation is not mistaken for
+// a reuse.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2

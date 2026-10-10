@@ -140,14 +140,18 @@ type RefreshTokenStore interface {
 //     revocation, so a revocation recorded before the first issuance still
 //     refuses it.
 //   - I6, failure: RevokeRefreshFamily returns nil or an error wrapping
-//     [ErrTokenFamilyRevocationFailed]. A failed call applies nothing, but
-//     its outcome can be unknown (a lost acknowledgement): the caller
-//     treats F as active and retries, which I5 makes safe.
+//     [ErrTokenFamilyRevocationFailed] (invalid_request for an empty or
+//     over-long ID, I7). A failed call applies nothing, but its outcome
+//     can be unknown (a lost acknowledgement): the caller treats F as
+//     active and retries, which I5 makes safe.
 //   - I7, isolation: nothing done to F affects another family or a token
 //     outside any family; RevokeRefreshFamily("") is rejected.
 //   - I8, fail closed: a store that can lose family state (expiry,
 //     eviction, cleanup) treats a token whose family it no longer knows as
-//     a token of a revoked family.
+//     a token of a revoked family. This protects lookups only: the next
+//     issuance into a family whose revoked state was lost records it
+//     active again, reviving its tokens, so a store MUST NOT lose a
+//     revoked family's state within its retention (I5).
 //
 // A store returns the sentinels themselves or wraps them with %w: an
 // [*Error] has no Is method, so a WithDescription or WithCause copy no

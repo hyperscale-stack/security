@@ -127,14 +127,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   an empty or over-long ID with `invalid_request`. Every store keeps one
   authoritative state per token family that issuance, rotation and lookups
   go through: a token of a revoked family is no longer usable — its access
-  token lookup fails with `invalid_grant`, its refresh token reads consumed —
-  and nothing can be issued into it. Access and refresh tokens must share
-  one backend. `store/sql` adds the `oauth2_token_families` table
-  (`Migrate` creates it); `store/redis` replaces the `famrt:`/`famat:` sets
-  with one `fam:{id}` key per family. The guarantees are documented on
-  `oauth2.Storage` and checked by `oauth2/storetest`, which every
-  implementation must pass. Upgrading invalidates every refresh token and
-  every family-bound access token issued before it — their family has no
+  token lookup fails with `invalid_grant`, its refresh token reads consumed
+  — and nothing can be issued into it. Access and refresh tokens must share
+  one backend. `store/sql` adds the `oauth2_token_families` table (`Migrate`
+  creates it); `store/redis` replaces the `famrt:`/`famat:` sets with one
+  `fam:{id}` key per family and now requires Redis 6.0 or later
+  (`SET … KEEPTTL`) and `maxmemory-policy noeviction`. The guarantees are
+  documented on `oauth2.Storage` and checked by `oauth2/storetest`, which
+  every implementation must pass. Upgrading invalidates every refresh token
+  and every family-bound access token issued before it — their family has no
   record and the stores fail closed — so users re-authenticate, and
   presenting such a refresh token answers `invalid_grant`;
   `client_credentials` and implicit tokens keep working. See

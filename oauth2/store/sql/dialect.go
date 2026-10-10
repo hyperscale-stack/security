@@ -30,7 +30,7 @@ type Dialect interface {
 	// lockRefresh reads a refresh token's family_id and consumed flag
 	// under a row lock.
 	lockRefresh() string
-	// txOptions are the options of every store transaction.
+	// txOptions are the options of the token-family transactions.
 	txOptions() *sql.TxOptions
 }
 
@@ -42,11 +42,11 @@ const (
 	lockRefreshForUpdate = `SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = ? FOR UPDATE`
 )
 
-// Postgres is the PostgreSQL dialect ($1,$2,… placeholders). Its store
-// transactions run at READ COMMITTED whatever the server default: the
-// family lock relies on a locking read re-reading the latest committed row,
-// where REPEATABLE READ or SERIALIZABLE would abort the transaction with a
-// serialization failure instead.
+// Postgres is the PostgreSQL dialect ($1,$2,… placeholders). Its
+// token-family transactions run at READ COMMITTED whatever the server
+// default: the family lock relies on a locking read re-reading the latest
+// committed row, where REPEATABLE READ or SERIALIZABLE would abort the
+// transaction with a serialization failure instead.
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The tables must be

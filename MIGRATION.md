@@ -208,12 +208,16 @@ To migrate:
    `oauth2_token_families` table and leaves the existing tables untouched.
    The `idx_oauth2_access_family` and `idx_oauth2_refresh_family` indexes
    are no longer created or used; dropping them is optional. Schedule the
-   expired-row cleanup the `store/sql` package documentation describes.
+   expired-row cleanup the `store/sql` package documentation describes, and
+   never delete a family row before its `expires_at`: an issuance into a
+   family whose revoked row is gone records it active again.
 5. **Redis.** Families now live in `<prefix>fam:{id}` keys (`<prefix>` being
    the `WithKeyPrefix` value, `oauth2:` by default); the store ignores the
    former `<prefix>famrt:*` and `<prefix>famat:*` sets, which you may delete
    with `SCAN`. The store requires Redis 6.0 or later, a standalone server
-   or a Sentinel primary, and reads from the primary only.
+   or a Sentinel primary, reads from the primary only, and
+   `maxmemory-policy noeviction`: an evicted revoked family can be
+   recorded active again by an issuance into it.
 6. **Tokens issued before the upgrade.** Upgrading invalidates every
    outstanding refresh token and every access token bound to a family:
    their family has no record, and the stores treat an unknown family as

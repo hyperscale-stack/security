@@ -358,7 +358,7 @@ func (s *Store) recordFamily(ctx context.Context, tx *sql.Tx, familyID string, r
 
 // lockFamily records familyID with revokedAt and expiresAt unless it
 // exists, then reads whether it is revoked under a row lock. A record
-// missing even then reads as revoked: lost family state is never active.
+// missing even then reads as revoked.
 func (s *Store) lockFamily(ctx context.Context, tx *sql.Tx, familyID string, revokedAt, expiresAt int64) (bool, error) {
 	if err := s.recordFamily(ctx, tx, familyID, revokedAt, expiresAt); err != nil {
 		return false, err
@@ -529,8 +529,8 @@ func (s *Store) insertPair(ctx context.Context, tx *sql.Tx, pair *oauth2.TokenPa
 
 // familyActive reports whether a token of familyID may be used: it is
 // outside any family, or its family's record says active. A NULL revokedAt
-// — no record joined — reads as revoked: lost family state never revives a
-// token.
+// — no record joined — reads as revoked: a lookup never takes a lost family
+// for an active one.
 func familyActive(familyID string, revokedAt sql.NullInt64) bool {
 	if familyID == "" {
 		return true
