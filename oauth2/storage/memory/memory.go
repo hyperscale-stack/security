@@ -2,15 +2,16 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-// Package memory ships an in-process [oauth2.Storage] implementation
-// suitable for tests, examples and small single-instance deployments.
-// Production deployments MUST use the SQL or Redis implementations
-// instead — the in-memory store loses all state on restart.
+// Package memory ships an in-process [oauth2.Storage] implementation for
+// development and tests. Production deployments MUST use the SQL or Redis
+// implementations instead — the in-memory store loses all state on
+// restart, and never purges anything: it grows with every code and token
+// it is given, since consumed and expired codes, expired tokens and
+// revoked families stay in memory for the process lifetime.
 //
 // All operations are guarded by a single sync.Mutex; the resulting
 // throughput is fine for tens of thousands of req/s but the structure is
-// optimized for clarity, not for scale. Nothing is ever purged: expired
-// tokens and revoked families stay in memory for the process lifetime.
+// optimized for clarity, not for scale.
 package memory
 
 import (
@@ -30,24 +31,27 @@ import (
 // store never loses one once revoked, so the I8 fail-closed rule of
 // [oauth2.Storage] never comes into play.
 type Store struct {
-	mu      sync.Mutex
-	codes   map[string]oauth2.AuthorizationCode
-	access  map[string]oauth2.AccessToken
-	refresh map[string]oauth2.RefreshToken
-	revoked map[string]struct{} // revoked token families
+	mu        sync.Mutex
+	codes     map[string]oauth2.AuthorizationCode
+	usedCodes map[string]struct{} // consumed codes, kept in codes
+	access    map[string]oauth2.AccessToken
+	refresh   map[string]oauth2.RefreshToken
+	revoked   map[string]struct{} // revoked token families
 }
 
 // New returns a fresh [Store].
 func New() *Store {
 	return &Store{
-		codes:   make(map[string]oauth2.AuthorizationCode),
-		access:  make(map[string]oauth2.AccessToken),
-		refresh: make(map[string]oauth2.RefreshToken),
-		revoked: make(map[string]struct{}),
+		codes:     make(map[string]oauth2.AuthorizationCode),
+		usedCodes: make(map[string]struct{}),
+		access:    make(map[string]oauth2.AccessToken),
+		refresh:   make(map[string]oauth2.RefreshToken),
+		revoked:   make(map[string]struct{}),
 	}
 }
 
-// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore].
+// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore]. The
+// record is kept without the raw code.
 func (s *Store) SaveAuthorizationCode(_ context.Context, code *oauth2.AuthorizationCode) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -56,13 +60,17 @@ func (s *Store) SaveAuthorizationCode(_ context.Context, code *oauth2.Authorizat
 		return oauth2.ErrInvalidRequest.WithDescription("storage: empty code hash")
 	}
 
-	s.codes[code.CodeHash] = *code
+	record := *code
+	record.Code = ""
+	s.codes[code.CodeHash] = record
 
 	return nil
 }
 
-// ConsumeAuthorizationCode implements [oauth2.AuthorizationCodeStore]. The
-// operation is atomic under the store's mutex.
+// ConsumeAuthorizationCode implements [oauth2.AuthorizationCodeStore].
+// Under the store's mutex it marks the code consumed; the record stays for
+// the store's lifetime, and every later call gets an
+// [*oauth2.CodeReplayError] carrying it.
 func (s *Store) ConsumeAuthorizationCode(_ context.Context, codeHash string) (*oauth2.AuthorizationCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,15 +80,17 @@ func (s *Store) ConsumeAuthorizationCode(_ context.Context, codeHash string) (*o
 		return nil, oauth2.ErrCodeAlreadyUsed
 	}
 
-	delete(s.codes, codeHash)
+	if _, used := s.usedCodes[codeHash]; used {
+		return nil, &oauth2.CodeReplayError{Record: &c}
+	}
 
-	// Expiry is NOT checked here: the store only guarantees atomic
-	// single-use read+delete. The grant handler validates IsExpired with
-	// its injected clock — keeping the check in one place avoids the
-	// store and the grant disagreeing on "now".
-	cp := c
+	s.usedCodes[codeHash] = struct{}{}
 
-	return &cp, nil
+	// Expiry is NOT checked here: the store only guarantees atomic single
+	// use. The grant handler validates IsExpired with its injected clock —
+	// keeping the check in one place avoids the store and the grant
+	// disagreeing on "now".
+	return &c, nil
 }
 
 // SaveTokenPair implements [oauth2.Storage]: under the store's mutex it

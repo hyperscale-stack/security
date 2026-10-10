@@ -16,8 +16,11 @@ import (
 
 // Store is a database/sql-backed [oauth2.Storage].
 //
-// ConsumeAuthorizationCode runs in a transaction whose DELETE decides the
-// winner when two callers race (RowsAffected()==1).
+// ConsumeAuthorizationCode runs in a transaction whose first statement, an
+// UPDATE flagging the code consumed, decides the winner when two callers
+// race (RowsAffected()==1). The consumed row stays, so a replay is
+// recognized, until an operator deletes it (see the package
+// documentation).
 //
 // The token operations implement the token-family contract of
 // [oauth2.Storage] on one record per family (oauth2_token_families), the
@@ -88,18 +91,54 @@ func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.Authoriz
 	return nil
 }
 
-// ConsumeAuthorizationCode implements [oauth2.AuthorizationCodeStore]. The
-// SELECT + DELETE run in one transaction; the DELETE's RowsAffected()
-// decides the winner when two callers race, so the operation is atomic
-// without SELECT…FOR UPDATE.
+// ConsumeAuthorizationCode implements [oauth2.AuthorizationCodeStore] in
+// one transaction that starts with its write: an UPDATE flags the code
+// consumed unless it already is, and its RowsAffected() picks the one
+// winner when callers race — a concurrent UPDATE waits on the row lock,
+// then finds the flag set (SQLite's single writer serializes them
+// instead). The record is then read in the same transaction: the winner
+// commits and gets it, a loser rolls back and gets an
+// [*oauth2.CodeReplayError] carrying it, and a hash without a row is an
+// unknown code.
 func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (*oauth2.AuthorizationCode, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	var code *oauth2.AuthorizationCode
+
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, s.dialect.rebind(
+			`UPDATE oauth2_auth_codes SET consumed = 1 WHERE code_hash = ? AND consumed = 0`), codeHash)
+		if err != nil {
+			return fmt.Errorf("sqlstore: consume authorization code: %w", err)
+		}
+
+		won, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("sqlstore: rows affected: %w", err)
+		}
+
+		if code, err = s.selectCode(ctx, tx, codeHash); err != nil {
+			return err
+		}
+
+		if won != 1 {
+			// Consumed before: by an earlier call, or by a concurrent one
+			// that committed first.
+			return &oauth2.CodeReplayError{Record: code}
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("sqlstore: begin: %w", err)
+		return nil, err
 	}
 
-	defer func() { _ = tx.Rollback() }()
+	// Expiry is NOT checked here: the grant compares ExpiresAt with its
+	// own clock.
+	return code, nil
+}
 
+// selectCode reads the record of the code codeHash within tx. A hash
+// without a row is an unknown code: [oauth2.ErrCodeAlreadyUsed].
+func (s *Store) selectCode(ctx context.Context, tx *sql.Tx, codeHash string) (*oauth2.AuthorizationCode, error) {
 	const sel = `SELECT client_id, subject, redirect_uri, scope,
 		code_challenge, code_challenge_method, nonce, issued_at, expires_at
 		FROM oauth2_auth_codes WHERE code_hash = ?`
@@ -109,37 +148,17 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 		issuedAt, expires int64
 	)
 
-	row := tx.QueryRowContext(ctx, s.dialect.rebind(sel), codeHash)
-	if err := row.Scan(
+	err := tx.QueryRowContext(ctx, s.dialect.rebind(sel), codeHash).Scan(
 		&code.ClientID, &code.Subject, &code.RedirectURI, &code.Scope,
 		&code.CodeChallenge, &code.CodeChallengeMethod, &code.Nonce,
 		&issuedAt, &expires,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, oauth2.ErrCodeAlreadyUsed
-		}
+	)
 
-		return nil, fmt.Errorf("sqlstore: select authorization code: %w", err)
-	}
-
-	res, err := tx.ExecContext(ctx, s.dialect.rebind(
-		`DELETE FROM oauth2_auth_codes WHERE code_hash = ?`), codeHash)
-	if err != nil {
-		return nil, fmt.Errorf("sqlstore: delete authorization code: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("sqlstore: rows affected: %w", err)
-	}
-
-	if affected != 1 {
-		// A concurrent transaction consumed the code first.
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return nil, oauth2.ErrCodeAlreadyUsed
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sqlstore: commit: %w", err)
+	case err != nil:
+		return nil, fmt.Errorf("sqlstore: select authorization code: %w", err)
 	}
 
 	code.IssuedAt = time.Unix(issuedAt, 0)

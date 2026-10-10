@@ -22,19 +22,35 @@ const FamilyRevocationRetention = 24 * time.Hour
 // store keeps them in a VARCHAR(64) column).
 const MaxFamilyIDLength = 64
 
-// AuthorizationCodeStore persists single-use authorization codes. The
-// Consume* operation MUST be atomic: a code may be returned successfully
-// to AT MOST one caller.
+// AuthorizationCodeStore persists single-use authorization codes (RFC 6749
+// §4.1.2, §10.5). A code is stored under its hash,
+// [AuthorizationCode.CodeHash], which the issuer sets: implementations MUST
+// NOT persist the raw [AuthorizationCode.Code]. Consuming a code does not
+// delete it: the record is kept, flagged consumed, at least until its
+// ExpiresAt, so that a replay can be told from an unknown code and the
+// server can revoke what the first exchange issued. Afterwards an
+// implementation MAY drop it — the Redis store expires the key, the SQL
+// store documents a cleanup, the memory store keeps it for its lifetime.
 type AuthorizationCodeStore interface {
-	// SaveAuthorizationCode persists the code. The storage layer hashes
-	// code.Code into code.CodeHash before persisting.
+	// SaveAuthorizationCode persists code under code.CodeHash. The issuer
+	// saves each code once, under a fresh hash; an empty hash is rejected
+	// with invalid_request.
 	SaveAuthorizationCode(ctx context.Context, code *AuthorizationCode) error
 
-	// ConsumeAuthorizationCode atomically reads-and-deletes the code
-	// identified by codeHash. Returns [ErrCodeAlreadyUsed] when the code
-	// was previously consumed (allowing the server to reject reuse with
-	// invalid_grant and revoke the resulting access token per RFC 6749
-	// §4.1.2).
+	// ConsumeAuthorizationCode atomically marks the code codeHash consumed
+	// and returns its record to AT MOST one caller, even under
+	// concurrency. Every other call returns a nil code and an error:
+	//
+	//   - a [*CodeReplayError] carrying the retained record when the code
+	//     was already consumed — every concurrent loser gets one. The
+	//     record only lets the caller revoke what the first exchange
+	//     issued: it MUST NOT be used to issue tokens;
+	//   - [ErrCodeAlreadyUsed] when the code is unknown: never saved, or
+	//     no longer retained;
+	//   - a wrapped error on a backend failure.
+	//
+	// Both refusals match [ErrCodeAlreadyUsed] (invalid_grant). Expiry is
+	// not checked: the caller compares ExpiresAt with its own clock.
 	ConsumeAuthorizationCode(ctx context.Context, codeHash string) (*AuthorizationCode, error)
 }
 

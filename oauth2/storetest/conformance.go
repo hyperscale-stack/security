@@ -143,66 +143,136 @@ func sampleCode(hash string) *oauth2.AuthorizationCode {
 	now := time.Now()
 
 	return &oauth2.AuthorizationCode{
-		Code:        "raw-" + hash,
-		CodeHash:    hash,
-		ClientID:    testClientID,
-		Subject:     testSubject,
-		RedirectURI: "https://app.example/cb",
-		Scope:       testScope,
-		IssuedAt:    now,
-		ExpiresAt:   now.Add(10 * time.Minute),
+		Code:                "raw-" + hash,
+		CodeHash:            hash,
+		ClientID:            testClientID,
+		Subject:             testSubject,
+		RedirectURI:         "https://app.example/cb",
+		Scope:               testScope,
+		CodeChallenge:       "challenge-" + hash,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-" + hash,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(10 * time.Minute),
 	}
 }
 
+// storedCode is code as a store returns it: without the raw value, with
+// its timestamps at the second.
+func storedCode(code oauth2.AuthorizationCode) oauth2.AuthorizationCode {
+	code.Code = ""
+	code.IssuedAt = time.Unix(code.IssuedAt.Unix(), 0)
+	code.ExpiresAt = time.Unix(code.ExpiresAt.Unix(), 0)
+
+	return code
+}
+
+// requireRecord asserts that got is the record of saved: every field a
+// store keeps, and never the raw code.
+func requireRecord(t *testing.T, got, saved *oauth2.AuthorizationCode, msg string) {
+	t.Helper()
+
+	mustEqual(t, got != nil, true, msg+": a record")
+	mustEqual(t, got.Code, "", msg+": the raw code is never kept")
+	mustEqual(t, storedCode(*got), storedCode(*saved), msg)
+}
+
+// requireReplay asserts that got and err report a replay of saved: no
+// code to issue tokens from, and an invalid_grant matching
+// oauth2.ErrCodeAlreadyUsed that carries the retained record.
+func requireReplay(t *testing.T, got *oauth2.AuthorizationCode, err error, saved *oauth2.AuthorizationCode, msg string) {
+	t.Helper()
+
+	mustEqual(t, got == nil, true, msg+": no code returned")
+	mustErrorIs(t, err, oauth2.ErrCodeAlreadyUsed, msg)
+	mustCode(t, err, oauth2.CodeInvalidGrant, msg)
+
+	var replay *oauth2.CodeReplayError
+
+	mustEqual(t, errors.As(err, &replay), true, msg+": a CodeReplayError")
+	requireRecord(t, replay.Record, saved, msg+": the retained record")
+}
+
 func testCodeSaveConsume(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveAuthorizationCode(ctx(), sampleCode("code-1")), "save")
+	mustCode(t, s.SaveAuthorizationCode(ctx(), &oauth2.AuthorizationCode{}), oauth2.CodeInvalidRequest, "save a code without hash")
+
+	saved := sampleCode("code-1")
+	mustNoError(t, s.SaveAuthorizationCode(ctx(), saved), "save")
 
 	got, err := s.ConsumeAuthorizationCode(ctx(), "code-1")
 	mustNoError(t, err, "consume")
-	mustEqual(t, got.ClientID, testClientID, "consumed code lost the client")
-	mustEqual(t, got.Subject, testSubject, "consumed code lost the subject")
-	mustEqual(t, got.Scope, testScope, "consumed code lost the scope")
+	requireRecord(t, got, saved, "consumed code")
 }
 
+// testCodeSingleUse replays a consumed code: every replay is refused with
+// a CodeReplayError carrying the retained record, so the server can tell
+// it from an unknown code and revoke what the first exchange issued.
 func testCodeSingleUse(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveAuthorizationCode(ctx(), sampleCode("code-2")), "save")
+	saved := sampleCode("code-2")
+	mustNoError(t, s.SaveAuthorizationCode(ctx(), saved), "save")
 
 	_, err := s.ConsumeAuthorizationCode(ctx(), "code-2")
 	mustNoError(t, err, "first consume")
 
-	_, err = s.ConsumeAuthorizationCode(ctx(), "code-2")
-	mustCode(t, err, oauth2.CodeInvalidGrant, "second consume (single-use)")
+	for _, attempt := range []string{"second consume", "third consume"} {
+		got, err := s.ConsumeAuthorizationCode(ctx(), "code-2")
+		requireReplay(t, got, err, saved, attempt)
+	}
 }
 
+// testCodeUnknown consumes a code never saved: an invalid_grant matching
+// oauth2.ErrCodeAlreadyUsed, but no replay — there is nothing to revoke.
 func testCodeUnknown(t *testing.T, s oauth2.Storage) {
-	_, err := s.ConsumeAuthorizationCode(ctx(), "never-saved")
+	got, err := s.ConsumeAuthorizationCode(ctx(), "never-saved")
+	mustEqual(t, got == nil, true, "consume an unknown code: no code returned")
+	mustErrorIs(t, err, oauth2.ErrCodeAlreadyUsed, "consume an unknown code")
 	mustCode(t, err, oauth2.CodeInvalidGrant, "consume an unknown code")
+
+	var replay *oauth2.CodeReplayError
+
+	mustEqual(t, errors.As(err, &replay), false, "an unknown code is no replay")
 }
 
 // testCodeConcurrentConsume asserts the single-use guarantee under
-// concurrency: 50 goroutines race to consume one code, exactly one wins.
+// concurrency: 50 goroutines race to consume one code, exactly one wins,
+// and every other one sees a replay of the code.
 func testCodeConcurrentConsume(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveAuthorizationCode(ctx(), sampleCode("code-race")), "save")
+	saved := sampleCode("code-race")
+	mustNoError(t, s.SaveAuthorizationCode(ctx(), saved), "save")
 
 	const n = 50
 
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		wins int
-	)
+	codes := make([]*oauth2.AuthorizationCode, n)
+	errs := make([]error, n)
 
-	for range n {
+	var wg sync.WaitGroup
+
+	start := make(chan struct{})
+
+	for i := range n {
 		wg.Go(func() {
-			if _, err := s.ConsumeAuthorizationCode(ctx(), "code-race"); err == nil {
-				mu.Lock()
-				wins++
-				mu.Unlock()
-			}
+			<-start
+
+			codes[i], errs[i] = s.ConsumeAuthorizationCode(ctx(), "code-race")
 		})
 	}
 
+	close(start)
 	wg.Wait()
+
+	wins := 0
+
+	for i, err := range errs {
+		if err == nil {
+			wins++
+
+			requireRecord(t, codes[i], saved, "winning consume")
+
+			continue
+		}
+
+		requireReplay(t, codes[i], err, saved, "losing consume")
+	}
 
 	mustEqual(t, wins, 1, "successful consumes")
 }

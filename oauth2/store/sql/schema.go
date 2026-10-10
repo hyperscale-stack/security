@@ -10,9 +10,10 @@ import (
 )
 
 // Schema returns the DDL statements that create the four tables backing
-// the store: authorization codes, access tokens, refresh tokens, and the
-// token families — one record per family, active (revoked_at = 0) or
-// revoked (revoked_at = Unix second of the first revocation), retained
+// the store: authorization codes — a consumed one keeps its row, flagged
+// consumed, until an operator deletes it — access tokens, refresh tokens,
+// and the token families — one record per family, active (revoked_at = 0)
+// or revoked (revoked_at = Unix second of the first revocation), retained
 // until expires_at. Timestamps are stored as BIGINT Unix seconds to dodge the
 // TIMESTAMP / DATETIME portability minefield between engines, and flags as
 // SMALLINT 0/1 since PostgreSQL has no implicit integer/boolean cast. Token
@@ -36,6 +37,7 @@ func Schema(_ Dialect) []string {
 			code_challenge        TEXT         NOT NULL,
 			code_challenge_method VARCHAR(16)  NOT NULL,
 			nonce                 TEXT         NOT NULL,
+			consumed              SMALLINT     NOT NULL DEFAULT 0,
 			issued_at             BIGINT       NOT NULL,
 			expires_at            BIGINT       NOT NULL
 		)`,
@@ -68,7 +70,8 @@ func Schema(_ Dialect) []string {
 }
 
 // Migrate applies [Schema] to the store's database. It is safe to call
-// repeatedly (every statement is IF NOT EXISTS).
+// repeatedly (every statement is IF NOT EXISTS): it creates the missing
+// tables and never alters an existing one.
 func (s *Store) Migrate(ctx context.Context) error {
 	for _, stmt := range Schema(s.dialect) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {

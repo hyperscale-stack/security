@@ -102,6 +102,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
   `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
   long a revoked family is remembered.
+- **OAuth2 code replay error**: `oauth2.CodeReplayError`, the error an
+  `AuthorizationCodeStore` returns for a replayed code it still retains. It
+  matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,
+  `oauth2.IsCode` and the wire, and carries the retained record for
+  `errors.As`.
 
 ### Changed
 
@@ -139,6 +144,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   record and the stores fail closed — so users re-authenticate, and
   presenting such a refresh token answers `invalid_grant`;
   `client_credentials` and implicit tokens keep working. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 authorization-code storage (breaking).**
+  `ConsumeAuthorizationCode` no longer deletes the code it consumes: every
+  store keeps the record, flagged consumed and without the raw code, at
+  least until the code expires, and answers a replay with an
+  `*oauth2.CodeReplayError` carrying it; an unknown code still gets
+  `ErrCodeAlreadyUsed`. `store/sql` adds a `consumed` column to
+  `oauth2_auth_codes` — existing tables need an `ALTER TABLE` — and keeps
+  consumed rows until the operator's cleanup; `store/redis` flags the
+  code's key and keeps its TTL, and a consumption resent by go-redis after
+  a lost reply no longer fails the exchange; the memory store no longer
+  keeps the raw code. Every instance must be upgraded at once. See
   [MIGRATION.md](MIGRATION.md).
 
 ### Fixed

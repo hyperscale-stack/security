@@ -181,7 +181,7 @@ These guarantees rest on deployment assumptions, detailed in the package
 documentation of [`store/sql`](../oauth2/store/sql/doc.go) and
 [`store/redis`](../oauth2/store/redis/doc.go): every read reaches the
 primary (no replica reads, no client-side caching), the store's PostgreSQL
-token-family transactions run at READ COMMITTED (it pins the level) and
+transactions run at READ COMMITTED (it pins the level) and
 MySQL tables use InnoDB, Redis is a standalone server or a Sentinel primary
 (not Cluster) running 6.0 or later with `maxmemory-policy noeviction`, no
 family row or key is deleted before it expires, and durability is the

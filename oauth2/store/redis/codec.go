@@ -26,9 +26,12 @@ func marshalJSON(v any) ([]byte, error) {
 // The DTO types below are the on-wire JSON shapes persisted in Redis. They
 // deliberately omit the raw Token / Code fields — only hashes are keys, and
 // the raw secret is never stored. Timestamps are Unix seconds for compact,
-// unambiguous encoding. The refresh token's `family_id` and `consumed`
-// field names are load-bearing: the rotation Lua script reads both via
-// cjson, and re-encodes the record when it consumes the token.
+// unambiguous encoding. Some field names are load-bearing: the rotation Lua
+// script reads the refresh token's `family_id` and `consumed` via cjson,
+// and the code-consumption script reads the code's `consumed` and writes
+// it with `consumed_by`. Both scripts re-encode the record they consume
+// with cjson, which may escape "/" as "\/" and prints numbers with 14
+// significant digits: Go decodes either unchanged.
 
 type codeDTO struct {
 	ClientID            string `json:"client_id"`
@@ -40,6 +43,11 @@ type codeDTO struct {
 	Nonce               string `json:"nonce"`
 	IssuedAt            int64  `json:"issued_at"`
 	ExpiresAt           int64  `json:"expires_at"`
+	// Consumed and ConsumedBy are only written by consumeCodeScript: the
+	// flag of a consumed code and the nonce of the call that consumed it.
+	// A payload without them — or with nulls — is an unconsumed code.
+	Consumed   bool   `json:"consumed,omitempty"`
+	ConsumedBy string `json:"consumed_by,omitempty"`
 }
 
 func encodeCode(c *oauth2.AuthorizationCode) ([]byte, error) {
@@ -56,10 +64,12 @@ func encodeCode(c *oauth2.AuthorizationCode) ([]byte, error) {
 	})
 }
 
-func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, error) {
+// decodeCode decodes a code payload into its record, and reports whether
+// the code is consumed and the nonce of the call that consumed it.
+func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, bool, string, error) {
 	var d codeDTO
 	if err := json.Unmarshal(raw, &d); err != nil {
-		return nil, err //nolint:wrapcheck // caller wraps
+		return nil, false, "", err //nolint:wrapcheck // caller wraps
 	}
 
 	return &oauth2.AuthorizationCode{
@@ -73,7 +83,7 @@ func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, error) {
 		Nonce:               d.Nonce,
 		IssuedAt:            time.Unix(d.IssuedAt, 0),
 		ExpiresAt:           time.Unix(d.ExpiresAt, 0),
-	}, nil
+	}, d.Consumed, d.ConsumedBy, nil
 }
 
 type accessDTO struct {

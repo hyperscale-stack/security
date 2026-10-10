@@ -11,7 +11,9 @@
 // Every key starts with the store prefix (WithKeyPrefix, "oauth2:" by
 // default):
 //
-//   - code:{hash}: an authorization code (JSON), until it expires.
+//   - code:{hash}: an authorization code (JSON), until it expires —
+//     exchanged or not: an exchanged code stays, flagged consumed, so that
+//     a replay of it is recognized.
 //   - at:{hash}, rt:{hash}: an access or refresh token (JSON), until it
 //     expires.
 //   - fam:{id}: the state of a token family, "active" or "revoked", kept at
@@ -23,8 +25,9 @@
 // The token-family guarantees of oauth2.Storage hold under these
 // conditions:
 //
-//   - Redis 6.0 or later: the rotation script uses SET … KEEPTTL, which an
-//     older server refuses at the script's first write — failing closed.
+//   - Redis 6.0 or later: the rotation and code-consumption scripts use
+//     SET … KEEPTTL, which an older server refuses at the script's first
+//     write — failing closed.
 //   - A standalone server, or the primary of a Sentinel deployment. Redis
 //     Cluster is not supported: the scripts touch keys of different hash
 //     slots (CROSSSLOT).
@@ -40,11 +43,13 @@
 //     lost "active" key only logs users out — the store treats the tokens
 //     of an unknown family as revoked — but a lost "revoked" key, within
 //     its retention, is recorded active again by the next issuance into
-//     the family, reviving its tokens.
+//     the family, reviving its tokens. An evicted code key reads as an
+//     unknown code: a replay of it is still refused, but no longer
+//     recognized as one.
 //
-// go-redis resends a command whose reply was lost; the token-family
-// scripts are safe to run twice, and a resent rotation is not mistaken for
-// a reuse.
+// go-redis resends a command whose reply was lost; every script is safe to
+// run twice: a resent rotation is not mistaken for a reuse, nor a resent
+// code consumption for a replay.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2
