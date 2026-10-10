@@ -14,6 +14,12 @@ import (
 // NewBasic returns a client_secret_basic authenticator. The client_id and
 // client_secret are read from the HTTP Basic Authorization header per
 // RFC 6749 §2.3.1.
+//
+// A header without a client_id or with an empty client_secret, such as
+// Basic base64("<client_id>:"), is refused with invalid_client before the
+// client is loaded, as [NewPost] refuses an empty client_secret. A public
+// client authenticates with [NewNone] instead (RFC 7591 §2: "none" is the
+// method of a public client that has no secret).
 func NewBasic() ClientAuthenticator { return basicAuth{} }
 
 type basicAuth struct{}
@@ -41,6 +47,14 @@ func (basicAuth) Authenticate(ctx context.Context, r *http.Request, store oauth2
 	id, secret, ok := decodeBasic(r.Header.Get("Authorization"))
 	if !ok {
 		return nil, oauth2.ErrInvalidClient.WithDescription("malformed Basic Authorization header")
+	}
+
+	// A missing client_id or an empty password is no credential: refuse it
+	// before the store is consulted, like client_secret_post, so the answer
+	// does not depend on the client existing (RFC 6749 §2.3 lets the server
+	// choose the client authentication it accepts).
+	if id == "" || secret == "" {
+		return nil, oauth2.ErrInvalidClient.WithDescription("missing client_id or client_secret")
 	}
 
 	client, err := store.LoadClient(ctx, id)

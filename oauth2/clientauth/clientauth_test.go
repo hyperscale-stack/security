@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -32,6 +33,18 @@ func (s fakeStore) LoadClient(_ context.Context, id string) (oauth2.Client, erro
 	}
 
 	return s.clients[id], nil
+}
+
+// countingStore is a fakeStore that counts its LoadClient calls.
+type countingStore struct {
+	fakeStore
+	calls atomic.Int32
+}
+
+func (s *countingStore) LoadClient(ctx context.Context, id string) (oauth2.Client, error) {
+	s.calls.Add(1)
+
+	return s.fakeStore.LoadClient(ctx, id)
 }
 
 // noMatcherClient implements oauth2.Client but NOT oauth2.SecretMatcher.
@@ -297,6 +310,79 @@ func TestPostAuthenticate(t *testing.T) {
 			postReq(url.Values{"client_id": {"c1"}, "client_secret": {"wrong"}}), store)
 		assertInvalidClient(t, err)
 	})
+}
+
+// --- secret-based methods ------------------------------------------------
+
+// TestSecretMethodsRefuseMissingCredentials pins that client_secret_basic
+// and client_secret_post refuse a missing client_id or an empty secret
+// before the client store is consulted, with the same answer whatever the
+// client: an empty secret is no credential, even for a client registered
+// without one (#94).
+func TestSecretMethodsRefuseMissingCredentials(t *testing.T) {
+	t.Parallel()
+
+	clients := map[string]oauth2.Client{
+		"c1":        confidentialClient(),
+		"no-secret": &oauth2.DefaultClient{IDValue: "no-secret", TypeValue: oauth2.ClientConfidential},
+		"public":    &oauth2.DefaultClient{IDValue: "public", TypeValue: oauth2.ClientPublic},
+	}
+
+	methods := []struct {
+		name string
+		auth ClientAuthenticator
+		req  func(id, secret string) *http.Request
+	}{
+		{
+			name: "basic",
+			auth: NewBasic(),
+			req: func(id, secret string) *http.Request {
+				r := httptest.NewRequest(http.MethodPost, "/", nil)
+				r.Header.Set("Authorization", basicHeader(id, secret))
+
+				return r
+			},
+		},
+		{
+			name: "post",
+			auth: NewPost(),
+			req: func(id, secret string) *http.Request {
+				return postReq(url.Values{"client_id": {id}, "client_secret": {secret}})
+			},
+		},
+	}
+
+	cases := []struct {
+		name       string
+		id, secret string
+	}{
+		{"client with a secret", "c1", ""},
+		{"confidential client without a secret", "no-secret", ""},
+		{"public client without a secret", "public", ""},
+		{"unknown client", "ghost", ""},
+		{"empty client_id", "", "s3cr3t"},
+		{"empty client_id and secret", "", ""},
+	}
+
+	for _, m := range methods {
+		for _, tc := range cases {
+			t.Run(m.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				// A store per subtest, so that the count is this request's.
+				store := &countingStore{fakeStore: fakeStore{clients: clients}}
+
+				c, err := m.auth.Authenticate(context.Background(), m.req(tc.id, tc.secret), store)
+				assert.Nil(t, c)
+				assertInvalidClient(t, err)
+
+				var oe *oauth2.Error
+				require.ErrorAs(t, err, &oe)
+				assert.Equal(t, "missing client_id or client_secret", oe.Description)
+				assert.Zero(t, store.calls.Load(), "the client store must not be consulted")
+			})
+		}
+	}
 }
 
 // --- none ----------------------------------------------------------------

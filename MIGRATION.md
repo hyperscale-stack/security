@@ -295,3 +295,55 @@ Unknown tokens and other clients' tokens still answer `200 OK`. Every
 underlying failure still reaches `ServerConfig.OnError` exactly once, as a
 `server_error` carrying its cause (a failed lookup is now reported too, as
 `revoke: token lookup failed`); the 503 itself is not reported again.
+
+### `oauth2`: `client_secret_basic` refuses an empty secret (#94)
+
+`client_secret_basic` decoded `Authorization: Basic base64("<client_id>:")`
+into an empty secret and handed it to the client's `SecretMatcher`, and
+`DefaultClient.SecretMatches` matched it against an empty `Secret`: anyone
+knowing the `client_id` of a client registered without a secret
+authenticated as it at `/token` and `/revoke`, and at `/introspect` when the
+client was confidential. An empty secret is no credential. RFC 6749 §2.3
+lets the authorization server accept the client authentication "meeting its
+security requirements" and forbids relying on a public client's
+authentication to identify it, and §10.1 forbids issuing client passwords
+to native or user-agent-based clients. RFC 6749 §2.3.1 and Appendix A.2
+(`client-secret = *VSCHAR`) allow an empty secret on the wire, but they do
+not oblige the server to accept one: Basic is required "for authenticating
+clients that were issued a client password", and a client registered
+without a secret was issued none.
+
+`client_secret_basic` now refuses a missing `client_id` or an empty
+password with `401 invalid_client` (`missing client_id or client_secret`)
+before loading the client, as `client_secret_post`'s `Authenticate`
+already did (a form with an empty `client_secret` is a `none` request),
+and `DefaultClient.SecretMatches` never matches an empty `Secret`:
+
+| Request                                                        | Before                                                   | After                           |
+| -------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------- |
+| Basic, empty password, client registered without a secret      | authenticated (`/introspect`: confidential clients only) | `401 invalid_client`            |
+| Basic, empty password, client with a secret, or unknown client | `401`, description depends on the client                 | `401`, same description for all |
+| Basic/Post with a real secret; `none` for public clients       | authenticated                                            | unchanged                       |
+| `DefaultClient{Secret: ""}.SecretMatches("")`                  | `true`                                                   | `false`                         |
+
+To migrate:
+
+1. **Public clients that sent an empty Basic password** use `none`
+   instead: `client_id` in the form body, no `Authorization` header and no
+   `client_secret` (RFC 6749 §3.2.1). Register them with
+   `TypeValue: oauth2.ClientPublic`, add `clientauth.NewNone()` to
+   `ServerConfig.ClientAuth` (`examples/oauth2` does not wire it) and, if
+   the client sets `AuthMethodValues`, include `"none"`.
+2. **Confidential or untyped clients registered without a secret** can no
+   longer authenticate through `client_secret_basic` or
+   `client_secret_post` (and `none` refuses non-public clients). Give each
+   one a high-entropy secret, or authenticate it with a custom
+   `ClientAuthenticator` using another credential (e.g. `private_key_jwt`,
+   mTLS). Register a client as public only if it cannot keep a secret — a
+   browser or native app using `authorization_code` + PKCE — and then set
+   its `GrantTypeValues`: an empty list allows every grant, and the server
+   does not yet refuse `client_credentials` to public clients (RFC 6749
+   §4.4).
+3. **Custom `SecretMatcher`s** must return `false` when no secret is
+   registered or the presented one is empty, whatever they compare
+   against: a bcrypt hash of `""` matches `""`.
