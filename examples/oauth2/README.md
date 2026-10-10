@@ -76,6 +76,9 @@ curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym
     http://localhost:1337/oauth2/token
 ```
 
+A code is single-use: running the same exchange again is refused with
+`invalid_grant` and revokes the tokens the first exchange issued.
+
 ## What this example does NOT cover
 
 - JWT-formatted access tokens (`jwt.OAuth2AccessTokenSigner` adapter wires

@@ -9,7 +9,8 @@
 // Three grants are shipped:
 //
 //   - authorization_code (with PKCE; PKCE is mandatory in
-//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft])
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft]); a replayed code
+//     revokes the tokens it issued
 //   - client_credentials
 //   - refresh_token (rotation + reuse detection; rotation is mandatory in
 //     [oauth2.Profile20BCP] and [oauth2.Profile21Draft])
@@ -59,8 +60,9 @@ type Config struct {
 	// OnError, when set, observes the errors a grant swallows to keep the
 	// protocol response intact — today, a family revocation that failed
 	// after a refresh-token reuse, whether the grant found the token
-	// consumed or the store reported the reuse while rotating: exactly one
-	// server_error per failed revocation, whose cause matches
+	// consumed or the store reported the reuse while rotating, or after an
+	// authorization-code replay (RFC 6749 §4.1.2): exactly one server_error
+	// per failed revocation, whose cause matches
 	// [oauth2.ErrTokenFamilyRevocationFailed] with a conforming store.
 	// Errors returned to the server travel to [oauth2.ServerConfig.OnError]
 	// instead, so wire both to the same sink. Optional; see

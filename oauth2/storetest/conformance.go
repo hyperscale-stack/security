@@ -34,12 +34,15 @@ type Factory func() oauth2.Storage
 //	    storetest.RunConformance(t, func() oauth2.Storage { return New(...) })
 //	}
 //
-// Besides single-use codes and atomic rotation, it checks the token-family
+// Besides single-use codes — retained once consumed, so a replay is told
+// from an unknown code — and atomic rotation, it checks the token-family
 // invariants the [oauth2.Storage] godoc states — visibility, gating, atomic
 // writes, reuse, idempotence, isolation — sequentially and under races,
-// through the public API only. What it cannot observe stays with each
-// store's own tests: an injected backend failure (I6, and a reuse whose
-// revocation fails), and family state lost by the backend (I8).
+// through the public API only, and drives the real authorization_code
+// grant to check that a replayed code revokes the tokens it issued. What
+// it cannot observe stays with each store's own tests: an injected backend
+// failure (I6, and a reuse whose revocation fails), and family state lost
+// by the backend (I8).
 func RunConformance(t *testing.T, newStore Factory) {
 	t.Helper()
 
@@ -51,6 +54,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"AuthorizationCodeSingleUse", testCodeSingleUse},
 		{"AuthorizationCodeUnknown", testCodeUnknown},
 		{"AuthorizationCodeConcurrentConsume", testCodeConcurrentConsume},
+		{"AuthorizationCodeReplayRevokesIssuedTokens", testCodeReplayRevokesIssuedTokens},
 		{"AccessTokenSaveLookupRevoke", testAccessLifecycle},
 		{"AccessTokenLookupUnknown", testAccessUnknown},
 		{"RefreshTokenSaveLookup", testRefreshSaveLookup},
@@ -87,6 +91,9 @@ const testClientID = "client-1"
 
 // testScope is the fixed scope used across the suite.
 const testScope = "read"
+
+// testRedirectURI is the fixed redirect URI of the suite's codes.
+const testRedirectURI = "https://app.example/cb"
 
 func ctx() context.Context { return context.Background() }
 
@@ -147,7 +154,7 @@ func sampleCode(hash string) *oauth2.AuthorizationCode {
 		CodeHash:            hash,
 		ClientID:            testClientID,
 		Subject:             testSubject,
-		RedirectURI:         "https://app.example/cb",
+		RedirectURI:         testRedirectURI,
 		Scope:               testScope,
 		CodeChallenge:       "challenge-" + hash,
 		CodeChallengeMethod: "S256",

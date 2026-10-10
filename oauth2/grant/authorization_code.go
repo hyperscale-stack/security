@@ -7,7 +7,9 @@ package grant
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -18,12 +20,26 @@ import (
 // AuthorizationCode implements RFC 6749 §4.1.3 with the RFC 7636 PKCE
 // extension. The flow:
 //
-//  1. Pop the code from storage atomically (single-use enforcement).
-//  2. Re-bind client (code.ClientID MUST match the authenticated client).
-//  3. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
-//  4. Verify PKCE when present / required.
-//  5. Generate access token (+ optional refresh token).
-//  6. Persist both and return the pair.
+//  1. Derive the code's token family from its hash, then consume the code
+//     atomically (single-use enforcement).
+//  2. Refuse an expired code.
+//  3. Re-bind client (code.ClientID MUST match the authenticated client).
+//  4. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
+//  5. Verify PKCE when present / required, then check that the client may
+//     use the grant.
+//  6. Generate the access token (+ optional refresh token) in the code's
+//     family, persist both atomically and return the pair.
+//
+// A replay — the store still retains the consumed code — is refused with
+// invalid_grant. When the replay passes steps 2-5 itself, proving
+// possession of the code the way its first exchange had to, the code's
+// family is revoked (RFC 6749 §4.1.2, RFC 9700 §4.2.4): every token the
+// code issued stops working, and an exchange of the code still in flight
+// fails at step 6 with invalid_grant instead of issuing, while the store
+// keeps the family's revoked record (see [oauth2.Storage]). A replay
+// failing those steps — another client, a missing or wrong verifier,
+// another redirect_uri, an expired code — revokes nothing (OAuth 2.1
+// §4.1.3, §7.5.3).
 type AuthorizationCode struct {
 	cfg Config
 }
@@ -48,33 +64,77 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 	}
 
 	hash := oauth2.HashToken(nil, rawCode) // pepper-free: code only lives in storage briefly
+	// Fixed before the code is consumed: a replay can revoke the family
+	// even while the first exchange is still issuing into it.
+	familyID := codeFamilyID(hash)
 
 	code, err := g.cfg.Storage.ConsumeAuthorizationCode(ctx, hash)
+
+	var replay *oauth2.CodeReplayError
+	if errors.As(err, &replay) && replay.Record != nil {
+		g.revokeReplayed(ctx, req, replay.Record, familyID)
+
+		return nil, oauth2.ErrCodeAlreadyUsed
+	}
+
 	if err != nil {
 		return nil, err //nolint:wrapcheck // oauth2.* sentinels pass through
 	}
 
-	if code.IsExpired(req.Now) {
-		return nil, oauth2.ErrInvalidGrant.WithDescription("authorization code expired")
-	}
-
-	if code.ClientID != req.Client.ID() {
-		return nil, oauth2.ErrInvalidGrant.WithDescription("code issued for a different client")
-	}
-
-	if redirect := req.Form.Get("redirect_uri"); redirect != code.RedirectURI {
-		return nil, oauth2.ErrInvalidGrant.WithDescription("redirect_uri mismatch")
-	}
-
-	if err := g.verifyPKCE(req, code); err != nil {
+	if err := g.validateExchange(req, code); err != nil {
 		return nil, err
 	}
 
-	if !grantTypeAllowed(req.Client, "authorization_code") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use authorization_code")
+	return issueTokenPair(ctx, g.cfg, req, code.Subject, code.Scope, familyID)
+}
+
+// validateExchange checks that req may redeem code, in order: the code has
+// not expired, was issued to the authenticated client for the same
+// redirect_uri (RFC 6749 §4.1.3), its PKCE verifier matches when present or
+// required (RFC 7636 §4.6), and the client may use the grant. A replay
+// passing it proves possession of the code.
+func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.AuthorizationCode) error {
+	if code.IsExpired(req.Now) {
+		return oauth2.ErrInvalidGrant.WithDescription("authorization code expired")
 	}
 
-	return issueTokenPair(ctx, g.cfg, req, code.Subject, code.Scope)
+	if code.ClientID != req.Client.ID() {
+		return oauth2.ErrInvalidGrant.WithDescription("code issued for a different client")
+	}
+
+	if redirect := req.Form.Get("redirect_uri"); redirect != code.RedirectURI {
+		return oauth2.ErrInvalidGrant.WithDescription("redirect_uri mismatch")
+	}
+
+	if err := g.verifyPKCE(req, code); err != nil {
+		return err
+	}
+
+	if !grantTypeAllowed(req.Client, "authorization_code") {
+		return oauth2.ErrUnauthorizedClient.WithDescription("client cannot use authorization_code")
+	}
+
+	return nil
+}
+
+// revokeReplayed answers the replay of a consumed code (RFC 6749 §4.1.2).
+// When req would have been accepted for code, it revokes the code's
+// family on a context detached from the request
+// ([Config.revokeFamilyDetached]) and reports a failure to the error hook,
+// since the client gets invalid_grant either way. Any other replay revokes
+// nothing: it could not have redeemed the code itself, and revoking on its
+// say-so would let anyone holding a leaked code, or naming a public
+// client_id, cut the client off.
+func (g *AuthorizationCode) revokeReplayed(ctx context.Context, req Request, code *oauth2.AuthorizationCode, familyID string) {
+	if g.validateExchange(req, code) != nil {
+		return
+	}
+
+	if err := g.cfg.revokeFamilyDetached(ctx, familyID); err != nil {
+		g.cfg.notifyError(ctx, oauth2.ErrServerError.
+			WithDescription("revoke token family failed after authorization code replay").
+			WithCause(err))
+	}
 }
 
 func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCode) error {
@@ -134,9 +194,26 @@ func grantTypeAllowed(c oauth2.Client, grant string) bool {
 	return slices.Contains(all, grant)
 }
 
-// newFamilyID returns a 16-byte random identifier used to group every
-// access / refresh token issued from the same original authorization.
-// base64url -> 22 chars without padding.
+// codeFamilyPrefix domain-separates the token family derived from a code
+// hash from any other use of the hash.
+const codeFamilyPrefix = "oauth2/code-family:"
+
+// codeFamilyID derives the token family of the tokens a code issues from
+// the code's storage hash: 16 bytes of a domain-separated SHA-256,
+// base64url -> 22 chars without padding, like [newFamilyID]. The exchange
+// and every replay of the code compute it before consuming the code, so
+// linking a code to its tokens takes no storage, and a replay can revoke
+// the family before the first exchange has issued into it.
+func codeFamilyID(codeHash string) string {
+	sum := sha256.Sum256([]byte(codeFamilyPrefix + codeHash))
+
+	return base64.RawURLEncoding.EncodeToString(sum[:16])
+}
+
+// newFamilyID returns a 16-byte random identifier grouping every access /
+// refresh token issued from one authorization that has no code to derive
+// it from (the legacy password grant). base64url -> 22 chars without
+// padding.
 func newFamilyID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

@@ -88,6 +88,35 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   exactly one winner; the conformance suite checks it with 50 concurrent
   consumers of one code and 30 concurrent rotations of one token, and races
   revocations against rotation chains and issuance.
+- **Authorization-code replay** — exchanging a consumed code is refused
+  with `invalid_grant`, and the tokens its first exchange issued are
+  revoked: access and refresh tokens, and every later rotation (RFC 6749
+  §4.1.2, §10.5; RFC 9700 §4.2.4). Only a replay that would itself have
+  been accepted revokes: the code has not expired, and the client it was
+  issued to presents it with the same `redirect_uri` and PKCE verifier and
+  may still use `authorization_code` (OAuth 2.1 §4.1.3, §7.5.3). Anything
+  else — another client, a missing or wrong verifier, an unknown code — is
+  refused and revokes nothing: a public `client_id` is no secret, and
+  revoking on any replay would let whoever holds a leaked code cut the
+  client off. The grant derives the code's token family from the code
+  before consuming it, so the link takes no storage and a replay racing the
+  first exchange revokes the family before that exchange issues: the
+  exchange answers `invalid_grant` and issues nothing. That race guarantee
+  holds while the store keeps the family's revoked record
+  (`oauth2.FamilyRevocationRetention` at least), i.e. under the
+  [deployment requirements](#token-family-revocation-storage-guarantees):
+  an evicted Redis family key, or a SQL family row deleted before its
+  `expires_at`, lets the in-flight exchange recreate the family active.
+  Stores keep a consumed code, hashed and flagged, at least until it
+  expires — Redis expires the key with the code, SQL rows stay until your
+  cleanup, the memory store keeps them for good — so a replay is recognized
+  for the code's lifetime (`AuthorizeConfig.CodeTTL`, 10 minutes by
+  default); a later one is refused as expired and revokes nothing. A failed
+  revocation reaches `grant.Config.OnError`, and the next proven replay
+  retries it. A legitimate client retrying a lost response, or submitting
+  a code twice, revokes its own tokens: a code MUST NOT be reused (RFC
+  6749 §4.1.2). Access tokens validated offline are out of reach, see
+  [Offline JWT access tokens](#offline-jwt-access-tokens).
 - **Profiles** — `Profile20BCP` (the default) follows the OAuth 2.0
   Security BCP: it refuses the `implicit` grant. `Profile21Draft`
   additionally refuses the `password` grant. Legacy grants are opt-in and
@@ -196,7 +225,9 @@ The store's revocation reaches every token looked up in the store —
 `/introspect`, a resource server calling `LookupAccessToken` — but not a
 resource server that verifies JWT access tokens offline, from their
 signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
-until its `exp`, whatever happened to its family. The RFC 9068 payload the
+until its `exp`, whatever happened to its family — including the tokens
+revoked after an authorization-code replay: deleting or flagging store
+records never invalidates a signature. The RFC 9068 payload the
 `jwtsec` signer emits carries no family or token identifier (`jti`), so it
 cannot be deny-listed today either. RFC 7009 §2.1 acknowledges such a
 propagation delay and asks implementations to minimize it; its §3 leaves
@@ -258,12 +289,12 @@ span catalog.
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.
-- [ ] With `store/sql`, periodically delete rows past `expires_at` — never
-      a family row before it — in the deadlock-free order the package
-      documentation gives; with `store/redis`, run Redis 6.0+ standalone or
-      behind Sentinel with `maxmemory-policy noeviction`, and read from the
-      primary only. A revoked family whose state is lost before it expires
-      can be revived.
+- [ ] With `store/sql`, periodically delete rows past `expires_at` —
+      consumed authorization codes included, never a family row before
+      it — in the deadlock-free order the package documentation gives;
+      with `store/redis`, run Redis 6.0+ standalone or behind Sentinel with
+      `maxmemory-policy noeviction`, and read from the primary only. A
+      revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.

@@ -169,6 +169,13 @@ type RefreshTokenStore interface {
 //     active again, reviving its tokens, so a store MUST NOT lose a
 //     revoked family's state within its retention (I5).
 //
+// The authorization_code grant derives the family of the tokens a code
+// issues from the code hash, before consuming the code. A replay of the
+// code that proves possession revokes that family: by I1 and I2, the
+// tokens the code issued stop working, and an exchange of the code still
+// in flight fails instead of issuing — one more reason a store MUST keep a
+// revoked family's state for its whole retention (I5, I8).
+//
 // A store returns the sentinels themselves or wraps them with %w: an
 // [*Error] has no Is method, so a WithDescription or WithCause copy no
 // longer matches its sentinel. Every implementation MUST pass the shared
