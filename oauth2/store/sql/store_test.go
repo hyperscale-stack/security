@@ -16,19 +16,19 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver — no cgo, no Docker
 )
 
-// newSQLiteStore opens a fresh in-memory SQLite database, migrates it, and
-// returns a ready oauth2.Storage. Each call gets an isolated database
-// (the "file::memory:" + unique cache prevents sharing across calls).
-func newSQLiteStore(t *testing.T) oauth2.Storage {
+// openSQLite opens a private in-memory SQLite database, migrates it, and
+// returns the store over it along with the raw handle, which tests use to
+// inspect the tables and inject failures with triggers.
+//
+// A plain ":memory:" database lives in its connection, so the pool is
+// capped at one connection: every call gets a database of its own, which
+// survives as long as the handle, and the store's transactions serialize
+// on it (SQLite is single-writer anyway).
+func openSQLite(t *testing.T) (*sqlstore.Store, *sql.DB) {
 	t.Helper()
 
-	// A private in-memory database, scoped to this *sql.DB handle.
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-
-	// SQLite in-memory shared-cache stays alive while at least one
-	// connection is open; cap the pool at 1 so the schema persists and
-	// writes serialise (SQLite is single-writer anyway).
 	db.SetMaxOpenConns(1)
 
 	t.Cleanup(func() { _ = db.Close() })
@@ -37,6 +37,15 @@ func newSQLiteStore(t *testing.T) oauth2.Storage {
 	require.NoError(t, err)
 
 	require.NoError(t, store.Migrate(context.Background()))
+
+	return store, db
+}
+
+// newSQLiteStore returns a ready oauth2.Storage over a private database.
+func newSQLiteStore(t *testing.T) oauth2.Storage {
+	t.Helper()
+
+	store, _ := openSQLite(t)
 
 	return store
 }
@@ -57,16 +66,8 @@ func TestSQLiteStoreConformance(t *testing.T) {
 func TestMigrateIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
+	store, _ := openSQLite(t)
 
-	t.Cleanup(func() { _ = db.Close() })
-
-	store, err := sqlstore.New(db, sqlstore.SQLite)
-	require.NoError(t, err)
-
-	require.NoError(t, store.Migrate(context.Background()))
 	require.NoError(t, store.Migrate(context.Background()), "second Migrate must be a no-op")
 }
 

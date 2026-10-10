@@ -6,6 +6,7 @@ package redisstore_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,15 +18,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRedisStoreRejectsEmptyHashes(t *testing.T) {
+func TestRedisStoreRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
 	store := newRedisStore(t)
 	ctx := context.Background()
+	tooLong := strings.Repeat("f", oauth2.MaxFamilyIDLength+1)
+	bare := &oauth2.TokenPair{Access: oauth2.AccessToken{TokenHash: "h", FamilyID: "f"}}
 
 	require.Error(t, store.SaveAuthorizationCode(ctx, &oauth2.AuthorizationCode{}))
-	require.Error(t, store.SaveAccessToken(ctx, &oauth2.AccessToken{}))
-	require.Error(t, store.SaveRefreshToken(ctx, &oauth2.RefreshToken{}))
+
+	for _, err := range []error{
+		store.SaveTokenPair(ctx, &oauth2.TokenPair{}),
+		store.SaveTokenPair(ctx, nil),
+		store.RotateRefreshToken(ctx, "h", nil),
+		store.RotateRefreshToken(ctx, "h", bare),
+		store.RevokeRefreshFamily(ctx, ""),
+		store.RevokeRefreshFamily(ctx, tooLong),
+	} {
+		assert.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err), "%v", err)
+	}
 }
 
 // TestRedisStoreReportsBackendErrors closes the miniredis server so every
@@ -34,7 +46,9 @@ func TestRedisStoreReportsBackendErrors(t *testing.T) {
 	t.Parallel()
 
 	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	// No retries: every command fails anyway, and retrying a dead server
+	// only slows the test down.
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
 	t.Cleanup(func() { _ = client.Close() })
 
 	store, err := redisstore.New(client)
@@ -53,22 +67,21 @@ func TestRedisStoreReportsBackendErrors(t *testing.T) {
 	_, err = store.ConsumeAuthorizationCode(ctx, "h")
 	require.Error(t, err)
 
-	at := &oauth2.AccessToken{TokenHash: "h", FamilyID: "f", ExpiresAt: now.Add(time.Minute)}
-	require.Error(t, store.SaveAccessToken(ctx, at))
+	require.Error(t, store.SaveTokenPair(ctx, testPair("h", "f", time.Minute)))
+	require.Error(t, store.SaveTokenPair(ctx, &oauth2.TokenPair{Access: oauth2.AccessToken{
+		TokenHash: "h", ExpiresAt: now.Add(time.Minute),
+	}}))
 
 	_, err = store.LookupAccessToken(ctx, "h")
 	require.Error(t, err)
 
 	require.Error(t, store.RevokeAccessToken(ctx, "h"))
 
-	rt := &oauth2.RefreshToken{TokenHash: "h", FamilyID: "f", ExpiresAt: now.Add(time.Minute)}
-	require.Error(t, store.SaveRefreshToken(ctx, rt))
-
 	_, err = store.LookupRefreshToken(ctx, "h")
 	require.Error(t, err)
 
-	require.Error(t, store.RotateRefreshToken(ctx, "h", rt))
-	require.Error(t, store.RevokeRefreshFamily(ctx, "f"))
+	require.Error(t, store.RotateRefreshToken(ctx, "h", testPair("next", "f", time.Minute)))
+	require.ErrorIs(t, store.RevokeRefreshFamily(ctx, "f"), oauth2.ErrTokenFamilyRevocationFailed)
 }
 
 // TestRedisStoreDecodeErrors injects corrupt JSON directly into Redis and
@@ -96,6 +109,13 @@ func TestRedisStoreDecodeErrors(t *testing.T) {
 	require.NoError(t, mr.Set("oauth2:rt:bad", "{not-json"))
 	_, err = store.LookupRefreshToken(ctx, "bad")
 	require.Error(t, err)
+
+	// A corrupt old token aborts the rotation before it writes anything.
+	next := testPair("after-bad", "f", time.Hour)
+	require.Error(t, store.RotateRefreshToken(ctx, "bad", next))
+	assert.False(t, mr.Exists("oauth2:rt:rt-after-bad"))
+	assert.False(t, mr.Exists("oauth2:at:at-after-bad"))
+	assert.False(t, mr.Exists("oauth2:fam:f"))
 }
 
 // TestRedisStoreConsumeUnknownCode covers the "code already used / absent"
@@ -109,63 +129,6 @@ func TestRedisStoreConsumeUnknownCode(t *testing.T) {
 	require.ErrorIs(t, err, oauth2.ErrCodeAlreadyUsed)
 }
 
-// TestRedisStoreRotateUnknownToken covers the script's "notfound" branch.
-func TestRedisStoreRotateUnknownToken(t *testing.T) {
-	t.Parallel()
-
-	store := newRedisStore(t)
-
-	err := store.RotateRefreshToken(context.Background(), "never-saved", &oauth2.RefreshToken{
-		TokenHash: "new", FamilyID: "fam", ExpiresAt: time.Now().Add(time.Hour),
-	})
-	require.Error(t, err)
-}
-
-// TestRedisStoreRevokeFamilyMarksRefreshTokens checks the family-revocation
-// path: every refresh token of the family ends up consumed.
-func TestRedisStoreRevokeFamilyMarksRefreshTokens(t *testing.T) {
-	t.Parallel()
-
-	store := newRedisStore(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	rt := &oauth2.RefreshToken{
-		Token: "raw", TokenHash: "rt-hash", ClientID: "c", Subject: "s",
-		Scope: "read", FamilyID: "fam-1", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
-	}
-	require.NoError(t, store.SaveRefreshToken(ctx, rt))
-
-	require.NoError(t, store.RevokeRefreshFamily(ctx, "fam-1"))
-
-	got, err := store.LookupRefreshToken(ctx, "rt-hash")
-	require.NoError(t, err)
-	assert.True(t, got.Consumed, "family revocation must mark the refresh token consumed")
-
-	// Revoking again is idempotent — the token is already consumed.
-	require.NoError(t, store.RevokeRefreshFamily(ctx, "fam-1"))
-}
-
-// TestRedisStoreRevokeFamilyWithCorruptMember exercises the markConsumed
-// decode-error branch.
-func TestRedisStoreRevokeFamilyWithCorruptMember(t *testing.T) {
-	t.Parallel()
-
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-
-	store, err := redisstore.New(client)
-	require.NoError(t, err)
-
-	// A family set referencing a refresh token whose payload is corrupt.
-	_, err = mr.SAdd("oauth2:famrt:fam-x", "corrupt-hash")
-	require.NoError(t, err)
-	require.NoError(t, mr.Set("oauth2:rt:corrupt-hash", "{not-json"))
-
-	require.Error(t, store.RevokeRefreshFamily(context.Background(), "fam-x"))
-}
-
 // TestRedisStoreSavePastExpiryClampsTTL saves a token already past its
 // expiry; ttlUntil must clamp the key TTL to the 1-second floor.
 func TestRedisStoreSavePastExpiryClampsTTL(t *testing.T) {
@@ -174,11 +137,11 @@ func TestRedisStoreSavePastExpiryClampsTTL(t *testing.T) {
 	store := newRedisStore(t)
 	ctx := context.Background()
 
-	at := &oauth2.AccessToken{
+	at := oauth2.AccessToken{
 		TokenHash: "expired", ClientID: "c", Subject: "s",
 		IssuedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
 	}
-	require.NoError(t, store.SaveAccessToken(ctx, at))
+	require.NoError(t, store.SaveTokenPair(ctx, &oauth2.TokenPair{Access: at}))
 
 	got, err := store.LookupAccessToken(ctx, "expired")
 	require.NoError(t, err)

@@ -157,10 +157,16 @@ The `oauth2` module is an authorization server, not just a provider:
   `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
   prefix used in the metadata document is configurable via
   `ServerConfig.RoutePrefix`.
-- **`Storage`** — an interface with explicit atomicity contracts
-  (`ConsumeAuthorizationCode`, `RotateRefreshToken`). Three implementations:
-  in-memory, SQL (Postgres/MySQL/SQLite), Redis (Lua scripts). All three
-  pass the shared `oauth2/storetest` conformance suite.
+- **`Storage`** — an interface with explicit atomicity contracts: a
+  single-use `ConsumeAuthorizationCode`, and token pairs persisted
+  atomically (`SaveTokenPair`, `RotateRefreshToken`) against one
+  authoritative state per token family, so that a revoked family
+  (`RevokeRefreshFamily`) can neither be used nor issued into — even before
+  its first token, and whatever races the revocation. Access and refresh
+  tokens share one backend; codes may live elsewhere. Three
+  implementations: in-memory, SQL (Postgres/MySQL/SQLite, row locks), Redis
+  (Lua scripts). All three pass the shared `oauth2/storetest` conformance
+  suite, which states the guarantees through the public API.
 
 Tokens and authorization codes are **never stored in cleartext** — the
 store only ever sees a hash.

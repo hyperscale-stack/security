@@ -289,13 +289,14 @@ func TestOnErrorReportsFailedRevocation(t *testing.T) {
 	require.NotEmpty(t, issued.AccessToken)
 	require.Empty(t, sink.codes(), "a successful /token must not notify")
 
-	// RFC 7009 §2.2: the revocation still answers 200 OK...
+	// RFC 7009 §2.2.1: the token may still be usable, so the revocation
+	// answers 503 — the client must assume the token still exists...
 	rec = httptest.NewRecorder()
 	srv.RevokeHandler().ServeHTTP(rec, formRequest("/revoke",
 		url.Values{"token": {issued.AccessToken}}, true))
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	// ...and the failure surfaces through the hook only.
+	// ...and the failure's cause surfaces through the hook only.
 	got := sink.collected()
 	require.NotEmpty(t, got)
 
@@ -338,22 +339,14 @@ func TestOnErrorReportsFailedFamilyRevocation(t *testing.T) {
 	require.NoError(t, err)
 
 	raw := "refresh-to-revoke"
-	require.NoError(t, store.SaveRefreshToken(t.Context(), &oauth2.RefreshToken{
-		Token:     raw,
-		TokenHash: oauth2.HashToken(nil, raw),
-		ClientID:  testClientID,
-		Subject:   "alice",
-		Scope:     "api:read",
-		FamilyID:  "family-1",
-		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
-	}))
+	seedPair(t, store, newClientPair(raw, "family-1"))
 
 	rec := httptest.NewRecorder()
 	srv.RevokeHandler().ServeHTTP(rec, formRequest("/revoke", url.Values{"token": {raw}}, true))
 
-	// RFC 7009 §2.2 still mandates 200 OK; the hook carries the failure.
-	assert.Equal(t, http.StatusOK, rec.Code)
+	// RFC 7009 §2.2.1: 503, the token may still be usable; the hook
+	// carries the failure.
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	got := sink.collected()
 	require.Len(t, got, 1)

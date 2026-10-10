@@ -30,22 +30,14 @@ func (s *familyRevokeFailingStore) RevokeRefreshFamily(context.Context, string) 
 	return s.err
 }
 
-// consumedRefreshRequest stores an already-consumed refresh token and
-// returns the matching /token request — the BCP §8.10.3 reuse case.
-func consumedRefreshRequest(ctx context.Context, store oauth2.Storage) grant.Request {
-	raw := "reused-refresh-token"
+// consumedRefreshRequest stores a refresh token of family "family-1",
+// consumes it by a real rotation, and returns the /token request replaying
+// it — the RFC 9700 §4.14.2 reuse case.
+func consumedRefreshRequest(t *testing.T, store oauth2.Storage) grant.Request {
+	t.Helper()
 
-	_ = store.SaveRefreshToken(ctx, &oauth2.RefreshToken{
-		Token:     raw,
-		TokenHash: oauth2.HashToken(nil, raw),
-		ClientID:  clientID,
-		Subject:   subject,
-		Scope:     "read:mail",
-		FamilyID:  "family-1",
-		Consumed:  true,
-		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
-		ExpiresAt: time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
-	})
+	raw := "reused-refresh-token"
+	seedRotated(t, store, raw, "family-1")
 
 	return grant.Request{
 		Client:   newClient(),
@@ -80,7 +72,7 @@ func TestRefreshTokenOnErrorReportsFamilyRevokeFailure(t *testing.T) {
 		},
 	})
 
-	resp, err := g.Handle(ctx, consumedRefreshRequest(ctx, store))
+	resp, err := g.Handle(ctx, consumedRefreshRequest(t, store))
 
 	// The protocol answer is unchanged: reuse stays invalid_grant.
 	assert.Nil(t, resp)
@@ -112,7 +104,7 @@ func TestRefreshTokenOnErrorIsOptional(t *testing.T) {
 		RotateRefreshTokens: true,
 	})
 
-	req := consumedRefreshRequest(ctx, store)
+	req := consumedRefreshRequest(t, store)
 
 	assert.NotPanics(t, func() {
 		_, err := g.Handle(ctx, req)
@@ -140,7 +132,7 @@ func TestRefreshTokenOnErrorQuietOnSuccessfulRevoke(t *testing.T) {
 		},
 	})
 
-	_, err := g.Handle(ctx, consumedRefreshRequest(ctx, store))
+	_, err := g.Handle(ctx, consumedRefreshRequest(t, store))
 	require.ErrorIs(t, err, oauth2.ErrRefreshTokenReused)
 	assert.Empty(t, seen, "a successful family revocation must stay quiet")
 }

@@ -32,7 +32,8 @@ type AccessTokenClaims struct {
 	ClientID string
 	// Scope is the granted scope.
 	Scope string
-	// FamilyID is the rotation family identifier (refresh-token family).
+	// FamilyID is the rotation family identifier (refresh-token family). At
+	// most [oauth2.MaxFamilyIDLength] bytes.
 	FamilyID string
 	// IssuedAt is the issuance time.
 	IssuedAt time.Time

@@ -63,9 +63,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **OAuth2 error hook**: `ServerConfig.OnError` and `grant.Config.OnError`
   (both `oauth2.ErrorHook`) observe every error the authorization server
   turns into an RFC 6749 §5.2 response — carrying the cause a `server_error`
-  never puts on the wire — plus the errors it swallows on purpose, such as a
-  best-effort revocation (RFC 7009 §2.2) or a family revocation that failed
-  during reuse detection. Purely observational: the responses are unchanged.
+  never puts on the wire — plus the errors behind an answer that cannot
+  carry them, such as the storage failure behind a `/revoke` 503 or a family
+  revocation that failed during reuse detection. Purely observational: the
+  hook never changes a response.
 - **OAuth2 profile consistency checks**: `oauth2.ProfileValidator`, an
   optional `Grant` capability: `oauth2.NewServer` asks every registered
   grant implementing it whether it can honor the active `Profile`, and
@@ -91,6 +92,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   same bytes as an unknown token; a policy error fails closed the same way
   and reaches `OnError` as a `server_error`. Optional: without a policy, any
   authenticated confidential client may introspect any token.
+- **OAuth2 token-family primitives**: `oauth2.ErrTokenFamilyRevoked`
+  (`invalid_grant`) refuses an operation on a revoked token family;
+  `oauth2.ErrTokenFamilyRevocationFailed`, a plain sentinel that never
+  reaches the wire, reports a family revocation that could not be recorded
+  (the family must then be treated as active and the revocation retried);
+  `oauth2.TokenPair.Validate` rejects a pair no store may persist (a refresh
+  token outside the access token's family, without a family, or already
+  consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
+  `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
+  long a revoked family is remembered.
 
 ### Changed
 
@@ -107,6 +118,28 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   default (`ErrMissingExpiry`), aligning with RFC 9068 §2.2 and the
   fail-closed doctrine. Opt out with `jwtsec.WithOptionalExpiry()` to verify
   deliberately non-expiring assertions.
+- **OAuth2 storage contract (breaking).** `oauth2.Storage` drops
+  `SaveAccessToken` and `SaveRefreshToken` for `SaveTokenPair`, which
+  persists a newly issued pair atomically; `RotateRefreshToken` takes the
+  whole replacement `*oauth2.TokenPair` and persists it atomically with the
+  consumption of the presented token; `RevokeRefreshFamily` records a family
+  revoked even before any of its tokens exists, is idempotent, and rejects
+  an empty or over-long ID with `invalid_request`. Every store keeps one
+  authoritative state per token family that issuance, rotation and lookups
+  go through: a token of a revoked family is no longer usable — its access
+  token lookup fails with `invalid_grant`, its refresh token reads consumed
+  — and nothing can be issued into it. Access and refresh tokens must share
+  one backend. `store/sql` adds the `oauth2_token_families` table (`Migrate`
+  creates it); `store/redis` replaces the `famrt:`/`famat:` sets with one
+  `fam:{id}` key per family and now requires Redis 6.0 or later
+  (`SET … KEEPTTL`) and `maxmemory-policy noeviction`. The guarantees are
+  documented on `oauth2.Storage` and checked by `oauth2/storetest`, which
+  every implementation must pass. Upgrading invalidates every refresh token
+  and every family-bound access token issued before it — their family has no
+  record and the stores fail closed — so users re-authenticate, and
+  presenting such a refresh token answers `invalid_grant`;
+  `client_credentials` and implicit tokens keep working. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -126,6 +159,48 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   access token. The replacement used to inherit the narrowed scope, so the
   grant shrank permanently and a later request for the original scope was
   refused with `invalid_scope`.
+- The SQL store's schema (`oauth2/store/sql`) runs on PostgreSQL and MySQL:
+  the refresh-token `consumed` flag is a `SMALLINT` — PostgreSQL rejected
+  the former `BOOLEAN NOT NULL DEFAULT 0` column and the store's integer
+  comparisons — and the token-family indexes are gone, since MySQL rejects
+  their `CREATE INDEX IF NOT EXISTS`. `Schema` returns the same DDL for
+  every dialect.
+- A failed family revocation after a refresh-token reuse the store detects
+  is no longer swallowed: the SQL and Redis stores returned the bare
+  `ErrRefreshTokenReused` whatever the revocation did. The error now also
+  wraps `oauth2.ErrTokenFamilyRevocationFailed` and its cause; the
+  `refresh_token` grant then retries the revocation and reports a second
+  failure to `grant.Config.OnError`, while the client still gets
+  `invalid_grant`. The revocations a reuse triggers now run on a context
+  detached from the request, so a client hanging up cannot abort them.
+- A failed exchange no longer leaves a live access token behind: the
+  `authorization_code`, `refresh_token` and legacy `password` grants
+  persisted the access token before minting the refresh token and rotating,
+  so a later failure left an access token the client never received. Each
+  exchange now persists its tokens in one atomic call.
+- A refresh token that disappears between the grant's lookup and its
+  rotation — e.g. expired from Redis — is answered `invalid_grant` (RFC 6749
+  §5.2) instead of `server_error`.
+- `/revoke` no longer answers `200 OK` for a revocation that may not have
+  taken effect: when a token lookup fails for another reason than an
+  unknown token, the token's family cannot be revoked, or a token outside
+  any family cannot be deleted, it answers `503 temporarily_unavailable`
+  (RFC 7009 §2.2.1), so the client knows to assume the token still exists
+  and retry. An access token is revoked through its family first, and only
+  then deleted, so the retry redoes the whole revocation. A failed lookup
+  used to skip the revocation silently; every storage failure now reaches
+  `ServerConfig.OnError` once, as a `server_error` with its cause. An
+  unknown token, or another client's, still answers `200 OK`.
+- `RevokeRefreshFamily("")` no longer deletes every access token outside a
+  family (`client_credentials`, implicit) in the memory and SQL stores; it
+  is rejected with `invalid_request`.
+- A rotation whose replacement declares another family than the presented
+  token's is refused with `invalid_request`; the Redis store used to revoke
+  the declared family, not the stored one, on reuse.
+- The `error_description` of `oauth2.ErrRefreshTokenReused` is now
+  `refresh token reused`. The former `refresh token reused — family
+  revoked` claimed a revocation that may have failed, and its em dash lies
+  outside the RFC 6749 §5.2 `error_description` charset.
 
 ### Removed
 
@@ -157,6 +232,21 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   it fails with `server_error` before any token is minted or persisted.
   Non-rotating refresh tokens remain an explicit `Profile20` choice
   (`RotateRefreshTokens: false`).
+- OAuth2 token-family revocation is race-free and authoritative in every
+  store (RFC 9700 §4.14.2, RFC 7009 §2.1). Once `RevokeRefreshFamily`
+  returns — or a reuse is reported without
+  `ErrTokenFamilyRevocationFailed` — no token of the family is usable
+  through the store, and no issuance or rotation into the family succeeds,
+  including one racing the revocation. Before, a rotation or a non-rotating
+  `Profile20` refresh could leave a usable token in a family whose
+  revocation had just completed: the SQL statements ran outside a shared
+  transaction, the Redis revocation enumerated the family non-atomically,
+  and nothing gated issuance. A revocation also left no trace for a family
+  without tokens yet. A Redis rotation resent by go-redis after a lost
+  reply is no longer mistaken for a reuse that revokes the family it just
+  rotated into. JWT access tokens verified offline stay out of the store's
+  reach until they expire: see
+  [docs/security-considerations.md](docs/security-considerations.md).
 - The OAuth2 `/introspect` endpoint now answers only clients whose
   `Type()` is `oauth2.ClientConfidential` (RFC 7662 §2.1 / §4, RFC 6749
   §2.2, §2.3). It used to answer any client the shared `ClientAuth` chain

@@ -13,6 +13,23 @@ than future refactor phases.
 - **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
   depends on a server-side public-key store; the `jwtsec` module already
   provides the building blocks (`NewStaticJWKS`).
+- **Offline JWT access tokens are not revocable** — a token-family
+  revocation takes effect in the store, not at resource servers verifying
+  JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload
+  carries no family or `jti` claim to deny-list, so such a token stays
+  valid until it expires. Keep their lifetime short, or validate against
+  the store. See
+  [docs/security-considerations.md](docs/security-considerations.md#offline-jwt-access-tokens).
+- **Redis Cluster** — not supported by `oauth2/store/redis`: its Lua
+  scripts touch keys of several hash slots. Use a standalone server or a
+  Sentinel primary.
+- **SQL expired-row cleanup** — `oauth2/store/sql` ships no expiry job:
+  rows stay until an operator deletes those past `expires_at` (see the
+  package documentation for a safe order).
+- **PostgreSQL and MySQL are not exercised in CI** — the SQL store's tests
+  run on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
+  READ COMMITTED on PostgreSQL, InnoDB on MySQL) are argued from their
+  locking semantics, not tested.
 
 ## Transports
 

@@ -98,10 +98,25 @@ var (
 	// invalid_grant per RFC 6749 §4.1.2.
 	ErrCodeAlreadyUsed = newCoded(CodeInvalidGrant, "authorization code already consumed", security.ErrInvalidCredentials)
 	// ErrRefreshTokenReused signals refresh-token reuse — surfaced as
-	// invalid_grant per OAuth 2.0 BCP §8.10.3. Storage implementations
-	// MUST also revoke the entire token family when this occurs.
-	ErrRefreshTokenReused = newCoded(CodeInvalidGrant, "refresh token reused — family revoked", security.ErrInvalidCredentials)
+	// invalid_grant per RFC 9700 §4.14.2. Storage implementations MUST also
+	// revoke the entire token family when this occurs; when that revocation
+	// fails, the error also wraps [ErrTokenFamilyRevocationFailed].
+	ErrRefreshTokenReused = newCoded(CodeInvalidGrant, "refresh token reused", security.ErrInvalidCredentials)
+	// ErrTokenFamilyRevoked signals an operation on a token family that has
+	// been revoked — surfaced as invalid_grant (RFC 6749 §5.2: the grant
+	// was revoked).
+	ErrTokenFamilyRevoked = newCoded(CodeInvalidGrant, "token family revoked", security.ErrInvalidCredentials)
 )
+
+// ErrTokenFamilyRevocationFailed reports that a token family could not be
+// recorded as revoked: the family MUST be treated as still active, and the
+// revocation retried (it is idempotent). It is a plain sentinel, not an
+// [*Error], so it never reaches the wire on its own — a caller that turns
+// it into a response answers server_error. Stores wrap it, with the
+// family ID and the backend cause, in the error RevokeRefreshFamily
+// returns, and after [ErrRefreshTokenReused] when the revocation a reuse
+// triggers fails; match it with errors.Is.
+var ErrTokenFamilyRevocationFailed = errors.New("oauth2: token family revocation failed")
 
 // newCoded constructs an Error sentinel. The cause chain reaches the supplied
 // security sentinel via Unwrap so errors.Is keeps working transparently.

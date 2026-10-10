@@ -26,8 +26,9 @@ func marshalJSON(v any) ([]byte, error) {
 // The DTO types below are the on-wire JSON shapes persisted in Redis. They
 // deliberately omit the raw Token / Code fields — only hashes are keys, and
 // the raw secret is never stored. Timestamps are Unix seconds for compact,
-// unambiguous encoding. The `consumed` field name is load-bearing: the
-// rotate-refresh Lua script reads it via cjson.
+// unambiguous encoding. The refresh token's `family_id` and `consumed`
+// field names are load-bearing: the rotation Lua script reads both via
+// cjson, and re-encodes the record when it consumes the token.
 
 type codeDTO struct {
 	ClientID            string `json:"client_id"`
@@ -165,4 +166,21 @@ func ttlUntil(t time.Time) time.Duration {
 	}
 
 	return d
+}
+
+// ttlMillis is ttlUntil in milliseconds, the unit of the scripts' PX TTLs.
+func ttlMillis(t time.Time) int64 {
+	return ttlUntil(t).Milliseconds()
+}
+
+// familyTTL is the TTL, in milliseconds, a family key needs to outlive
+// every token of pair.
+func familyTTL(pair *oauth2.TokenPair) int64 {
+	ttl := ttlMillis(pair.Access.ExpiresAt)
+
+	if pair.Refresh != nil {
+		ttl = max(ttl, ttlMillis(pair.Refresh.ExpiresAt))
+	}
+
+	return ttl
 }

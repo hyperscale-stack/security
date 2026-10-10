@@ -14,9 +14,28 @@ import (
 )
 
 // Store is a Redis-backed [oauth2.Storage]. Single-use atomicity
-// (ConsumeAuthorizationCode, RotateRefreshToken) is provided by Lua
-// scripts: a Redis Lua script runs to completion without interleaving
-// other commands, so the read-modify-write sequence is indivisible.
+// (ConsumeAuthorizationCode) and the token-family contract of
+// [oauth2.Storage] rest on Lua scripts: a Redis script runs to completion
+// without interleaving other commands, so each read-modify-write sequence
+// is indivisible.
+//
+// Each token family has one key, {prefix}fam:{id}, holding "active" or
+// "revoked": the point every write into the family serializes on.
+//
+//   - SaveTokenPair runs one script that refuses a family in any state but
+//     unknown or "active", records it active and writes both tokens.
+//   - RotateRefreshToken runs one script that checks the old token and the
+//     family — any state but "active" refuses the rotation — then consumes
+//     the old token and writes the new pair. On reuse the script writes
+//     nothing and the store runs the revocation script next: whatever
+//     commits in between is ordered before the revocation, which covers it.
+//   - RevokeRefreshFamily runs one script that writes that single key,
+//     whether or not any token of the family exists.
+//   - Lookups read the token, then its family key: unless that key holds
+//     exactly "active", the token is reported revoked.
+//
+// The family key lives at least as long as every token of the family, and
+// for [oauth2.FamilyRevocationRetention] after a revocation.
 type Store struct {
 	rdb    redis.UniversalClient
 	prefix string
@@ -48,8 +67,20 @@ func New(rdb redis.UniversalClient, opts ...Option) (*Store, error) {
 func (s *Store) codeKey(hash string) string { return s.prefix + "code:" + hash }
 func (s *Store) atKey(hash string) string   { return s.prefix + "at:" + hash }
 func (s *Store) rtKey(hash string) string   { return s.prefix + "rt:" + hash }
-func (s *Store) famRTKey(fam string) string { return s.prefix + "famrt:" + fam }
-func (s *Store) famATKey(fam string) string { return s.prefix + "famat:" + fam }
+func (s *Store) famKey(id string) string    { return s.prefix + "fam:" + id }
+
+// familyActive is the state of a family key that lets its tokens be used;
+// the scripts write it, and "revoked", as Lua literals.
+const familyActive = "active"
+
+// The replies of the token scripts.
+const (
+	resultOK       = "ok"
+	resultNotFound = "notfound"
+	resultMismatch = "mismatch"
+	resultRevoked  = "revoked"
+	resultReused   = "reused"
+)
 
 // --- Lua scripts ---------------------------------------------------------
 
@@ -62,31 +93,73 @@ redis.call('DEL', KEYS[1])
 return v
 `)
 
-// rotateRefreshScript atomically rotates a refresh token.
+// issuePairScript persists a newly issued pair into a family. It refuses a
+// family whose key holds anything but "active" — a missing key is a new
+// family — records the family active for at least the pair's lifetime,
+// then writes the tokens.
 //
-//	KEYS[1] old refresh-token key
-//	KEYS[2] new refresh-token key
-//	KEYS[3] family set of refresh-token hashes
-//	ARGV[1] new refresh-token JSON
-//	ARGV[2] new refresh-token TTL (seconds)
-//	ARGV[3] new refresh-token hash
+//	KEYS[1] family; KEYS[2] access token; KEYS[3] refresh token (optional)
+//	ARGV[1] family TTL (ms); ARGV[2] access JSON; ARGV[3] access TTL (ms);
+//	ARGV[4] refresh JSON; ARGV[5] refresh TTL (ms) — with KEYS[3] only
 //
-// Returns: 'ok' on success, 'notfound' when the old key is absent,
-// 'reused' when the old token was already consumed.
-var rotateRefreshScript = redis.NewScript(`
-local old = redis.call('GET', KEYS[1])
-if not old then return 'notfound' end
-local decoded = cjson.decode(old)
-if decoded.consumed then return 'reused' end
-decoded.consumed = true
-local ttl = redis.call('PTTL', KEYS[1])
-if ttl and ttl > 0 then
-  redis.call('SET', KEYS[1], cjson.encode(decoded), 'PX', ttl)
-else
-  redis.call('SET', KEYS[1], cjson.encode(decoded))
+// Returns 'ok', or 'revoked' without writing anything.
+var issuePairScript = redis.NewScript(`
+local state = redis.call('GET', KEYS[1])
+if state and state ~= 'active' then return 'revoked' end
+if redis.call('PTTL', KEYS[1]) < tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[1], 'active', 'PX', ARGV[1])
 end
-redis.call('SET', KEYS[2], ARGV[1], 'EX', tonumber(ARGV[2]))
-redis.call('SADD', KEYS[3], ARGV[3])
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+if KEYS[3] then redis.call('SET', KEYS[3], ARGV[4], 'PX', ARGV[5]) end
+return 'ok'
+`)
+
+// rotatePairScript atomically consumes a refresh token and persists the
+// pair replacing it. Every check runs before the first write, so a refusal
+// — or a corrupt old token, which aborts the script — writes nothing.
+//
+//	KEYS[1] old refresh token; KEYS[2] family;
+//	KEYS[3] new refresh token; KEYS[4] new access token
+//	ARGV[1] family ID; ARGV[2] refresh JSON; ARGV[3] refresh TTL (ms);
+//	ARGV[4] access JSON; ARGV[5] access TTL (ms); ARGV[6] family TTL (ms)
+//
+// Returns 'ok', 'notfound', 'mismatch' (the old token is in another
+// family), 'revoked' (the family key is not 'active': rotations never
+// create a family) or 'reused'. A consumed old token whose replacement
+// already exists is a resend of this very rotation — the new refresh key
+// comes from 256 random bits, only an earlier run of the same call can
+// have written it — so it answers 'ok' rather than 'reused': go-redis
+// resends a command whose reply was lost, which must not revoke the family
+// the rotation just extended.
+var rotatePairScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'notfound' end
+local old = cjson.decode(raw)
+if old.family_id ~= ARGV[1] then return 'mismatch' end
+if redis.call('GET', KEYS[2]) ~= 'active' then return 'revoked' end
+if old.consumed then
+  if redis.call('EXISTS', KEYS[3]) == 1 then return 'ok' end
+  return 'reused'
+end
+old.consumed = true
+redis.call('SET', KEYS[1], cjson.encode(old), 'KEEPTTL')
+redis.call('SET', KEYS[3], ARGV[2], 'PX', ARGV[3])
+redis.call('SET', KEYS[4], ARGV[4], 'PX', ARGV[5])
+if redis.call('PTTL', KEYS[2]) < tonumber(ARGV[6]) then
+  redis.call('SET', KEYS[2], 'active', 'PX', ARGV[6])
+end
+return 'ok'
+`)
+
+// revokeFamilyScript records a family revoked: its only write sets the
+// family key, keeping the longer of its current TTL and the retention.
+//
+//	KEYS[1] family; ARGV[1] minimum retention (ms)
+var revokeFamilyScript = redis.NewScript(`
+local ttl = tonumber(ARGV[1])
+local current = redis.call('PTTL', KEYS[1])
+if current > ttl then ttl = current end
+redis.call('SET', KEYS[1], 'revoked', 'PX', ttl)
 return 'ok'
 `)
 
@@ -136,34 +209,58 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 	return code, nil
 }
 
-// --- access tokens -------------------------------------------------------
+// --- access and refresh tokens -------------------------------------------
 
-// SaveAccessToken implements [oauth2.AccessTokenStore].
-func (s *Store) SaveAccessToken(ctx context.Context, t *oauth2.AccessToken) error {
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("redisstore: empty access token hash")
+// SaveTokenPair implements [oauth2.Storage]. A pair of a family goes
+// through issuePairScript; a pair outside any family is one SET.
+func (s *Store) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
+	if err := pair.Validate(); err != nil {
+		return fmt.Errorf("redisstore: save token pair: %w", err)
 	}
 
-	payload, err := encodeAccess(t)
+	access, err := encodeAccess(&pair.Access)
 	if err != nil {
 		return fmt.Errorf("redisstore: encode access token: %w", err)
 	}
 
-	pipe := s.rdb.TxPipeline()
-	pipe.Set(ctx, s.atKey(t.TokenHash), payload, ttlUntil(t.ExpiresAt))
+	if pair.Access.FamilyID == "" {
+		if err := s.rdb.Set(ctx, s.atKey(pair.Access.TokenHash), access, ttlUntil(pair.Access.ExpiresAt)).Err(); err != nil {
+			return fmt.Errorf("redisstore: save access token: %w", err)
+		}
 
-	if t.FamilyID != "" {
-		pipe.SAdd(ctx, s.famATKey(t.FamilyID), t.TokenHash)
+		return nil
 	}
 
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("redisstore: save access token: %w", err)
+	keys := []string{s.famKey(pair.Access.FamilyID), s.atKey(pair.Access.TokenHash)}
+	args := []any{familyTTL(pair), access, ttlMillis(pair.Access.ExpiresAt)}
+
+	if pair.Refresh != nil {
+		refresh, err := encodeRefresh(pair.Refresh)
+		if err != nil {
+			return fmt.Errorf("redisstore: encode refresh token: %w", err)
+		}
+
+		keys = append(keys, s.rtKey(pair.Refresh.TokenHash))
+		args = append(args, refresh, ttlMillis(pair.Refresh.ExpiresAt))
 	}
 
-	return nil
+	res, err := issuePairScript.Run(ctx, s.rdb, keys, args...).Text()
+	if err != nil {
+		return fmt.Errorf("redisstore: save token pair: %w", err)
+	}
+
+	switch res {
+	case resultOK:
+		return nil
+	case resultRevoked:
+		return oauth2.ErrTokenFamilyRevoked
+	default:
+		return fmt.Errorf("redisstore: save token pair: unexpected script result %q", res)
+	}
 }
 
-// LookupAccessToken implements [oauth2.AccessTokenStore].
+// LookupAccessToken implements [oauth2.AccessTokenStore]. A token whose
+// family key is not "active" is reported as [oauth2.ErrTokenFamilyRevoked].
 func (s *Store) LookupAccessToken(ctx context.Context, tokenHash string) (*oauth2.AccessToken, error) {
 	raw, err := s.rdb.Get(ctx, s.atKey(tokenHash)).Bytes()
 	if err != nil {
@@ -179,6 +276,15 @@ func (s *Store) LookupAccessToken(ctx context.Context, tokenHash string) (*oauth
 		return nil, fmt.Errorf("redisstore: decode access token: %w", err)
 	}
 
+	active, err := s.familyActive(ctx, t.FamilyID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !active {
+		return nil, oauth2.ErrTokenFamilyRevoked
+	}
+
 	return t, nil
 }
 
@@ -191,34 +297,9 @@ func (s *Store) RevokeAccessToken(ctx context.Context, tokenHash string) error {
 	return nil
 }
 
-// --- refresh tokens ------------------------------------------------------
-
-// SaveRefreshToken implements [oauth2.RefreshTokenStore].
-func (s *Store) SaveRefreshToken(ctx context.Context, t *oauth2.RefreshToken) error {
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("redisstore: empty refresh token hash")
-	}
-
-	payload, err := encodeRefresh(t)
-	if err != nil {
-		return fmt.Errorf("redisstore: encode refresh token: %w", err)
-	}
-
-	pipe := s.rdb.TxPipeline()
-	pipe.Set(ctx, s.rtKey(t.TokenHash), payload, ttlUntil(t.ExpiresAt))
-
-	if t.FamilyID != "" {
-		pipe.SAdd(ctx, s.famRTKey(t.FamilyID), t.TokenHash)
-	}
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("redisstore: save refresh token: %w", err)
-	}
-
-	return nil
-}
-
-// LookupRefreshToken implements [oauth2.RefreshTokenStore].
+// LookupRefreshToken implements [oauth2.RefreshTokenStore]. A token whose
+// family key is not "active" comes back consumed — and so does a token
+// stored without a family, which no valid pair carries.
 func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oauth2.RefreshToken, error) {
 	raw, err := s.rdb.Get(ctx, s.rtKey(tokenHash)).Bytes()
 	if err != nil {
@@ -234,108 +315,148 @@ func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oaut
 		return nil, fmt.Errorf("redisstore: decode refresh token: %w", err)
 	}
 
+	active, err := s.familyActive(ctx, t.FamilyID)
+	if err != nil {
+		return nil, err
+	}
+
+	t.Consumed = t.Consumed || t.FamilyID == "" || !active
+
 	return t, nil
 }
 
-// RotateRefreshToken implements [oauth2.RefreshTokenStore] via the
-// rotateRefresh Lua script — the consumed-flag check and the new-token
-// insert happen atomically. Reuse of a consumed token returns
-// [oauth2.ErrRefreshTokenReused] and revokes the whole family.
-func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.RefreshToken) error {
-	payload, err := encodeRefresh(next)
+// RotateRefreshToken implements [oauth2.RefreshTokenStore] via
+// rotatePairScript. On reuse the script writes nothing and the store then
+// revokes the family; a failure of that revocation is reported as
+// [oauth2.ErrRefreshTokenReused] joined with
+// [oauth2.ErrTokenFamilyRevocationFailed] and its cause.
+func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.TokenPair) error {
+	if err := validateRotation(next); err != nil {
+		return err
+	}
+
+	refresh, err := encodeRefresh(next.Refresh)
 	if err != nil {
-		return fmt.Errorf("redisstore: encode rotated refresh token: %w", err)
+		return fmt.Errorf("redisstore: encode refresh token: %w", err)
 	}
 
+	access, err := encodeAccess(&next.Access)
+	if err != nil {
+		return fmt.Errorf("redisstore: encode access token: %w", err)
+	}
+
+	familyID := next.Access.FamilyID
 	keys := []string{
-		s.rtKey(oldHash),
-		s.rtKey(next.TokenHash),
-		s.famRTKey(next.FamilyID),
+		s.rtKey(oldHash), s.famKey(familyID),
+		s.rtKey(next.Refresh.TokenHash), s.atKey(next.Access.TokenHash),
 	}
-	args := []any{payload, int64(ttlUntil(next.ExpiresAt).Seconds()), next.TokenHash}
+	args := []any{
+		familyID,
+		refresh, ttlMillis(next.Refresh.ExpiresAt),
+		access, ttlMillis(next.Access.ExpiresAt),
+		familyTTL(next),
+	}
 
-	res, err := rotateRefreshScript.Run(ctx, s.rdb, keys, args...).Result()
+	res, err := rotatePairScript.Run(ctx, s.rdb, keys, args...).Text()
 	if err != nil {
 		return fmt.Errorf("redisstore: rotate refresh token: %w", err)
 	}
 
 	switch res {
-	case "ok":
+	case resultOK:
 		return nil
-	case "notfound":
+	case resultNotFound:
 		return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
-	case "reused":
-		// Reuse detected — revoke the whole family per BCP §8.10.3.
-		_ = s.RevokeRefreshFamily(ctx, next.FamilyID)
-
-		return oauth2.ErrRefreshTokenReused
+	case resultMismatch:
+		return oauth2.ErrInvalidRequest.WithDescription("redisstore: rotation into another token family")
+	case resultRevoked:
+		return oauth2.ErrTokenFamilyRevoked
+	case resultReused:
+		return s.revokeReused(ctx, familyID)
 	default:
-		return fmt.Errorf("redisstore: rotate: unexpected script result %v", res)
+		return fmt.Errorf("redisstore: rotate refresh token: unexpected script result %q", res)
 	}
 }
 
-// RevokeRefreshFamily implements [oauth2.RefreshTokenStore]: every refresh
-// token of the family is marked consumed, every access token of the
-// family is deleted.
+// RevokeRefreshFamily implements [oauth2.RefreshTokenStore] via
+// revokeFamilyScript: one write, recorded whether or not any token of the
+// family exists. A failure wraps [oauth2.ErrTokenFamilyRevocationFailed].
 func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string) error {
-	rtHashes, err := s.rdb.SMembers(ctx, s.famRTKey(familyID)).Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("redisstore: list family refresh tokens: %w", err)
+	if err := checkFamilyID(familyID); err != nil {
+		return err
 	}
 
-	for _, h := range rtHashes {
-		if err := s.markConsumed(ctx, h); err != nil {
-			return err
-		}
+	return s.revokeFamily(ctx, familyID)
+}
+
+// revokeReused answers the reuse rotatePairScript detected by revoking the
+// family, then reports the reuse.
+func (s *Store) revokeReused(ctx context.Context, familyID string) error {
+	if err := s.revokeFamily(ctx, familyID); err != nil {
+		return fmt.Errorf("%w: %w", oauth2.ErrRefreshTokenReused, err)
 	}
 
-	atHashes, err := s.rdb.SMembers(ctx, s.famATKey(familyID)).Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("redisstore: list family access tokens: %w", err)
-	}
+	return oauth2.ErrRefreshTokenReused
+}
 
-	for _, h := range atHashes {
-		if err := s.rdb.Del(ctx, s.atKey(h)).Err(); err != nil {
-			return fmt.Errorf("redisstore: purge family access token: %w", err)
-		}
+// revokeFamily runs revokeFamilyScript.
+func (s *Store) revokeFamily(ctx context.Context, familyID string) error {
+	err := revokeFamilyScript.Run(ctx, s.rdb, []string{s.famKey(familyID)},
+		oauth2.FamilyRevocationRetention.Milliseconds()).Err()
+	if err != nil {
+		return fmt.Errorf("redisstore: revoke family %q: %w: %w", familyID, oauth2.ErrTokenFamilyRevocationFailed, err)
 	}
 
 	return nil
 }
 
-// markConsumed flips the consumed flag of a single refresh token,
-// preserving its TTL.
-func (s *Store) markConsumed(ctx context.Context, hash string) error {
-	raw, err := s.rdb.Get(ctx, s.rtKey(hash)).Bytes()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil // already gone — nothing to revoke
-		}
-
-		return fmt.Errorf("redisstore: get refresh token: %w", err)
+// familyActive reports whether a token of familyID may be used: it is
+// outside any family, or its family key holds exactly "active". A missing
+// key — expired, evicted — or any other value reads as revoked; a key the
+// store cannot read is an error, never an answer.
+func (s *Store) familyActive(ctx context.Context, familyID string) (bool, error) {
+	if familyID == "" {
+		return true, nil
 	}
 
-	rt, err := decodeRefresh(hash, raw)
-	if err != nil {
-		return fmt.Errorf("redisstore: decode refresh token: %w", err)
+	state, err := s.rdb.Get(ctx, s.famKey(familyID)).Result()
+
+	switch {
+	case errors.Is(err, redis.Nil):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("redisstore: lookup token family: %w", err)
+	default:
+		return state == familyActive, nil
+	}
+}
+
+// validateRotation refuses a malformed rotation target before any command
+// runs: nil, failing [oauth2.TokenPair.Validate], or without the refresh
+// token a rotation issues.
+func validateRotation(next *oauth2.TokenPair) error {
+	if err := next.Validate(); err != nil {
+		return fmt.Errorf("redisstore: rotate refresh token: %w", err)
 	}
 
-	if rt.Consumed {
+	if next.Refresh == nil {
+		return oauth2.ErrInvalidRequest.WithDescription("redisstore: rotation without a refresh token")
+	}
+
+	return nil
+}
+
+// checkFamilyID refuses a family ID no family can have: empty, or longer
+// than [oauth2.MaxFamilyIDLength].
+func checkFamilyID(familyID string) error {
+	switch {
+	case familyID == "":
+		return oauth2.ErrInvalidRequest.WithDescription("redisstore: empty token family id")
+	case len(familyID) > oauth2.MaxFamilyIDLength:
+		return oauth2.ErrInvalidRequest.WithDescription("redisstore: token family id too long")
+	default:
 		return nil
 	}
-
-	rt.Consumed = true
-
-	payload, err := encodeRefresh(rt)
-	if err != nil {
-		return fmt.Errorf("redisstore: encode refresh token: %w", err)
-	}
-
-	if err := s.rdb.Set(ctx, s.rtKey(hash), payload, redis.KeepTTL).Err(); err != nil {
-		return fmt.Errorf("redisstore: mark refresh token consumed: %w", err)
-	}
-
-	return nil
 }
 
 // Compile-time interface check.

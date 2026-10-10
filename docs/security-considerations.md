@@ -54,28 +54,32 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   every refresh exchange consumes the presented token and issues a new one
   in the same family (RFC 9700 §4.14.2). The profiles apply it to every
   client, stricter than RFC 9700 §2.2.2, which requires rotation — or
-  sender-constrained refresh tokens, which this library does not issue —
-  for public clients only. Under these profiles — and under `Profile20`
-  when `RotateRefreshTokens` is set — `NewServer` refuses a
-  `refresh_token` grant without a `RefreshTokens` generator, and the grant
-  itself fails with `server_error` before minting anything when it cannot
-  rotate. Re-use of an already-rotated token is treated as theft: the
-  whole family is revoked (`ErrRefreshTokenReused`). Clients MUST keep the
-  refresh token returned by each exchange (RFC 6749 §6) and must not
-  refresh concurrently with the same token, or they lose the family. Under
-  `Profile20` rotation is opt-in (`RotateRefreshTokens`); without it a
-  refresh token stays reusable until it expires, which RFC 9700 §2.2.2
-  forbids for public clients.
+  sender-constrained refresh tokens, which this library does not issue — for
+  public clients only. Under these profiles — and under `Profile20` when
+  `RotateRefreshTokens` is set — `NewServer` refuses a `refresh_token` grant
+  without a `RefreshTokens` generator, and the grant itself fails with
+  `server_error` before minting anything when it cannot rotate. Re-use of an
+  already-rotated token is treated as theft: the whole family is revoked
+  (`ErrRefreshTokenReused`), with the guarantees described under
+  [Token-family revocation](#token-family-revocation-storage-guarantees).
+  Clients MUST keep the refresh token returned by each exchange (RFC 6749
+  §6) and must not refresh concurrently with the same token, or they lose
+  the family. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`);
+  without it a refresh token stays reusable until it expires, which RFC 9700
+  §2.2.2 forbids for public clients.
 - **Token storage** — access tokens, refresh tokens, and authorization
   codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
   store never sees cleartext, so a database compromise does not yield
   usable tokens. Tokens carry ≥ 128 bits of entropy, so the bare hash is
   preimage- and brute-force-resistant.
-- **Atomic single-use** — `ConsumeAuthorizationCode` and
-  `RotateRefreshToken` are atomic in every `Storage` implementation (SQL
-  transactions, Redis Lua scripts). Concurrent use of the same code/token
-  yields exactly one winner; the conformance suite verifies this under
-  100-goroutine races.
+- **Atomic single-use** — `ConsumeAuthorizationCode` is atomic in every
+  `Storage` implementation, and so are the token writes: `SaveTokenPair`
+  and `RotateRefreshToken` persist a whole pair or nothing, gated by the
+  token family (SQL transactions with row locks, Redis Lua scripts, a mutex
+  in memory). Concurrent use of the same code or refresh token yields
+  exactly one winner; the conformance suite checks it with 50 concurrent
+  consumers of one code and 30 concurrent rotations of one token, and races
+  revocations against rotation chains and issuance.
 - **Profiles** — `Profile20BCP` (the default) follows the OAuth 2.0
   Security BCP: it refuses the `implicit` grant. `Profile21Draft`
   additionally refuses the `password` grant. Legacy grants are opt-in and
@@ -106,6 +110,97 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   failed policy answer the same bytes as an unknown token
   (`{"active":false}`), so the response discloses nothing (its latency may
   still differ); a policy failure is reported to `OnError`.
+
+### Token-family revocation (storage guarantees)
+
+Every access and refresh token issued from one authorization shares a token
+family; `client_credentials` and implicit tokens belong to none. Revoking
+the family is how the server answers a replayed refresh token (RFC 9700
+§4.14.2, RFC 6749 §10.4) and how `/revoke` honours RFC 7009 §2.1, which asks
+the server to invalidate the access tokens of a revoked refresh token's
+grant (and allows revoking the refresh tokens of a revoked access token).
+Every `Storage` keeps one authoritative state per family — active or
+revoked — that issuance, rotation and lookups go through, so a revocation
+never has to find the family's tokens:
+
+- **Complete revocation.** A revocation is complete once
+  `RevokeRefreshFamily` returned `nil`, or once a reuse was reported without
+  `oauth2.ErrTokenFamilyRevocationFailed`. From then on no token of the
+  family is usable through the store — access-token lookups fail with
+  `invalid_grant`, refresh tokens read consumed — and every issuance or
+  rotation into the family fails without persisting anything, including one
+  that raced the revocation: it is ordered either before the revocation,
+  which then covers its tokens, or after it, and is refused. A lookup
+  running concurrently with the revocation may still answer "active".
+- **Before the first token.** A family can be revoked before any of its
+  tokens exists; the revocation is kept for at least
+  `oauth2.FamilyRevocationRetention` (24 hours), and never for less than the
+  lifetime of the family's tokens, so a late issuance is still refused.
+- **Atomicity.** A failed issuance or rotation persists no token and
+  consumes nothing: a failed exchange no longer leaves an access token
+  behind.
+- **Idempotence and isolation.** Revoking a revoked family changes nothing
+  and succeeds; a revoked family never becomes active again. Revoking one
+  family affects no other family and no token outside a family, and the
+  empty family ID is refused.
+- **Failure.** A revocation that cannot be recorded fails with
+  `oauth2.ErrTokenFamilyRevocationFailed`, and its outcome may be unknown (a
+  lost acknowledgement): treat the family as active and retry, which
+  idempotence makes safe. `/revoke` then answers
+  `503 temporarily_unavailable` — RFC 7009 §2.2.1: the client must assume
+  the token still exists and may retry — since a `200` would tell the client
+  the token can no longer be used (RFC 7009 §2.1). It revokes an access
+  token's family before deleting the token, so a failed family revocation
+  leaves everything in place for that retry. On the reuse path the store
+  reports `ErrRefreshTokenReused` joined with the revocation failure, the
+  `refresh_token` grant retries the revocation on a context detached from
+  the request, and a second failure reaches `grant.Config.OnError`; the
+  client gets `invalid_grant` either way.
+- **Fail closed.** A token whose family state is missing — expired,
+  evicted, deleted by a premature cleanup, or never written by a build
+  predating token families — is treated as revoked. This protects lookups
+  only: the next issuance into a family whose revoked state was lost records
+  it active again and revives its tokens, so a revoked family's state must
+  never be lost within its retention — no eviction, no early cleanup.
+- **Lost responses look like theft.** When the response to a successful
+  rotation is lost, the client retries with the presented token, which is
+  now a reuse: the family is revoked and the user re-authenticates. This is
+  inherent to rotation; there is no grace period. A Redis rotation resent
+  by the client library after a lost reply is recognized, though, and does
+  not count as a reuse.
+
+These guarantees rest on deployment assumptions, detailed in the package
+documentation of [`store/sql`](../oauth2/store/sql/doc.go) and
+[`store/redis`](../oauth2/store/redis/doc.go): every read reaches the
+primary (no replica reads, no client-side caching), the store's PostgreSQL
+token-family transactions run at READ COMMITTED (it pins the level) and
+MySQL tables use InnoDB, Redis is a standalone server or a Sentinel primary
+(not Cluster) running 6.0 or later with `maxmemory-policy noeviction`, no
+family row or key is deleted before it expires, and durability is the
+backend's: a revocation acknowledged by a primary that fails before
+persisting or replicating it can be lost in a failover. Only SQLite is
+exercised in CI; the PostgreSQL and MySQL guarantees rest on their locking
+semantics.
+
+### Offline JWT access tokens
+
+The store's revocation reaches every token looked up in the store —
+`/introspect`, a resource server calling `LookupAccessToken` — but not a
+resource server that verifies JWT access tokens offline, from their
+signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
+until its `exp`, whatever happened to its family. The RFC 9068 payload the
+`jwtsec` signer emits carries no family or token identifier (`jti`), so it
+cannot be deny-listed today either. RFC 7009 §2.1 acknowledges such a
+propagation delay and asks implementations to minimize it; its §3 leaves
+immediate revocation of self-contained tokens to non-standardized backend
+interaction, and suggests short-lived access tokens instead. To bound the
+window:
+
+- keep `grant.Config.AccessTTL` short when access tokens are JWTs;
+- for high-value operations, validate the token against the authorization
+  server — RFC 7662 introspection, or `LookupAccessToken` when the resource
+  server shares the store — rather than offline;
+- or issue opaque access tokens, which only the store can validate.
 
 ## Sessions
 
@@ -152,6 +247,17 @@ span catalog.
 - [ ] Register the resource servers calling `/introspect` as confidential
       clients, and set `ServerConfig.IntrospectionPolicy` when several
       resource servers or tenants share the authorization server.
+- [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
+      `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
+      failed family revocations are reported there.
+- [ ] With `store/sql`, periodically delete rows past `expires_at` — never
+      a family row before it — in the deadlock-free order the package
+      documentation gives; with `store/redis`, run Redis 6.0+ standalone or
+      behind Sentinel with `maxmemory-policy noeviction`, and read from the
+      primary only. A revoked family whose state is lost before it expires
+      can be revived.
+- [ ] Keep JWT access tokens short-lived: a store revocation does not
+      reach resource servers that verify them offline.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

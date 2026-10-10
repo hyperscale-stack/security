@@ -220,13 +220,7 @@ func TestRefreshTokenRotationDetectsReuse(t *testing.T) {
 
 	// Seed an existing refresh token.
 	rawRT := "raw-refresh-token-xyz"
-	rtHash := oauth2.HashToken(nil, rawRT)
-	rt := &oauth2.RefreshToken{
-		Token: rawRT, TokenHash: rtHash, ClientID: clientID, Subject: subject,
-		Scope: "read:mail", IssuedAt: now, ExpiresAt: now.Add(24 * time.Hour),
-		FamilyID: "family-1",
-	}
-	require.NoError(t, store.SaveRefreshToken(context.Background(), rt))
+	seedPair(t, store, rawRT, "family-1", "read:mail", now.Add(24*time.Hour))
 
 	g := grant.NewRefreshToken(grant.Config{
 		Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),

@@ -32,9 +32,9 @@ through the OAuth2 error hook described below.
 
 An RFC 6749 §5.2 response carries a code, a description and a URI — never
 the cause. A `server_error` therefore reaches the client as an opaque 500,
-and RFC 7009 §2.2 goes further: a revocation answers `200 OK` even when the
-revocation itself failed. Both are protocol requirements, and both leave an
-operator with nothing to diagnose.
+and a revocation that may not have taken effect as a bare
+`503 temporarily_unavailable` (RFC 7009 §2.2.1). Both are protocol
+requirements, and both leave an operator with nothing to diagnose.
 
 `oauth2.ServerConfig.OnError` closes that gap. It is an `oauth2.ErrorHook`
 (`func(ctx context.Context, err error)`) called with the `*oauth2.Error`
@@ -59,16 +59,35 @@ The hook fires for:
   `/introspect`, metadata) and every error redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
   400 (unknown client, unregistered `redirect_uri`);
-- the best-effort revocations `/revoke` swallows to honour RFC 7009 §2.2;
+- every storage failure at `/revoke`: a token lookup that failed for another
+  reason than an unknown token (`revoke: token lookup failed`), and a failed
+  family or access-token revocation (`revoke refresh family failed`,
+  `revoke access token failed`) — one `server_error` per failure, cause
+  attached. When the failure leaves the revocation unfinished — a failed
+  lookup, a family that could not be revoked, a token outside any family
+  that could not be deleted — `/revoke` answers
+  `503 temporarily_unavailable` (RFC 7009 §2.2.1: the client must assume the
+  token still exists, and may retry); that 503 is not reported again. An
+  access token whose family was revoked but whose delete failed answers
+  `200 OK`: it is unusable through its family. An unknown token, or another
+  client's, answers `200 OK` and is not reported;
 - an `IntrospectionPolicy` that failed: `/introspect` withholds the token
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain
   refusal by the policy is an expected outcome and is not reported.
 
 `grant.Config.OnError` is the same hook for the errors a grant swallows
-before returning — today, a family revocation that failed during BCP §8.10.3
-reuse detection. Errors a grant *returns* travel to the server and reach
-`ServerConfig.OnError`, so wire both fields to the same sink.
+before returning — today, a family revocation that failed after a
+refresh-token reuse (RFC 9700 §4.14.2), whether the grant found the
+presented token consumed or the store reported the reuse while rotating.
+The grant retries a revocation the store could not record, on a context
+detached from the request, and reports one `server_error` per revocation
+that still failed: `revoke refresh family failed after reuse detection`,
+whose cause matches `oauth2.ErrTokenFamilyRevocationFailed` and names the
+family with a conforming store. It does not match
+`oauth2.ErrRefreshTokenReused`: the reuse itself is the `invalid_grant` the
+server reports as usual. Errors a grant *returns* travel to the server and
+reach `ServerConfig.OnError`, so wire both fields to the same sink.
 
 The hook is purely observational: it MUST NOT influence the response, and it
 runs synchronously on the request goroutine, so keep it fast. It receives no

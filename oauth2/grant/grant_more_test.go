@@ -268,17 +268,12 @@ func TestClientCredentialsDefaultsToFirstScope(t *testing.T) {
 
 // --- refresh_token edge cases -------------------------------------------
 
-// seedRefresh stores a refresh token and returns its raw value.
-func seedRefresh(t *testing.T, store interface {
-	SaveRefreshToken(context.Context, *oauth2.RefreshToken) error
-}, raw, scope string, expiresAt time.Time) {
+// seedRefresh stores a refresh token raw in family "fam-x", alongside an
+// access token of its family.
+func seedRefresh(t *testing.T, store oauth2.Storage, raw, scope string, expiresAt time.Time) {
 	t.Helper()
 
-	require.NoError(t, store.SaveRefreshToken(context.Background(), &oauth2.RefreshToken{
-		Token: raw, TokenHash: oauth2.HashToken(nil, raw),
-		ClientID: clientID, Subject: subject, Scope: scope,
-		IssuedAt: time.Now().Add(-time.Hour), ExpiresAt: expiresAt, FamilyID: "fam-x",
-	}))
+	seedPair(t, store, raw, "fam-x", scope, expiresAt)
 }
 
 func TestRefreshTokenMissing(t *testing.T) {

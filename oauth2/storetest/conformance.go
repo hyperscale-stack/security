@@ -33,6 +33,13 @@ type Factory func() oauth2.Storage
 //	func TestMyStoreConformance(t *testing.T) {
 //	    storetest.RunConformance(t, func() oauth2.Storage { return New(...) })
 //	}
+//
+// Besides single-use codes and atomic rotation, it checks the token-family
+// invariants the [oauth2.Storage] godoc states — visibility, gating, atomic
+// writes, reuse, idempotence, isolation — sequentially and under races,
+// through the public API only. What it cannot observe stays with each
+// store's own tests: an injected backend failure (I6, and a reuse whose
+// revocation fails), and family state lost by the backend (I8).
 func RunConformance(t *testing.T, newStore Factory) {
 	t.Helper()
 
@@ -51,6 +58,18 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"RefreshTokenReuseRevokesFamily", testRefreshReuse},
 		{"RefreshTokenConcurrentRotation", testRefreshConcurrentRotation},
 		{"RevokeRefreshFamily", testRevokeFamily},
+		{"FamilyRevokeBeforeIssuance", testFamilyRevokeBeforeIssuance},
+		{"FamilyRotateThenRevoke", testFamilyRotateThenRevoke},
+		{"FamilyRevokeThenRotate", testFamilyRevokeThenRotate},
+		{"FamilyRevokeIsIdempotent", testFamilyRevokeIsIdempotent},
+		{"FamilyRevokeIsolation", testFamilyRevokeIsolation},
+		{"FamilyRevokeRejectsEmptyID", testFamilyRevokeRejectsEmptyID},
+		{"FamilyIDLengthLimit", testFamilyIDLengthLimit},
+		{"FamilyFailedRotationPersistsNothing", testFamilyFailedRotationPersistsNothing},
+		{"FamilySaveTokenPairRejectsInvalidPair", testFamilySaveTokenPairRejectsInvalidPair},
+		{"FamilyAccessOnlyIssuanceIsGated", testFamilyAccessOnlyIssuanceIsGated},
+		{"FamilyRevokeRacesRotationChain", testFamilyRevokeRacesRotationChain},
+		{"FamilyRevokeRacesIssuance", testFamilyRevokeRacesIssuance},
 	}
 
 	for _, c := range cases {
@@ -71,11 +90,50 @@ const testScope = "read"
 
 func ctx() context.Context { return context.Background() }
 
+// The assertion helpers below hold every t.Fatalf of the suite, so the
+// cases themselves stay free of branches a passing store never takes.
+
 func mustNoError(t *testing.T, err error, msg string) {
 	t.Helper()
 
 	if err != nil {
 		t.Fatalf("%s: unexpected error: %v", msg, err)
+	}
+}
+
+// mustErrorIs asserts that err matches target.
+func mustErrorIs(t *testing.T, err, target error, msg string) {
+	t.Helper()
+
+	if !errors.Is(err, target) {
+		t.Fatalf("%s: got error %v, want one matching %v", msg, err, target)
+	}
+}
+
+// mustNotErrorIs asserts that err does not match target.
+func mustNotErrorIs(t *testing.T, err, target error, msg string) {
+	t.Helper()
+
+	if errors.Is(err, target) {
+		t.Fatalf("%s: got error %v, must not match %v", msg, err, target)
+	}
+}
+
+// mustCode asserts that err is an error carrying the OAuth2 code.
+func mustCode(t *testing.T, err error, code, msg string) {
+	t.Helper()
+
+	if got := oauth2.IsCode(err); err == nil || got != code {
+		t.Fatalf("%s: got error %v (code %q), want an error with code %s", msg, err, got, code)
+	}
+}
+
+// mustEqual asserts that got equals want.
+func mustEqual[T comparable](t *testing.T, got, want T, msg string) {
+	t.Helper()
+
+	if got != want {
+		t.Fatalf("%s: got %v, want %v", msg, got, want)
 	}
 }
 
@@ -101,34 +159,24 @@ func testCodeSaveConsume(t *testing.T, s oauth2.Storage) {
 
 	got, err := s.ConsumeAuthorizationCode(ctx(), "code-1")
 	mustNoError(t, err, "consume")
-
-	if got.ClientID != testClientID || got.Subject != testSubject || got.Scope != testScope {
-		t.Fatalf("consumed code lost fields: %+v", got)
-	}
+	mustEqual(t, got.ClientID, testClientID, "consumed code lost the client")
+	mustEqual(t, got.Subject, testSubject, "consumed code lost the subject")
+	mustEqual(t, got.Scope, testScope, "consumed code lost the scope")
 }
 
 func testCodeSingleUse(t *testing.T, s oauth2.Storage) {
 	mustNoError(t, s.SaveAuthorizationCode(ctx(), sampleCode("code-2")), "save")
 
-	if _, err := s.ConsumeAuthorizationCode(ctx(), "code-2"); err != nil {
-		t.Fatalf("first consume failed: %v", err)
-	}
-
 	_, err := s.ConsumeAuthorizationCode(ctx(), "code-2")
-	if err == nil {
-		t.Fatal("second consume MUST fail (single-use)")
-	}
+	mustNoError(t, err, "first consume")
 
-	if !errors.Is(err, oauth2.ErrCodeAlreadyUsed) &&
-		oauth2.IsCode(err) != oauth2.CodeInvalidGrant {
-		t.Fatalf("reuse error should be ErrCodeAlreadyUsed/invalid_grant, got %v", err)
-	}
+	_, err = s.ConsumeAuthorizationCode(ctx(), "code-2")
+	mustCode(t, err, oauth2.CodeInvalidGrant, "second consume (single-use)")
 }
 
 func testCodeUnknown(t *testing.T, s oauth2.Storage) {
-	if _, err := s.ConsumeAuthorizationCode(ctx(), "never-saved"); err == nil {
-		t.Fatal("consuming an unknown code MUST fail")
-	}
+	_, err := s.ConsumeAuthorizationCode(ctx(), "never-saved")
+	mustCode(t, err, oauth2.CodeInvalidGrant, "consume an unknown code")
 }
 
 // testCodeConcurrentConsume asserts the single-use guarantee under
@@ -145,203 +193,158 @@ func testCodeConcurrentConsume(t *testing.T, s oauth2.Storage) {
 	)
 
 	for range n {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			if _, err := s.ConsumeAuthorizationCode(ctx(), "code-race"); err == nil {
 				mu.Lock()
 				wins++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
 
-	if wins != 1 {
-		t.Fatalf("expected exactly 1 successful consume, got %d", wins)
-	}
+	mustEqual(t, wins, 1, "successful consumes")
 }
 
 // --- access tokens -------------------------------------------------------
 
-func sampleAccess(hash, family string) *oauth2.AccessToken {
-	now := time.Now()
-
-	return &oauth2.AccessToken{
-		Token:     "raw-" + hash,
-		TokenHash: hash,
-		ClientID:  testClientID,
-		Subject:   testSubject,
-		Scope:     testScope,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(time.Hour),
-		FamilyID:  family,
-		Audience:  "api",
-	}
-}
-
 func testAccessLifecycle(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveAccessToken(ctx(), sampleAccess("at-1", "")), "save")
+	cc := accessOnly("lifecycle", "") // a client_credentials token
+	mustSave(t, s, cc)
 
-	got, err := s.LookupAccessToken(ctx(), "at-1")
+	got, err := s.LookupAccessToken(ctx(), cc.Access.TokenHash)
 	mustNoError(t, err, "lookup")
+	mustEqual(t, got.Subject, testSubject, "lookup lost the subject")
+	mustEqual(t, got.Audience, cc.Access.Audience, "lookup lost the audience")
 
-	if got.Subject != testSubject {
-		t.Fatalf("lookup lost fields: %+v", got)
-	}
-
-	mustNoError(t, s.RevokeAccessToken(ctx(), "at-1"), "revoke")
-
-	if _, err := s.LookupAccessToken(ctx(), "at-1"); err == nil {
-		t.Fatal("lookup after revoke MUST fail")
-	}
+	mustNoError(t, s.RevokeAccessToken(ctx(), cc.Access.TokenHash), "revoke")
+	requireUnusable(t, s, cc)
 }
 
 func testAccessUnknown(t *testing.T, s oauth2.Storage) {
-	if _, err := s.LookupAccessToken(ctx(), "missing"); err == nil {
-		t.Fatal("lookup of unknown access token MUST fail")
-	}
+	_, err := s.LookupAccessToken(ctx(), "missing")
+	mustCode(t, err, oauth2.CodeInvalidGrant, "lookup of an unknown access token")
 }
 
 // --- refresh tokens ------------------------------------------------------
 
-func sampleRefresh(hash, family string) *oauth2.RefreshToken {
-	now := time.Now()
-
-	return &oauth2.RefreshToken{
-		Token:     "raw-" + hash,
-		TokenHash: hash,
-		ClientID:  testClientID,
-		Subject:   testSubject,
-		Scope:     testScope,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(24 * time.Hour),
-		FamilyID:  family,
-	}
-}
-
 func testRefreshSaveLookup(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-1", "fam-1")), "save")
+	pair := newPair("save", "fam-save")
+	mustSave(t, s, pair)
 
-	got, err := s.LookupRefreshToken(ctx(), "rt-1")
-	mustNoError(t, err, "lookup")
+	requireUsable(t, s, pair)
 
-	if got.Consumed {
-		t.Fatal("freshly saved refresh token must not be consumed")
-	}
+	got, err := s.LookupRefreshToken(ctx(), pair.Refresh.TokenHash)
+	mustNoError(t, err, "lookup refresh token")
+	mustEqual(t, got.FamilyID, "fam-save", "lookup lost the family")
+	mustEqual(t, got.Scope, testScope, "lookup lost the scope")
 }
 
 func testRefreshRotation(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-old", "fam-2")), "save old")
+	first := newPair("rot-0", "fam-rot")
+	mustSave(t, s, first)
 
-	next := sampleRefresh("rt-new", "fam-2")
-	mustNoError(t, s.RotateRefreshToken(ctx(), "rt-old", next), "rotate")
+	next := newPair("rot-1", "fam-rot")
+	mustRotate(t, s, first, next)
 
-	old, err := s.LookupRefreshToken(ctx(), "rt-old")
-	mustNoError(t, err, "lookup old")
+	requireConsumed(t, s, first.Refresh.TokenHash)
+	requireUsable(t, s, next)
 
-	if !old.Consumed {
-		t.Fatal("rotated old token MUST be marked consumed")
-	}
-
-	fresh, err := s.LookupRefreshToken(ctx(), "rt-new")
-	mustNoError(t, err, "lookup new")
-
-	if fresh.Consumed {
-		t.Fatal("new token must not be consumed")
-	}
+	// Rotation consumes the presented refresh token only: the access token
+	// issued alongside it lives on until it expires.
+	_, err := s.LookupAccessToken(ctx(), first.Access.TokenHash)
+	mustNoError(t, err, "lookup the previous access token")
 }
 
+// testRefreshReuse replays a rotated token: the store reports reuse — with
+// the family revoked, so not as a revocation failure — and nothing of the
+// family stays usable or can be issued any more.
 func testRefreshReuse(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-r1", "fam-3")), "save")
+	first := newPair("reuse-0", "fam-reuse")
+	mustSave(t, s, first)
 
-	next1 := sampleRefresh("rt-r2", "fam-3")
-	mustNoError(t, s.RotateRefreshToken(ctx(), "rt-r1", next1), "first rotate")
+	second := newPair("reuse-1", "fam-reuse")
+	mustRotate(t, s, first, second)
 
-	// Replaying rt-r1 (already consumed) MUST fail and revoke the family.
-	next2 := sampleRefresh("rt-r3", "fam-3")
+	replay := newPair("reuse-2", "fam-reuse")
+	err := s.RotateRefreshToken(ctx(), first.Refresh.TokenHash, replay)
+	mustErrorIs(t, err, oauth2.ErrRefreshTokenReused, "replay a rotated token")
+	mustCode(t, err, oauth2.CodeInvalidGrant, "replay a rotated token")
+	mustNotErrorIs(t, err, oauth2.ErrTokenFamilyRevocationFailed, "replay a rotated token")
 
-	err := s.RotateRefreshToken(ctx(), "rt-r1", next2)
-	if err == nil {
-		t.Fatal("rotating a consumed token MUST fail")
-	}
+	requireUnusable(t, s, first)
+	requireUnusable(t, s, second)
+	requireAbsent(t, s, replay)
 
-	if !errors.Is(err, oauth2.ErrRefreshTokenReused) {
-		t.Fatalf("expected ErrRefreshTokenReused, got %v", err)
-	}
+	// Once the family is revoked, the revoked state decides before the
+	// consumed one: the next replay is refused as a revoked family.
+	again := newPair("reuse-again", "fam-reuse")
+	err = s.RotateRefreshToken(ctx(), first.Refresh.TokenHash, again)
+	mustErrorIs(t, err, oauth2.ErrTokenFamilyRevoked, "replay into the revoked family")
+	requireAbsent(t, s, again)
 
-	// The whole family must now be consumed.
-	for _, h := range []string{"rt-r1", "rt-r2"} {
-		rt, lookupErr := s.LookupRefreshToken(ctx(), h)
-		if lookupErr != nil {
-			continue // some backends delete revoked tokens — acceptable
-		}
-
-		if !rt.Consumed {
-			t.Fatalf("token %s should be consumed after family revocation", h)
-		}
-	}
+	late := newPair("reuse-3", "fam-reuse")
+	mustErrorIs(t, s.SaveTokenPair(ctx(), late), oauth2.ErrTokenFamilyRevoked, "issue into the revoked family")
+	requireAbsent(t, s, late)
 }
 
 // testRefreshConcurrentRotation asserts atomic rotation: 30 goroutines race
-// to rotate the same token; exactly one succeeds, the rest see reuse.
+// to rotate the same token and exactly one succeeds. Every loser runs after
+// the winner, so the first of them detects the reuse and revokes the
+// family: the winner's tokens end up unusable and no loser persists
+// anything.
 func testRefreshConcurrentRotation(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-c0", "fam-c")), "save")
+	first := newPair("race-0", "fam-race")
+	mustSave(t, s, first)
 
 	const n = 30
 
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		wins int
-	)
+	nexts := make([]*oauth2.TokenPair, n)
+	errs := make([]error, n)
 
-	for i := range n {
-		wg.Add(1)
-
-		go func(i int) {
-			defer wg.Done()
-
-			next := sampleRefresh(fmt.Sprintf("rt-c%d", i+1), "fam-c")
-			if err := s.RotateRefreshToken(ctx(), "rt-c0", next); err == nil {
-				mu.Lock()
-				wins++
-				mu.Unlock()
-			}
-		}(i)
+	for i := range nexts {
+		nexts[i] = newPair(fmt.Sprintf("race-%d", i+1), "fam-race")
 	}
 
+	var wg sync.WaitGroup
+
+	start := make(chan struct{})
+
+	for i := range nexts {
+		wg.Go(func() {
+			<-start
+
+			errs[i] = s.RotateRefreshToken(ctx(), first.Refresh.TokenHash, nexts[i])
+		})
+	}
+
+	close(start)
 	wg.Wait()
 
-	if wins != 1 {
-		t.Fatalf("expected exactly 1 successful rotation, got %d", wins)
-	}
-}
+	wins := 0
 
-func testRevokeFamily(t *testing.T, s oauth2.Storage) {
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-f1", "fam-x")), "save rt1")
-	mustNoError(t, s.SaveRefreshToken(ctx(), sampleRefresh("rt-f2", "fam-x")), "save rt2")
-	mustNoError(t, s.SaveAccessToken(ctx(), sampleAccess("at-f1", "fam-x")), "save at")
+	for i, err := range errs {
+		if err == nil {
+			wins++
 
-	mustNoError(t, s.RevokeRefreshFamily(ctx(), "fam-x"), "revoke family")
+			requireUnusable(t, s, nexts[i])
 
-	// Access tokens of the family must be gone.
-	if _, err := s.LookupAccessToken(ctx(), "at-f1"); err == nil {
-		t.Fatal("access token of revoked family MUST be gone")
-	}
-
-	// Refresh tokens of the family must be consumed (or gone).
-	for _, h := range []string{"rt-f1", "rt-f2"} {
-		rt, err := s.LookupRefreshToken(ctx(), h)
-		if err != nil {
 			continue
 		}
 
-		if !rt.Consumed {
-			t.Fatalf("refresh token %s should be consumed after family revocation", h)
-		}
+		mustCode(t, err, oauth2.CodeInvalidGrant, "losing rotation")
+		requireAbsent(t, s, nexts[i])
 	}
+
+	mustEqual(t, wins, 1, "successful rotations")
+}
+
+func testRevokeFamily(t *testing.T, s oauth2.Storage) {
+	pair := newPair("revoke", "fam-revoke")
+	mustSave(t, s, pair)
+
+	mustNoError(t, s.RevokeRefreshFamily(ctx(), "fam-revoke"), "revoke family")
+
+	requireUnusable(t, s, pair)
 }

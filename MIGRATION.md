@@ -170,3 +170,80 @@ To migrate:
    caller authenticated as a confidential client, and gets the request
    context; see the `oauth2.IntrospectionPolicy` godoc for the full
    contract.
+
+### `oauth2`: atomic token pairs, authoritative token families (#82)
+
+Refresh-token reuse detection promised to revoke the whole token family,
+but no store could guarantee it: revocation searched and purged the
+family's tokens non-atomically, nothing stopped a rotation or an issuance
+racing it, a reuse whose revocation failed was reported as a success, and
+the grants persisted an access token before the rest of the exchange could
+fail. Every store now keeps one authoritative state per token family —
+active or revoked — that issuance, rotation and lookups go through, and
+writes each token pair in one atomic call. The guarantees are stated on the
+`oauth2.Storage` godoc and checked by `oauth2/storetest`.
+
+| Before                                                                    | After                                                                                                      |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `SaveAccessToken(ctx, at)`                                                | `SaveTokenPair(ctx, &oauth2.TokenPair{Access: *at})`                                                       |
+| `SaveAccessToken` then `SaveRefreshToken` for one issuance                | one `SaveTokenPair(ctx, &oauth2.TokenPair{Access: at, Refresh: &rt})`                                      |
+| `SaveAccessToken`, then `RotateRefreshToken(ctx, oldHash, nextRefresh)`   | one `RotateRefreshToken(ctx, oldHash, &oauth2.TokenPair{Access: at, Refresh: &rt})`                        |
+| `RevokeRefreshFamily` purges the family's tokens                          | records the family revoked, even before its first token; `""` and IDs over 64 bytes are refused            |
+| a token of a revoked family: access token deleted, refresh token consumed | `LookupAccessToken` fails with `invalid_grant` (`ErrTokenFamilyRevoked`); the refresh token reads consumed |
+| a reuse returns `ErrRefreshTokenReused` whatever its revocation did       | the error also wraps `ErrTokenFamilyRevocationFailed` when the revocation failed                           |
+
+To migrate:
+
+1. **Wiring.** `ServerConfig.Storage` and the `Storage` of every grant MUST
+   be the same store: access and refresh tokens now share one backend (only
+   authorization codes may live elsewhere).
+2. **Custom stores.** Implement the new methods as the `oauth2.Storage`
+   godoc describes, refuse what `TokenPair.Validate` rejects — and a
+   rotation without a refresh token — before any I/O, return the `oauth2`
+   sentinels as-is or wrapped with `%w` (a `WithDescription` copy no longer
+   matches `errors.Is`), and pass `storetest.RunConformance`.
+3. **Code seeding tokens** (tests, fixtures) calls `SaveTokenPair`; a
+   consumed refresh token can only come from a real `RotateRefreshToken`.
+4. **SQL.** Run `Store.Migrate` (or apply `Schema`) once: it creates the
+   `oauth2_token_families` table and leaves the existing tables untouched.
+   The `idx_oauth2_access_family` and `idx_oauth2_refresh_family` indexes
+   are no longer created or used; dropping them is optional. Schedule the
+   expired-row cleanup the `store/sql` package documentation describes, and
+   never delete a family row before its `expires_at`: an issuance into a
+   family whose revoked row is gone records it active again.
+5. **Redis.** Families now live in `<prefix>fam:{id}` keys (`<prefix>` being
+   the `WithKeyPrefix` value, `oauth2:` by default); the store ignores the
+   former `<prefix>famrt:*` and `<prefix>famat:*` sets, which you may delete
+   with `SCAN`. The store requires Redis 6.0 or later, a standalone server
+   or a Sentinel primary, reads from the primary only, and
+   `maxmemory-policy noeviction`: an evicted revoked family can be
+   recorded active again by an issuance into it.
+6. **Tokens issued before the upgrade.** Upgrading invalidates every
+   outstanding refresh token and every access token bound to a family:
+   their family has no record, and the stores treat an unknown family as
+   revoked. Users re-authenticate; expect a one-off burst of `invalid_grant`
+   ("refresh token reused") answers as clients present their pre-upgrade
+   refresh tokens. Access tokens outside a family (`client_credentials`,
+   implicit) keep working until they expire. Flushing the old token rows
+   or keys is good hygiene: they can no longer be used.
+
+### `oauth2`: `/revoke` answers 503 when a revocation may have failed (#82)
+
+`/revoke` answered `200 OK` whatever happened, telling the client its token
+could no longer be used (RFC 7009 §2.1) even when the store had failed to
+revoke it. It now answers `503 temporarily_unavailable`
+(`{"error":"temporarily_unavailable","error_description":"revocation temporarily unavailable"}`)
+when a token lookup fails for another reason than an unknown token, when
+the token's family cannot be revoked, or when a token outside any family
+cannot be deleted. RFC 7009 §2.2.1: the client must then assume the token
+still exists, and may retry after a delay — revocation is idempotent, so
+retrying is safe. An access token is revoked through its family first and
+only then deleted: a failed family revocation leaves it in place for the
+retry, while a failed delete after the family was revoked is reported but
+answers `200 OK`, the token being unusable through its family. Clients that
+ignored the status of `/revoke` should now retry on 503.
+
+Unknown tokens and other clients' tokens still answer `200 OK`. Every
+underlying failure still reaches `ServerConfig.OnError` exactly once, as a
+`server_error` carrying its cause (a failed lookup is now reported too, as
+`revoke: token lookup failed`); the 503 itself is not reported again.

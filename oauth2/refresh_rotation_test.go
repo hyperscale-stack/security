@@ -38,20 +38,12 @@ func (s *spyAccessGen) Generate(context.Context, token.AccessTokenClaims) (strin
 // wrapped grant implements.
 type hiddenGrant struct{ oauth2.Grant }
 
-// seedServerRefresh stores a live refresh token issued to the test client.
+// seedServerRefresh stores a live refresh token issued to the test client
+// in family "family-rot", alongside an access token of its family.
 func seedServerRefresh(t *testing.T, store oauth2.Storage, raw string) {
 	t.Helper()
 
-	require.NoError(t, store.SaveRefreshToken(t.Context(), &oauth2.RefreshToken{
-		Token:     raw,
-		TokenHash: oauth2.HashToken(nil, raw),
-		ClientID:  testClientID,
-		Subject:   "alice",
-		Scope:     "api:read",
-		FamilyID:  "family-rot",
-		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
-	}))
+	seedPair(t, store, newClientPair(raw, "family-rot"))
 }
 
 // refreshServerConfig is hookServerConfig serving the single grant g under

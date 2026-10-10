@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/hyperscale-stack/security/oauth2"
-	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
 // RefreshToken implements the RFC 6749 §6 refresh_token grant with the
@@ -17,8 +16,8 @@ import (
 //
 // The flow:
 //
-//  1. Look up the refresh token; treat consumed tokens as reuse and revoke
-//     the family.
+//  1. Look up the refresh token; a consumed one (rotated, or of a revoked
+//     family) is reuse: revoke the family and refuse with invalid_grant.
 //  2. Re-bind client (refresh.ClientID MUST match the authenticated client).
 //  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
 //  4. Decide rotation before minting anything: mandatory under
@@ -26,10 +25,14 @@ import (
 //     [Config.RotateRefreshTokens] under [oauth2.Profile20]. A rotation
 //     that cannot be honored fails with server_error
 //     ([ErrRotationRequiresGenerator]).
-//  5. Issue a fresh access token.
-//  6. When rotating, issue a fresh refresh token in the same family with
-//     the presented token's scope (RFC 6749 §6) AND atomically mark the
-//     old one consumed.
+//  5. Mint a fresh access token.
+//  6. When rotating, mint a fresh refresh token in the same family with
+//     the presented token's scope (RFC 6749 §6), then consume the old token
+//     and persist the new pair in one atomic
+//     [oauth2.RefreshTokenStore.RotateRefreshToken]; otherwise persist the
+//     access token alone into the family. Either write fails, persisting
+//     nothing, once the family is revoked — the refusal stays invalid_grant
+//     — and a reuse the store detects is answered like step 1.
 type RefreshToken struct {
 	cfg Config
 }
@@ -77,14 +80,9 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 	}
 
 	if rt.Consumed {
-		// Reuse detected — revoke the whole family and refuse. The refusal
-		// stays invalid_grant whatever the revocation did, so a failure
-		// there is only observable through the error hook.
-		if err := g.cfg.Storage.RevokeRefreshFamily(ctx, rt.FamilyID); err != nil {
-			g.cfg.notifyError(ctx, oauth2.ErrServerError.
-				WithDescription("revoke refresh family failed after reuse detection").
-				WithCause(err))
-		}
+		// Reuse detected — revoke the whole family and refuse (RFC 9700
+		// §4.14.2).
+		g.revokeReusedFamily(ctx, rt.FamilyID)
 
 		return nil, oauth2.ErrRefreshTokenReused
 	}
@@ -134,71 +132,74 @@ func (g *RefreshToken) ValidateProfile(p oauth2.Profile) error {
 
 func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth2.RefreshToken, scope string) (*Response, error) {
 	// Decided before anything is minted: a rotation that cannot be honored
-	// must not leave an access token behind.
+	// must not mint an access token.
 	rotate, err := g.rotates(req.Profile)
 	if err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	expires := req.Now.Add(g.cfg.AccessTTL)
-
-	atRaw, atHash, err := g.cfg.AccessTokens.Generate(ctx, token.AccessTokenClaims{
-		Issuer:    req.Issuer,
-		Subject:   old.Subject,
-		Audience:  req.Audience,
-		ClientID:  req.Client.ID(),
-		Scope:     scope,
-		FamilyID:  old.FamilyID,
-		IssuedAt:  req.Now,
-		ExpiresAt: expires,
-	})
+	access, err := mintAccess(ctx, g.cfg, req, old.Subject, scope, old.FamilyID)
 	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
+		return nil, err
 	}
 
-	access := &oauth2.AccessToken{
-		Token: atRaw, TokenHash: atHash, ClientID: req.Client.ID(), Subject: old.Subject,
-		Scope: scope, IssuedAt: req.Now, ExpiresAt: expires,
-		FamilyID: old.FamilyID, Audience: req.Audience,
-	}
-	if err := g.cfg.Storage.SaveAccessToken(ctx, access); err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
-	resp := &Response{
-		Pair:      oauth2.TokenPair{Access: *access},
-		Scope:     scope,
-		TokenType: oauth2.TokenTypeBearer,
-	}
+	pair := &oauth2.TokenPair{Access: *access}
 
 	if !rotate {
-		return resp, nil
-	}
+		// The legacy Profile20 refresh: the access token alone joins the
+		// family, which the store refuses once revoked.
+		if err := g.cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
+			return nil, storageFailure(err)
+		}
 
-	rtRaw, rtHash, err := g.cfg.RefreshTokens.Generate(ctx)
-	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
+		return pairResponse(pair, scope), nil
 	}
 
 	// RFC 6749 §6: the new refresh token keeps the scope of the one it
 	// replaces; a narrowed request only narrows the access token.
-	next := &oauth2.RefreshToken{
-		Token: rtRaw, TokenHash: rtHash, ClientID: req.Client.ID(), Subject: old.Subject,
-		Scope: old.Scope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(g.cfg.RefreshTTL),
-		FamilyID: old.FamilyID,
+	if pair.Refresh, err = mintRefresh(ctx, g.cfg, req, old.Subject, old.Scope, old.FamilyID); err != nil {
+		return nil, err
 	}
 
-	if err := g.cfg.Storage.RotateRefreshToken(ctx, old.TokenHash, next); err != nil {
-		if errors.Is(err, oauth2.ErrRefreshTokenReused) {
-			return nil, err //nolint:wrapcheck // oauth2.* sentinels pass through
-		}
-
-		return nil, oauth2.ErrServerError.WithCause(err)
+	if err := g.cfg.Storage.RotateRefreshToken(ctx, old.TokenHash, pair); err != nil {
+		return nil, g.rotationFailure(ctx, old.FamilyID, err)
 	}
 
-	resp.Pair.Refresh = next
+	return pairResponse(pair, scope), nil
+}
 
-	return resp, nil
+// rotationFailure maps a failed rotation. Reuse — the token was consumed
+// since the lookup — answers the bare invalid_grant
+// [oauth2.ErrRefreshTokenReused]; when the store could not revoke the
+// family on that path, the revocation is retried as for a reuse the grant
+// detects itself. Anything else goes through storageFailure.
+func (g *RefreshToken) rotationFailure(ctx context.Context, familyID string, err error) error {
+	if !errors.Is(err, oauth2.ErrRefreshTokenReused) {
+		return storageFailure(err)
+	}
+
+	if errors.Is(err, oauth2.ErrTokenFamilyRevocationFailed) {
+		g.revokeReusedFamily(ctx, familyID)
+	}
+
+	return oauth2.ErrRefreshTokenReused
+}
+
+// revokeReusedFamily answers a detected refresh-token reuse: it revokes the
+// token's family on a context detached from the request
+// ([Config.revokeFamilyDetached]) and reports a failure to the error hook,
+// since the client gets invalid_grant either way. A token outside any
+// family leaves nothing to revoke.
+func (g *RefreshToken) revokeReusedFamily(ctx context.Context, familyID string) {
+	if familyID == "" {
+		return
+	}
+
+	if err := g.cfg.revokeFamilyDetached(ctx, familyID); err != nil {
+		g.cfg.notifyError(ctx, oauth2.ErrServerError.
+			WithDescription("revoke refresh family failed after reuse detection").
+			WithCause(err))
+	}
 }
 
 // narrowScopesForRefresh refuses broadening (RFC 6749 §6). An empty

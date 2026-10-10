@@ -62,7 +62,8 @@ type AccessToken struct {
 	ExpiresAt time.Time
 	// FamilyID identifies the refresh-token family the token belongs to,
 	// so revoking the family revokes it too. Empty for tokens issued
-	// outside a family (client_credentials, the implicit flow).
+	// outside a family (client_credentials, the implicit flow). At most
+	// [MaxFamilyIDLength] bytes.
 	FamilyID string
 	// Audience is the configured aud claim (typically the resource server
 	// identifier). Single-valued in this model; servers needing multi-aud
@@ -88,10 +89,13 @@ type RefreshToken struct {
 	// FamilyID groups every refresh token derived from the same original
 	// authorisation. Rotation issues a new RefreshToken with the same
 	// FamilyID; reuse of a consumed token leads to revocation of the
-	// entire family (OAuth 2.0 BCP §8.10.3).
+	// entire family (RFC 9700 §4.14.2). Never empty for a stored refresh
+	// token; at most [MaxFamilyIDLength] bytes.
 	FamilyID string
-	// Consumed indicates whether the token has been rotated. Reuse of a
-	// consumed token MUST trigger family revocation.
+	// Consumed reports that the token can no longer be exchanged: it was
+	// rotated, or its family was revoked. Presenting a consumed token is
+	// reuse, which MUST trigger family revocation. Lookups set it; a new
+	// token is never persisted consumed.
 	Consumed bool
 }
 
@@ -103,9 +107,40 @@ func (t *RefreshToken) IsExpired(now time.Time) bool {
 // TokenPair couples an access token with the refresh token issued alongside
 // it. Refresh is nil when the grant issues none: client_credentials, a grant
 // without a RefreshTokens generator, or a non-rotating refresh under
-// Profile20. The grant handlers return this; the response writer turns it
-// into the RFC 6749 §5.1 JSON body.
+// Profile20. It is the unit of persistence — [Storage] writes a pair
+// atomically, through SaveTokenPair or RotateRefreshToken — and what the
+// grant handlers return; the response writer turns it into the RFC 6749
+// §5.1 JSON body.
 type TokenPair struct {
 	Access  AccessToken
 	Refresh *RefreshToken
+}
+
+// Validate reports, as an invalid_request [*Error], a pair no [Storage]
+// may persist: a nil pair, an access token without hash or with a family
+// ID longer than [MaxFamilyIDLength], or a refresh token without hash,
+// outside a family, in another family than the access token, or already
+// consumed. A refresh token only ever travels with an access token of its
+// own family.
+func (p *TokenPair) Validate() error {
+	switch {
+	case p == nil:
+		return ErrInvalidRequest.WithDescription("storage: nil token pair")
+	case p.Access.TokenHash == "":
+		return ErrInvalidRequest.WithDescription("storage: empty access token hash")
+	case len(p.Access.FamilyID) > MaxFamilyIDLength:
+		return ErrInvalidRequest.WithDescription("storage: token family id too long")
+	case p.Refresh == nil:
+		return nil
+	case p.Refresh.TokenHash == "":
+		return ErrInvalidRequest.WithDescription("storage: empty refresh token hash")
+	case p.Refresh.FamilyID == "":
+		return ErrInvalidRequest.WithDescription("storage: refresh token outside a token family")
+	case p.Refresh.FamilyID != p.Access.FamilyID:
+		return ErrInvalidRequest.WithDescription("storage: refresh and access tokens in different families")
+	case p.Refresh.Consumed:
+		return ErrInvalidRequest.WithDescription("storage: refresh token already consumed")
+	default:
+		return nil
+	}
 }

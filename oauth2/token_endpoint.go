@@ -163,7 +163,13 @@ func (s *Server) writeOAuthError(ctx context.Context, w http.ResponseWriter, err
 	}
 
 	s.notifyError(ctx, oe)
+	writeErrorResponse(w, oe)
+}
 
+// writeErrorResponse writes oe as the RFC 6749 §5.2 JSON body, with the
+// status code it maps to. It does not notify the [ErrorHook]: callers that
+// already reported the failure behind oe use it directly.
+func writeErrorResponse(w http.ResponseWriter, oe *Error) {
 	body := errorResponse{
 		Error:            oe.Code,
 		ErrorDescription: oe.Description,
