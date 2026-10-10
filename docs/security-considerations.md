@@ -46,9 +46,17 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
 
 ## OAuth2
 
-- **PKCE** — `authorization_code` requires PKCE. `S256` is the only method
-  allowed under `Profile21Draft`; `plain` is accepted (with a warning) only
-  under the looser profiles.
+- **PKCE** — `authorization_code` requires PKCE under `Profile20BCP` and
+  `Profile21Draft`; under `Profile20` it is optional unless
+  `grant.Config.RequirePKCE` is set. `S256` is the only method accepted
+  under BCP / 2.1; `plain` is tolerated only under `Profile20`. Both ends
+  enforce the RFC 7636 syntax: `/authorize` answers `invalid_request` to a
+  `code_challenge` that is not 43–128 unreserved characters (`plain`) or
+  not the unpadded base64url SHA-256 digest (`S256`), and, for a code
+  bound to a `code_challenge`, `/token` answers `invalid_grant` to a
+  `code_verifier` that is not 43–128 unreserved characters. The code is
+  consumed whether the verifier is malformed or wrong. Well-formed
+  verifiers are compared in constant time.
 - **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
   and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
   every refresh exchange consumes the presented token and issues a new one

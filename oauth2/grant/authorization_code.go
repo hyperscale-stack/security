@@ -105,7 +105,14 @@ func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCo
 	// The "plain" transformation is accepted only when the profile tolerates
 	// it (Profile20). BCP and OAuth 2.1 mandate S256.
 	if method == pkce.MethodPlain && !req.Profile.AllowsPKCEPlain() {
-		return oauth2.ErrInvalidGrant.WithDescription(`PKCE method "plain" is refused by the active profile`)
+		return oauth2.ErrInvalidGrant.WithDescription("PKCE method plain is refused by the active profile")
+	}
+
+	// RFC 7636 §4.1: a code_verifier is 43-128 unreserved characters. A
+	// malformed one cannot be a valid proof, and §4.6 answers a failed
+	// proof with invalid_grant. The code stays consumed.
+	if !pkce.ValidVerifier(verifier) {
+		return oauth2.ErrInvalidGrant.WithDescription("malformed code_verifier")
 	}
 
 	if !pkce.Verify(method, verifier, code.CodeChallenge) {

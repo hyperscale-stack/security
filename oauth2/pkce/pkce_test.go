@@ -18,6 +18,10 @@ const (
 	// challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
 	rfc7636Verifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	rfc7636Challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	// wellFormedVerifier is RFC 7636 §4.1 compliant but differs from the
+	// Appendix B verifier, so only a mismatch can refuse it.
+	wellFormedVerifier = "a-well-formed-verifier-that-does-not-match-the-challenge"
 )
 
 func TestVerifyS256AcceptsRFC7636Vector(t *testing.T) {
@@ -30,20 +34,22 @@ func TestVerifyS256AcceptsRFC7636Vector(t *testing.T) {
 func TestVerifyS256RejectsBadVerifier(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, pkce.VerifyS256("wrong-verifier", rfc7636Challenge))
+	require.True(t, pkce.ValidVerifier(wellFormedVerifier), "the mismatch, not the syntax, must refuse it")
+	assert.False(t, pkce.VerifyS256(wellFormedVerifier, rfc7636Challenge))
 }
 
 func TestVerifyPlainAcceptsExactMatch(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, pkce.Verify(pkce.MethodPlain, "verifier", "verifier"))
-	assert.False(t, pkce.Verify(pkce.MethodPlain, "verifier", "other"))
+	assert.True(t, pkce.Verify(pkce.MethodPlain, rfc7636Verifier, rfc7636Verifier))
+	assert.False(t, pkce.Verify(pkce.MethodPlain, rfc7636Verifier, wellFormedVerifier))
 }
 
 func TestVerifyUnknownMethodReturnsFalse(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, pkce.Verify("MD5", "verifier", "challenge"))
+	// A well-formed verifier, so the unknown method is what refuses it.
+	assert.False(t, pkce.Verify("MD5", rfc7636Verifier, rfc7636Challenge))
 }
 
 func TestChallengeMatchesVerification(t *testing.T) {

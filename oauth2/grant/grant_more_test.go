@@ -101,19 +101,25 @@ func TestAuthorizationCodeMissingVerifier(t *testing.T) {
 	_, err := g.Handle(context.Background(), req)
 	require.Error(t, err)
 	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+	// The presence check answers before the RFC 7636 syntax check.
+	assert.ErrorContains(t, err, "missing code_verifier")
 }
+
+// plainVerifier is a well-formed RFC 7636 §4.1 verifier (52 characters,
+// including ".", "~" and "_") used as a plain PKCE pair.
+const plainVerifier = "shared-plain-secret.with~unreserved_chars-0123456789"
 
 // plainPKCECode seeds a code whose challenge method is empty (the grant
 // defaults to "plain", where the verifier equals the challenge verbatim)
-// and returns the matching /token form.
-func plainPKCECode(t *testing.T, store oauth2.Storage) url.Values {
+// bound to verifier, and returns the matching /token form.
+func plainPKCECode(t *testing.T, store oauth2.Storage, verifier string) url.Values {
 	t.Helper()
 
 	raw := "raw-plain-code"
 	require.NoError(t, store.SaveAuthorizationCode(context.Background(), &oauth2.AuthorizationCode{
 		Code: raw, CodeHash: oauth2.HashToken(nil, raw),
 		ClientID: clientID, Subject: subject, RedirectURI: redirectURI, Scope: "read:mail",
-		CodeChallenge: "shared-plain-secret", CodeChallengeMethod: "",
+		CodeChallenge: verifier, CodeChallengeMethod: "",
 		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
 		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
 	}))
@@ -121,7 +127,7 @@ func plainPKCECode(t *testing.T, store oauth2.Storage) url.Values {
 	form := url.Values{}
 	form.Set("code", raw)
 	form.Set("redirect_uri", redirectURI)
-	form.Set("code_verifier", "shared-plain-secret")
+	form.Set("code_verifier", verifier)
 
 	return form
 }
@@ -130,7 +136,7 @@ func TestAuthorizationCodePlainPKCEAcceptedUnderProfile20(t *testing.T) {
 	t.Parallel()
 
 	store := newStore()
-	form := plainPKCECode(t, store)
+	form := plainPKCECode(t, store, plainVerifier)
 
 	g := grant.NewAuthorizationCode(grant.Config{
 		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour,
@@ -148,7 +154,9 @@ func TestAuthorizationCodePlainPKCERefusedUnderBCP(t *testing.T) {
 	t.Parallel()
 
 	store := newStore()
-	form := plainPKCECode(t, store)
+	// A malformed (too short) plain pair: the profile ban must answer
+	// before the RFC 7636 syntax check.
+	form := plainPKCECode(t, store, "shared-plain-secret")
 
 	g := grant.NewAuthorizationCode(grant.Config{
 		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour,
@@ -161,6 +169,11 @@ func TestAuthorizationCodePlainPKCERefusedUnderBCP(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+
+	// RFC 6749 §5.2: the description carries no double quote.
+	var oe *oauth2.Error
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, "PKCE method plain is refused by the active profile", oe.Description)
 }
 
 func TestAuthorizationCodeProfileRequiresPKCE(t *testing.T) {

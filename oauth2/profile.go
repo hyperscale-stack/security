@@ -15,8 +15,8 @@ package oauth2
 //     and password grants outright; mandates PKCE on
 //     authorization_code; mandates refresh-token
 //     rotation.
-//   - Profile21Draft — draft-ietf-oauth-v2-1. Same constraints as BCP plus
-//     an explicit prohibition of "plain" PKCE.
+//   - Profile21Draft — draft-ietf-oauth-v2-1. Same constraints as BCP,
+//     which already refuses "plain" PKCE (S256 only).
 //
 // The recommended default is [Profile20BCP].
 type Profile int
