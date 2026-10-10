@@ -21,8 +21,10 @@ var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation 
 //
 // The answer is 200 OK whether or not the token existed or belonged to the
 // caller (RFC 7009 §2.2), and 503 temporarily_unavailable when a storage
-// failure leaves the token possibly usable (RFC 7009 §2.2.1): its lookup
-// failed, or its revocation did. Each such failure reaches the
+// failure leaves the revocation unfinished (RFC 7009 §2.2.1): the token's
+// lookup failed, its family could not be revoked, or — for a token outside
+// any family — it could not be deleted. The client then retries, which
+// redoes the whole revocation. Each storage failure reaches the
 // [ErrorHook] once, as a server_error carrying its cause; the 503 is not
 // reported again. A 503 hints that the token exists only when the backend
 // fails while the caller presents it, a caller that already holds the
@@ -114,28 +116,32 @@ func (s *Server) lookupMissed(ctx context.Context, err error) bool {
 	return false
 }
 
-// revokeAccess revokes an access token — and the refresh family it belongs
-// to — once the token is confirmed to belong to the calling client. It
-// reports whether the token can no longer be used: deleted, or its family
-// revoked. Each failure is reported to the [ErrorHook].
+// revokeAccess revokes an access token once it is confirmed to belong to
+// the calling client, and reports whether the token can no longer be used.
+// Each failure is reported to the [ErrorHook].
+//
+// A token of a family is revoked through its family first (RFC 7009 §2.1).
+// Should that fail, the token is left in place and the revocation reported
+// unfinished, so that the retry it calls for redoes both. Once the family
+// is revoked no token of it is usable, and deleting the access token is
+// mere cleanup: a failed delete is reported but leaves the answer
+// unchanged. A token outside any family only goes away when it is deleted.
 func (s *Server) revokeAccess(ctx context.Context, client Client, at *AccessToken, hash string) bool {
 	if at.ClientID != client.ID() {
 		return true
 	}
 
-	deleted := true
+	if at.FamilyID != "" && !s.revokeFamily(ctx, at.FamilyID) {
+		return false
+	}
 
 	if err := s.cfg.Storage.RevokeAccessToken(ctx, hash); err != nil {
 		s.notifyError(ctx, ErrServerError.WithDescription("revoke access token failed").WithCause(err))
 
-		deleted = false
+		return at.FamilyID != ""
 	}
 
-	if at.FamilyID == "" {
-		return deleted
-	}
-
-	return s.revokeFamily(ctx, at.FamilyID) || deleted
+	return true
 }
 
 // revokeFamily revokes a refresh-token family and reports whether it did,

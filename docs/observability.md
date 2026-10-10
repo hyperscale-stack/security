@@ -59,15 +59,18 @@ The hook fires for:
   `/introspect`, metadata) and every error redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
   400 (unknown client, unregistered `redirect_uri`);
-- every storage failure at `/revoke`: a token lookup that failed for
-  another reason than an unknown token (`revoke: token lookup failed`), and
-  a failed access-token or family revocation (`revoke access token failed`,
-  `revoke refresh family failed`) — one `server_error` per failure, cause
-  attached. When the failure leaves the token possibly usable, `/revoke`
-  answers `503 temporarily_unavailable` (RFC 7009 §2.2.1: the client must
-  assume the token still exists, and may retry); that 503 is not reported
-  again. An unknown token, or another client's, answers `200 OK` and is not
-  reported;
+- every storage failure at `/revoke`: a token lookup that failed for another
+  reason than an unknown token (`revoke: token lookup failed`), and a failed
+  family or access-token revocation (`revoke refresh family failed`,
+  `revoke access token failed`) — one `server_error` per failure, cause
+  attached. When the failure leaves the revocation unfinished — a failed
+  lookup, a family that could not be revoked, a token outside any family
+  that could not be deleted — `/revoke` answers
+  `503 temporarily_unavailable` (RFC 7009 §2.2.1: the client must assume the
+  token still exists, and may retry); that 503 is not reported again. An
+  access token whose family was revoked but whose delete failed answers
+  `200 OK`: it is unusable through its family. An unknown token, or another
+  client's, answers `200 OK` and is not reported;
 - an `IntrospectionPolicy` that failed: `/introspect` withholds the token
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain

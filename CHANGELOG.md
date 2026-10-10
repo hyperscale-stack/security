@@ -182,12 +182,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   §5.2) instead of `server_error`.
 - `/revoke` no longer answers `200 OK` for a revocation that may not have
   taken effect: when a token lookup fails for another reason than an
-  unknown token, or the revocation itself fails and leaves the token
-  usable, it answers `503 temporarily_unavailable` (RFC 7009 §2.2.1), so
-  the client knows to assume the token still exists and retry. A failed
-  lookup used to skip the revocation silently; every such failure now
-  reaches `ServerConfig.OnError` once, as a `server_error` with its cause.
-  An unknown token, or another client's, still answers `200 OK`.
+  unknown token, the token's family cannot be revoked, or a token outside
+  any family cannot be deleted, it answers `503 temporarily_unavailable`
+  (RFC 7009 §2.2.1), so the client knows to assume the token still exists
+  and retry. An access token is revoked through its family first, and only
+  then deleted, so the retry redoes the whole revocation. A failed lookup
+  used to skip the revocation silently; every storage failure now reaches
+  `ServerConfig.OnError` once, as a `server_error` with its cause. An
+  unknown token, or another client's, still answers `200 OK`.
 - `RevokeRefreshFamily("")` no longer deletes every access token outside a
   family (`client_credentials`, implicit) in the memory and SQL stores; it
   is rejected with `invalid_request`.

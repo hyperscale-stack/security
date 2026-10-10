@@ -229,11 +229,15 @@ To migrate:
 could no longer be used (RFC 7009 §2.1) even when the store had failed to
 revoke it. It now answers `503 temporarily_unavailable`
 (`{"error":"temporarily_unavailable","error_description":"revocation temporarily unavailable"}`)
-when a token lookup fails for another reason than an unknown token, or when
-the revocation fails and leaves the token usable. RFC 7009 §2.2.1: the
-client must then assume the token still exists, and may retry after a
-delay — revocation is idempotent, so retrying is safe. Clients that ignored
-the status of `/revoke` should now retry on 503.
+when a token lookup fails for another reason than an unknown token, when
+the token's family cannot be revoked, or when a token outside any family
+cannot be deleted. RFC 7009 §2.2.1: the client must then assume the token
+still exists, and may retry after a delay — revocation is idempotent, so
+retrying is safe. An access token is revoked through its family first and
+only then deleted: a failed family revocation leaves it in place for the
+retry, while a failed delete after the family was revoked is reported but
+answers `200 OK`, the token being unusable through its family. Clients that
+ignored the status of `/revoke` should now retry on 503.
 
 Unknown tokens and other clients' tokens still answer `200 OK`. Every
 underlying failure still reaches `ServerConfig.OnError` exactly once, as a

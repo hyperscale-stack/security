@@ -175,15 +175,31 @@ func TestRevokeAccessTokenAnswersByTheTokenOutcome(t *testing.T) {
 
 	backendDown := errors.New("backend down")
 
-	t.Run("both revocations failed", func(t *testing.T) {
+	t.Run("the family revocation failed", func(t *testing.T) {
 		t.Parallel()
 
 		sink := &errorSink{}
-		store := &revokeStore{Store: memory.New(), revokeAccessErr: backendDown, revokeFamilyErr: backendDown}
-		pair := seedPair(t, store.Store, newClientPair("both-rt", "fam-both"))
+		store := &revokeStore{Store: memory.New(), revokeFamilyErr: familyRevocationFailure("fam-failed")}
+		pair := seedPair(t, store.Store, newClientPair("failed-rt", "fam-failed"))
 
 		requireUnavailable(t, revoke(revokeServer(t, store, sink), pair.Access.Token), sink,
-			"revoke access token failed", "revoke refresh family failed")
+			"revoke refresh family failed")
+		assert.ErrorContains(t, errors.Unwrap(sink.collected()[0]), `"fam-failed"`)
+
+		// The access token was left in place, so the retry the 503 calls for
+		// redoes both revocations once the backend is back.
+		_, err := store.Store.LookupAccessToken(t.Context(), pair.Access.TokenHash)
+		require.NoError(t, err, "the access token was not deleted")
+
+		rec := revoke(revokeServer(t, store.Store, &errorSink{}), pair.Access.Token)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		_, err = store.Store.LookupAccessToken(t.Context(), pair.Access.TokenHash)
+		assert.Error(t, err, "the access token is revoked")
+
+		rt, err := store.Store.LookupRefreshToken(t.Context(), pair.Refresh.TokenHash)
+		require.NoError(t, err)
+		assert.True(t, rt.Consumed, "the family's refresh token is revoked")
 	})
 
 	t.Run("the family revocation covers a failed delete", func(t *testing.T) {
@@ -199,18 +215,6 @@ func TestRevokeAccessTokenAnswersByTheTokenOutcome(t *testing.T) {
 
 		_, err := store.LookupAccessToken(t.Context(), pair.Access.TokenHash)
 		assert.ErrorIs(t, err, oauth2.ErrTokenFamilyRevoked)
-	})
-
-	t.Run("the delete covers a failed family revocation", func(t *testing.T) {
-		t.Parallel()
-
-		sink := &errorSink{}
-		store := &revokeStore{Store: memory.New(), revokeFamilyErr: backendDown}
-		pair := seedPair(t, store.Store, newClientPair("deleted-rt", "fam-deleted"))
-
-		rec := revoke(revokeServer(t, store, sink), pair.Access.Token)
-		assert.Equal(t, http.StatusOK, rec.Code, "the token itself is gone")
-		requireReported(t, sink, "revoke refresh family failed")
 	})
 
 	t.Run("a token outside any family", func(t *testing.T) {

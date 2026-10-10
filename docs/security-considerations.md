@@ -149,10 +149,12 @@ never has to find the family's tokens:
   idempotence makes safe. `/revoke` then answers
   `503 temporarily_unavailable` — RFC 7009 §2.2.1: the client must assume
   the token still exists and may retry — since a `200` would tell the client
-  the token can no longer be used (RFC 7009 §2.1). On the reuse path the
-  store reports `ErrRefreshTokenReused` joined with the revocation failure,
-  the `refresh_token` grant retries the revocation on a context detached
-  from the request, and a second failure reaches `grant.Config.OnError`; the
+  the token can no longer be used (RFC 7009 §2.1). It revokes an access
+  token's family before deleting the token, so a failed family revocation
+  leaves everything in place for that retry. On the reuse path the store
+  reports `ErrRefreshTokenReused` joined with the revocation failure, the
+  `refresh_token` grant retries the revocation on a context detached from
+  the request, and a second failure reaches `grant.Config.OnError`; the
   client gets `invalid_grant` either way.
 - **Fail closed.** A token whose family state is missing — expired,
   evicted, deleted by a premature cleanup, or never written by a build
