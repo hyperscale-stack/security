@@ -227,6 +227,54 @@ To migrate:
    implicit) keep working until they expire. Flushing the old token rows
    or keys is good hygiene: they can no longer be used.
 
+### `oauth2`: consumed authorization codes are retained (#80)
+
+`ConsumeAuthorizationCode` deleted a code as it consumed it, so a replay
+looked exactly like an unknown code and nothing was left to tie the code
+to the tokens its first exchange issued — while RFC 6749 §4.1.2 says those
+tokens SHOULD be revoked. Stores now keep a consumed code — flagged
+consumed, without the raw code — at least until it expires, and answer a
+replay with an `*oauth2.CodeReplayError` carrying the retained record.
+
+| Before                                                      | After                                                                                                                                           |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ConsumeAuthorizationCode` deletes the code                 | flags it consumed and keeps it at least until `ExpiresAt`: Redis until the key expires, SQL until your cleanup, memory for the process lifetime |
+| a replay returns `ErrCodeAlreadyUsed`, like an unknown code | a replay returns an `*oauth2.CodeReplayError` (it matches `ErrCodeAlreadyUsed`) carrying the record                                             |
+| the memory store keeps the raw `Code`                       | no store keeps it                                                                                                                               |
+
+To migrate:
+
+1. **Custom stores.** Keep a consumed code, without its raw value, at
+   least until its `ExpiresAt`. Return the record, with a `nil` error, to
+   one caller only; return `nil` and `&oauth2.CodeReplayError{Record: rec}`
+   to every later or concurrent caller, and `oauth2.ErrCodeAlreadyUsed` for
+   an unknown code. Pass `storetest.RunConformance`.
+2. **Code calling `ConsumeAuthorizationCode`** — decorators, custom
+   grants — tests `err` first and never issues tokens from a record that
+   comes with an error. A wrapper must propagate `err` unchanged or
+   wrapped with `%w`, which keeps the replay record reachable through
+   `errors.As`: normalizing it to `ErrCodeAlreadyUsed` silently disables
+   the revocation a replay triggers.
+3. **SQL.** `oauth2_auth_codes` gains a `consumed` column, which `Migrate`
+   does not add to an existing table (it only creates missing tables).
+   Until it exists, every code exchange fails with `server_error`. Run, on
+   PostgreSQL, MySQL or SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes ADD COLUMN consumed SMALLINT NOT NULL DEFAULT 0;
+   ```
+
+   or drop the table and run `Migrate` again: a code only lives
+   `AuthorizeConfig.CodeTTL` (10 minutes by default). Consumed codes now
+   stay until your cleanup deletes the rows past `expires_at` (see the
+   `store/sql` package documentation); index `expires_at` through your
+   migration tool.
+4. **Redis and memory** need nothing: a code payload without the new
+   `consumed` flag is an unconsumed code.
+5. **Upgrade every instance at once.** An instance still running an
+   earlier build ignores the flag and would accept a code an upgraded
+   instance already consumed — a second use of the code.
+
 ### `oauth2`: `/revoke` answers 503 when a revocation may have failed (#82)
 
 `/revoke` answered `200 OK` whatever happened, telling the client its token

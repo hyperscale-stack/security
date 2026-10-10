@@ -79,15 +79,18 @@ The hook fires for:
 `grant.Config.OnError` is the same hook for the errors a grant swallows
 before returning — today, a family revocation that failed after a
 refresh-token reuse (RFC 9700 §4.14.2), whether the grant found the
-presented token consumed or the store reported the reuse while rotating.
-The grant retries a revocation the store could not record, on a context
-detached from the request, and reports one `server_error` per revocation
-that still failed: `revoke refresh family failed after reuse detection`,
-whose cause matches `oauth2.ErrTokenFamilyRevocationFailed` and names the
-family with a conforming store. It does not match
-`oauth2.ErrRefreshTokenReused`: the reuse itself is the `invalid_grant` the
-server reports as usual. Errors a grant *returns* travel to the server and
-reach `ServerConfig.OnError`, so wire both fields to the same sink.
+presented token consumed or the store reported the reuse while rotating,
+or after an authorization-code replay (RFC 6749 §4.1.2). These revocations
+run on a context detached from the request, and the `refresh_token` grant
+retries one the store could not record. The hook gets one `server_error`
+per revocation that still failed — `revoke refresh family failed after
+reuse detection`, or `revoke token family failed after authorization code
+replay` — whose cause matches `oauth2.ErrTokenFamilyRevocationFailed` and
+names the family with a conforming store. It does not match
+`oauth2.ErrRefreshTokenReused` or `oauth2.ErrCodeAlreadyUsed`: the reuse or
+replay itself is the `invalid_grant` the server reports as usual. Errors a
+grant *returns* travel to the server and reach `ServerConfig.OnError`, so
+wire both fields to the same sink.
 
 The hook is purely observational: it MUST NOT influence the response, and it
 runs synchronously on the request goroutine, so keep it fast. It receives no

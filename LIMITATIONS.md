@@ -24,8 +24,13 @@ than future refactor phases.
   scripts touch keys of several hash slots. Use a standalone server or a
   Sentinel primary.
 - **SQL expired-row cleanup** — `oauth2/store/sql` ships no expiry job:
-  rows stay until an operator deletes those past `expires_at` (see the
-  package documentation for a safe order).
+  rows — consumed and abandoned authorization codes included — stay until
+  an operator deletes those past `expires_at` (see the package
+  documentation for a safe order).
+- **In-memory store growth** — `oauth2/storage/memory` never purges
+  anything: consumed and expired codes, expired tokens and revoked
+  families stay for the process lifetime. It is meant for development and
+  tests only.
 - **PostgreSQL and MySQL are not exercised in CI** — the SQL store's tests
   run on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
   READ COMMITTED on PostgreSQL, InnoDB on MySQL) are argued from their

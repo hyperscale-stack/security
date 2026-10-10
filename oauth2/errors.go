@@ -94,8 +94,10 @@ var (
 	ErrAccessDenied = newCoded(CodeAccessDenied, "the resource owner denied the request", security.ErrAccessDenied)
 	// ErrServerError -> 500 server_error.
 	ErrServerError = newCoded(CodeServerError, "internal server error", nil)
-	// ErrCodeAlreadyUsed signals authorization-code reuse — surfaced as
-	// invalid_grant per RFC 6749 §4.1.2.
+	// ErrCodeAlreadyUsed signals an unknown or already consumed
+	// authorization code — surfaced as invalid_grant per RFC 6749 §4.1.2.
+	// On a replay, stores return it wrapped in a [*CodeReplayError]
+	// carrying the retained record.
 	ErrCodeAlreadyUsed = newCoded(CodeInvalidGrant, "authorization code already consumed", security.ErrInvalidCredentials)
 	// ErrRefreshTokenReused signals refresh-token reuse — surfaced as
 	// invalid_grant per RFC 9700 §4.14.2. Storage implementations MUST also
@@ -117,6 +119,25 @@ var (
 // returns, and after [ErrRefreshTokenReused] when the revocation a reuse
 // triggers fails; match it with errors.Is.
 var ErrTokenFamilyRevocationFailed = errors.New("oauth2: token family revocation failed")
+
+// CodeReplayError is the error an [AuthorizationCodeStore] returns for a
+// code it consumed before and still retains: a replay (RFC 6749 §4.1.2).
+// It reads and matches as [ErrCodeAlreadyUsed] — errors.Is, [IsCode] and
+// the RFC 6749 §5.2 response all see invalid_grant — and carries the
+// retained record, so the authorization_code grant can revoke the tokens
+// the first exchange issued. The record MUST NOT be used to issue tokens.
+// Wrapping it with %w keeps it reachable through errors.As.
+type CodeReplayError struct {
+	// Record is the replayed code as it was saved, without the raw Code.
+	Record *AuthorizationCode
+}
+
+// Error implements the error interface with the text of
+// [ErrCodeAlreadyUsed].
+func (e *CodeReplayError) Error() string { return ErrCodeAlreadyUsed.Error() }
+
+// Unwrap returns [ErrCodeAlreadyUsed].
+func (e *CodeReplayError) Unwrap() error { return ErrCodeAlreadyUsed }
 
 // newCoded constructs an Error sentinel. The cause chain reaches the supplied
 // security sentinel via Unwrap so errors.Is keeps working transparently.

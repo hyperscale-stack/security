@@ -102,6 +102,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
   `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
   long a revoked family is remembered.
+- **OAuth2 code replay error**: `oauth2.CodeReplayError`, the error an
+  `AuthorizationCodeStore` returns for a replayed code it still retains. It
+  matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,
+  `oauth2.IsCode` and the wire, and carries the retained record for
+  `errors.As`.
 
 ### Changed
 
@@ -139,6 +144,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   record and the stores fail closed — so users re-authenticate, and
   presenting such a refresh token answers `invalid_grant`;
   `client_credentials` and implicit tokens keep working. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 authorization-code storage (breaking).**
+  `ConsumeAuthorizationCode` no longer deletes the code it consumes: every
+  store keeps the record, flagged consumed and without the raw code, at
+  least until the code expires, and answers a replay with an
+  `*oauth2.CodeReplayError` carrying it; an unknown code still gets
+  `ErrCodeAlreadyUsed`. `store/sql` adds a `consumed` column to
+  `oauth2_auth_codes` — existing tables need an `ALTER TABLE` — and keeps
+  consumed rows until the operator's cleanup; `store/redis` flags the
+  code's key and keeps its TTL, and a consumption resent by go-redis after
+  a lost reply no longer fails the exchange; the memory store no longer
+  keeps the raw code. Every instance must be upgraded at once. See
   [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
@@ -276,3 +293,22 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   codes; their `error_description` no longer contains a double quote,
   which RFC 6749 §4.1.2.1 and §5.2 forbid, and no longer echoes an
   unsupported `code_challenge_method`.
+- A replayed OAuth2 authorization code now revokes every token issued from
+  it — access and refresh tokens, and every later rotation — in every store
+  (RFC 6749 §4.1.2, §10.5; RFC 9700 §4.2.4). The `authorization_code` grant
+  derives the token family from the code before consuming it, so a replay
+  racing the first exchange cannot leave its tokens active: one landing
+  before that exchange persists its tokens makes it fail with
+  `invalid_grant` — as long as the store keeps the revoked family record
+  (see the deployment requirements in
+  [docs/security-considerations.md](docs/security-considerations.md)) — and
+  one landing after revokes them. Only a replay that would itself have been
+  accepted revokes: the code has not expired, and the client it was issued
+  to presents it with the same `redirect_uri` and PKCE verifier and may
+  still use `authorization_code` (OAuth 2.1 §4.1.3, §7.5.3). A public
+  `client_id` is no secret, so unknown codes, other clients and missing or
+  wrong verifiers revoke nothing. The replay is still refused with
+  `invalid_grant`, and a failed revocation is reported through
+  `grant.Config.OnError`. JWT access tokens validated offline stay valid
+  until they expire. Previously the tokens issued from a replayed code
+  stayed valid.

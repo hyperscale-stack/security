@@ -13,10 +13,11 @@
 // The token-family guarantees of oauth2.Storage hold under these
 // conditions; outside them a revocation can be lost or hidden.
 //
-//   - PostgreSQL: the store runs its token-family transactions — issuance,
-//     rotation, revocation — at READ COMMITTED, whatever the server
-//     default, so that SELECT … FOR UPDATE re-reads the latest committed
-//     family row. synchronous_commit=off can lose an acknowledged
+//   - PostgreSQL: the store runs every transaction at READ COMMITTED,
+//     whatever the server default, so that its locking reads and writes act
+//     on the latest committed row: SELECT … FOR UPDATE re-reads a family
+//     row, and the UPDATE consuming a code finds a concurrent consumption
+//     and reports a replay. synchronous_commit=off can lose an acknowledged
 //     revocation in a crash.
 //   - MySQL: the tables must use InnoDB (row locks), and lookups must run
 //     in autocommit mode — the default — so each one sees the latest
@@ -33,16 +34,21 @@
 //
 // # Cleanup
 //
-// A revocation never deletes tokens and the store ships no expiry job:
-// rows stay until an operator deletes them. Every table carries expires_at
-// (Unix seconds), and a family record outlives its tokens — and is kept for
-// oauth2.FamilyRevocationRetention after a revocation. Delete expired rows
-// ("expires_at < now") table by table, in small batches by primary key and
-// outside long transactions (autocommit, or READ COMMITTED). Delete families
-// in statements of their own: a transaction deleting tokens then families
+// The store ships no expiry job: rows stay until an operator deletes them.
+// A revocation never deletes tokens, and an exchanged authorization code
+// keeps its row, flagged consumed, so that a replay of the code is
+// recognized; a code never exchanged stays too. Every table carries
+// expires_at (Unix seconds), and a family record outlives its tokens — and
+// is kept for oauth2.FamilyRevocationRetention after a revocation. Delete
+// expired rows ("expires_at < now"; a code past it can no longer be
+// exchanged) table by table, in small batches by primary key and outside
+// long transactions (autocommit, or READ COMMITTED). Delete families in
+// statements of their own: a transaction deleting tokens then families
 // takes their locks in the reverse order of the store and can deadlock with
-// it. On MySQL, a range delete on the unindexed expires_at column takes
-// next-key locks: index it, or delete by primary key.
+// it. The DDL creates no index — MySQL has no CREATE INDEX IF NOT EXISTS —
+// so add one on expires_at through your migration tool: on MySQL, a range
+// delete on an unindexed expires_at takes next-key locks that block the
+// code and token writes of /authorize and /token.
 //
 // Never delete a family row before its expires_at. A missing row fails
 // closed for lookups — the store treats the tokens of an unknown family as

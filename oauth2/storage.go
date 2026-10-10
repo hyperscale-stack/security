@@ -22,19 +22,40 @@ const FamilyRevocationRetention = 24 * time.Hour
 // store keeps them in a VARCHAR(64) column).
 const MaxFamilyIDLength = 64
 
-// AuthorizationCodeStore persists single-use authorization codes. The
-// Consume* operation MUST be atomic: a code may be returned successfully
-// to AT MOST one caller.
+// AuthorizationCodeStore persists single-use authorization codes (RFC 6749
+// §4.1.2, §10.5). A code is stored under its hash,
+// [AuthorizationCode.CodeHash], which the issuer sets: implementations MUST
+// NOT persist the raw [AuthorizationCode.Code]. Consuming a code does not
+// delete it: the record is kept, flagged consumed, at least until its
+// ExpiresAt, so that a replay can be told from an unknown code and the
+// server can revoke what the first exchange issued. Afterwards an
+// implementation MAY drop it — the Redis store expires the key, the SQL
+// store documents a cleanup, the memory store keeps it for its lifetime.
 type AuthorizationCodeStore interface {
-	// SaveAuthorizationCode persists the code. The storage layer hashes
-	// code.Code into code.CodeHash before persisting.
+	// SaveAuthorizationCode persists code under code.CodeHash; an empty
+	// hash is rejected with invalid_request. Callers MUST save a given
+	// CodeHash at most once: a store may overwrite the record, and
+	// re-saving a consumed code can make it redeemable again (the Redis
+	// store does).
 	SaveAuthorizationCode(ctx context.Context, code *AuthorizationCode) error
 
-	// ConsumeAuthorizationCode atomically reads-and-deletes the code
-	// identified by codeHash. Returns [ErrCodeAlreadyUsed] when the code
-	// was previously consumed (allowing the server to reject reuse with
-	// invalid_grant and revoke the resulting access token per RFC 6749
-	// §4.1.2).
+	// ConsumeAuthorizationCode atomically marks the code codeHash consumed
+	// and returns its record to AT MOST one caller, even under
+	// concurrency. Every other call returns a nil code and an error:
+	//
+	//   - a [*CodeReplayError] carrying the retained record when the code
+	//     was already consumed — every concurrent loser gets one. The
+	//     record only lets the caller revoke what the first exchange
+	//     issued: it MUST NOT be used to issue tokens;
+	//   - [ErrCodeAlreadyUsed] when the code is unknown: never saved, or
+	//     no longer retained;
+	//   - a wrapped error on a backend failure.
+	//
+	// Both refusals match [ErrCodeAlreadyUsed] (invalid_grant). A decorator
+	// or wrapper MUST return the store's error unchanged or wrapped with
+	// %w: normalizing it to ErrCodeAlreadyUsed silently disables the
+	// revocation a replay triggers. Expiry is not checked: the caller
+	// compares ExpiresAt with its own clock.
 	ConsumeAuthorizationCode(ctx context.Context, codeHash string) (*AuthorizationCode, error)
 }
 
@@ -152,6 +173,13 @@ type RefreshTokenStore interface {
 //     issuance into a family whose revoked state was lost records it
 //     active again, reviving its tokens, so a store MUST NOT lose a
 //     revoked family's state within its retention (I5).
+//
+// The authorization_code grant derives the family of the tokens a code
+// issues from the code hash, before consuming the code. A replay of the
+// code that proves possession revokes that family: by I1 and I2, the
+// tokens the code issued stop working, and an exchange of the code still
+// in flight fails instead of issuing — one more reason a store MUST keep a
+// revoked family's state for its whole retention (I5, I8).
 //
 // A store returns the sentinels themselves or wraps them with %w: an
 // [*Error] has no Is method, so a WithDescription or WithCause copy no

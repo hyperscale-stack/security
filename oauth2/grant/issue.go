@@ -12,16 +12,14 @@ import (
 )
 
 // issueTokenPair mints an access token — and, when the config carries a
-// refresh-token generator, a companion refresh token — in a new family for
-// the given subject and scope, persists them atomically, and returns the
-// grant response. It is the shared issuance path of the authorization_code
-// and legacy password grants.
-func issueTokenPair(ctx context.Context, cfg Config, req Request, subject, scope string) (*Response, error) {
-	familyID, err := newFamilyID()
-	if err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
-
+// refresh-token generator, a companion refresh token — in the family
+// familyID for the given subject and scope, persists them atomically, and
+// returns the grant response. It is the shared issuance path of the
+// authorization_code grant, whose family is derived from the code, and of
+// the legacy password grant, whose family is new. A family revoked in the
+// meantime — by a replay of the code — refuses the pair with invalid_grant,
+// and nothing is issued.
+func issueTokenPair(ctx context.Context, cfg Config, req Request, subject, scope, familyID string) (*Response, error) {
 	access, err := mintAccess(ctx, cfg, req, subject, scope, familyID)
 	if err != nil {
 		return nil, err

@@ -8,16 +8,18 @@ import "time"
 
 // AuthorizationCode is the record persisted between the /authorize call and
 // the matching /token call. The Code field carries the raw, single-use value
-// returned to the user-agent; storage implementations MUST hash it before
-// persisting and consume atomically (RFC 6749 §4.1.2 + OAuth 2.0 BCP §4.5).
+// returned to the user-agent; storage implementations key the record by
+// CodeHash, never persist the raw value, consume it atomically, and keep
+// the consumed record until ExpiresAt so that a replay is recognized (RFC
+// 6749 §4.1.2, RFC 9700 §4.2.4; see [AuthorizationCodeStore]).
 type AuthorizationCode struct {
 	// Code is the raw, single-use authorization code as issued to the
 	// user-agent. Storage implementations persist its hash, never the raw
 	// value. The struct carries the raw form because the issuance flow
 	// needs to redirect it.
 	Code string
-	// CodeHash is the storage-side hash of Code. Filled in by the storage
-	// layer; the issuance flow leaves it empty.
+	// CodeHash is the storage key: HashToken(nil, Code), set by the issuer
+	// (the authorization endpoint). Stores reject an empty one.
 	CodeHash string
 	// ClientID is the requesting client's identifier.
 	ClientID string

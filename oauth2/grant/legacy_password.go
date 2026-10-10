@@ -82,7 +82,12 @@ func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, er
 		return nil, err
 	}
 
-	return issueTokenPair(ctx, g.cfg, req, subject, scope)
+	familyID, err := newFamilyID()
+	if err != nil {
+		return nil, oauth2.ErrServerError.WithCause(err)
+	}
+
+	return issueTokenPair(ctx, g.cfg, req, subject, scope, familyID)
 }
 
 // Compile-time interface check.

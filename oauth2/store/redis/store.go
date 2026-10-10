@@ -6,6 +6,7 @@ package redisstore
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 
@@ -18,6 +19,10 @@ import (
 // [oauth2.Storage] rest on Lua scripts: a Redis script runs to completion
 // without interleaving other commands, so each read-modify-write sequence
 // is indivisible.
+//
+// ConsumeAuthorizationCode runs one script that flags the code consumed in
+// its key, which keeps its TTL: a replay is recognized until the code
+// expires, and the key expires with it.
 //
 // Each token family has one key, {prefix}fam:{id}, holding "active" or
 // "revoked": the point every write into the family serializes on.
@@ -84,12 +89,22 @@ const (
 
 // --- Lua scripts ---------------------------------------------------------
 
-// consumeCodeScript atomically reads-and-deletes an authorization code.
-// Returns the JSON value, or false when the key is absent.
+// consumeCodeScript atomically flags an authorization code consumed,
+// keeping the key's TTL, and returns the payload as it found it — false
+// when the key is absent. A payload already flagged is returned unchanged:
+// it is a replay, unless this very call flagged it, which the caller
+// tells from the consumed_by nonce the script records. cjson decodes a
+// JSON null as a truthy value, hence the explicit comparison.
+//
+//	KEYS[1] code; ARGV[1] the nonce of the call
 var consumeCodeScript = redis.NewScript(`
 local v = redis.call('GET', KEYS[1])
 if not v then return false end
-redis.call('DEL', KEYS[1])
+local c = cjson.decode(v)
+if c.consumed == true then return v end
+c.consumed = true
+c.consumed_by = ARGV[1]
+redis.call('SET', KEYS[1], cjson.encode(c), 'KEEPTTL')
 return v
 `)
 
@@ -165,7 +180,10 @@ return 'ok'
 
 // --- authorization codes -------------------------------------------------
 
-// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore].
+// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore] with a
+// plain SET, which overwrites any record under the same hash: a consumed
+// code saved again becomes redeemable again, so callers MUST save a given
+// CodeHash at most once.
 func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.AuthorizationCode) error {
 	if code.CodeHash == "" {
 		return oauth2.ErrInvalidRequest.WithDescription("redisstore: empty code hash")
@@ -184,9 +202,18 @@ func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.Authoriz
 }
 
 // ConsumeAuthorizationCode implements [oauth2.AuthorizationCodeStore] via
-// the consumeCode Lua script — atomic read+delete.
+// consumeCodeScript: one atomic step flags the code consumed, and a replay
+// gets an [*oauth2.CodeReplayError] carrying the record until the key
+// expires with the code.
+//
+// Each call sends the script a fresh nonce, which the script records when
+// it flags the code: go-redis resends a script whose reply was lost, and
+// the resend — finding the code flagged under its own nonce — must not
+// read as a replay of the exchange it is part of.
 func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (*oauth2.AuthorizationCode, error) {
-	res, err := consumeCodeScript.Run(ctx, s.rdb, []string{s.codeKey(codeHash)}).Result()
+	nonce := rand.Text()
+
+	res, err := consumeCodeScript.Run(ctx, s.rdb, []string{s.codeKey(codeHash)}, nonce).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, oauth2.ErrCodeAlreadyUsed
@@ -197,13 +224,20 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 
 	str, ok := res.(string)
 	if !ok {
-		// The script returned false: key absent / already consumed.
+		// Any other reply type: treat as an unknown code (a Lua false
+		// arrives as redis.Nil, handled above).
 		return nil, oauth2.ErrCodeAlreadyUsed
 	}
 
-	code, err := decodeCode(codeHash, []byte(str))
+	code, consumed, consumedBy, err := decodeCode(codeHash, []byte(str))
 	if err != nil {
 		return nil, fmt.Errorf("redisstore: decode code: %w", err)
+	}
+
+	// The payload is the one the script found: unconsumed when this call
+	// consumed the code, or flagged by this very call when it was resent.
+	if won := !consumed || (nonce != "" && consumedBy == nonce); !won {
+		return nil, &oauth2.CodeReplayError{Record: code}
 	}
 
 	return code, nil
