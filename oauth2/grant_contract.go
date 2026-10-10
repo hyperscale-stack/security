@@ -21,8 +21,8 @@ type GrantRequest struct {
 	Now      time.Time
 	// Profile is the server's active security profile. Grants use it to
 	// enforce the profile-mandated rules at runtime (e.g. PKCE required,
-	// "plain" PKCE refused). A profile can only tighten a grant's own
-	// configuration, never loosen it.
+	// "plain" PKCE refused, refresh-token rotation forced). A profile can
+	// only tighten a grant's own configuration, never loosen it.
 	Profile Profile
 }
 
@@ -48,4 +48,17 @@ type Grant interface {
 	// Handle runs the grant. Returns oauth2.* sentinel errors that the
 	// server then projects onto the OAuth2 JSON error envelope.
 	Handle(ctx context.Context, req GrantRequest) (*GrantResponse, error)
+}
+
+// ProfileValidator is an optional [Grant] capability for grants whose
+// configuration must agree with the server's [Profile]. [NewServer] calls
+// ValidateProfile on every registered grant implementing it and refuses to
+// build the server on error — e.g. a refresh_token grant that cannot rotate
+// refresh tokens under [Profile20BCP] or [Profile21Draft]. It only moves
+// the failure to boot: grants still enforce the profile at runtime through
+// [GrantRequest.Profile]. Grant decorators should forward ValidateProfile;
+// a grant that does not implement it is not checked at construction.
+type ProfileValidator interface {
+	// ValidateProfile returns why the grant cannot honor p, or nil.
+	ValidateProfile(p Profile) error
 }

@@ -42,8 +42,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   key rotation, `alg=none` and algorithm-confusion defenses, and a
   `bearer.TokenVerifier` adapter.
 - **OAuth2 server** (`oauth2`): `Profile` (2.0 / 2.0-BCP / 2.1-draft),
-  enforced at runtime on the grants (PKCE required, `plain` PKCE refused
-  under BCP / 2.1). Grants: `authorization_code` (PKCE), `client_credentials`,
+  enforced at runtime on the grants (PKCE required, `plain` PKCE refused,
+  refresh-token rotation forced under BCP / 2.1). Grants:
+  `authorization_code` (PKCE), `client_credentials`,
   `refresh_token` (rotation + reuse detection), and the opt-in legacy
   `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
   `client_secret_basic`/`_post`/`none` client authentication. Endpoints:
@@ -65,6 +66,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   never puts on the wire — plus the errors it swallows on purpose, such as a
   best-effort revocation (RFC 7009 §2.2) or a family revocation that failed
   during reuse detection. Purely observational: the responses are unchanged.
+- **OAuth2 profile consistency checks**: `oauth2.ProfileValidator`, an
+  optional `Grant` capability: `oauth2.NewServer` asks every registered
+  grant implementing it whether it can honor the active `Profile`, and
+  refuses to build the server otherwise; the shipped `refresh_token` grant
+  implements it. `grant.ErrRotationRequiresGenerator` reports a
+  `refresh_token` grant that has to rotate refresh tokens but has no
+  `grant.Config.RefreshTokens` generator to mint the replacement — returned
+  by `NewServer`, and the cause of the `server_error` such a grant fails
+  with at runtime, before any token is minted or persisted.
 - **Observability**: OpenTelemetry spans emitted directly by the core,
   `httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, and `session`. See
   [docs/observability.md](docs/observability.md).
@@ -101,6 +111,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   1h TTL is advertised as `3600`, not `3599`) and an already-expired token
   drops the field rather than sending the negative lifetime RFC 6749 §5.1
   does not allow.
+- A rotated OAuth2 refresh token keeps the scope of the token it replaces
+  (RFC 6749 §6); narrowing the scope of a refresh only narrows the issued
+  access token. The replacement used to inherit the narrowed scope, so the
+  grant shrank permanently and a later request for the original scope was
+  refused with `invalid_scope`.
 
 ### Removed
 
@@ -115,3 +130,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a fixed, generic string per error code, so internal context (timestamps,
   package and authenticator names, consumer-supplied `TokenVerifier`/store
   errors) can no longer leak to clients.
+- The OAuth2 `refresh_token` grant now enforces the refresh-token rotation
+  that `Profile20BCP` (the default) and `Profile21Draft` mandate (RFC 9700
+  §4.14.2) — for every client, stricter than RFC 9700 §2.2.2, which only
+  requires it (or sender-constrained refresh tokens) for public clients —
+  whatever `grant.Config.RotateRefreshTokens` says: every exchange consumes
+  the presented refresh token and returns a new one, and replaying a
+  consumed token is refused with `invalid_grant` and revokes the whole
+  family. The zero configuration used to let the same refresh token be
+  replayed until it expired. Clients MUST keep the refresh token returned
+  by each exchange (RFC 6749 §6). A grant that has to rotate but has no
+  `grant.Config.RefreshTokens` generator — including under `Profile20`
+  with `RotateRefreshTokens` set, which used to skip the rotation
+  silently — is refused by `oauth2.NewServer`, and should it run anyway
+  (called directly, or behind a decorator that hides it from `NewServer`)
+  it fails with `server_error` before any token is minted or persisted.
+  Non-rotating refresh tokens remain an explicit `Profile20` choice
+  (`RotateRefreshTokens: false`).

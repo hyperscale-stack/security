@@ -8,7 +8,8 @@
 //   - Server aggregates Profile, Storage, Grants, ClientAuth, IssuerResolver.
 //   - Profile selects the security baseline (OAuth2.0, OAuth2.0-BCP,
 //     OAuth2.1-draft). BCP is the recommended default and is enforced at
-//     runtime on the grants (PKCE required, "plain" PKCE refused).
+//     runtime on the grants (PKCE required, "plain" PKCE refused,
+//     refresh-token rotation forced).
 //   - Endpoints: AuthorizeHandler runs the RFC 6749 §3.1 authorization
 //     endpoint (authorization_code, and the opt-in legacy implicit flow);
 //     TokenHandler, RevokeHandler, IntrospectHandler and MetadataHandler

@@ -38,7 +38,8 @@ type ServerConfig struct {
 	// Use [StaticIssuer] for single-tenant deployments.
 	IssuerResolver IssuerResolver
 	// Grants lists the grant_type handlers active on /token. The Server
-	// builds a dispatch map keyed on Grant.Type().
+	// builds a dispatch map keyed on Grant.Type(). Grants implementing
+	// [ProfileValidator] are checked against Profile at construction.
 	Grants []Grant
 	// ClientAuth lists the client-authentication methods active on /token
 	// (and /revoke, /introspect). The Server consults them in order and
@@ -79,7 +80,8 @@ type Server struct {
 
 // NewServer validates cfg and returns a ready-to-mount [Server]. It
 // returns an error when the configuration is internally inconsistent
-// (no storage, no client store, ...).
+// (no storage, no client store, a grant the profile forbids or that
+// rejects it through [ProfileValidator], ...).
 func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Storage == nil {
 		return nil, errors.New("oauth2: NewServer: Storage is required")
@@ -164,17 +166,22 @@ func (s *Server) resolveIssuer(ctx context.Context, r *http.Request) (string, st
 	return iss, aud, nil
 }
 
-// profileConstraints enforces the profile-specific bans (e.g. legacy
-// grants refused outside Profile20).
+// profileConstraints enforces the profile at construction: the legacy
+// grants are refused outside Profile20, and every grant implementing
+// [ProfileValidator] must accept the profile.
 func profileConstraints(p Profile, grants []Grant) error {
-	if p.AllowsLegacyGrant() {
-		return nil
-	}
-
 	for _, g := range grants {
 		switch g.Type() {
 		case "password", "implicit":
-			return fmt.Errorf("oauth2: profile %s forbids grant %q", p, g.Type())
+			if !p.AllowsLegacyGrant() {
+				return fmt.Errorf("oauth2: profile %s forbids grant %q", p, g.Type())
+			}
+		}
+
+		if v, ok := g.(ProfileValidator); ok {
+			if err := v.ValidateProfile(p); err != nil {
+				return fmt.Errorf("oauth2: NewServer: grant %q is inconsistent with profile %s: %w", g.Type(), p, err)
+			}
 		}
 	}
 

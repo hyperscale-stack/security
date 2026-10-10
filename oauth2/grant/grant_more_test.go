@@ -12,6 +12,7 @@ import (
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/grant"
+	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -365,6 +366,23 @@ func TestRefreshTokenNarrowsScope(t *testing.T) {
 	resp, err := g.Handle(context.Background(), grant.Request{Client: newClient(), Form: form, Now: time.Now()})
 	require.NoError(t, err)
 	assert.Equal(t, "read:mail", resp.Scope)
+	assert.Equal(t, "read:mail", resp.Pair.Access.Scope)
+
+	// RFC 6749 §6: narrowing only affects the access token; the rotated
+	// refresh token keeps the scope of the one it replaces.
+	require.NotNil(t, resp.Pair.Refresh)
+	assert.Equal(t, "read:mail write:mail", resp.Pair.Refresh.Scope)
+
+	stored, err := store.LookupRefreshToken(context.Background(), resp.Pair.Refresh.TokenHash)
+	require.NoError(t, err)
+	assert.Equal(t, "read:mail write:mail", stored.Scope)
+
+	// So the next exchange without a scope gets the whole original grant back.
+	next, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: url.Values{"refresh_token": {resp.Pair.Refresh.Token}}, Now: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "read:mail write:mail", next.Scope)
 }
 
 func TestRefreshTokenRefusesBroadenedScope(t *testing.T) {
@@ -386,24 +404,47 @@ func TestRefreshTokenRefusesBroadenedScope(t *testing.T) {
 	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
 }
 
-func TestRefreshTokenWithoutRotation(t *testing.T) {
+func TestRefreshTokenWithoutRotationUnderProfile20(t *testing.T) {
 	t.Parallel()
 
-	store := newStore()
-	seedRefresh(t, store, "static-rt", "read:mail", time.Now().Add(time.Hour))
+	cases := []struct {
+		name string
+		gen  token.RefreshTokenGenerator
+	}{
+		{"with a refresh generator", newRefreshGen()},
+		{"without a refresh generator", nil},
+	}
 
-	// RotateRefreshTokens defaults to false here: the grant issues a new
-	// access token but no replacement refresh token.
-	g := grant.NewRefreshToken(grant.Config{
-		Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),
-		AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour, RotateRefreshTokens: false,
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	form := url.Values{}
-	form.Set("refresh_token", "static-rt")
+			store := newStore()
+			seedRefresh(t, store, "static-rt", "read:mail", time.Now().Add(time.Hour))
 
-	resp, err := g.Handle(context.Background(), grant.Request{Client: newClient(), Form: form, Now: time.Now()})
-	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Pair.Access.Token)
-	assert.Nil(t, resp.Pair.Refresh, "no rotation -> no new refresh token")
+			// Rotation is opt-in under Profile20 only: with RotateRefreshTokens
+			// false the grant issues a new access token but no replacement
+			// refresh token, and the presented one stays usable.
+			g := grant.NewRefreshToken(grant.Config{
+				Storage: store, AccessTokens: newAccessGen(), RefreshTokens: tc.gen,
+				AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour, RotateRefreshTokens: false,
+			})
+
+			form := url.Values{}
+			form.Set("refresh_token", "static-rt")
+
+			req := grant.Request{Client: newClient(), Form: form, Now: time.Now(), Profile: oauth2.Profile20}
+
+			for range 2 {
+				resp, err := g.Handle(context.Background(), req)
+				require.NoError(t, err)
+				assert.NotEmpty(t, resp.Pair.Access.Token)
+				assert.Nil(t, resp.Pair.Refresh, "no rotation -> no new refresh token")
+			}
+
+			rt, err := store.LookupRefreshToken(context.Background(), oauth2.HashToken(nil, "static-rt"))
+			require.NoError(t, err)
+			assert.False(t, rt.Consumed, "a non-rotating refresh never consumes the token")
+		})
+	}
 }

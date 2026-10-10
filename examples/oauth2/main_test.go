@@ -149,10 +149,48 @@ func TestExampleOAuth2AuthorizationCodeFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	var tok struct {
-		AccessToken string `json:"access_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&tok))
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotEmpty(t, tok.AccessToken)
+	require.NotEmpty(t, tok.RefreshToken)
+
+	// 4. Profile20BCP mandates refresh-token rotation: the refresh exchange
+	// returns a replacement refresh token...
+	resp = refreshExchange(t, client, srv.URL, tok.RefreshToken)
+
+	var rotated struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&rotated))
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotEmpty(t, rotated.RefreshToken)
+	assert.NotEqual(t, tok.RefreshToken, rotated.RefreshToken)
+
+	// 5. ...and replaying the consumed one is refused.
+	resp = refreshExchange(t, client, srv.URL, tok.RefreshToken)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// refreshExchange POSTs a refresh_token grant for raw to the demo /token
+// endpoint, authenticated as the demo client.
+func refreshExchange(t *testing.T, client *http.Client, baseURL, raw string) *http.Response {
+	t.Helper()
+
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {raw}}
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/oauth2/token", strings.NewReader(form.Encode()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(demoClientID, demoClientSecret)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	return resp
 }
