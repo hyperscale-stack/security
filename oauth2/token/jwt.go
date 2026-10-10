@@ -30,6 +30,14 @@ type AccessTokenSigner interface {
 // introspection locate the AccessToken record without persisting the raw
 // JWT (the JWS is large; storing only the hash keeps the table compact and
 // removes the leak window). Every lookup path hashes the same way.
+//
+// Revoking such a token — or its family — takes effect in the store only:
+// a resource server verifying the JWT offline, from its signature and
+// claims, keeps accepting it until it expires, and the RFC 9068 payload
+// carries no family or token identifier to deny-list. Keep the access-token
+// lifetime short, or validate high-value requests against the store
+// ([oauth2.AccessTokenStore.LookupAccessToken]) or through RFC 7662
+// introspection.
 type JWTAccessTokenGenerator struct {
 	signer AccessTokenSigner
 }

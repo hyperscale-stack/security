@@ -74,9 +74,17 @@ The hook fires for:
   refusal by the policy is an expected outcome and is not reported.
 
 `grant.Config.OnError` is the same hook for the errors a grant swallows
-before returning — today, a family revocation that failed during BCP §8.10.3
-reuse detection. Errors a grant *returns* travel to the server and reach
-`ServerConfig.OnError`, so wire both fields to the same sink.
+before returning — today, a family revocation that failed after a
+refresh-token reuse (RFC 9700 §4.14.2), whether the grant found the
+presented token consumed or the store reported the reuse while rotating.
+The grant retries a revocation the store could not record, on a context
+detached from the request, and reports one `server_error` per revocation
+that still failed: `revoke refresh family failed after reuse detection`,
+whose cause matches `oauth2.ErrTokenFamilyRevocationFailed` and names the
+family with a conforming store. It does not match
+`oauth2.ErrRefreshTokenReused`: the reuse itself is the `invalid_grant` the
+server reports as usual. Errors a grant *returns* travel to the server and
+reach `ServerConfig.OnError`, so wire both fields to the same sink.
 
 The hook is purely observational: it MUST NOT influence the response, and it
 runs synchronously on the request goroutine, so keep it fast. It receives no
