@@ -211,15 +211,11 @@ func TestRefreshTokenReuseDetectedWithoutGenerator(t *testing.T) {
 
 	ctx := t.Context()
 	store := newStore()
-	req := consumedRefreshRequest(ctx, store) // family-1, Profile20BCP
+	req := consumedRefreshRequest(t, store) // family-1, Profile20BCP
 
 	const sibling = "active-sibling"
 
-	require.NoError(t, store.SaveRefreshToken(ctx, &oauth2.RefreshToken{
-		Token: sibling, TokenHash: oauth2.HashToken(nil, sibling),
-		ClientID: clientID, Subject: subject, Scope: "read:mail", FamilyID: "family-1",
-		IssuedAt: req.Now, ExpiresAt: req.Now.Add(time.Hour),
-	}))
+	seedPair(t, store, sibling, "family-1", "read:mail", time.Now().Add(time.Hour))
 
 	g := grant.NewRefreshToken(grant.Config{
 		Storage: store, AccessTokens: newAccessGen(), AccessTTL: time.Hour, // no RefreshTokens generator

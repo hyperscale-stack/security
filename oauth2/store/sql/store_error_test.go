@@ -7,11 +7,13 @@ package sqlstore_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 	sqlstore "github.com/hyperscale-stack/security/oauth2/store/sql"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -51,40 +53,47 @@ func TestSQLStoreReportsBackendErrors(t *testing.T) {
 	_, err := store.ConsumeAuthorizationCode(ctx, "h")
 	require.Error(t, err)
 
-	at := &oauth2.AccessToken{
-		TokenHash: "h", ClientID: "c", Subject: "s", Scope: "r",
-		IssuedAt: now, ExpiresAt: now.Add(time.Minute),
-	}
-	require.Error(t, store.SaveAccessToken(ctx, at))
+	pair := testPair("h", "f", time.Minute)
+	require.Error(t, store.SaveTokenPair(ctx, pair))
+
+	// Outside any family the pair skips the family record: the access
+	// token insert is the failing statement.
+	require.Error(t, store.SaveTokenPair(ctx, &oauth2.TokenPair{Access: oauth2.AccessToken{
+		TokenHash: "h", ClientID: "c", Subject: "s", Scope: "r", IssuedAt: now, ExpiresAt: now.Add(time.Minute),
+	}}))
 
 	_, err = store.LookupAccessToken(ctx, "h")
 	require.Error(t, err)
 
 	require.Error(t, store.RevokeAccessToken(ctx, "h"))
 
-	// Consumed=true also exercises the boolToInt true branch.
-	rt := &oauth2.RefreshToken{
-		TokenHash: "h", ClientID: "c", Subject: "s", Scope: "r", FamilyID: "f",
-		Consumed: true, IssuedAt: now, ExpiresAt: now.Add(time.Minute),
-	}
-	require.Error(t, store.SaveRefreshToken(ctx, rt))
-
 	_, err = store.LookupRefreshToken(ctx, "h")
 	require.Error(t, err)
 
-	require.Error(t, store.RotateRefreshToken(ctx, "h", rt))
-	require.Error(t, store.RevokeRefreshFamily(ctx, "f"))
+	require.Error(t, store.RotateRefreshToken(ctx, "h", testPair("next", "f", time.Minute)))
+	require.ErrorIs(t, store.RevokeRefreshFamily(ctx, "f"), oauth2.ErrTokenFamilyRevocationFailed)
 }
 
-func TestSQLStoreRejectsEmptyHashes(t *testing.T) {
+func TestSQLStoreRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
 	store := unmigratedStore(t)
 	ctx := context.Background()
+	tooLong := strings.Repeat("f", oauth2.MaxFamilyIDLength+1)
+	bare := &oauth2.TokenPair{Access: oauth2.AccessToken{TokenHash: "h", FamilyID: "f"}}
 
-	require.Error(t, store.SaveAuthorizationCode(ctx, &oauth2.AuthorizationCode{}))
-	require.Error(t, store.SaveAccessToken(ctx, &oauth2.AccessToken{}))
-	require.Error(t, store.SaveRefreshToken(ctx, &oauth2.RefreshToken{}))
+	// Refused before any statement runs: the database has no table at all.
+	for _, err := range []error{
+		store.SaveAuthorizationCode(ctx, &oauth2.AuthorizationCode{}),
+		store.SaveTokenPair(ctx, &oauth2.TokenPair{}),
+		store.SaveTokenPair(ctx, nil),
+		store.RotateRefreshToken(ctx, "h", nil),
+		store.RotateRefreshToken(ctx, "h", bare),
+		store.RevokeRefreshFamily(ctx, ""),
+		store.RevokeRefreshFamily(ctx, tooLong),
+	} {
+		assert.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err), "%v", err)
+	}
 }
 
 func TestSQLStoreReportsErrorsOnClosedDB(t *testing.T) {
@@ -105,5 +114,7 @@ func TestSQLStoreReportsErrorsOnClosedDB(t *testing.T) {
 	_, err = store.ConsumeAuthorizationCode(ctx, "h")
 	require.Error(t, err)
 
-	require.Error(t, store.RotateRefreshToken(ctx, "h", &oauth2.RefreshToken{}))
+	require.Error(t, store.SaveTokenPair(ctx, testPair("h", "f", time.Minute)))
+	require.Error(t, store.RotateRefreshToken(ctx, "h", testPair("next", "f", time.Minute)))
+	require.ErrorIs(t, store.RevokeRefreshFamily(ctx, "f"), oauth2.ErrTokenFamilyRevocationFailed)
 }

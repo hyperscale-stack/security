@@ -66,7 +66,8 @@ func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response,
 		Token: atRaw, TokenHash: atHash, ClientID: req.Client.ID(), Subject: req.Client.ID(),
 		Scope: scope, IssuedAt: req.Now, ExpiresAt: expires, Audience: req.Audience,
 	}
-	if err := g.cfg.Storage.SaveAccessToken(ctx, access); err != nil {
+	// RFC 6749 §4.4.3: no refresh token, and a token outside any family.
+	if err := g.cfg.Storage.SaveTokenPair(ctx, &oauth2.TokenPair{Access: *access}); err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 

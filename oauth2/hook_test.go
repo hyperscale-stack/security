@@ -338,16 +338,7 @@ func TestOnErrorReportsFailedFamilyRevocation(t *testing.T) {
 	require.NoError(t, err)
 
 	raw := "refresh-to-revoke"
-	require.NoError(t, store.SaveRefreshToken(t.Context(), &oauth2.RefreshToken{
-		Token:     raw,
-		TokenHash: oauth2.HashToken(nil, raw),
-		ClientID:  testClientID,
-		Subject:   "alice",
-		Scope:     "api:read",
-		FamilyID:  "family-1",
-		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
-	}))
+	seedPair(t, store, newClientPair(raw, "family-1"))
 
 	rec := httptest.NewRecorder()
 	srv.RevokeHandler().ServeHTTP(rec, formRequest("/revoke", url.Values{"token": {raw}}, true))

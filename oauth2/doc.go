@@ -25,8 +25,11 @@
 //   - Tokens are opaque by default; refresh tokens and authorization codes
 //     are stored hashed. JWT access tokens are available via an adapter to
 //     the jwt sub-module (no hard dependency from oauth2 to jwt).
-//   - Stores expose atomic ConsumeAuthorizationCode and RotateRefreshToken
-//     to guarantee single-use semantics and reuse-detection.
+//   - Stores expose an atomic ConsumeAuthorizationCode (single use), and
+//     persist every token pair atomically — SaveTokenPair, and
+//     RotateRefreshToken with reuse detection — against one authoritative
+//     state per token family: once revoked, no token of the family is
+//     usable and none can be issued into it (see Storage).
 //   - ServerConfig.OnError (and grant.Config.OnError) observe the errors the
 //     protocol hides: the cause of a server_error, which never reaches the
 //     wire, the revocations RFC 7009 §2.2 requires to answer 200 OK

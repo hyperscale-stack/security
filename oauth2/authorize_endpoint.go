@@ -427,7 +427,8 @@ func (s *Server) issueImplicitToken(
 		ExpiresAt: now.Add(cfg.ImplicitTTL),
 	}
 
-	if err := s.cfg.Storage.SaveAccessToken(r.Context(), at); err != nil {
+	// An implicit token belongs to no family: it is never gated by one.
+	if err := s.cfg.Storage.SaveTokenPair(r.Context(), &TokenPair{Access: *at}); err != nil {
 		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
 
 		return

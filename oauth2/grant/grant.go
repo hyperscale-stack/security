@@ -58,9 +58,13 @@ type Config struct {
 	RotateRefreshTokens bool
 	// OnError, when set, observes the errors a grant swallows to keep the
 	// protocol response intact — today, a family revocation that failed
-	// during reuse detection. Errors returned to the server travel to
-	// [oauth2.ServerConfig.OnError] instead, so wire both to the same sink.
-	// Optional; see [oauth2.ErrorHook].
+	// after a refresh-token reuse, whether the grant found the token
+	// consumed or the store reported the reuse while rotating: exactly one
+	// server_error per failed revocation, whose cause matches
+	// [oauth2.ErrTokenFamilyRevocationFailed] with a conforming store.
+	// Errors returned to the server travel to [oauth2.ServerConfig.OnError]
+	// instead, so wire both to the same sink. Optional; see
+	// [oauth2.ErrorHook].
 	OnError oauth2.ErrorHook
 }
 
@@ -71,6 +75,22 @@ func (c Config) notifyError(ctx context.Context, err error) {
 	}
 
 	c.OnError(ctx, err)
+}
+
+// detachedRevocationTimeout bounds a family revocation detached from the
+// request that triggered it.
+const detachedRevocationTimeout = 10 * time.Second
+
+// revokeFamilyDetached revokes familyID as the security response to a
+// detected replay. It runs on a context detached from the request's
+// cancellation — a client hanging up must not abort the revocation its
+// replay triggered — bounded by detachedRevocationTimeout. The caller
+// reports a failure: it cannot change the answer the client gets.
+func (c Config) revokeFamilyDetached(ctx context.Context, familyID string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedRevocationTimeout)
+	defer cancel()
+
+	return c.Storage.RevokeRefreshFamily(ctx, familyID) //nolint:wrapcheck // reported as the hook cause, unchanged
 }
 
 // Request and Response are type aliases anchoring the contract in the

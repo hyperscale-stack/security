@@ -92,8 +92,10 @@ type RefreshToken struct {
 	// entire family (RFC 9700 §4.14.2). Never empty for a stored refresh
 	// token; at most [MaxFamilyIDLength] bytes.
 	FamilyID string
-	// Consumed indicates whether the token has been rotated. Reuse of a
-	// consumed token MUST trigger family revocation.
+	// Consumed reports that the token can no longer be exchanged: it was
+	// rotated, or its family was revoked. Presenting a consumed token is
+	// reuse, which MUST trigger family revocation. Lookups set it; a new
+	// token is never persisted consumed.
 	Consumed bool
 }
 
@@ -105,8 +107,10 @@ func (t *RefreshToken) IsExpired(now time.Time) bool {
 // TokenPair couples an access token with the refresh token issued alongside
 // it. Refresh is nil when the grant issues none: client_credentials, a grant
 // without a RefreshTokens generator, or a non-rotating refresh under
-// Profile20. The grant handlers return this; the response writer turns it
-// into the RFC 6749 §5.1 JSON body.
+// Profile20. It is the unit of persistence — [Storage] writes a pair
+// atomically, through SaveTokenPair or RotateRefreshToken — and what the
+// grant handlers return; the response writer turns it into the RFC 6749
+// §5.1 JSON body.
 type TokenPair struct {
 	Access  AccessToken
 	Refresh *RefreshToken

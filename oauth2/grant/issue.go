@@ -12,19 +12,41 @@ import (
 )
 
 // issueTokenPair mints an access token — and, when the config carries a
-// refresh-token generator, a companion refresh token in the same family —
-// for the given subject and scope, persists them, and returns the grant
-// response. It is the shared issuance path of the authorization_code and
-// legacy password grants.
+// refresh-token generator, a companion refresh token — in a new family for
+// the given subject and scope, persists them atomically, and returns the
+// grant response. It is the shared issuance path of the authorization_code
+// and legacy password grants.
 func issueTokenPair(ctx context.Context, cfg Config, req Request, subject, scope string) (*Response, error) {
 	familyID, err := newFamilyID()
 	if err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
+	access, err := mintAccess(ctx, cfg, req, subject, scope, familyID)
+	if err != nil {
+		return nil, err
+	}
+
+	pair := &oauth2.TokenPair{Access: *access}
+
+	if cfg.RefreshTokens != nil {
+		if pair.Refresh, err = mintRefresh(ctx, cfg, req, subject, scope, familyID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
+		return nil, storageFailure(err)
+	}
+
+	return pairResponse(pair, scope), nil
+}
+
+// mintAccess generates an access token in familyID; nothing is persisted.
+func mintAccess(ctx context.Context, cfg Config, req Request, subject, scope, familyID string) (*oauth2.AccessToken, error) {
 	expires := req.Now.Add(cfg.AccessTTL)
 
-	atRaw, atHash, err := cfg.AccessTokens.Generate(ctx, token.AccessTokenClaims{
+	raw, hash, err := cfg.AccessTokens.Generate(ctx, token.AccessTokenClaims{
 		Issuer:    req.Issuer,
 		Subject:   subject,
 		Audience:  req.Audience,
@@ -38,40 +60,42 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, subject, scope
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	access := &oauth2.AccessToken{
-		Token: atRaw, TokenHash: atHash, ClientID: req.Client.ID(), Subject: subject,
+	return &oauth2.AccessToken{
+		Token: raw, TokenHash: hash, ClientID: req.Client.ID(), Subject: subject,
 		Scope: scope, IssuedAt: req.Now, ExpiresAt: expires,
 		FamilyID: familyID, Audience: req.Audience,
-	}
-	if err := cfg.Storage.SaveAccessToken(ctx, access); err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
-	}
+	}, nil
+}
 
-	resp := &Response{
-		Pair:      oauth2.TokenPair{Access: *access},
-		Scope:     scope,
-		TokenType: oauth2.TokenTypeBearer,
-	}
-
-	if cfg.RefreshTokens == nil {
-		return resp, nil
-	}
-
-	rtRaw, rtHash, err := cfg.RefreshTokens.Generate(ctx)
+// mintRefresh generates a refresh token in familyID with the RefreshTokens
+// generator, which the caller ensured is set; nothing is persisted.
+func mintRefresh(ctx context.Context, cfg Config, req Request, subject, scope, familyID string) (*oauth2.RefreshToken, error) {
+	raw, hash, err := cfg.RefreshTokens.Generate(ctx)
 	if err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	refresh := &oauth2.RefreshToken{
-		Token: rtRaw, TokenHash: rtHash, ClientID: req.Client.ID(), Subject: subject,
+	return &oauth2.RefreshToken{
+		Token: raw, TokenHash: hash, ClientID: req.Client.ID(), Subject: subject,
 		Scope: scope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(cfg.RefreshTTL),
 		FamilyID: familyID,
-	}
-	if err := cfg.Storage.SaveRefreshToken(ctx, refresh); err != nil {
-		return nil, oauth2.ErrServerError.WithCause(err)
+	}, nil
+}
+
+// pairResponse wraps a persisted pair into the grant response.
+func pairResponse(pair *oauth2.TokenPair, scope string) *Response {
+	return &Response{Pair: *pair, Scope: scope, TokenType: oauth2.TokenTypeBearer}
+}
+
+// storageFailure maps a failed persistence call to the grant's answer. A
+// refusal the store reports as invalid_grant — a revoked family, a refresh
+// token that vanished — is the answer RFC 6749 §5.2 prescribes and passes
+// through; anything else becomes a server_error whose cause stays off the
+// wire.
+func storageFailure(err error) error {
+	if oauth2.IsCode(err) == oauth2.CodeInvalidGrant {
+		return err
 	}
 
-	resp.Pair.Refresh = refresh
-
-	return resp, nil
+	return oauth2.ErrServerError.WithCause(err)
 }

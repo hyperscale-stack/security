@@ -138,7 +138,7 @@ func newIntrospectServer(t *testing.T, policy oauth2.IntrospectionPolicy, onErro
 //   - at-app / rt-app (fam-app): active, for alice, scope read, audience api.
 //   - at-expired / rt-expired (fam-expired): past their expiry.
 //   - at-consumed / rt-consumed (fam-consumed): the refresh token was
-//     already rotated.
+//     already rotated, into at-consumed-next / rt-consumed-next.
 func seedTokens(t *testing.T, store *memory.Store) {
 	t.Helper()
 
@@ -174,15 +174,26 @@ func seedTokens(t *testing.T, store *memory.Store) {
 			},
 			refresh: oauth2.RefreshToken{
 				TokenHash: oauth2.HashToken(nil, "rt-consumed"), ClientID: "app", Subject: "alice", Scope: "read",
-				FamilyID: "fam-consumed", IssuedAt: seededIssuedAt, ExpiresAt: seededRefreshExp, Consumed: true,
+				FamilyID: "fam-consumed", IssuedAt: seededIssuedAt, ExpiresAt: seededRefreshExp,
 			},
 		},
 	}
 
 	for _, p := range pairs {
-		require.NoError(t, store.SaveAccessToken(t.Context(), &p.access))
-		require.NoError(t, store.SaveRefreshToken(t.Context(), &p.refresh))
+		require.NoError(t, store.SaveTokenPair(t.Context(), &oauth2.TokenPair{Access: p.access, Refresh: &p.refresh}))
 	}
+
+	// A refresh token is only ever consumed by a rotation.
+	require.NoError(t, store.RotateRefreshToken(t.Context(), oauth2.HashToken(nil, "rt-consumed"), &oauth2.TokenPair{
+		Access: oauth2.AccessToken{
+			TokenHash: oauth2.HashToken(nil, "at-consumed-next"), ClientID: "app", Subject: "alice", Scope: "read",
+			Audience: "api", FamilyID: "fam-consumed", IssuedAt: seededIssuedAt, ExpiresAt: seededAccessExp,
+		},
+		Refresh: &oauth2.RefreshToken{
+			TokenHash: oauth2.HashToken(nil, "rt-consumed-next"), ClientID: "app", Subject: "alice", Scope: "read",
+			FamilyID: "fam-consumed", IssuedAt: seededIssuedAt, ExpiresAt: seededRefreshExp,
+		},
+	}))
 }
 
 // basicForm builds a form POST authenticated with HTTP Basic as id:secret

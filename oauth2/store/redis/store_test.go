@@ -36,8 +36,8 @@ func newRedisStore(t *testing.T) oauth2.Storage {
 }
 
 // TestRedisStoreConformance runs the shared storage contract against the
-// Redis implementation. The same 11-case suite the memory and SQL stores
-// pass — concurrency races included — exercising the Lua-script atomicity.
+// Redis implementation. The same suite the memory and SQL stores pass —
+// concurrency races included — exercising the Lua-script atomicity.
 func TestRedisStoreConformance(t *testing.T) {
 	t.Parallel()
 

@@ -9,8 +9,11 @@ import (
 	"fmt"
 )
 
-// Schema returns the DDL statements that create the three tables backing
-// the store. Timestamps are stored as BIGINT Unix seconds to dodge the
+// Schema returns the DDL statements that create the four tables backing
+// the store: authorization codes, access tokens, refresh tokens, and the
+// token families — one record per family, active (revoked_at = 0) or
+// revoked (revoked_at = Unix second of the first revocation), retained
+// until expires_at. Timestamps are stored as BIGINT Unix seconds to dodge the
 // TIMESTAMP / DATETIME portability minefield between engines, and flags as
 // SMALLINT 0/1 since PostgreSQL has no implicit integer/boolean cast. Token
 // / code raw values are NEVER stored — only their hashes.
@@ -54,6 +57,11 @@ func Schema(_ Dialect) []string {
 			family_id  VARCHAR(64)  NOT NULL,
 			consumed   SMALLINT     NOT NULL DEFAULT 0,
 			issued_at  BIGINT       NOT NULL,
+			expires_at BIGINT       NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
+			family_id  VARCHAR(64)  PRIMARY KEY,
+			revoked_at BIGINT       NOT NULL DEFAULT 0,
 			expires_at BIGINT       NOT NULL
 		)`,
 	}

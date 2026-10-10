@@ -9,11 +9,13 @@
 //
 // All operations are guarded by a single sync.Mutex; the resulting
 // throughput is fine for tens of thousands of req/s but the structure is
-// optimized for clarity, not for scale.
+// optimized for clarity, not for scale. Nothing is ever purged: expired
+// tokens and revoked families stay in memory for the process lifetime.
 package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -21,21 +23,27 @@ import (
 
 // Store is an in-memory [oauth2.Storage]. The zero value is unusable;
 // build one with [New].
+//
+// The mutex is the linearization point of the token-family contract: every
+// issuance, rotation, revocation and lookup checks or records the revoked
+// families under it. A family needs no record while it is active, and the
+// store never loses one once revoked, so the I8 fail-closed rule of
+// [oauth2.Storage] never comes into play.
 type Store struct {
-	mu       sync.Mutex
-	codes    map[string]oauth2.AuthorizationCode
-	access   map[string]oauth2.AccessToken
-	refresh  map[string]oauth2.RefreshToken
-	families map[string][]string // familyID -> refresh-token hashes (for revocation)
+	mu      sync.Mutex
+	codes   map[string]oauth2.AuthorizationCode
+	access  map[string]oauth2.AccessToken
+	refresh map[string]oauth2.RefreshToken
+	revoked map[string]struct{} // revoked token families
 }
 
 // New returns a fresh [Store].
 func New() *Store {
 	return &Store{
-		codes:    make(map[string]oauth2.AuthorizationCode),
-		access:   make(map[string]oauth2.AccessToken),
-		refresh:  make(map[string]oauth2.RefreshToken),
-		families: make(map[string][]string),
+		codes:   make(map[string]oauth2.AuthorizationCode),
+		access:  make(map[string]oauth2.AccessToken),
+		refresh: make(map[string]oauth2.RefreshToken),
+		revoked: make(map[string]struct{}),
 	}
 }
 
@@ -75,21 +83,27 @@ func (s *Store) ConsumeAuthorizationCode(_ context.Context, codeHash string) (*o
 	return &cp, nil
 }
 
-// SaveAccessToken implements [oauth2.AccessTokenStore].
-func (s *Store) SaveAccessToken(_ context.Context, t *oauth2.AccessToken) error {
+// SaveTokenPair implements [oauth2.Storage]: under the store's mutex it
+// refuses a pair joining a revoked family, then persists both tokens.
+func (s *Store) SaveTokenPair(_ context.Context, pair *oauth2.TokenPair) error {
+	if err := pair.Validate(); err != nil {
+		return fmt.Errorf("memory: save token pair: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("storage: empty access token hash")
+	if s.isRevoked(pair.Access.FamilyID) {
+		return oauth2.ErrTokenFamilyRevoked
 	}
 
-	s.access[t.TokenHash] = *t
+	s.persist(pair)
 
 	return nil
 }
 
-// LookupAccessToken implements [oauth2.AccessTokenStore].
+// LookupAccessToken implements [oauth2.AccessTokenStore]. A token of a
+// revoked family is reported as [oauth2.ErrTokenFamilyRevoked].
 func (s *Store) LookupAccessToken(_ context.Context, tokenHash string) (*oauth2.AccessToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,6 +111,10 @@ func (s *Store) LookupAccessToken(_ context.Context, tokenHash string) (*oauth2.
 	t, ok := s.access[tokenHash]
 	if !ok {
 		return nil, oauth2.ErrInvalidGrant.WithDescription("access token not found")
+	}
+
+	if s.isRevoked(t.FamilyID) {
+		return nil, oauth2.ErrTokenFamilyRevoked
 	}
 
 	cp := t
@@ -114,27 +132,9 @@ func (s *Store) RevokeAccessToken(_ context.Context, tokenHash string) error {
 	return nil
 }
 
-// SaveRefreshToken implements [oauth2.RefreshTokenStore]. The token is
-// registered in its family so that subsequent revocation can iterate every
-// sibling.
-func (s *Store) SaveRefreshToken(_ context.Context, t *oauth2.RefreshToken) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("storage: empty refresh token hash")
-	}
-
-	s.refresh[t.TokenHash] = *t
-
-	if t.FamilyID != "" {
-		s.families[t.FamilyID] = append(s.families[t.FamilyID], t.TokenHash)
-	}
-
-	return nil
-}
-
-// LookupRefreshToken implements [oauth2.RefreshTokenStore].
+// LookupRefreshToken implements [oauth2.RefreshTokenStore]. A token of a
+// revoked family — or outside any family, which no valid pair carries —
+// comes back consumed.
 func (s *Store) LookupRefreshToken(_ context.Context, tokenHash string) (*oauth2.RefreshToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,69 +145,99 @@ func (s *Store) LookupRefreshToken(_ context.Context, tokenHash string) (*oauth2
 	}
 
 	cp := t
+	if cp.FamilyID == "" || s.isRevoked(cp.FamilyID) {
+		cp.Consumed = true
+	}
 
 	return &cp, nil
 }
 
-// RotateRefreshToken implements [oauth2.RefreshTokenStore]. The atomic
-// sequence under the store's mutex is:
-//
-//  1. Look up the old token; if missing -> ErrInvalidGrant.
-//  2. If the old token is already consumed -> revoke the entire family and
-//     return [oauth2.ErrRefreshTokenReused] (BCP §8.10.3).
-//  3. Mark the old token as consumed, save the new token, register it in
-//     the same family.
-func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.RefreshToken) error {
-	s.mu.Lock()
-
-	old, ok := s.refresh[oldHash]
-	if !ok {
-		s.mu.Unlock()
-
-		return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
+// RotateRefreshToken implements [oauth2.RefreshTokenStore]. Under the
+// store's mutex it decides, in the contract's order: unknown token
+// (invalid_grant), next in another family (invalid_request), revoked
+// family ([oauth2.ErrTokenFamilyRevoked]), consumed token (reuse: the
+// family is revoked in the same critical section, which cannot fail, and
+// [oauth2.ErrRefreshTokenReused] is returned). Otherwise it consumes the
+// old token and persists next.
+func (s *Store) RotateRefreshToken(_ context.Context, oldHash string, next *oauth2.TokenPair) error {
+	if err := validateRotation(next); err != nil {
+		return err
 	}
 
-	if old.Consumed {
-		family := old.FamilyID
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-		s.mu.Unlock()
+	old, ok := s.refresh[oldHash]
 
-		_ = s.RevokeRefreshFamily(ctx, family)
+	switch {
+	case !ok:
+		return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
+	case old.FamilyID != next.Access.FamilyID:
+		return oauth2.ErrInvalidRequest.WithDescription("storage: rotation into another token family")
+	case s.isRevoked(old.FamilyID):
+		return oauth2.ErrTokenFamilyRevoked
+	case old.Consumed:
+		s.revoked[old.FamilyID] = struct{}{}
 
 		return oauth2.ErrRefreshTokenReused
 	}
 
 	old.Consumed = true
 	s.refresh[oldHash] = old
-	s.refresh[next.TokenHash] = *next
-
-	if next.FamilyID != "" {
-		s.families[next.FamilyID] = append(s.families[next.FamilyID], next.TokenHash)
-	}
-
-	s.mu.Unlock()
+	s.persist(next)
 
 	return nil
 }
 
-// RevokeRefreshFamily implements [oauth2.RefreshTokenStore]. Every refresh
-// token in the family is marked consumed and every access token whose
-// FamilyID matches is removed.
+// RevokeRefreshFamily implements [oauth2.RefreshTokenStore]: it records
+// the family as revoked, whether or not any of its tokens exists.
 func (s *Store) RevokeRefreshFamily(_ context.Context, familyID string) error {
+	switch {
+	case familyID == "":
+		return oauth2.ErrInvalidRequest.WithDescription("storage: empty token family id")
+	case len(familyID) > oauth2.MaxFamilyIDLength:
+		return oauth2.ErrInvalidRequest.WithDescription("storage: token family id too long")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, hash := range s.families[familyID] {
-		if t, ok := s.refresh[hash]; ok {
-			t.Consumed = true
-			s.refresh[hash] = t
-		}
+	s.revoked[familyID] = struct{}{}
+
+	return nil
+}
+
+// isRevoked reports whether familyID is a revoked family; tokens outside
+// any family never are. The caller holds the mutex.
+func (s *Store) isRevoked(familyID string) bool {
+	if familyID == "" {
+		return false
 	}
 
-	for hash, t := range s.access {
-		if t.FamilyID == familyID {
-			delete(s.access, hash)
-		}
+	_, revoked := s.revoked[familyID]
+
+	return revoked
+}
+
+// persist writes the tokens of pair. The caller holds the mutex.
+func (s *Store) persist(pair *oauth2.TokenPair) {
+	s.access[pair.Access.TokenHash] = pair.Access
+
+	if pair.Refresh != nil {
+		s.refresh[pair.Refresh.TokenHash] = *pair.Refresh
+	}
+}
+
+// validateRotation refuses a malformed rotation target before the store is
+// touched: nil, failing [oauth2.TokenPair.Validate], or without the refresh
+// token a rotation must issue.
+func validateRotation(next *oauth2.TokenPair) error {
+	if err := next.Validate(); err != nil {
+		return fmt.Errorf("memory: rotate refresh token: %w", err)
+	}
+
+	if next.Refresh == nil {
+		return oauth2.ErrInvalidRequest.WithDescription("storage: rotation without a refresh token")
 	}
 
 	return nil

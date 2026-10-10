@@ -309,12 +309,12 @@ func TestRevokeEndpoint(t *testing.T) {
 
 		srv, store := newTestServer(t)
 		ctx := context.Background()
-		require.NoError(t, store.SaveAccessToken(ctx, &oauth2.AccessToken{
+		require.NoError(t, store.SaveTokenPair(ctx, &oauth2.TokenPair{Access: oauth2.AccessToken{
 			TokenHash: oauth2.HashToken(nil, "raw-access"),
 			ClientID:  testClientID,
 			FamilyID:  "fam-1",
 			ExpiresAt: time.Now().Add(time.Hour),
-		}))
+		}}))
 
 		rec := httptest.NewRecorder()
 		srv.RevokeHandler().ServeHTTP(rec,
@@ -330,17 +330,19 @@ func TestRevokeEndpoint(t *testing.T) {
 
 		srv, store := newTestServer(t)
 		ctx := context.Background()
-		require.NoError(t, store.SaveRefreshToken(ctx, &oauth2.RefreshToken{
-			TokenHash: oauth2.HashToken(nil, "raw-refresh"),
-			ClientID:  testClientID,
-			FamilyID:  "fam-2",
-			ExpiresAt: time.Now().Add(time.Hour),
-		}))
+		pair := seedPair(t, store, newClientPair("raw-refresh", "fam-2"))
 
 		rec := httptest.NewRecorder()
 		srv.RevokeHandler().ServeHTTP(rec,
 			formRequest("/oauth2/revoke", url.Values{"token": {"raw-refresh"}}, true))
 		assert.Equal(t, http.StatusOK, rec.Code)
+
+		rt, err := store.LookupRefreshToken(ctx, pair.Refresh.TokenHash)
+		require.NoError(t, err)
+		assert.True(t, rt.Consumed, "the refresh token's family must be revoked")
+
+		_, err = store.LookupAccessToken(ctx, pair.Access.TokenHash)
+		assert.Error(t, err, "the family's access token must be revoked")
 	})
 }
 
@@ -376,14 +378,14 @@ func TestIntrospectEndpoint(t *testing.T) {
 		t.Parallel()
 
 		srv, store := newTestServer(t)
-		require.NoError(t, store.SaveAccessToken(context.Background(), &oauth2.AccessToken{
+		require.NoError(t, store.SaveTokenPair(context.Background(), &oauth2.TokenPair{Access: oauth2.AccessToken{
 			TokenHash: oauth2.HashToken(nil, "live-at"),
 			ClientID:  testClientID,
 			Subject:   "user-1",
 			Scope:     "api:read",
 			IssuedAt:  time.Now().Add(-time.Minute),
 			ExpiresAt: time.Now().Add(time.Hour),
-		}))
+		}}))
 
 		body := introspect(t, srv, "live-at")
 		assert.True(t, body["active"].(bool))
@@ -395,11 +397,11 @@ func TestIntrospectEndpoint(t *testing.T) {
 		t.Parallel()
 
 		srv, store := newTestServer(t)
-		require.NoError(t, store.SaveAccessToken(context.Background(), &oauth2.AccessToken{
+		require.NoError(t, store.SaveTokenPair(context.Background(), &oauth2.TokenPair{Access: oauth2.AccessToken{
 			TokenHash: oauth2.HashToken(nil, "dead-at"),
 			ClientID:  testClientID,
 			ExpiresAt: time.Now().Add(-time.Hour),
-		}))
+		}}))
 		assert.False(t, introspect(t, srv, "dead-at")["active"].(bool))
 	})
 
@@ -407,11 +409,7 @@ func TestIntrospectEndpoint(t *testing.T) {
 		t.Parallel()
 
 		srv, store := newTestServer(t)
-		require.NoError(t, store.SaveRefreshToken(context.Background(), &oauth2.RefreshToken{
-			TokenHash: oauth2.HashToken(nil, "live-rt"),
-			ClientID:  testClientID,
-			ExpiresAt: time.Now().Add(time.Hour),
-		}))
+		seedPair(t, store, newClientPair("live-rt", "fam-live"))
 
 		body := introspect(t, srv, "live-rt")
 		assert.True(t, body["active"].(bool))
@@ -422,12 +420,7 @@ func TestIntrospectEndpoint(t *testing.T) {
 		t.Parallel()
 
 		srv, store := newTestServer(t)
-		require.NoError(t, store.SaveRefreshToken(context.Background(), &oauth2.RefreshToken{
-			TokenHash: oauth2.HashToken(nil, "used-rt"),
-			ClientID:  testClientID,
-			ExpiresAt: time.Now().Add(time.Hour),
-			Consumed:  true,
-		}))
+		seedRotated(t, store, newClientPair("used-rt", "fam-used"), newClientPair("used-rt-next", "fam-used"))
 		assert.False(t, introspect(t, srv, "used-rt")["active"].(bool))
 	})
 }

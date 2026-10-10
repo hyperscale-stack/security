@@ -14,11 +14,31 @@ import (
 	"github.com/hyperscale-stack/security/oauth2"
 )
 
-// Store is a database/sql-backed [oauth2.Storage]. Atomicity of the
-// single-use operations (ConsumeAuthorizationCode, RotateRefreshToken) is
-// guaranteed by transactions plus affected-row checks — no SELECT…FOR
-// UPDATE is needed because the winning DELETE / UPDATE is the one that
-// reports RowsAffected()==1.
+// Store is a database/sql-backed [oauth2.Storage].
+//
+// ConsumeAuthorizationCode runs in a transaction whose DELETE decides the
+// winner when two callers race (RowsAffected()==1).
+//
+// The token operations implement the token-family contract of
+// [oauth2.Storage] on one record per family (oauth2_token_families), the
+// point every write into the family serializes on:
+//
+//   - SaveTokenPair and RotateRefreshToken each run in one transaction that
+//     starts with a write — recording the family unless it exists — then
+//     locks the family row (SELECT … FOR UPDATE; SQLite's single writer
+//     serializes the transactions instead), refuses a revoked family, and
+//     only then writes the tokens. A rotation records an unknown family as
+//     revoked: only an issuance creates an active family.
+//   - RevokeRefreshFamily records the family revoked in one transaction,
+//     whether or not any of its tokens exists. On reuse, RotateRefreshToken
+//     does the same inside its own transaction, which already holds the
+//     family lock, and commits it.
+//   - Lookups are single statements joining the family record: a token of
+//     a revoked family — or of a family the table no longer holds — is
+//     reported revoked, a refresh token as consumed.
+//
+// Revocation therefore never touches token rows: they stay until an
+// operator deletes expired rows (see the package documentation).
 type Store struct {
 	db      *sql.DB
 	dialect Dialect
@@ -128,46 +148,56 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 	return code, nil
 }
 
-// --- access tokens -------------------------------------------------------
+// --- access and refresh tokens -------------------------------------------
 
-// SaveAccessToken implements [oauth2.AccessTokenStore].
-func (s *Store) SaveAccessToken(ctx context.Context, t *oauth2.AccessToken) error {
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("sqlstore: empty access token hash")
+// SaveTokenPair implements [oauth2.Storage]: one transaction joins the
+// pair's family — recording it active when unknown, refusing it once
+// revoked — and inserts both tokens. A pair outside any family is inserted
+// without a family record.
+func (s *Store) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
+	if err := pair.Validate(); err != nil {
+		return fmt.Errorf("sqlstore: save token pair: %w", err)
 	}
 
-	const q = `INSERT INTO oauth2_access_tokens
-		(token_hash, client_id, subject, scope, family_id, audience, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		if familyID := pair.Access.FamilyID; familyID != "" {
+			if err := s.joinFamily(ctx, tx, familyID, pairExpiry(pair)); err != nil {
+				return err
+			}
+		}
 
-	_, err := s.exec(ctx, q,
-		t.TokenHash, t.ClientID, t.Subject, t.Scope, t.FamilyID, t.Audience,
-		t.IssuedAt.Unix(), t.ExpiresAt.Unix())
-	if err != nil {
-		return fmt.Errorf("sqlstore: save access token: %w", err)
-	}
-
-	return nil
+		return s.insertPair(ctx, tx, pair)
+	})
 }
 
-// LookupAccessToken implements [oauth2.AccessTokenStore].
+// LookupAccessToken implements [oauth2.AccessTokenStore]. One statement
+// reads the token and its family record: a token of a revoked or unknown
+// family is reported as [oauth2.ErrTokenFamilyRevoked].
 func (s *Store) LookupAccessToken(ctx context.Context, tokenHash string) (*oauth2.AccessToken, error) {
-	const q = `SELECT client_id, subject, scope, family_id, audience, issued_at, expires_at
-		FROM oauth2_access_tokens WHERE token_hash = ?`
+	const q = `SELECT t.client_id, t.subject, t.scope, t.family_id, t.audience, t.issued_at, t.expires_at,
+			f.revoked_at
+		FROM oauth2_access_tokens t
+		LEFT JOIN oauth2_token_families f ON f.family_id = t.family_id
+		WHERE t.token_hash = ?`
 
 	var (
 		t                 = &oauth2.AccessToken{TokenHash: tokenHash}
 		issuedAt, expires int64
+		revokedAt         sql.NullInt64
 	)
 
 	row := s.db.QueryRowContext(ctx, s.dialect.rebind(q), tokenHash)
 	if err := row.Scan(&t.ClientID, &t.Subject, &t.Scope, &t.FamilyID, &t.Audience,
-		&issuedAt, &expires); err != nil {
+		&issuedAt, &expires, &revokedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, oauth2.ErrInvalidGrant.WithDescription("access token not found")
 		}
 
 		return nil, fmt.Errorf("sqlstore: lookup access token: %w", err)
+	}
+
+	if !familyActive(t.FamilyID, revokedAt) {
+		return nil, oauth2.ErrTokenFamilyRevoked
 	}
 
 	t.IssuedAt = time.Unix(issuedAt, 0)
@@ -185,35 +215,27 @@ func (s *Store) RevokeAccessToken(ctx context.Context, tokenHash string) error {
 	return nil
 }
 
-// --- refresh tokens ------------------------------------------------------
-
-// SaveRefreshToken implements [oauth2.RefreshTokenStore].
-func (s *Store) SaveRefreshToken(ctx context.Context, t *oauth2.RefreshToken) error {
-	if t.TokenHash == "" {
-		return oauth2.ErrInvalidRequest.WithDescription("sqlstore: empty refresh token hash")
-	}
-
-	const q = `INSERT INTO oauth2_refresh_tokens
-		(token_hash, client_id, subject, scope, family_id, consumed, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-
-	_, err := s.exec(ctx, q,
-		t.TokenHash, t.ClientID, t.Subject, t.Scope, t.FamilyID, boolToInt(t.Consumed),
-		t.IssuedAt.Unix(), t.ExpiresAt.Unix())
-	if err != nil {
-		return fmt.Errorf("sqlstore: save refresh token: %w", err)
-	}
-
-	return nil
-}
-
-// LookupRefreshToken implements [oauth2.RefreshTokenStore].
+// LookupRefreshToken implements [oauth2.RefreshTokenStore]. One statement
+// reads the token and its family record: a token of a revoked or unknown
+// family comes back consumed — and so does a token stored without a
+// family, which no valid pair carries.
 func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oauth2.RefreshToken, error) {
-	const q = `SELECT client_id, subject, scope, family_id, consumed, issued_at, expires_at
-		FROM oauth2_refresh_tokens WHERE token_hash = ?`
+	const q = `SELECT t.client_id, t.subject, t.scope, t.family_id, t.consumed, t.issued_at, t.expires_at,
+			f.revoked_at
+		FROM oauth2_refresh_tokens t
+		LEFT JOIN oauth2_token_families f ON f.family_id = t.family_id
+		WHERE t.token_hash = ?`
 
-	t, err := scanRefresh(s.db.QueryRowContext(ctx, s.dialect.rebind(q), tokenHash), tokenHash)
-	if err != nil {
+	var (
+		t                 = &oauth2.RefreshToken{TokenHash: tokenHash}
+		consumed          int64
+		issuedAt, expires int64
+		revokedAt         sql.NullInt64
+	)
+
+	row := s.db.QueryRowContext(ctx, s.dialect.rebind(q), tokenHash)
+	if err := row.Scan(&t.ClientID, &t.Subject, &t.Scope, &t.FamilyID,
+		&consumed, &issuedAt, &expires, &revokedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
 		}
@@ -221,39 +243,196 @@ func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oaut
 		return nil, fmt.Errorf("sqlstore: lookup refresh token: %w", err)
 	}
 
+	t.Consumed = consumed != 0 || t.FamilyID == "" || !familyActive(t.FamilyID, revokedAt)
+	t.IssuedAt = time.Unix(issuedAt, 0)
+	t.ExpiresAt = time.Unix(expires, 0)
+
 	return t, nil
 }
 
-// RotateRefreshToken implements [oauth2.RefreshTokenStore]. The whole
-// sequence runs in one transaction:
+// RotateRefreshToken implements [oauth2.RefreshTokenStore] in one
+// transaction:
 //
-//  1. UPDATE the old token to consumed=1 WHERE consumed=0. The
-//     RowsAffected()==1 check is the atomic gate — a concurrent rotation
-//     that already flipped the row gets 0.
-//  2. On 0 rows, the token was reused: revoke the family and return
-//     ErrRefreshTokenReused.
-//  3. On 1 row, INSERT the new token and commit.
-func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.RefreshToken) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+//  1. Lock next's family — recording it revoked if unknown, since a
+//     rotation never creates an active family — then read the old token
+//     under lock.
+//  2. Decide in the contract's order: unknown old token (invalid_grant),
+//     next in another family (invalid_request), revoked family
+//     ([oauth2.ErrTokenFamilyRevoked]), consumed old token (reuse).
+//  3. On reuse, record the family revoked and commit. A failure there is
+//     reported as [oauth2.ErrRefreshTokenReused] joined with
+//     [oauth2.ErrTokenFamilyRevocationFailed] and its cause.
+//  4. Otherwise consume the old token, extend the family's retention,
+//     insert next and commit.
+func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.TokenPair) error {
+	if err := validateRotation(next); err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, s.dialect.txOptions())
 	if err != nil {
 		return fmt.Errorf("sqlstore: begin: %w", err)
 	}
 
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
 
-	// Fetch family id (needed for the reuse-revocation path).
-	var familyID string
-
-	famRow := tx.QueryRowContext(ctx, s.dialect.rebind(
-		`SELECT family_id FROM oauth2_refresh_tokens WHERE token_hash = ?`), oldHash)
-	if err := famRow.Scan(&familyID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
-		}
-
-		return fmt.Errorf("sqlstore: select refresh token: %w", err)
+	reused, err := s.rotateTx(ctx, tx, oldHash, next)
+	if err != nil {
+		return err
 	}
 
+	if reused {
+		return s.revokeReused(ctx, tx, next.Access.FamilyID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlstore: commit: %w", err)
+	}
+
+	return nil
+}
+
+// RevokeRefreshFamily implements [oauth2.RefreshTokenStore]: one
+// transaction records the family revoked — inserting the record if the
+// family is unknown, keeping the time of a first revocation otherwise —
+// and extends its retention to [oauth2.FamilyRevocationRetention] from
+// now. A failure wraps [oauth2.ErrTokenFamilyRevocationFailed].
+func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string) error {
+	if err := checkFamilyID(familyID); err != nil {
+		return err
+	}
+
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now()
+
+		if err := s.recordFamily(ctx, tx, familyID, now.Unix(), retentionFloor(now)); err != nil {
+			return err
+		}
+
+		return s.markRevoked(ctx, tx, familyID, now)
+	})
+	if err != nil {
+		return revocationFailed(familyID, err)
+	}
+
+	return nil
+}
+
+// --- transaction steps -----------------------------------------------------
+
+// inTx runs fn in a transaction with the dialect's options, committing when
+// fn succeeds and rolling back otherwise. fn uses tx only: with a
+// single-connection pool, touching s.db while the transaction is open
+// would deadlock.
+func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, s.dialect.txOptions())
+	if err != nil {
+		return fmt.Errorf("sqlstore: begin: %w", err)
+	}
+
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlstore: commit: %w", err)
+	}
+
+	return nil
+}
+
+// recordFamily inserts the record (familyID, revokedAt, expiresAt) unless
+// the family already has one. It is the first statement of every write
+// transaction on a family: a write first takes SQLite's write lock before
+// anything is read.
+func (s *Store) recordFamily(ctx context.Context, tx *sql.Tx, familyID string, revokedAt, expiresAt int64) error {
+	if _, err := tx.ExecContext(ctx, s.dialect.rebind(s.dialect.insertFamily()),
+		familyID, revokedAt, expiresAt); err != nil {
+		return fmt.Errorf("sqlstore: record token family: %w", err)
+	}
+
+	return nil
+}
+
+// lockFamily records familyID with revokedAt and expiresAt unless it
+// exists, then reads whether it is revoked under a row lock. A record
+// missing even then reads as revoked: lost family state is never active.
+func (s *Store) lockFamily(ctx context.Context, tx *sql.Tx, familyID string, revokedAt, expiresAt int64) (bool, error) {
+	if err := s.recordFamily(ctx, tx, familyID, revokedAt, expiresAt); err != nil {
+		return false, err
+	}
+
+	var current int64
+
+	err := tx.QueryRowContext(ctx, s.dialect.rebind(s.dialect.lockFamily()), familyID).Scan(&current)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("sqlstore: lock token family: %w", err)
+	default:
+		return current != 0, nil
+	}
+}
+
+// joinFamily locks familyID for an issuance, recording it active until
+// expiresAt when unknown: a revoked family refuses the issuance, an active
+// one has its retention extended to expiresAt.
+func (s *Store) joinFamily(ctx context.Context, tx *sql.Tx, familyID string, expiresAt int64) error {
+	revoked, err := s.lockFamily(ctx, tx, familyID, 0, expiresAt)
+	if err != nil {
+		return err
+	}
+
+	if revoked {
+		return oauth2.ErrTokenFamilyRevoked
+	}
+
+	return s.extendFamily(ctx, tx, familyID, expiresAt)
+}
+
+// rotateTx runs the reads of a rotation and, unless the old token was
+// already consumed, its writes; it reports a reuse to the caller, which
+// owns the transaction.
+func (s *Store) rotateTx(ctx context.Context, tx *sql.Tx, oldHash string, next *oauth2.TokenPair) (bool, error) {
+	familyID := next.Access.FamilyID
+	now := time.Now()
+
+	revoked, err := s.lockFamily(ctx, tx, familyID, now.Unix(), retentionFloor(now))
+	if err != nil {
+		return false, err
+	}
+
+	var (
+		oldFamily string
+		consumed  int64
+	)
+
+	err = tx.QueryRowContext(ctx, s.dialect.rebind(s.dialect.lockRefresh()), oldHash).Scan(&oldFamily, &consumed)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
+	case err != nil:
+		return false, fmt.Errorf("sqlstore: lock refresh token: %w", err)
+	case oldFamily != familyID:
+		return false, oauth2.ErrInvalidRequest.WithDescription("sqlstore: rotation into another token family")
+	case revoked:
+		return false, oauth2.ErrTokenFamilyRevoked
+	case consumed != 0:
+		return true, nil
+	}
+
+	return false, s.consumeAndInsert(ctx, tx, oldHash, next)
+}
+
+// consumeAndInsert applies a rotation rotateTx cleared: it consumes the
+// old token, extends the family's retention to next's tokens and inserts
+// them.
+func (s *Store) consumeAndInsert(ctx context.Context, tx *sql.Tx, oldHash string, next *oauth2.TokenPair) error {
 	res, err := tx.ExecContext(ctx, s.dialect.rebind(
 		`UPDATE oauth2_refresh_tokens SET consumed = 1 WHERE token_hash = ? AND consumed = 0`), oldHash)
 	if err != nil {
@@ -265,80 +444,153 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oa
 		return fmt.Errorf("sqlstore: rows affected: %w", err)
 	}
 
+	// The token was read unconsumed under lock: any other count means the
+	// lock did not hold, and the rotation must not go on.
 	if affected != 1 {
-		// Reuse: the token was already consumed. Revoke the family in a
-		// separate transaction after rolling this one back.
-		_ = tx.Rollback()
-		_ = s.RevokeRefreshFamily(ctx, familyID)
-
-		return oauth2.ErrRefreshTokenReused
+		return fmt.Errorf("sqlstore: consume refresh token: %d rows affected", affected)
 	}
 
+	if err := s.extendFamily(ctx, tx, next.Access.FamilyID, pairExpiry(next)); err != nil {
+		return err
+	}
+
+	return s.insertPair(ctx, tx, next)
+}
+
+// revokeReused answers a reuse rotateTx detected: within the rotation's
+// transaction, which holds the family lock, it records the family revoked
+// and commits, then reports the reuse.
+func (s *Store) revokeReused(ctx context.Context, tx *sql.Tx, familyID string) error {
+	err := s.markRevoked(ctx, tx, familyID, time.Now())
+	if err == nil {
+		err = tx.Commit()
+	}
+
+	if err != nil {
+		return fmt.Errorf("%w: %w", oauth2.ErrRefreshTokenReused, revocationFailed(familyID, err))
+	}
+
+	return oauth2.ErrRefreshTokenReused
+}
+
+// markRevoked records familyID revoked — keeping the time of a first
+// revocation — and extends its retention to the floor a revocation
+// guarantees.
+func (s *Store) markRevoked(ctx context.Context, tx *sql.Tx, familyID string, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, s.dialect.rebind(
-		`INSERT INTO oauth2_refresh_tokens
-			(token_hash, client_id, subject, scope, family_id, consumed, issued_at, expires_at)
-			VALUES (?, ?, ?, ?, ?, 0, ?, ?)`),
-		next.TokenHash, next.ClientID, next.Subject, next.Scope, next.FamilyID,
-		next.IssuedAt.Unix(), next.ExpiresAt.Unix(),
-	); err != nil {
-		return fmt.Errorf("sqlstore: insert rotated refresh token: %w", err)
+		`UPDATE oauth2_token_families SET revoked_at = ? WHERE family_id = ? AND revoked_at = 0`),
+		now.Unix(), familyID); err != nil {
+		return fmt.Errorf("sqlstore: mark token family revoked: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlstore: commit: %w", err)
+	return s.extendFamily(ctx, tx, familyID, retentionFloor(now))
+}
+
+// extendFamily raises familyID's retention to until; it never lowers it.
+func (s *Store) extendFamily(ctx context.Context, tx *sql.Tx, familyID string, until int64) error {
+	if _, err := tx.ExecContext(ctx, s.dialect.rebind(
+		`UPDATE oauth2_token_families SET expires_at = ? WHERE family_id = ? AND expires_at < ?`),
+		until, familyID, until); err != nil {
+		return fmt.Errorf("sqlstore: extend token family: %w", err)
 	}
 
 	return nil
 }
 
-// RevokeRefreshFamily implements [oauth2.RefreshTokenStore]: every refresh
-// token of the family is marked consumed and every access token of the
-// family is deleted.
-func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string) error {
-	if _, err := s.exec(ctx,
-		`UPDATE oauth2_refresh_tokens SET consumed = 1 WHERE family_id = ?`, familyID); err != nil {
-		return fmt.Errorf("sqlstore: revoke refresh family: %w", err)
+// insertPair inserts the tokens of pair.
+func (s *Store) insertPair(ctx context.Context, tx *sql.Tx, pair *oauth2.TokenPair) error {
+	at := &pair.Access
+
+	if _, err := tx.ExecContext(ctx, s.dialect.rebind(`INSERT INTO oauth2_access_tokens
+		(token_hash, client_id, subject, scope, family_id, audience, issued_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		at.TokenHash, at.ClientID, at.Subject, at.Scope, at.FamilyID, at.Audience,
+		at.IssuedAt.Unix(), at.ExpiresAt.Unix()); err != nil {
+		return fmt.Errorf("sqlstore: insert access token: %w", err)
 	}
 
-	if _, err := s.exec(ctx,
-		`DELETE FROM oauth2_access_tokens WHERE family_id = ?`, familyID); err != nil {
-		return fmt.Errorf("sqlstore: purge family access tokens: %w", err)
+	rt := pair.Refresh
+	if rt == nil {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, s.dialect.rebind(`INSERT INTO oauth2_refresh_tokens
+		(token_hash, client_id, subject, scope, family_id, consumed, issued_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, 0, ?, ?)`),
+		rt.TokenHash, rt.ClientID, rt.Subject, rt.Scope, rt.FamilyID,
+		rt.IssuedAt.Unix(), rt.ExpiresAt.Unix()); err != nil {
+		return fmt.Errorf("sqlstore: insert refresh token: %w", err)
 	}
 
 	return nil
 }
 
-// rowScanner abstracts *sql.Row so scanRefresh works with QueryRow results.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
+// --- helpers ---------------------------------------------------------------
 
-// scanRefresh decodes a refresh-token row.
-func scanRefresh(row rowScanner, hash string) (*oauth2.RefreshToken, error) {
-	var (
-		t                 = &oauth2.RefreshToken{TokenHash: hash}
-		consumed          int64
-		issuedAt, expires int64
-	)
-
-	if err := row.Scan(&t.ClientID, &t.Subject, &t.Scope, &t.FamilyID,
-		&consumed, &issuedAt, &expires); err != nil {
-		return nil, err //nolint:wrapcheck // caller classifies sql.ErrNoRows
+// familyActive reports whether a token of familyID may be used: it is
+// outside any family, or its family's record says active. A NULL revokedAt
+// — no record joined — reads as revoked: lost family state never revives a
+// token.
+func familyActive(familyID string, revokedAt sql.NullInt64) bool {
+	if familyID == "" {
+		return true
 	}
 
-	t.Consumed = consumed != 0
-	t.IssuedAt = time.Unix(issuedAt, 0)
-	t.ExpiresAt = time.Unix(expires, 0)
-
-	return t, nil
+	return revokedAt.Valid && revokedAt.Int64 == 0
 }
 
-func boolToInt(b bool) int {
-	if b {
-		return 1
+// pairExpiry is the Unix second the family of pair must be retained
+// until: the later of the pair's token expiries.
+func pairExpiry(pair *oauth2.TokenPair) int64 {
+	until := pair.Access.ExpiresAt.Unix()
+
+	if pair.Refresh != nil && pair.Refresh.ExpiresAt.Unix() > until {
+		until = pair.Refresh.ExpiresAt.Unix()
 	}
 
-	return 0
+	return until
+}
+
+// retentionFloor is the Unix second a family revoked at now is retained
+// until, at least.
+func retentionFloor(now time.Time) int64 {
+	return now.Add(oauth2.FamilyRevocationRetention).Unix()
+}
+
+// validateRotation refuses a malformed rotation target before anything
+// runs: nil, failing [oauth2.TokenPair.Validate], or without the refresh
+// token a rotation issues.
+func validateRotation(next *oauth2.TokenPair) error {
+	if err := next.Validate(); err != nil {
+		return fmt.Errorf("sqlstore: rotate refresh token: %w", err)
+	}
+
+	if next.Refresh == nil {
+		return oauth2.ErrInvalidRequest.WithDescription("sqlstore: rotation without a refresh token")
+	}
+
+	return nil
+}
+
+// checkFamilyID refuses a family ID no family can have: empty, which would
+// reach every token outside a family, or longer than
+// [oauth2.MaxFamilyIDLength].
+func checkFamilyID(familyID string) error {
+	switch {
+	case familyID == "":
+		return oauth2.ErrInvalidRequest.WithDescription("sqlstore: empty token family id")
+	case len(familyID) > oauth2.MaxFamilyIDLength:
+		return oauth2.ErrInvalidRequest.WithDescription("sqlstore: token family id too long")
+	default:
+		return nil
+	}
+}
+
+// revocationFailed reports a family revocation that could not be recorded:
+// the family ID, then [oauth2.ErrTokenFamilyRevocationFailed], then the
+// cause.
+func revocationFailed(familyID string, err error) error {
+	return fmt.Errorf("sqlstore: revoke family %q: %w: %w", familyID, oauth2.ErrTokenFamilyRevocationFailed, err)
 }
 
 // Compile-time interface check.
