@@ -32,8 +32,9 @@
 //     usable and none can be issued into it (see Storage).
 //   - ServerConfig.OnError (and grant.Config.OnError) observe the errors the
 //     protocol hides: the cause of a server_error, which never reaches the
-//     wire, the revocations RFC 7009 §2.2 requires to answer 200 OK
-//     regardless, and a failed IntrospectionPolicy. See ErrorHook.
+//     wire, the storage failures behind a /revoke 503 (RFC 7009 §2.2.1), a
+//     family revocation that failed after a refresh-token reuse, and a
+//     failed IntrospectionPolicy. See ErrorHook.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

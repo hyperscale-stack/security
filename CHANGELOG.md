@@ -63,9 +63,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **OAuth2 error hook**: `ServerConfig.OnError` and `grant.Config.OnError`
   (both `oauth2.ErrorHook`) observe every error the authorization server
   turns into an RFC 6749 §5.2 response — carrying the cause a `server_error`
-  never puts on the wire — plus the errors it swallows on purpose, such as a
-  best-effort revocation (RFC 7009 §2.2) or a family revocation that failed
-  during reuse detection. Purely observational: the responses are unchanged.
+  never puts on the wire — plus the errors behind an answer that cannot
+  carry them, such as the storage failure behind a `/revoke` 503 or a family
+  revocation that failed during reuse detection. Purely observational: the
+  hook never changes a response.
 - **OAuth2 profile consistency checks**: `oauth2.ProfileValidator`, an
   optional `Grant` capability: `oauth2.NewServer` asks every registered
   grant implementing it whether it can honor the active `Profile`, and
@@ -179,6 +180,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - A refresh token that disappears between the grant's lookup and its
   rotation — e.g. expired from Redis — is answered `invalid_grant` (RFC 6749
   §5.2) instead of `server_error`.
+- `/revoke` no longer answers `200 OK` for a revocation that may not have
+  taken effect: when a token lookup fails for another reason than an
+  unknown token, or the revocation itself fails and leaves the token
+  usable, it answers `503 temporarily_unavailable` (RFC 7009 §2.2.1), so
+  the client knows to assume the token still exists and retry. A failed
+  lookup used to skip the revocation silently; every such failure now
+  reaches `ServerConfig.OnError` once, as a `server_error` with its cause.
+  An unknown token, or another client's, still answers `200 OK`.
 - `RevokeRefreshFamily("")` no longer deletes every access token outside a
   family (`client_credentials`, implicit) in the memory and SQL stores; it
   is rejected with `invalid_request`.

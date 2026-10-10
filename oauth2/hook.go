@@ -13,10 +13,12 @@ import "context"
 //     The hook receives the [*Error] envelope with its Cause intact, which
 //     is the only place the cause of a server_error is ever exposed — the
 //     wire response deliberately drops it.
-//   - the errors the server swallows to stay protocol-compliant, such as a
-//     best-effort revocation that failed (RFC 7009 §2.2 mandates 200 OK
-//     whatever happened) or an [IntrospectionPolicy] that failed (the token
-//     is withheld behind a bare {"active":false}, RFC 7662 §2.2).
+//   - the errors behind an answer that cannot carry them: a failed lookup
+//     or revocation at /revoke — each one reported as a server_error, then
+//     answered with a bare 503 temporarily_unavailable (RFC 7009 §2.2.1)
+//     that is not reported again — or an [IntrospectionPolicy] that failed
+//     (the token is withheld behind a bare {"active":false}, RFC 7662
+//     §2.2).
 //
 // The hook is a pure observability sink: it MUST NOT influence the
 // response. It runs synchronously on the request goroutine, so a slow

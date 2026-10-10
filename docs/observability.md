@@ -32,9 +32,9 @@ through the OAuth2 error hook described below.
 
 An RFC 6749 §5.2 response carries a code, a description and a URI — never
 the cause. A `server_error` therefore reaches the client as an opaque 500,
-and RFC 7009 §2.2 goes further: a revocation answers `200 OK` even when the
-revocation itself failed. Both are protocol requirements, and both leave an
-operator with nothing to diagnose.
+and a revocation that may not have taken effect as a bare
+`503 temporarily_unavailable` (RFC 7009 §2.2.1). Both are protocol
+requirements, and both leave an operator with nothing to diagnose.
 
 `oauth2.ServerConfig.OnError` closes that gap. It is an `oauth2.ErrorHook`
 (`func(ctx context.Context, err error)`) called with the `*oauth2.Error`
@@ -59,7 +59,15 @@ The hook fires for:
   `/introspect`, metadata) and every error redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
   400 (unknown client, unregistered `redirect_uri`);
-- the best-effort revocations `/revoke` swallows to honour RFC 7009 §2.2;
+- every storage failure at `/revoke`: a token lookup that failed for
+  another reason than an unknown token (`revoke: token lookup failed`), and
+  a failed access-token or family revocation (`revoke access token failed`,
+  `revoke refresh family failed`) — one `server_error` per failure, cause
+  attached. When the failure leaves the token possibly usable, `/revoke`
+  answers `503 temporarily_unavailable` (RFC 7009 §2.2.1: the client must
+  assume the token still exists, and may retry); that 503 is not reported
+  again. An unknown token, or another client's, answers `200 OK` and is not
+  reported;
 - an `IntrospectionPolicy` that failed: `/introspect` withholds the token
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain
