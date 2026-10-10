@@ -55,13 +55,14 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   in the same family (RFC 9700 §4.14.2). The profiles apply it to every
   client, stricter than RFC 9700 §2.2.2, which requires rotation — or
   sender-constrained refresh tokens, which this library does not issue —
-  for public clients only. `NewServer` refuses a `refresh_token` grant
-  without a `RefreshTokens` generator, and the grant itself fails with
-  `server_error` before minting anything when it cannot rotate. Re-use of
-  an already-rotated token is treated as theft: the whole family is
-  revoked (`ErrRefreshTokenReused`). Clients MUST keep the refresh token
-  returned by each exchange (RFC 6749 §6) and must not refresh
-  concurrently with the same token, or they lose the family. Under
+  for public clients only. Under these profiles — and under `Profile20`
+  when `RotateRefreshTokens` is set — `NewServer` refuses a
+  `refresh_token` grant without a `RefreshTokens` generator, and the grant
+  itself fails with `server_error` before minting anything when it cannot
+  rotate. Re-use of an already-rotated token is treated as theft: the
+  whole family is revoked (`ErrRefreshTokenReused`). Clients MUST keep the
+  refresh token returned by each exchange (RFC 6749 §6) and must not
+  refresh concurrently with the same token, or they lose the family. Under
   `Profile20` rotation is opt-in (`RotateRefreshTokens`); without it a
   refresh token stays reusable until it expires, which RFC 9700 §2.2.2
   forbids for public clients.

@@ -86,6 +86,33 @@ func TestRefreshTokenRotationMandatedByProfile(t *testing.T) {
 	}
 }
 
+func TestRefreshTokenRotationOptInUnderProfile20(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := newStore()
+	seedRefresh(t, store, "opt-in-rt", "read:mail", time.Now().Add(time.Hour))
+
+	// Profile20 mandates nothing: the rotation comes from the explicit opt-in.
+	g := grant.NewRefreshToken(grant.Config{
+		Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),
+		AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour, RotateRefreshTokens: true,
+	})
+
+	first, err := g.Handle(ctx, refreshReq("opt-in-rt", oauth2.Profile20))
+	require.NoError(t, err)
+	require.NotNil(t, first.Pair.Refresh, "the opt-in rotates under Profile20 too")
+	assert.NotEqual(t, "opt-in-rt", first.Pair.Refresh.Token)
+
+	presented, err := store.LookupRefreshToken(ctx, oauth2.HashToken(nil, "opt-in-rt"))
+	require.NoError(t, err)
+	assert.True(t, presented.Consumed, "the rotation consumes the presented token")
+
+	_, err = g.Handle(ctx, refreshReq("opt-in-rt", oauth2.Profile20))
+	require.ErrorIs(t, err, oauth2.ErrRefreshTokenReused)
+	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+}
+
 func TestRefreshTokenRotationWithoutGeneratorFailsBeforeIssuance(t *testing.T) {
 	t.Parallel()
 

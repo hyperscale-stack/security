@@ -133,16 +133,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - The OAuth2 `refresh_token` grant now enforces the refresh-token rotation
   that `Profile20BCP` (the default) and `Profile21Draft` mandate (RFC 9700
   §4.14.2) — for every client, stricter than RFC 9700 §2.2.2, which only
-  requires it for public clients — whatever `grant.Config.RotateRefreshTokens`
-  says: every exchange consumes the presented refresh token and returns a
-  new one, and replaying a consumed token is refused with `invalid_grant`
-  and revokes the whole family. The zero configuration used to let the same
-  refresh token be replayed until it expired. Clients MUST keep the refresh
-  token returned by each exchange (RFC 6749 §6). A grant that has to rotate
-  but has no `grant.Config.RefreshTokens` generator — including under
-  `Profile20` with `RotateRefreshTokens` set, which used to skip the
-  rotation silently — is refused by `oauth2.NewServer`, and should it run
-  anyway (called directly, or behind a decorator that hides it from
-  `NewServer`) it fails with `server_error` before any token is minted or
-  persisted. Non-rotating refresh tokens remain an explicit `Profile20`
-  choice (`RotateRefreshTokens: false`).
+  requires it (or sender-constrained refresh tokens) for public clients —
+  whatever `grant.Config.RotateRefreshTokens` says: every exchange consumes
+  the presented refresh token and returns a new one, and replaying a
+  consumed token is refused with `invalid_grant` and revokes the whole
+  family. The zero configuration used to let the same refresh token be
+  replayed until it expired. Clients MUST keep the refresh token returned
+  by each exchange (RFC 6749 §6). A grant that has to rotate but has no
+  `grant.Config.RefreshTokens` generator — including under `Profile20`
+  with `RotateRefreshTokens` set, which used to skip the rotation
+  silently — is refused by `oauth2.NewServer`, and should it run anyway
+  (called directly, or behind a decorator that hides it from `NewServer`)
+  it fails with `server_error` before any token is minted or persisted.
+  Non-rotating refresh tokens remain an explicit `Profile20` choice
+  (`RotateRefreshTokens: false`).

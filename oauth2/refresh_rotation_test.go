@@ -131,6 +131,40 @@ func TestNewServerRefusesRefreshGrantThatCannotRotate(t *testing.T) {
 	}
 }
 
+// TestNewServerChecksEveryGrantAgainstProfile pins that NewServer checks
+// every registered grant, whatever its position: neither a passing
+// validator nor a grant without one ends the check early.
+func TestNewServerChecksEveryGrantAgainstProfile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("legacy grant after a refresh grant that can rotate", func(t *testing.T) {
+		t.Parallel()
+
+		store := memory.New()
+		cfg := refreshServerConfig(oauth2.Profile20BCP, store, grant.NewRefreshToken(nonRotatingConfig(store)))
+		cfg.Grants = append(cfg.Grants, legacyGrant{typ: "password"})
+
+		srv, err := oauth2.NewServer(cfg)
+		assert.Nil(t, srv)
+		assert.ErrorContains(t, err, `forbids grant "password"`)
+	})
+
+	t.Run("refresh grant that cannot rotate after a grant without validator", func(t *testing.T) {
+		t.Parallel()
+
+		store := memory.New()
+		noGen := nonRotatingConfig(store)
+		noGen.RefreshTokens = nil
+
+		cfg := refreshServerConfig(oauth2.Profile20BCP, store, grant.NewClientCredentials(noGen))
+		cfg.Grants = append(cfg.Grants, grant.NewRefreshToken(noGen))
+
+		srv, err := oauth2.NewServer(cfg)
+		assert.Nil(t, srv)
+		assert.ErrorIs(t, err, grant.ErrRotationRequiresGenerator)
+	})
+}
+
 func TestTokenEndpointRefreshRotationMandatedByProfile(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +229,39 @@ func TestTokenEndpointRefreshWithoutRotationUnderProfile20(t *testing.T) {
 		assert.NotEmpty(t, body["access_token"])
 		assert.NotContains(t, body, "refresh_token")
 	}
+}
+
+func TestTokenEndpointRefreshRotationOptInUnderProfile20(t *testing.T) {
+	t.Parallel()
+
+	store := memory.New()
+	seedServerRefresh(t, store, "opt-in-rt")
+
+	// Profile20 mandates nothing: the rotation comes from the explicit opt-in.
+	gcfg := nonRotatingConfig(store)
+	gcfg.RotateRefreshTokens = true
+
+	srv, err := oauth2.NewServer(refreshServerConfig(oauth2.Profile20, store, grant.NewRefreshToken(gcfg)))
+	require.NoError(t, err)
+
+	rec := refreshExchange(t, srv, "opt-in-rt")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.NotEmpty(t, body.RefreshToken, "the opt-in rotates under Profile20 too")
+	assert.NotEqual(t, "opt-in-rt", body.RefreshToken)
+
+	presented, err := store.LookupRefreshToken(t.Context(), oauth2.HashToken(nil, "opt-in-rt"))
+	require.NoError(t, err)
+	assert.True(t, presented.Consumed, "the rotation consumes the presented token")
+
+	rec = refreshExchange(t, srv, "opt-in-rt")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, oauth2.CodeInvalidGrant, decodeError(t, rec))
 }
 
 func TestTokenEndpointRefreshFailsClosedWhenRotationUnavailable(t *testing.T) {
