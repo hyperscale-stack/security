@@ -10,6 +10,11 @@ than future refactor phases.
 
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
+- **RFC 6749 §4.4 is not enforced yet** — the `client_credentials` grant
+  "MUST only be used by confidential clients", but it is not refused to
+  public clients (authenticated with `none`), and an empty
+  `GrantTypeValues` allows every grant: restrict `GrantTypeValues` for
+  public clients.
 - **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
   depends on a server-side public-key store; the `jwtsec` module already
   provides the building blocks (`NewStaticJWKS`).

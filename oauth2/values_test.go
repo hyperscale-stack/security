@@ -192,6 +192,12 @@ func TestDefaultClient(t *testing.T) {
 	assert.True(t, c.SecretMatches("s3cr3t"))
 	assert.False(t, c.SecretMatches("wrong"))
 	assert.False(t, c.SecretMatches(""))
+
+	// An empty Secret registers no secret: it matches nothing, the empty
+	// string included (#94).
+	secretless := &oauth2.DefaultClient{IDValue: "client-2"}
+	assert.False(t, secretless.SecretMatches(""))
+	assert.False(t, secretless.SecretMatches("s3cr3t"))
 }
 
 func TestStaticIssuer(t *testing.T) {

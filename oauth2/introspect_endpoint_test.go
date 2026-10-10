@@ -305,9 +305,11 @@ func TestIntrospectCallerAuthentication(t *testing.T) {
 			wantDesc: "none method reserved to public clients",
 		},
 		{
+			// Refused by client_secret_basic itself (#94), before the
+			// confidential-only check.
 			name:     "basic public client with an empty password",
 			req:      introspectRequest(spaClientID, "", "at-app"),
-			wantDesc: introspectionRefused,
+			wantDesc: missingCredentials,
 		},
 		{
 			name:     "basic public client with a secret",
@@ -325,9 +327,11 @@ func TestIntrospectCallerAuthentication(t *testing.T) {
 			wantDesc: introspectionRefused,
 		},
 		{
+			// Refused by client_secret_basic itself (#94), before the
+			// confidential-only check.
 			name:     "basic untyped client with an empty password",
 			req:      introspectRequest(untypedNoSecretID, "", "at-app"),
-			wantDesc: introspectionRefused,
+			wantDesc: missingCredentials,
 		},
 		{
 			name: "wrong secret",

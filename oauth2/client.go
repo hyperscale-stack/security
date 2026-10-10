@@ -53,9 +53,14 @@ type Client interface {
 // authentication methods (client_secret_basic, client_secret_post) to
 // verify the registered secret without exposing it. Implementations MUST
 // use constant-time comparison (or a hashed-secret scheme).
+//
+// An empty secret is never a credential: implementations MUST NOT match
+// it — not even against a hash of the empty string — nor anything when no
+// secret is registered.
 type SecretMatcher interface {
 	// SecretMatches returns true when secret matches the registered one.
-	// Implementations MUST use constant-time comparison.
+	// Implementations MUST use constant-time comparison, and MUST return
+	// false when secret is empty or no secret is registered.
 	SecretMatches(secret string) bool
 }
 
@@ -74,6 +79,11 @@ type DefaultClient struct {
 	// Secret is the cleartext client secret. DefaultClient stores it
 	// verbatim for dev/test convenience; production deployments wrap a
 	// hashed-secret store and implement SecretMatches themselves.
+	//
+	// Leave it empty for a client that does not authenticate with a secret
+	// (a public client using "none", or a client authenticated by another
+	// method): an empty Secret matches nothing, so client_secret_basic and
+	// client_secret_post never authenticate it.
 	Secret            string //nolint:gosec // dev/test convenience
 	TypeValue         ClientType
 	RedirectURIValues []string
@@ -101,10 +111,15 @@ func (c *DefaultClient) Scopes() []string { return c.ScopeValues }
 func (c *DefaultClient) AuthMethods() []string { return c.AuthMethodValues }
 
 // SecretMatches implements [SecretMatcher] using constant-time comparison.
-// The DefaultClient stores secrets in cleartext for development convenience;
-// production deployments SHOULD wrap a hashed-secret store and implement
-// SecretMatches themselves.
+// An empty Secret registers no secret and matches nothing, the empty string
+// included. The DefaultClient stores secrets in cleartext for development
+// convenience; production deployments SHOULD wrap a hashed-secret store and
+// implement SecretMatches themselves.
 func (c *DefaultClient) SecretMatches(secret string) bool {
+	if c.Secret == "" {
+		return false
+	}
+
 	return subtle.ConstantTimeCompare([]byte(c.Secret), []byte(secret)) == 1
 }
 

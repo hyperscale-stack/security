@@ -312,3 +312,26 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `grant.Config.OnError`. JWT access tokens validated offline stay valid
   until they expire. Previously the tokens issued from a replayed code
   stayed valid.
+- OAuth2 `client_secret_basic` no longer authenticates a client with an
+  empty password (RFC 6749 §2.3, §10.1). It handed the empty secret of
+  `Authorization: Basic base64("<client_id>:")` to the client's
+  `SecretMatcher`, and `DefaultClient.SecretMatches` matched it against an
+  empty `Secret`: anyone knowing the `client_id` of a client registered
+  without a secret authenticated as it at `/token` — obtaining tokens,
+  `client_credentials` included — and at `/revoke`, whatever the client's
+  type, and at `/introspect` when the client was confidential, reading the
+  validity and claims of the tokens they held. `client_secret_basic` now
+  answers a missing `client_id` or an empty password with
+  `401 invalid_client` (`missing client_id or client_secret`) before
+  loading the client, with the guard `client_secret_post`'s `Authenticate`
+  already has: no store lookup, one answer for every client.
+  `DefaultClient.SecretMatches` never matches an empty `Secret`, and the
+  `oauth2.SecretMatcher` contract now says implementations MUST NOT match
+  an empty secret: callers of `DefaultClient` are covered, custom matchers
+  are told to follow suit. Public clients still authenticate with `none`,
+  by design; through it, a public client can still use any grant its
+  `GrantTypeValues` allow, `client_credentials` included (RFC 6749 §4.4 is
+  not enforced yet; see [MIGRATION.md](MIGRATION.md)). This breaks public
+  clients that sent an empty Basic password — they must use `none` — and
+  clients registered as confidential or untyped that authenticated with an
+  empty Basic password. See [MIGRATION.md](MIGRATION.md).
