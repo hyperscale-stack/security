@@ -23,12 +23,12 @@ import (
 )
 
 // replayStore decorates the memory store for the code-replay tests. It
-// counts the family revocations and can fail them, honors the context it
-// gets like a real backend, can force the result of a code consumption,
-// runs afterConsume after every one, and runs beforeSave once, right
-// before the first SaveTokenPair it records — a replay landing between a
-// code's consumption and the issuance of its tokens. It is safe for
-// concurrent use once configured.
+// counts the family revocations, records the deadline of the context each
+// one runs on, can fail them, honors that context like a real backend, can
+// force the result of a code consumption, runs afterConsume after every
+// one, and runs beforeSave once, right before the first SaveTokenPair it
+// records — a replay landing between a code's consumption and the
+// issuance of its tokens. It is safe for concurrent use once configured.
 type replayStore struct {
 	*memory.Store
 
@@ -40,6 +40,7 @@ type replayStore struct {
 	mu         sync.Mutex
 	beforeSave func()
 	saved      []oauth2.TokenPair
+	deadlines  []time.Time // zero when a revocation context had none
 }
 
 func (s *replayStore) ConsumeAuthorizationCode(ctx context.Context, hash string) (*oauth2.AuthorizationCode, error) {
@@ -53,7 +54,7 @@ func (s *replayStore) ConsumeAuthorizationCode(ctx context.Context, hash string)
 		s.afterConsume()
 	}
 
-	return code, err //nolint:wrapcheck // test double
+	return code, err
 }
 
 func (s *replayStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
@@ -67,11 +68,17 @@ func (s *replayStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair)
 		hook()
 	}
 
-	return s.Store.SaveTokenPair(ctx, pair) //nolint:wrapcheck // test double
+	return s.Store.SaveTokenPair(ctx, pair)
 }
 
 func (s *replayStore) RevokeRefreshFamily(ctx context.Context, familyID string) error {
 	s.revokes.Add(1)
+
+	deadline, _ := ctx.Deadline()
+
+	s.mu.Lock()
+	s.deadlines = append(s.deadlines, deadline)
+	s.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {
 		return err
@@ -81,7 +88,16 @@ func (s *replayStore) RevokeRefreshFamily(ctx context.Context, familyID string) 
 		return s.revokeErr
 	}
 
-	return s.Store.RevokeRefreshFamily(ctx, familyID) //nolint:wrapcheck // test double
+	return s.Store.RevokeRefreshFamily(ctx, familyID)
+}
+
+// revocationDeadlines returns the deadline of each family revocation's
+// context, zero for none.
+func (s *replayStore) revocationDeadlines() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]time.Time(nil), s.deadlines...)
 }
 
 // savedPairs returns the pairs the grant tried to persist.
@@ -288,9 +304,10 @@ func TestAuthorizationCodeReplayRevokesAccessOnlyIssuance(t *testing.T) {
 // TestAuthorizationCodeUnprovenReplayRevokesNothing replays a consumed code
 // with requests that could not have redeemed it — another client, a
 // missing or wrong proof, another redirect_uri, an expired code, a client
-// no longer allowed the grant — and an unknown code: each is refused and
-// revokes nothing (OAuth 2.1 §4.1.3, §7.5.3). A request that would have
-// been accepted revokes.
+// no longer allowed the grant — and an unknown code: each one revokes
+// nothing (OAuth 2.1 §4.1.3, §7.5.3) and gets the very answer of any
+// replay, so the response tells nothing about which check failed. A
+// request that would have been accepted revokes.
 func TestAuthorizationCodeUnprovenReplayRevokesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -338,7 +355,7 @@ func TestAuthorizationCodeUnprovenReplayRevokesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, err := g.Handle(t.Context(), tc.replay(req))
 			assert.Nil(t, resp)
-			assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+			assert.Same(t, oauth2.ErrCodeAlreadyUsed, err, "the answer of any replay: no oracle")
 
 			assert.Zero(t, store.revokes.Load())
 			assert.Empty(t, hooks.errs)
@@ -354,20 +371,34 @@ func TestAuthorizationCodeUnprovenReplayRevokesNothing(t *testing.T) {
 }
 
 // TestAuthorizationCodeReplayWithoutRecordRevokesNothing covers a store
-// reporting a replay without the retained record: the replay cannot be
-// validated, so the grant refuses it like an unknown code and revokes
-// nothing.
+// reporting a replay without the retained record — a CodeReplayError
+// without one, or a typed nil: the replay cannot be validated, so the
+// grant refuses it like an unknown code and revokes nothing.
 func TestAuthorizationCodeReplayWithoutRecordRevokesNothing(t *testing.T) {
 	t.Parallel()
 
-	store := &replayStore{Store: memory.New(), consumeErr: &oauth2.CodeReplayError{}}
-	g := grant.NewAuthorizationCode(rotatingConfig(store, &hookRecorder{}))
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"no record", &oauth2.CodeReplayError{}},
+		{"typed nil", (*oauth2.CodeReplayError)(nil)},
+	}
 
-	resp, err := g.Handle(t.Context(), codeRequest(t, store, "recordless-code"))
-	assert.Nil(t, resp)
-	require.ErrorIs(t, err, oauth2.ErrCodeAlreadyUsed)
-	assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
-	assert.Zero(t, store.revokes.Load())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &replayStore{Store: memory.New(), consumeErr: tc.err}
+			g := grant.NewAuthorizationCode(rotatingConfig(store, &hookRecorder{}))
+
+			resp, err := g.Handle(t.Context(), codeRequest(t, store, "recordless-code"))
+			assert.Nil(t, resp)
+			require.ErrorIs(t, err, oauth2.ErrCodeAlreadyUsed)
+			assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+			assert.Zero(t, store.revokes.Load())
+		})
+	}
 }
 
 // TestAuthorizationCodeReplayRevocationFailureIsReported fails the
@@ -413,7 +444,8 @@ func TestAuthorizationCodeReplayRevocationFailureIsReported(t *testing.T) {
 
 // TestAuthorizationCodeReplayRevocationDetachedFromRequest cancels the
 // replaying request right after its code is consumed — a client hanging
-// up: the revocation still runs, on a context detached from the request.
+// up: the revocation still runs, on a context detached from the request
+// and bounded by the detached revocation timeout (10s).
 func TestAuthorizationCodeReplayRevocationDetachedFromRequest(t *testing.T) {
 	t.Parallel()
 
@@ -433,6 +465,11 @@ func TestAuthorizationCodeReplayRevocationDetachedFromRequest(t *testing.T) {
 	require.Error(t, ctx.Err(), "the request was canceled")
 
 	assert.Equal(t, int32(1), store.revokes.Load())
+
+	deadlines := store.revocationDeadlines()
+	require.Len(t, deadlines, 1)
+	require.False(t, deadlines[0].IsZero(), "the detached revocation is bounded")
+	assert.WithinDuration(t, time.Now(), deadlines[0], 10*time.Second, "by the detached revocation timeout")
 	assert.Empty(t, hooks.errs)
 	requirePairRevoked(t, store, first.Pair)
 }

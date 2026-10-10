@@ -148,9 +148,10 @@ func TestTokenEndpointCodeReplayRevokesIssuedTokens(t *testing.T) {
 
 // TestTokenEndpointUnprovenCodeReplayRevokesNothing replays a public
 // client's consumed code with requests that could not have redeemed it:
-// each one is refused and the tokens stay active, until a replay with the
-// code's client, redirect_uri and PKCE verifier revokes them. A public
-// client_id is no secret; the verifier is the proof.
+// each one gets the very answer of any replay — nothing tells which check
+// failed — and the tokens stay active, until a replay with the code's
+// client, redirect_uri and PKCE verifier revokes them. A public client_id
+// is no secret; the verifier is the proof.
 func TestTokenEndpointUnprovenCodeReplayRevokesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -175,7 +176,10 @@ func TestTokenEndpointUnprovenCodeReplayRevokesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := serve(srv.TokenHandler(), tc.req)
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Equal(t, oauth2.CodeInvalidGrant, decodeError(t, rec))
+
+			errCode, desc := tokenError(t, rec)
+			assert.Equal(t, oauth2.CodeInvalidGrant, errCode)
+			assert.Equal(t, "authorization code already consumed", desc, "the answer of any replay: no oracle")
 			assert.Equal(t, true, introspect(t, srv, issued.AccessToken)["active"])
 		})
 	}
@@ -203,7 +207,7 @@ func (s *codeRaceStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPai
 		hook()
 	}
 
-	return s.Store.SaveTokenPair(ctx, pair) //nolint:wrapcheck // test double
+	return s.Store.SaveTokenPair(ctx, pair)
 }
 
 // TestTokenEndpointCodeExchangeLosingReplayRaceIsInvalidGrant serves a

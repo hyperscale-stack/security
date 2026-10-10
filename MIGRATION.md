@@ -251,8 +251,10 @@ To migrate:
    an unknown code. Pass `storetest.RunConformance`.
 2. **Code calling `ConsumeAuthorizationCode`** — decorators, custom
    grants — tests `err` first and never issues tokens from a record that
-   comes with an error. A wrapper must propagate `err`; wrapping it with
-   `%w` keeps the replay record reachable through `errors.As`.
+   comes with an error. A wrapper must propagate `err` unchanged or
+   wrapped with `%w`, which keeps the replay record reachable through
+   `errors.As`: normalizing it to `ErrCodeAlreadyUsed` silently disables
+   the revocation a replay triggers.
 3. **SQL.** `oauth2_auth_codes` gains a `consumed` column, which `Migrate`
    does not add to an existing table (it only creates missing tables).
    Until it exists, every code exchange fails with `server_error`. Run, on

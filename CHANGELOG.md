@@ -297,16 +297,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   it — access and refresh tokens, and every later rotation — in every store
   (RFC 6749 §4.1.2, §10.5; RFC 9700 §4.2.4). The `authorization_code` grant
   derives the token family from the code before consuming it, so a replay
-  racing the first exchange makes that exchange fail with `invalid_grant`
-  instead of issuing, as long as the store keeps the revoked family record
+  racing the first exchange cannot leave its tokens active: one landing
+  before that exchange persists its tokens makes it fail with
+  `invalid_grant` — as long as the store keeps the revoked family record
   (see the deployment requirements in
-  [docs/security-considerations.md](docs/security-considerations.md)). Only
-  a replay that would itself have been accepted revokes: the code has not
-  expired, and the client it was issued to presents it with the same
-  `redirect_uri` and PKCE verifier and may still use `authorization_code`
-  (OAuth 2.1 §4.1.3, §7.5.3). A public `client_id` is no secret, so unknown
-  codes, other clients and missing or wrong verifiers revoke nothing. The
-  replay is still refused with `invalid_grant`, and a failed revocation is
-  reported through `grant.Config.OnError`. JWT access tokens validated
-  offline stay valid until they expire. Previously the tokens issued from a
-  replayed code stayed valid.
+  [docs/security-considerations.md](docs/security-considerations.md)) — and
+  one landing after revokes them. Only a replay that would itself have been
+  accepted revokes: the code has not expired, and the client it was issued
+  to presents it with the same `redirect_uri` and PKCE verifier and may
+  still use `authorization_code` (OAuth 2.1 §4.1.3, §7.5.3). A public
+  `client_id` is no secret, so unknown codes, other clients and missing or
+  wrong verifiers revoke nothing. The replay is still refused with
+  `invalid_grant`, and a failed revocation is reported through
+  `grant.Config.OnError`. JWT access tokens validated offline stay valid
+  until they expire. Previously the tokens issued from a replayed code
+  stayed valid.

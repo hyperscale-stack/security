@@ -70,8 +70,10 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 
 	code, err := g.cfg.Storage.ConsumeAuthorizationCode(ctx, hash)
 
+	// A replay without its record — a typed nil included — cannot be
+	// validated: it is refused like an unknown code.
 	var replay *oauth2.CodeReplayError
-	if errors.As(err, &replay) && replay.Record != nil {
+	if errors.As(err, &replay) && replay != nil && replay.Record != nil {
 		g.revokeReplayed(ctx, req, replay.Record, familyID)
 
 		return nil, oauth2.ErrCodeAlreadyUsed

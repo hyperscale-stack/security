@@ -180,7 +180,10 @@ return 'ok'
 
 // --- authorization codes -------------------------------------------------
 
-// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore].
+// SaveAuthorizationCode implements [oauth2.AuthorizationCodeStore] with a
+// plain SET, which overwrites any record under the same hash: a consumed
+// code saved again becomes redeemable again, so callers MUST save a given
+// CodeHash at most once.
 func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.AuthorizationCode) error {
 	if code.CodeHash == "" {
 		return oauth2.ErrInvalidRequest.WithDescription("redisstore: empty code hash")
@@ -221,7 +224,8 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 
 	str, ok := res.(string)
 	if !ok {
-		// The script returned false: the key is absent.
+		// Any other reply type: treat as an unknown code (a Lua false
+		// arrives as redis.Nil, handled above).
 		return nil, oauth2.ErrCodeAlreadyUsed
 	}
 

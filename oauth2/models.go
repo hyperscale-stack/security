@@ -11,7 +11,7 @@ import "time"
 // returned to the user-agent; storage implementations key the record by
 // CodeHash, never persist the raw value, consume it atomically, and keep
 // the consumed record until ExpiresAt so that a replay is recognized (RFC
-// 6749 §4.1.2 + OAuth 2.0 BCP §4.5; see [AuthorizationCodeStore]).
+// 6749 §4.1.2, RFC 9700 §4.2.4; see [AuthorizationCodeStore]).
 type AuthorizationCode struct {
 	// Code is the raw, single-use authorization code as issued to the
 	// user-agent. Storage implementations persist its hash, never the raw

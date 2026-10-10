@@ -32,9 +32,11 @@ const MaxFamilyIDLength = 64
 // implementation MAY drop it — the Redis store expires the key, the SQL
 // store documents a cleanup, the memory store keeps it for its lifetime.
 type AuthorizationCodeStore interface {
-	// SaveAuthorizationCode persists code under code.CodeHash. The issuer
-	// saves each code once, under a fresh hash; an empty hash is rejected
-	// with invalid_request.
+	// SaveAuthorizationCode persists code under code.CodeHash; an empty
+	// hash is rejected with invalid_request. Callers MUST save a given
+	// CodeHash at most once: a store may overwrite the record, and
+	// re-saving a consumed code can make it redeemable again (the Redis
+	// store does).
 	SaveAuthorizationCode(ctx context.Context, code *AuthorizationCode) error
 
 	// ConsumeAuthorizationCode atomically marks the code codeHash consumed
@@ -49,8 +51,11 @@ type AuthorizationCodeStore interface {
 	//     no longer retained;
 	//   - a wrapped error on a backend failure.
 	//
-	// Both refusals match [ErrCodeAlreadyUsed] (invalid_grant). Expiry is
-	// not checked: the caller compares ExpiresAt with its own clock.
+	// Both refusals match [ErrCodeAlreadyUsed] (invalid_grant). A decorator
+	// or wrapper MUST return the store's error unchanged or wrapped with
+	// %w: normalizing it to ErrCodeAlreadyUsed silently disables the
+	// revocation a replay triggers. Expiry is not checked: the caller
+	// compares ExpiresAt with its own clock.
 	ConsumeAuthorizationCode(ctx context.Context, codeHash string) (*AuthorizationCode, error)
 }
 

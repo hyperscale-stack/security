@@ -81,8 +81,11 @@ func TestRedisConsumedCodeKeepsItsTTL(t *testing.T) {
 }
 
 // TestRedisCodePayloadWithoutFlagIsConsumable covers payloads without a
-// consumed flag — written before the flag existed — and with a null one,
-// which cjson decodes as a truthy value: both are unconsumed codes.
+// consumed flag — written before the flag existed — and with a null one:
+// both are unconsumed codes, consumed once. miniredis decodes a JSON null
+// as nil, so the null case only checks the Go side; on a real Redis,
+// cjson.null is truthy, and the script's == true comparison is what keeps
+// such a payload single-use.
 func TestRedisCodePayloadWithoutFlagIsConsumable(t *testing.T) {
 	t.Parallel()
 
