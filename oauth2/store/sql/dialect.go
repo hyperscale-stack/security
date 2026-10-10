@@ -64,8 +64,7 @@ type mysql struct{}
 func (mysql) Name() string           { return "mysql" }
 func (mysql) rebind(q string) string { return q }
 
-// dialectSQLite is the dialect identifier for SQLite, kept as a constant so
-// it can be referenced from Name() and from schema generation.
+// dialectSQLite is the dialect identifier for SQLite.
 const dialectSQLite = "sqlite"
 
 type sqlite struct{}

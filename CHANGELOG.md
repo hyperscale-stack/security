@@ -136,6 +136,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   access token. The replacement used to inherit the narrowed scope, so the
   grant shrank permanently and a later request for the original scope was
   refused with `invalid_scope`.
+- The SQL store's schema (`oauth2/store/sql`) runs on PostgreSQL and MySQL:
+  the refresh-token `consumed` flag is a `SMALLINT` — PostgreSQL rejected
+  the former `BOOLEAN NOT NULL DEFAULT 0` column and the store's integer
+  comparisons — and the token-family indexes are gone, since MySQL rejects
+  their `CREATE INDEX IF NOT EXISTS`. `Schema` returns the same DDL for
+  every dialect.
 - The `error_description` of `oauth2.ErrRefreshTokenReused` is now
   `refresh token reused`. The former `refresh token reused — family
   revoked` claimed a revocation that may have failed, and its em dash lies
