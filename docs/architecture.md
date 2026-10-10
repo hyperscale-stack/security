@@ -148,10 +148,12 @@ The `oauth2` module is an authorization server, not just a provider:
   `refresh_token` (rotation + reuse detection), plus the opt-in legacy
   `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
 - **Client authentication** — `client_secret_basic`, `client_secret_post`,
-  `none` (public clients, PKCE required).
+  `none` (public clients, PKCE required). `/introspect` answers
+  confidential clients only.
 - **Endpoints** — `/authorize` (RFC 6749 §3.1, `authorization_code` and the
   opt-in legacy `implicit` flow, with an application-supplied consent hook),
-  `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662),
+  `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662, with an optional
+  `IntrospectionPolicy` deciding which tokens each caller may see),
   `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
   prefix used in the metadata document is configurable via
   `ServerConfig.RoutePrefix`.

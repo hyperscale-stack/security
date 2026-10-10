@@ -42,8 +42,11 @@ type ServerConfig struct {
 	// [ProfileValidator] are checked against Profile at construction.
 	Grants []Grant
 	// ClientAuth lists the client-authentication methods active on /token
-	// (and /revoke, /introspect). The Server consults them in order and
-	// uses the first one whose Match returns true.
+	// and /revoke. The Server consults them in order and uses the first one
+	// whose Match returns true. /introspect authenticates its caller through
+	// the same list but answers [ClientConfidential] clients only: a public
+	// client (whatever the method, "none" included) or an untyped one gets
+	// 401 invalid_client.
 	ClientAuth []ClientAuthenticator
 	// RoutePrefix is the path prefix under which the token / revoke /
 	// introspect / authorize endpoints are mounted. It is used solely to
@@ -63,8 +66,16 @@ type ServerConfig struct {
 	// OnError, when set, observes every error the server turns into an
 	// RFC 6749 §5.2 response — including the cause of a server_error, which
 	// never reaches the wire — plus the errors it swallows on purpose
-	// (best-effort revocation). Optional; see [ErrorHook].
+	// (best-effort revocation, a failed [IntrospectionPolicy]). Optional;
+	// see [ErrorHook].
 	OnError ErrorHook
+	// IntrospectionPolicy, when set, decides which active tokens each
+	// confidential caller of /introspect may see — the place to enforce
+	// resource and tenant boundaries (RFC 7662 §4). A withheld token
+	// answers {"active":false}, exactly like an unknown one. Optional; nil
+	// lets any authenticated confidential client introspect any token. See
+	// [IntrospectionPolicy].
+	IntrospectionPolicy IntrospectionPolicy
 }
 
 // Server is the OAuth2 authorization server. It exposes one
