@@ -82,6 +82,7 @@ is intentionally skipped in CI.
 | Path                      | Import / pkg name                          | Purpose                                              |
 | ------------------------- | ------------------------------------------ | ---------------------------------------------------- |
 | `.`                       | `security`                                 | Core transport-agnostic primitives                   |
+| `./outbound`              | `.../outbound`                             | SSRF-safe outbound `*http.Client` — **package of the core** |
 | `./http`                  | `.../http` → `httpsec`                     | `net/http` adapter (middleware, `Authorize`, carrier) |
 | `./grpc`                  | `.../grpc` → `grpcsec`                      | gRPC unary/stream interceptors + `Authorize`         |
 | `./connectrpc`            | `.../connectrpc` → `connectrpcsec`          | ConnectRPC auth + authorize interceptors             |
@@ -98,7 +99,10 @@ is intentionally skipped in CI.
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
-of `oauth2`. The other rows are independent modules (own `go.mod`).
+of `oauth2`; `outbound` is a sub-package of the core (stdlib only, the core's
+only networking code: every server-side fetch of a configuration- or
+metadata-supplied URL MUST go through `outbound.NewClient`). The other rows
+are independent modules (own `go.mod`).
 
 **The dependency direction is a hard rule** (enforced by review, see
 `MIGRATION.md`): the **core (`.`) must depend only on stdlib +

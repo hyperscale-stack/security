@@ -29,6 +29,9 @@ import only what you need.
 | `…/security/oauth2/store/sql`                       | Production OAuth2 storage on `database/sql`                     |
 | `…/security/oauth2/store/redis`                     | Production OAuth2 storage on Redis                              |
 
+The core module also ships `…/security/outbound`, an SSRF-safe
+`*http.Client` factory for requests to configuration-supplied URLs.
+
 ## Install
 
 ```sh

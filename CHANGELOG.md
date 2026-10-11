@@ -107,6 +107,24 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,
   `oauth2.IsCode` and the wire, and carries the retained record for
   `errors.As`.
+- **Outbound HTTP guard** (`outbound`, a stdlib-only sub-package of the
+  core): `outbound.NewClient(outbound.Policy)` returns the `*http.Client`
+  the federation modules use for server-side requests to URLs that come
+  from configuration or remote metadata (discovery documents, JWK Sets,
+  token and UserInfo endpoints, SAML metadata), against server-side
+  request forgery. Its zero-value policy allows https only (http is an
+  opt-in, an https→http redirect is always refused), judges the address
+  actually connected to — after DNS resolution, so DNS rebinding cannot
+  bypass it — and refuses loopback, private (RFC 1918, RFC 4193), shared
+  (RFC 6598), link-local and cloud-metadata, multicast, reserved,
+  documentation and benchmarking space, IPv4-mapped and NAT64 addresses
+  being judged on their IPv4 and IPv6 being limited to `2000::/3` minus
+  its special-purpose blocks; it requires ASCII host names, follows no
+  redirect, uses no proxy and no cookie jar, bounds the exchange (10 s)
+  and every body (1 MiB, counted after decompression), and requires TLS
+  1.2 or later. Applications widen it explicitly (`AllowedPrefixes`,
+  `AllowHTTP`, `MaxRedirects`) and narrow it with the `CheckURL` and
+  `CheckAddr` hooks.
 
 - **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
   takes an `oauth2.Extension` — the contract an OpenID Provider (the

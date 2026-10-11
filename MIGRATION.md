@@ -26,7 +26,10 @@ released on its own cadence.
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
-and tests.
+and tests. Likewise `outbound` is a sub-package of the core module: the
+SSRF-safe `*http.Client` factory the federation modules use to fetch
+configuration-supplied URLs. It depends on the standard library only and
+is the only networking code of the core.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
@@ -38,6 +41,7 @@ own tests).
 
 ```
 core (.)                ← stdlib + go.opentelemetry.io/otel
+                           (outbound/ is a stdlib-only sub-package of the core)
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 connectrpc/             ← core + otel + connectrpc.com/connect

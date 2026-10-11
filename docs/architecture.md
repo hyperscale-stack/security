@@ -40,11 +40,15 @@ transitive dependencies.
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
+`outbound` is a sub-package of the core module (standard library only): the
+SSRF-safe `*http.Client` factory used for requests to URLs that come from
+configuration or remote metadata — see [Outbound requests](#outbound-requests).
 
 ## Dependency policy
 
 ```
 core (.)                ← stdlib + go.opentelemetry.io/otel
+                           (outbound/ is a stdlib-only sub-package of the core)
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 connectrpc/             ← core + otel + connectrpc.com/connect
@@ -193,6 +197,20 @@ The `oauth2` module is an authorization server, not just a provider:
 
 Tokens and authorization codes are **never stored in cleartext** — the
 store only ever sees a hash.
+
+## Outbound requests
+
+Server-side requests to URLs the library does not control — an OpenID
+Provider's discovery document and JWK Set, its token and UserInfo
+endpoints, a SAML IdP's metadata — go through `outbound.NewClient`. The
+URL often comes from a tenant's configuration or from remote metadata, so
+the client refuses by default every destination that is not publicly
+routable, judged on the address actually dialed (`net.Dialer.ControlContext`,
+after DNS resolution), and bounds schemes, hosts, redirects, time and
+response sizes. Applications widen the policy explicitly
+(`AllowedPrefixes` for an on-premises IdP or the loopback interface in
+tests, `AllowHTTP` in development) and narrow it with hooks. See
+[security-considerations.md](security-considerations.md#outbound-requests-ssrf).
 
 ## Observability
 

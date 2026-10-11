@@ -354,6 +354,46 @@ session store to compromise or scale.
 - **Size** — the whole session is JSON-encoded into the cookie; browsers
   cap a cookie near 4 KiB. Keep `Values` small.
 
+## Outbound requests (SSRF)
+
+Modules that fetch URLs from configuration or remote metadata (OpenID
+Connect discovery, JWK Sets, token and UserInfo endpoints, SAML metadata)
+use `outbound.NewClient`. In a multi-tenant deployment those URLs are
+attacker-influenced — a tenant administrator types an issuer, a discovery
+document names its own endpoints — so the client defends the server's own
+network:
+
+- **Destinations** are judged on the address actually connected to, in
+  `net.Dialer.ControlContext`, after DNS resolution: a name that resolves
+  to a public address when vetted and to an internal one when dialed (DNS
+  rebinding) is still refused. Refused by default: loopback, private
+  (RFC 1918, RFC 4193 unique-local), shared (RFC 6598, CGNAT), link-local
+  (including `169.254.169.254` and the other cloud metadata endpoints),
+  multicast, unspecified, reserved, documentation and benchmarking space,
+  and any scoped (zoned) address. IPv4-mapped IPv6 addresses and NAT64
+  (`64:ff9b::/96`) addresses are judged on the IPv4 address they reach;
+  IPv6 is limited to `2000::/3` minus its special-purpose blocks (Teredo,
+  6to4, documentation), so an unknown or future reservation is refused.
+- **URLs** must be https (http only with `AllowHTTP`, for development), carry
+  no userinfo, and name an ASCII host: non-ASCII names (which `net/http`
+  would map to another name before dialing), percent-encoded or
+  underscore characters, empty labels and trailing dots are refused, so a
+  host check in `CheckURL` sees the name actually dialed.
+- **Redirects** are not followed unless `MaxRedirects` allows it; every
+  hop is re-checked, and https→http is always refused. Credential-bearing
+  requests (token, UserInfo) never follow redirects.
+- **Resources** are bounded: one timeout for the whole exchange (10 s by
+  default), a size cap on every body (1 MiB by default) counted after
+  transparent decompression — a gzip bomb fails — and a 64 KiB header cap.
+- **No ambient authority**: no proxy (an environment proxy would be
+  judged instead of the destination), no cookie jar, TLS 1.2 or later with
+  verified certificates.
+
+Exemptions are explicit: `AllowedPrefixes` for an on-premises identity
+provider's subnet (or `outbound.LoopbackPrefixes()` in tests). Any port
+is allowed by default; restrict ports and hosts in `CheckURL`, and deny
+specific public addresses in `CheckAddr`.
+
 ## Transport error mapping
 
 Error mappers return terse, code-first responses. HTTP emits a status code
@@ -403,3 +443,6 @@ span catalog.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
+- [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
+      subnets of on-premises identity providers in `AllowedPrefixes`, and
+      restrict hosts and ports in `CheckURL` when tenants configure URLs.

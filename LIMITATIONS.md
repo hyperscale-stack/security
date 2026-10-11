@@ -66,6 +66,18 @@ than future refactor phases.
   advertises — and `fragment` only for an enabled implicit flow; `form_post`
   is refused.
 
+## Outbound requests
+
+- **No proxy support** — `outbound` clients never use a proxy: the
+  connect-time address check would judge the proxy, not the destination.
+  Deployments whose egress must go through a proxy cannot use them yet.
+- **Ports are not restricted** by default — restrict them in
+  `Policy.CheckURL`.
+- **Private networks** need an explicit `AllowedPrefixes` exemption, and
+  only the well-known NAT64 prefix (`64:ff9b::/96`) is translated; a
+  network-specific NAT64 prefix is refused like any non-global IPv6
+  address.
+
 ## Transports
 
 - Only `net/http` and gRPC adapters are shipped. Other transports can be
