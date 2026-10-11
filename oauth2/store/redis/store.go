@@ -83,6 +83,7 @@ const (
 	resultOK       = "ok"
 	resultNotFound = "notfound"
 	resultMismatch = "mismatch"
+	resultContext  = "context"
 	resultRevoked  = "revoked"
 	resultReused   = "reused"
 )
@@ -136,21 +137,28 @@ return 'ok'
 //	KEYS[1] old refresh token; KEYS[2] family;
 //	KEYS[3] new refresh token; KEYS[4] new access token
 //	ARGV[1] family ID; ARGV[2] refresh JSON; ARGV[3] refresh TTL (ms);
-//	ARGV[4] access JSON; ARGV[5] access TTL (ms); ARGV[6] family TTL (ms)
+//	ARGV[4] access JSON; ARGV[5] access TTL (ms); ARGV[6] family TTL (ms);
+//	ARGV[7] issuer; ARGV[8] extension data — of the replacement
 //
 // Returns 'ok', 'notfound', 'mismatch' (the old token is in another
-// family), 'revoked' (the family key is not 'active': rotations never
-// create a family) or 'reused'. A consumed old token whose replacement
-// already exists is a resend of this very rotation — the new refresh key
-// comes from 256 random bits, only an earlier run of the same call can
-// have written it — so it answers 'ok' rather than 'reused': go-redis
-// resends a command whose reply was lost, which must not revoke the family
-// the rotation just extended.
+// family), 'context' (the replacement carries another issuer or other
+// extension data than the old token; a field absent from the old payload,
+// or null, reads as the empty string), 'revoked' (the family key is not
+// 'active': rotations never create a family) or 'reused'. A consumed old
+// token whose replacement already exists is a resend of this very rotation
+// — the new refresh key comes from 256 random bits, only an earlier run of
+// the same call can have written it — so it answers 'ok' rather than
+// 'reused': go-redis resends a command whose reply was lost, which must not
+// revoke the family the rotation just extended.
 var rotatePairScript = redis.NewScript(`
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 'notfound' end
 local old = cjson.decode(raw)
 if old.family_id ~= ARGV[1] then return 'mismatch' end
+local issuer, data = old.issuer, old.extension_data
+if type(issuer) ~= 'string' then issuer = '' end
+if type(data) ~= 'string' then data = '' end
+if issuer ~= ARGV[7] or data ~= ARGV[8] then return 'context' end
 if redis.call('GET', KEYS[2]) ~= 'active' then return 'revoked' end
 if old.consumed then
   if redis.call('EXISTS', KEYS[3]) == 1 then return 'ok' end
@@ -389,6 +397,7 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oa
 		refresh, ttlMillis(next.Refresh.ExpiresAt),
 		access, ttlMillis(next.Access.ExpiresAt),
 		familyTTL(next),
+		next.Access.Issuer, next.Access.ExtensionData,
 	}
 
 	res, err := rotatePairScript.Run(ctx, s.rdb, keys, args...).Text()
@@ -403,6 +412,8 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldHash string, next *oa
 		return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
 	case resultMismatch:
 		return oauth2.ErrInvalidRequest.WithDescription("redisstore: rotation into another token family")
+	case resultContext:
+		return oauth2.ErrInvalidRequest.WithDescription("redisstore: rotation into another grant context")
 	case resultRevoked:
 		return oauth2.ErrTokenFamilyRevoked
 	case resultReused:

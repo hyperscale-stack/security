@@ -18,33 +18,70 @@ import (
 // [oauth2.Storage] godoc states, through the public API only.
 
 // newPair returns a fresh pair in family: access token "at-<name>" and
-// refresh token "rt-<name>", both valid for a while.
+// refresh token "rt-<name>", both valid for a while. Every pair of a family
+// carries the family's grant context — the issuer and extension data of the
+// authorization the family stems from; a pair outside any family (a
+// client_credentials token) carries the issuer only.
 func newPair(name, family string) *oauth2.TokenPair {
 	now := time.Now()
+	issuer, data := familyContext(family)
 
 	return &oauth2.TokenPair{
 		Access: oauth2.AccessToken{
-			Token:     "raw-at-" + name,
-			TokenHash: "at-" + name,
-			ClientID:  testClientID,
-			Subject:   testSubject,
-			Scope:     testScope,
-			IssuedAt:  now,
-			ExpiresAt: now.Add(time.Hour),
-			FamilyID:  family,
-			Audience:  "api",
+			Token:         "raw-at-" + name,
+			TokenHash:     "at-" + name,
+			ClientID:      testClientID,
+			Subject:       testSubject,
+			Scope:         testScope,
+			IssuedAt:      now,
+			ExpiresAt:     now.Add(time.Hour),
+			FamilyID:      family,
+			Audience:      "api",
+			Issuer:        issuer,
+			ExtensionData: data,
 		},
 		Refresh: &oauth2.RefreshToken{
-			Token:     "raw-rt-" + name,
-			TokenHash: "rt-" + name,
-			ClientID:  testClientID,
-			Subject:   testSubject,
-			Scope:     testScope,
-			IssuedAt:  now,
-			ExpiresAt: now.Add(24 * time.Hour),
-			FamilyID:  family,
+			Token:         "raw-rt-" + name,
+			TokenHash:     "rt-" + name,
+			ClientID:      testClientID,
+			Subject:       testSubject,
+			Scope:         testScope,
+			IssuedAt:      now,
+			ExpiresAt:     now.Add(24 * time.Hour),
+			FamilyID:      family,
+			Issuer:        issuer,
+			ExtensionData: data,
 		},
 	}
+}
+
+// familyContext is the grant context newPair gives the pairs of family.
+func familyContext(family string) (issuer, data string) {
+	if family == "" {
+		return testIssuer, ""
+	}
+
+	return testIssuer, trickyData + family
+}
+
+// requireContext asserts that the lookups of pair's tokens return the
+// issuer and extension data it was saved with, byte-exact.
+func requireContext(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
+	t.Helper()
+
+	at, err := s.LookupAccessToken(ctx(), pair.Access.TokenHash)
+	mustNoError(t, err, "lookup access token "+pair.Access.TokenHash)
+	mustEqual(t, at.Issuer, pair.Access.Issuer, "access token issuer")
+	mustEqual(t, at.ExtensionData, pair.Access.ExtensionData, "access token extension data")
+
+	if pair.Refresh == nil {
+		return
+	}
+
+	rt, err := s.LookupRefreshToken(ctx(), pair.Refresh.TokenHash)
+	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
+	mustEqual(t, rt.Issuer, pair.Refresh.Issuer, "refresh token issuer")
+	mustEqual(t, rt.ExtensionData, pair.Refresh.ExtensionData, "refresh token extension data")
 }
 
 // accessOnly returns a pair carrying an access token alone: a
@@ -311,7 +348,14 @@ func testFamilySaveTokenPairRejectsInvalidPair(t *testing.T, s oauth2.Storage) {
 	consumed := newPair("invalid-consumed", "fam-invalid-c")
 	consumed.Refresh.Consumed = true
 
-	for _, pair := range []*oauth2.TokenPair{split, orphan, consumed} {
+	// A refresh token must carry the grant context of its access token.
+	splitIssuer := newPair("invalid-issuer", "fam-invalid-d")
+	splitIssuer.Refresh.Issuer = otherIssuer
+
+	splitData := newPair("invalid-data", "fam-invalid-e")
+	splitData.Refresh.ExtensionData += "!"
+
+	for _, pair := range []*oauth2.TokenPair{split, orphan, consumed, splitIssuer, splitData} {
 		mustCode(t, s.SaveTokenPair(ctx(), pair), oauth2.CodeInvalidRequest, "save invalid pair "+pair.Access.TokenHash)
 		requireAbsent(t, s, pair)
 	}

@@ -84,14 +84,18 @@ type RefreshTokenStore interface {
 	LookupRefreshToken(ctx context.Context, tokenHash string) (*RefreshToken, error)
 	// RotateRefreshToken atomically consumes the refresh token oldHash and
 	// persists next — an access token and a refresh token, both in
-	// oldHash's family — or changes nothing (I3).
+	// oldHash's family and carrying its grant context (Issuer and
+	// ExtensionData, unchanged) — or changes nothing (I3).
 	//
 	// A malformed next — nil, without a refresh token, or failing
 	// [TokenPair.Validate] — is refused with invalid_request before
 	// anything is read. The other errors come in this order: invalid_grant
 	// when oldHash is unknown; invalid_request when next declares another
-	// family than oldHash's; [ErrTokenFamilyRevoked] when the family is
-	// revoked; [ErrRefreshTokenReused] when oldHash was already consumed.
+	// family than oldHash's, or another Issuer or ExtensionData — a
+	// rotation never re-binds a grant to another realm nor rewrites the
+	// authentication event it rests on; [ErrTokenFamilyRevoked] when the
+	// family is revoked; [ErrRefreshTokenReused] when oldHash was already
+	// consumed.
 	// On reuse the family is revoked before the return; when that
 	// revocation fails, the error also wraps [ErrTokenFamilyRevocationFailed]
 	// and its cause, and the family MUST be treated as active (I4). Callers
@@ -180,6 +184,18 @@ type RefreshTokenStore interface {
 // tokens the code issued stop working, and an exchange of the code still
 // in flight fails instead of issuing — one more reason a store MUST keep a
 // revoked family's state for its whole retention (I5, I8).
+//
+// # Grant context
+//
+// Codes and tokens carry the Issuer they were issued under and the opaque
+// ExtensionData an [Extension] recorded for their authorization. A store
+// persists both byte-exact — valid UTF-8 without NUL, at most
+// [MaxExtensionDataLength] bytes of ExtensionData — and returns them from
+// every read: ConsumeAuthorizationCode and the record of a
+// [*CodeReplayError], LookupAccessToken, LookupRefreshToken, a consumed
+// refresh token included. A record written before these fields existed
+// reads them as "". RotateRefreshToken refuses a replacement that changes
+// them.
 //
 // A store returns the sentinels themselves or wraps them with %w: an
 // [*Error] has no Is method, so a WithDescription or WithCause copy no

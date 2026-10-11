@@ -99,6 +99,24 @@ func TestTokenPairValidate(t *testing.T) {
 				TokenHash: "rt-hash", FamilyID: "F", Consumed: true, ExpiresAt: time.Now().Add(time.Hour),
 			},
 		}, true},
+		{"access and refresh share the grant context", &oauth2.TokenPair{
+			Access: oauth2.AccessToken{TokenHash: "at-hash", FamilyID: "F", Issuer: "https://a.example", ExtensionData: "ctx"},
+			Refresh: &oauth2.RefreshToken{
+				TokenHash: "rt-hash", FamilyID: "F", Issuer: "https://a.example", ExtensionData: "ctx",
+			},
+		}, false},
+		{"refresh token under another issuer", &oauth2.TokenPair{
+			Access: oauth2.AccessToken{TokenHash: "at-hash", FamilyID: "F", Issuer: "https://a.example"},
+			Refresh: &oauth2.RefreshToken{
+				TokenHash: "rt-hash", FamilyID: "F", Issuer: "https://b.example",
+			},
+		}, true},
+		{"refresh token with other extension data", &oauth2.TokenPair{
+			Access: oauth2.AccessToken{TokenHash: "at-hash", FamilyID: "F", ExtensionData: "ctx"},
+			Refresh: &oauth2.RefreshToken{
+				TokenHash: "rt-hash", FamilyID: "F", ExtensionData: "other",
+			},
+		}, true},
 	}
 
 	for _, tc := range cases {

@@ -27,8 +27,8 @@ type Dialect interface {
 	insertFamily() string
 	// lockFamily reads a family's revoked_at under a row lock.
 	lockFamily() string
-	// lockRefresh reads a refresh token's family_id and consumed flag
-	// under a row lock.
+	// lockRefresh reads a refresh token's family_id, consumed flag,
+	// issuer and extension_data (NULL read as '') under a row lock.
 	lockRefresh() string
 	// txOptions are the options of every store transaction.
 	txOptions() *sql.TxOptions
@@ -39,7 +39,8 @@ const (
 	insertFamilyOnConflict = `INSERT INTO oauth2_token_families (family_id, revoked_at, expires_at) VALUES (?, ?, ?)
 		ON CONFLICT (family_id) DO NOTHING`
 	lockFamilyForUpdate  = `SELECT revoked_at FROM oauth2_token_families WHERE family_id = ? FOR UPDATE`
-	lockRefreshForUpdate = `SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = ? FOR UPDATE`
+	lockRefreshForUpdate = `SELECT family_id, consumed, COALESCE(issuer, ''), COALESCE(extension_data, '')
+		FROM oauth2_refresh_tokens WHERE token_hash = ? FOR UPDATE`
 )
 
 // Postgres is the PostgreSQL dialect ($1,$2,… placeholders). Its store
@@ -129,7 +130,8 @@ func (sqlite) lockFamily() string {
 }
 
 func (sqlite) lockRefresh() string {
-	return `SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = ?`
+	return `SELECT family_id, consumed, COALESCE(issuer, ''), COALESCE(extension_data, '')
+		FROM oauth2_refresh_tokens WHERE token_hash = ?`
 }
 
 func (sqlite) txOptions() *sql.TxOptions { return nil }

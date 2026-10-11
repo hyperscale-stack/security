@@ -20,7 +20,8 @@ func TestDialectFamilyStatements(t *testing.T) {
 		onDuplicate = `INSERT INTO oauth2_token_families (family_id, revoked_at, expires_at) VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE family_id = family_id`
 		familyForUpdate  = `SELECT revoked_at FROM oauth2_token_families WHERE family_id = ? FOR UPDATE`
-		refreshForUpdate = `SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = ? FOR UPDATE`
+		refreshForUpdate = `SELECT family_id, consumed, COALESCE(issuer, ''), COALESCE(extension_data, '')
+		FROM oauth2_refresh_tokens WHERE token_hash = ? FOR UPDATE`
 	)
 
 	cases := []struct {
@@ -39,7 +40,8 @@ func TestDialectFamilyStatements(t *testing.T) {
 		{
 			sqlite{}, onConflict,
 			`SELECT revoked_at FROM oauth2_token_families WHERE family_id = ?`,
-			`SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = ?`,
+			`SELECT family_id, consumed, COALESCE(issuer, ''), COALESCE(extension_data, '')
+		FROM oauth2_refresh_tokens WHERE token_hash = ?`,
 			nil,
 		},
 	}
@@ -61,6 +63,7 @@ func TestDialectFamilyStatements(t *testing.T) {
 		ON CONFLICT (family_id) DO NOTHING`,
 		postgres{}.rebind(postgres{}.insertFamily()))
 	assert.Equal(t,
-		`SELECT family_id, consumed FROM oauth2_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
+		`SELECT family_id, consumed, COALESCE(issuer, ''), COALESCE(extension_data, '')
+		FROM oauth2_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
 		postgres{}.rebind(postgres{}.lockRefresh()))
 }
