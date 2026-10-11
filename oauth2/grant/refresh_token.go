@@ -149,7 +149,8 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	}
 
 	iss := issuance{
-		subject: old.Subject, scope: scope, refreshScope: old.Scope,
+		grantType: oauth2.GrantTypeRefreshToken,
+		subject:   old.Subject, scope: scope, refreshScope: old.Scope,
 		familyID: old.FamilyID, extensionData: old.ExtensionData,
 	}
 
@@ -163,11 +164,16 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	if !rotate {
 		// The legacy Profile20 refresh: the access token alone joins the
 		// family, which the store refuses once revoked.
-		if err := g.cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
-			return nil, storageFailure(err)
+		idToken, err := extendResponse(ctx, req, iss, pair.Access)
+		if err != nil {
+			return nil, err
 		}
 
-		return pairResponse(pair, scope), nil
+		if err := g.cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
+			return nil, grantFailure(err)
+		}
+
+		return pairResponse(pair, scope, idToken), nil
 	}
 
 	// RFC 6749 §6: the new refresh token keeps the scope of the one it
@@ -177,21 +183,28 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		return nil, err
 	}
 
+	// Extended before the rotation: a failure leaves the presented token
+	// usable.
+	idToken, err := extendResponse(ctx, req, iss, pair.Access)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := g.cfg.Storage.RotateRefreshToken(ctx, old.TokenHash, pair); err != nil {
 		return nil, g.rotationFailure(ctx, old.FamilyID, err)
 	}
 
-	return pairResponse(pair, scope), nil
+	return pairResponse(pair, scope, idToken), nil
 }
 
 // rotationFailure maps a failed rotation. Reuse — the token was consumed
 // since the lookup — answers the bare invalid_grant
 // [oauth2.ErrRefreshTokenReused]; when the store could not revoke the
 // family on that path, the revocation is retried as for a reuse the grant
-// detects itself. Anything else goes through storageFailure.
+// detects itself. Anything else goes through grantFailure.
 func (g *RefreshToken) rotationFailure(ctx context.Context, familyID string, err error) error {
 	if !errors.Is(err, oauth2.ErrRefreshTokenReused) {
-		return storageFailure(err)
+		return grantFailure(err)
 	}
 
 	if errors.Is(err, oauth2.ErrTokenFamilyRevocationFailed) {

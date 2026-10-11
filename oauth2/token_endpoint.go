@@ -18,7 +18,9 @@ import (
 //  1. Enforces POST + application/x-www-form-urlencoded.
 //  2. Authenticates the client via the configured ClientAuthenticators.
 //  3. Looks up the grant_type and dispatches to the matching Grant.
-//  4. Serializes the response per RFC 6749 §5.1 (success) or §5.2 (error).
+//  4. Serializes the response per RFC 6749 §5.1 (success) — plus the
+//     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
+//     (error).
 //
 // Errors are emitted as JSON: {"error":"...","error_description":"..."}.
 func (s *Server) TokenHandler() http.Handler {
@@ -72,12 +74,13 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	now := s.cfg.Now()
 
 	resp, err := handler.Handle(r.Context(), GrantRequest{
-		Client:   client,
-		Form:     r.PostForm,
-		Issuer:   issuer,
-		Audience: audience,
-		Now:      now,
-		Profile:  s.cfg.Profile,
+		Client:    client,
+		Form:      r.PostForm,
+		Issuer:    issuer,
+		Audience:  audience,
+		Now:       now,
+		Profile:   s.cfg.Profile,
+		Extension: s.cfg.Extension,
 	})
 	if err != nil {
 		s.writeOAuthError(r.Context(), w, err)
@@ -98,6 +101,8 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"` //nolint:gosec // wire field name mandated by RFC 6749
 	Scope        string `json:"scope,omitempty"`
+	// IDToken is the OpenID Connect Core §3.1.3.3 member an Extension adds.
+	IDToken string `json:"id_token,omitempty"`
 }
 
 // writeTokenResponse serializes resp to the standard JSON body and adds
@@ -110,6 +115,7 @@ func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse, now time.Tim
 		TokenType:   resp.TokenType,
 		ExpiresIn:   expiresIn(resp.Pair.Access.ExpiresAt, now),
 		Scope:       resp.Scope,
+		IDToken:     resp.IDToken,
 	}
 
 	if resp.Pair.Refresh != nil {

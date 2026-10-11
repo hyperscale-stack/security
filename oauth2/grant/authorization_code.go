@@ -31,8 +31,9 @@ import (
 //  5. Verify PKCE when present / required, then check that the client may
 //     use the grant.
 //  6. Generate the access token (+ optional refresh token) in the code's
-//     family, carrying its issuer and grant context, persist both
-//     atomically and return the pair.
+//     family, carrying its issuer and grant context, let the server's
+//     extension extend the response (an OpenID Connect id_token, with the
+//     code's nonce), persist both atomically and return the pair.
 //
 // A replay — the store still retains the consumed code — is refused with
 // invalid_grant. When the replay passes steps 2-5 itself, proving
@@ -92,6 +93,7 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 	}
 
 	return issueTokenPair(ctx, g.cfg, req, issuance{
+		grantType: oauth2.GrantTypeAuthorizationCode, nonce: code.Nonce,
 		subject: code.Subject, scope: code.Scope, refreshScope: code.Scope,
 		familyID: familyID, extensionData: code.ExtensionData,
 	})

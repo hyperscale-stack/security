@@ -5,6 +5,7 @@
 package oauth2_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/clientauth"
+	"github.com/hyperscale-stack/security/oauth2/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -271,5 +274,82 @@ func TestOpenIDConnectRefusalSentinels(t *testing.T) {
 		assert.NotEmpty(t, tc.err.Description)
 		assert.ErrorIs(t, tc.err, tc.core)
 		assert.Equal(t, http.StatusBadRequest, tc.err.HTTPStatus())
+	}
+}
+
+// failingCodeStore fails every authorization-code and token write.
+type failingCodeStore struct{ *memory.Store }
+
+var errCodeStoreDown = errors.New("code store down")
+
+func (failingCodeStore) SaveAuthorizationCode(context.Context, *oauth2.AuthorizationCode) error {
+	return errCodeStoreDown
+}
+
+func (failingCodeStore) SaveTokenPair(context.Context, *oauth2.TokenPair) error {
+	return errCodeStoreDown
+}
+
+// failingOpaque is an OpaqueTokenGenerator that cannot mint.
+type failingOpaque struct{}
+
+func (failingOpaque) Generate(context.Context) (string, string, error) {
+	return "", "", errCodeStoreDown
+}
+
+// TestAuthorizeIssuanceFailuresAreServerErrors: a code or implicit token
+// that cannot be minted or persisted answers a redirected server_error,
+// the cause reaching the hook.
+func TestAuthorizeIssuanceFailuresAreServerErrors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		implicit bool
+		tokens   oauth2.OpaqueTokenGenerator
+	}{
+		{"code not persisted", false, nil},
+		{"implicit token not persisted", true, implicitTokens()},
+		{"implicit token not minted", true, failingOpaque{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sink := &errorSink{}
+			srv, err := oauth2.NewServer(oauth2.ServerConfig{
+				Profile: oauth2.Profile20, Storage: failingCodeStore{memory.New()},
+				IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
+				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
+					testClientID: &oauth2.DefaultClient{IDValue: testClientID, RedirectURIValues: []string{redirectURI}},
+				}},
+				ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+				OnError:    sink.hook,
+			})
+			require.NoError(t, err)
+
+			q, cfg := authorizeQuery(), oauth2.AuthorizeConfig{}
+			if tc.implicit {
+				q, cfg = implicitQuery(), oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: tc.tokens}
+			}
+
+			rec := runAuthorizeCfg(srv, cfg, q, approve)
+			require.Equal(t, http.StatusFound, rec.Code)
+
+			loc := mustLocation(t, rec)
+			params := loc.Query()
+
+			if tc.implicit {
+				params, err = url.ParseQuery(loc.Fragment)
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, oauth2.CodeServerError, params.Get("error"))
+
+			hooked := sink.collected()
+			require.Len(t, hooked, 1)
+			assert.ErrorIs(t, hooked[0], errCodeStoreDown)
+		})
 	}
 }

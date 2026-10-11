@@ -89,6 +89,11 @@ func TestTokenErrorsStayWithinTheRFC6749Charset(t *testing.T) {
 			name: "error_uri with a space", err: &oauth2.Error{Code: oauth2.CodeInvalidGrant, URI: "https://docs.example/a b"},
 			wantCode: oauth2.CodeInvalidGrant, wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
 		},
+		{
+			// Every character fits, but the escape is malformed: not a URI.
+			name: "error_uri that is no URI", err: &oauth2.Error{Code: oauth2.CodeInvalidGrant, URI: "https://docs.example/%zz"},
+			wantCode: oauth2.CodeInvalidGrant, wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
+		},
 	}
 
 	for _, tc := range cases {
@@ -193,4 +198,29 @@ func TestRevokeAndIntrospectErrorsShareTheWireRules(t *testing.T) {
 		assert.Equal(t, oauth2.CodeInvalidRequest, body["error"])
 		assert.Regexp(t, errorDescriptionCharset, body["error_description"])
 	}
+}
+
+// TestTokenFailureWithAPlainErrorIsServerError: a grant failing with an
+// error that is no *Error answers server_error; the hook gets the cause.
+func TestTokenFailureWithAPlainErrorIsServerError(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("ledger down")
+	sink := &errorSink{}
+	cfg := hookServerConfig(memory.New())
+	cfg.Grants = []oauth2.Grant{failingGrant{err: cause}}
+	cfg.OnError = sink.hook
+
+	srv, err := oauth2.NewServer(cfg)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	srv.TokenHandler().ServeHTTP(rec, formRequest("/oauth2/token", url.Values{"grant_type": {"urn:test:failing"}}, true))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, oauth2.CodeServerError, tokenErrorBody(t, rec)["error"])
+
+	hooked := sink.collected()
+	require.Len(t, hooked, 1)
+	assert.ErrorIs(t, hooked[0], cause)
 }

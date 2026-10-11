@@ -16,6 +16,12 @@ import (
 // token is bound to the request's issuer, which the grant checked against
 // the redeemed code or refresh token.
 type issuance struct {
+	// grantType is the exchange the server's extension extends — an
+	// oauth2.GrantType* value — or "" for an exchange it never sees (the
+	// legacy password grant).
+	grantType string
+	// nonce is the nonce the redeemed code recorded; "" on a refresh.
+	nonce   string
 	subject string
 	// scope is the access token's scope.
 	scope string
@@ -29,12 +35,14 @@ type issuance struct {
 }
 
 // issueTokenPair mints an access token — and, when the config carries a
-// refresh-token generator, a companion refresh token — for iss, persists
-// them atomically, and returns the grant response. It is the shared
-// issuance path of the authorization_code grant, whose family is derived
-// from the code, and of the legacy password grant, whose family is new. A
-// family revoked in the meantime — by a replay of the code — refuses the
-// pair with invalid_grant, and nothing is issued.
+// refresh-token generator, a companion refresh token — for iss, lets the
+// server's extension extend the response, persists the pair atomically,
+// and returns the grant response. It is the shared issuance path of the
+// authorization_code grant, whose family is derived from the code, and of
+// the legacy password grant, whose family is new. Nothing is persisted
+// before the extension succeeded, and its id_token is only returned with a
+// persisted pair. A family revoked in the meantime — by a replay of the
+// code — refuses the pair with invalid_grant, and nothing is issued.
 func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) (*Response, error) {
 	access, err := mintAccess(ctx, cfg, req, iss)
 	if err != nil {
@@ -49,11 +57,38 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) 
 		}
 	}
 
-	if err := cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
-		return nil, storageFailure(err)
+	idToken, err := extendResponse(ctx, req, iss, pair.Access)
+	if err != nil {
+		return nil, err
 	}
 
-	return pairResponse(pair, iss.scope), nil
+	if err := cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
+		return nil, grantFailure(err)
+	}
+
+	return pairResponse(pair, iss.scope, idToken), nil
+}
+
+// extendResponse runs the server's extension on the exchange iss — when
+// the request carries one and the exchange is one it extends — handing it
+// the minted, not yet persisted access token, and returns the id_token it
+// adds. A failure is answered through grantFailure.
+func extendResponse(ctx context.Context, req Request, iss issuance, access oauth2.AccessToken) (string, error) {
+	if req.Extension == nil || iss.grantType == "" {
+		return "", nil
+	}
+
+	ext, err := req.Extension.ExtendTokenResponse(ctx, oauth2.TokenIssuance{
+		GrantType: iss.grantType,
+		Client:    req.Client,
+		Access:    access,
+		Nonce:     iss.nonce,
+	})
+	if err != nil {
+		return "", grantFailure(err)
+	}
+
+	return ext.IDToken, nil
 }
 
 // mintAccess generates the access token of iss; nothing is persisted.
@@ -97,17 +132,18 @@ func mintRefresh(ctx context.Context, cfg Config, req Request, iss issuance) (*o
 	}, nil
 }
 
-// pairResponse wraps a persisted pair into the grant response.
-func pairResponse(pair *oauth2.TokenPair, scope string) *Response {
-	return &Response{Pair: *pair, Scope: scope, TokenType: oauth2.TokenTypeBearer}
+// pairResponse wraps a persisted pair, and the id_token the extension
+// added to it, into the grant response.
+func pairResponse(pair *oauth2.TokenPair, scope, idToken string) *Response {
+	return &Response{Pair: *pair, Scope: scope, TokenType: oauth2.TokenTypeBearer, IDToken: idToken}
 }
 
-// storageFailure maps a failed persistence call to the grant's answer. A
-// refusal the store reports as invalid_grant — a revoked family, a refresh
-// token that vanished — is the answer RFC 6749 §5.2 prescribes and passes
-// through; anything else becomes a server_error whose cause stays off the
-// wire.
-func storageFailure(err error) error {
+// grantFailure maps a failed persistence or extension call to the grant's
+// answer. A refusal reported as invalid_grant — a revoked family, a refresh
+// token that vanished, a grant the extension cannot honor — is the answer
+// RFC 6749 §5.2 prescribes and passes through; anything else becomes a
+// server_error whose cause stays off the wire.
+func grantFailure(err error) error {
 	if oauth2.IsCode(err) == oauth2.CodeInvalidGrant {
 		return err
 	}

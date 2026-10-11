@@ -24,6 +24,13 @@ type GrantRequest struct {
 	// "plain" PKCE refused, refresh-token rotation forced). A profile can
 	// only tighten a grant's own configuration, never loosen it.
 	Profile Profile
+	// Extension is [ServerConfig.Extension], set by the server; nil when
+	// none is configured. The authorization_code and refresh_token grants
+	// call its ExtendTokenResponse between minting their tokens and
+	// persisting them, and return what it adds in GrantResponse.IDToken. A
+	// grant decorator forwards the request unchanged; a custom grant that
+	// ignores the extension answers without its members.
+	Extension Extension
 }
 
 // TokenTypeBearer is the RFC 6750 §7.1 token type issued by every grant in
@@ -31,12 +38,16 @@ type GrantRequest struct {
 const TokenTypeBearer = "Bearer"
 
 // GrantResponse is what a grant hands back to the server. The HTTP layer
-// projects it onto the RFC 6749 §5.1 JSON body.
+// projects it onto the RFC 6749 §5.1 JSON body: the members a response may
+// carry are fields — there is no free-form map, so nothing can shadow a
+// standard member.
 type GrantResponse struct {
-	Pair        TokenPair
-	Scope       string
-	TokenType   string // e.g. TokenTypeBearer
-	ExtraParams map[string]any
+	Pair      TokenPair
+	Scope     string
+	TokenType string // e.g. TokenTypeBearer
+	// IDToken is serialized as the id_token member (OpenID Connect Core
+	// §3.1.3.3) when non-empty: what the server's [Extension] added.
+	IDToken string
 }
 
 // Grant validates and processes one OAuth2 grant_type value. Each Grant is

@@ -93,6 +93,12 @@ type AuthorizeRequest struct {
 	// to. A ConsentFunc authenticates the resource owner within it: a
 	// session established at another issuer is no authentication here.
 	Issuer string
+	// ExtensionRequest is what the server's [Extension] returned from
+	// ValidateAuthorizeRequest — its validated view of its own parameters,
+	// e.g. an OpenID Connect provider's prompt and max_age; nil without an
+	// extension, or when it has nothing to add. The value is shared: never
+	// mutate it.
+	ExtensionRequest any
 }
 
 // Consent is the resource-owner decision returned by a [ConsentFunc].
@@ -120,6 +126,14 @@ type Consent struct {
 	// personal data in them. An approval carrying a Refusal contradicts
 	// itself and fails closed with server_error.
 	Refusal *Error
+	// ExtensionResult is the trusted, extension-defined result of the
+	// authentication and consent — for an OpenID Connect provider, the
+	// time, ACR and AMR of the authentication event and the claims released
+	// — handed to Extension.CompleteAuthorization on an approval, which
+	// validates it and decides what the grant records. It is ignored
+	// without an extension and never persisted as is. The value is shared:
+	// never mutate it after returning it.
+	ExtensionResult any
 }
 
 // ConsentFunc is the application hook invoked by [Server.AuthorizeHandler]
@@ -326,8 +340,43 @@ func (s *Server) validateAuthorize(
 	}
 
 	ar.Issuer = issuer
+	st := &authorizeState{ar: *ar, audience: audience, fragment: fragment}
 
-	return &authorizeState{ar: *ar, audience: audience, fragment: fragment}, true
+	if s.cfg.Extension == nil {
+		return st, true
+	}
+
+	view, err := s.cfg.Extension.ValidateAuthorizeRequest(r.Context(), r, st.request())
+	if err != nil {
+		s.extensionFailed(w, r, st, err)
+
+		return nil, false
+	}
+
+	st.ar.ExtensionRequest = view
+
+	return st, true
+}
+
+// extensionFailed answers the error an [Extension] authorization hook
+// returned: [ErrUnredirectableRequest] with a bare 400, a protocol [*Error]
+// with a redirect — authorization-endpoint codes only, see
+// redirectAuthorizeError — and anything else with a redirected
+// server_error.
+func (s *Server) extensionFailed(w http.ResponseWriter, r *http.Request, st *authorizeState, err error) {
+	if errors.Is(err, ErrUnredirectableRequest) {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("authorization request refused without redirect").WithCause(err))
+		http.Error(w, "oauth2: invalid authorization request", http.StatusBadRequest)
+
+		return
+	}
+
+	var oe *Error
+	if !errors.As(err, &oe) {
+		oe = ErrServerError.WithDescription("authorization extension failed").WithCause(err)
+	}
+
+	s.refuseAuthorize(w, r, st, oe)
 }
 
 // authorize runs the ConsentFunc on a validated request and issues what
@@ -359,6 +408,10 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 	}
 
 	grant := authorizedGrant{subject: decision.Subject, scope: granted, now: s.cfg.Now()}
+
+	if s.cfg.Extension != nil && !s.completeAuthorization(w, r, st, decision, &grant) {
+		return
+	}
 
 	if st.fragment {
 		s.issueImplicitToken(cfg, w, r, st, grant)
@@ -404,11 +457,44 @@ func checkDecision(d *Consent) *Error {
 }
 
 // authorizedGrant is what an approved authorization issues: to whom, which
-// scope, and when.
+// scope, when, and the grant context the extension recorded.
 type authorizedGrant struct {
 	subject string
 	scope   string
 	now     time.Time
+	data    string
+}
+
+// completeAuthorization runs Extension.CompleteAuthorization on an
+// approved decision and applies the ExtensionGrant it returns to grant. It
+// answers a failure itself and reports whether the authorization goes on.
+func (s *Server) completeAuthorization(
+	w http.ResponseWriter,
+	r *http.Request,
+	st *authorizeState,
+	decision *Consent,
+	grant *authorizedGrant,
+) bool {
+	consent := *decision
+	consent.Scope = grant.scope
+
+	g, err := s.cfg.Extension.CompleteAuthorization(r.Context(), st.request(), consent, grant.now)
+	if err != nil {
+		s.extensionFailed(w, r, st, err)
+
+		return false
+	}
+
+	scope, oerr := applyExtensionGrant(grant.scope, g)
+	if oerr != nil {
+		s.refuseAuthorize(w, r, st, oerr)
+
+		return false
+	}
+
+	grant.scope, grant.data = scope, g.Data
+
+	return true
 }
 
 // refuseAuthorize redirects oerr back to the client of the validated
@@ -554,6 +640,7 @@ func (s *Server) issueAuthorizationCode(
 		IssuedAt:            grant.now,
 		ExpiresAt:           grant.now.Add(cfg.CodeTTL),
 		Issuer:              st.ar.Issuer,
+		ExtensionData:       grant.data,
 	}
 
 	if err := s.cfg.Storage.SaveAuthorizationCode(r.Context(), code); err != nil {
@@ -588,15 +675,16 @@ func (s *Server) issueImplicitToken(
 	}
 
 	at := &AccessToken{
-		Token:     raw,
-		TokenHash: hash,
-		ClientID:  st.ar.Client.ID(),
-		Subject:   grant.subject,
-		Scope:     grant.scope,
-		Audience:  st.audience,
-		IssuedAt:  grant.now,
-		ExpiresAt: grant.now.Add(cfg.ImplicitTTL),
-		Issuer:    st.ar.Issuer,
+		Token:         raw,
+		TokenHash:     hash,
+		ClientID:      st.ar.Client.ID(),
+		Subject:       grant.subject,
+		Scope:         grant.scope,
+		Audience:      st.audience,
+		IssuedAt:      grant.now,
+		ExpiresAt:     grant.now.Add(cfg.ImplicitTTL),
+		Issuer:        st.ar.Issuer,
+		ExtensionData: grant.data,
 	}
 
 	// An implicit token belongs to no family: it is never gated by one.
