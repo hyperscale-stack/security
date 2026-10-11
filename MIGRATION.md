@@ -347,3 +347,162 @@ To migrate:
 3. **Custom `SecretMatcher`s** must return `false` when no secret is
    registered or the presented one is empty, whatever they compare
    against: a bcrypt hash of `""` matches `""`.
+
+### `oauth2`: codes and tokens are bound to their issuer and record extension data (#83)
+
+An authorization code was not bound to the realm that authorized it:
+`/token` resolved the issuer again, so behind an `IssuerResolver` serving
+several realms (per `Host` or path) a client could redeem a code authorized
+at one issuer, or refresh a token issued there, at another one — obtaining
+tokens of realm B for a subject of realm A, while a subject is only
+meaningful within its issuer (OIDC Core §16.15). And nothing could carry the
+authentication context an OpenID Connect provider needs from `/authorize` to
+the token response and through refreshes. Codes and tokens now record the
+issuer they were issued under and the opaque grant context of an
+`oauth2.Extension`; the grants refuse a code or refresh token at another
+issuer, and a rotation never changes the context it carries.
+
+| Before | After |
+| ------ | ----- |
+| `/authorize` resolved no issuer for the code flow (the implicit flow did, after the consent) | resolves it right after the redirect URI is trusted, for both flows: a resolver failure answers a redirected `server_error`, before the `ConsentFunc` runs; `AuthorizeRequest.Issuer` exposes it |
+| a code or refresh token redeemed at any issuer | `invalid_grant` (`authorization code issued by another issuer`, `refresh_token issued by another issuer`); a refused refresh consumes nothing, a code replayed at another issuer revokes nothing |
+| `AuthorizationCode`, `AccessToken`, `RefreshToken` | gain `Issuer` and `ExtensionData` (strings every store persists byte-exact); `IntrospectedToken` gains `Issuer` |
+| codes and refresh tokens written before the upgrade | carry no issuer: refused with `invalid_grant` unless your resolver returns an empty issuer — fail closed |
+| `TokenPair.Validate` | also refuses a refresh token whose `Issuer` or `ExtensionData` differ from its access token's (`invalid_request`) |
+| `RotateRefreshToken` accepted any replacement in the family | refuses with `invalid_request`, writing nothing, a replacement whose `Issuer` or `ExtensionData` differ from the presented token's (checked right after the family) |
+
+To migrate:
+
+1. **Issuer resolution.** An `IssuerResolver` MUST return the same issuer
+   for every request of one realm — `/authorize` and `/token` — and issuers
+   are compared exactly. Renaming an issuer invalidates the outstanding codes
+   and refresh tokens issued under the former one.
+2. **SQL.** The three code and token tables gain two nullable `TEXT`
+   columns, which `Migrate` does not add to an existing table (it only
+   creates missing tables; new installs get them). Until they exist, every
+   code and token write and lookup fails with `server_error`. Apply, through
+   your migration tool and before the new build serves traffic — the same
+   statements on PostgreSQL, MySQL and SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes     ADD COLUMN issuer TEXT;
+   ALTER TABLE oauth2_auth_codes     ADD COLUMN extension_data TEXT;
+   ALTER TABLE oauth2_access_tokens  ADD COLUMN issuer TEXT;
+   ALTER TABLE oauth2_access_tokens  ADD COLUMN extension_data TEXT;
+   ALTER TABLE oauth2_refresh_tokens ADD COLUMN issuer TEXT;
+   ALTER TABLE oauth2_refresh_tokens ADD COLUMN extension_data TEXT;
+   ```
+
+   A row written before them reads an empty issuer and extension data, and is
+   refused at `/token` (step 4). A deployment with a **single** issuer can
+   keep its users signed in by stamping that issuer — exactly the value its
+   `IssuerResolver` returns — on the existing rows, after the `ALTER`s and
+   before serving traffic:
+
+   ```sql
+   UPDATE oauth2_auth_codes     SET issuer = 'https://auth.example' WHERE issuer IS NULL;
+   UPDATE oauth2_access_tokens  SET issuer = 'https://auth.example' WHERE issuer IS NULL;
+   UPDATE oauth2_refresh_tokens SET issuer = 'https://auth.example' WHERE issuer IS NULL;
+   ```
+
+   A multi-issuer deployment must not backfill: nothing tells which realm a
+   row belongs to. Keep PostgreSQL databases in `UTF8` and MySQL tables in
+   `utf8mb4` with a strict `sql_mode` (see the `store/sql` package
+   documentation).
+3. **Redis and memory** need nothing: the new payload fields are additive,
+   and a payload without them reads an empty issuer and extension data.
+4. **Codes and tokens issued before the upgrade.** Outstanding codes (they
+   live `AuthorizeConfig.CodeTTL`, 10 minutes by default) and refresh tokens
+   carry no issuer and are refused with `invalid_grant`: users
+   re-authenticate, unless the SQL backfill of step 2 applies. Access tokens
+   keep working until they expire.
+5. **Upgrade every instance at once.** An instance still running an earlier
+   build writes codes and tokens without an issuer, which upgraded instances
+   refuse, and checks no issuer itself.
+6. **Custom stores** persist and return `Issuer` and `ExtensionData` on the
+   three records byte-exact — the record of a `*oauth2.CodeReplayError` and
+   consumed refresh tokens included — read a missing value as `""`, refuse
+   in `RotateRefreshToken` a replacement carrying another issuer or extension
+   data (`invalid_request`, after the family check), and pass
+   `storetest.RunConformance`.
+7. **Custom grants** stamp the tokens they mint with `GrantRequest.Issuer`
+   and the `ExtensionData` of the code or refresh token they redeem, after
+   checking its `Issuer` against `GrantRequest.Issuer`. **Code seeding codes
+   or tokens** (tests, fixtures) sets their `Issuer` to the issuer the
+   requests resolve.
+
+### `oauth2`: `/authorize` refuses unsupported response modes and approvals without a subject (#83)
+
+`/authorize` ignored `response_mode`: a client asking for a mode the server
+does not serve still got its answer — code or error — in the query string,
+where it did not expect it; the response mode decides how every answer
+travels, and one the server cannot honor leaves no way to answer at all
+(OAuth 2.0 Multiple Response Type Encoding Practices §2.1; OIDC Core 1.0
+incorporating errata set 2, §3.1.2.6). An approval without a subject,
+documented as required, was never refused. And a `ConsentFunc` could not
+answer a protocol refusal such as OpenID Connect's `login_required`.
+
+| Request | Before | After |
+| ------- | ------ | ----- |
+| `response_mode` absent or empty, `query` (code flow), `fragment` (enabled implicit flow) | served | unchanged |
+| any other `response_mode` — `fragment` for the code flow, `query` for the implicit one, `form_post`, a case variant, an unknown value | ignored, answered in the default mode | bare `400` (`text/plain`, never redirected), reported to `OnError` as `invalid_request`, before any other check that would redirect |
+| approval with an empty `Subject`, or one longer than 255 bytes | code or token issued | redirected `server_error`, nothing issued |
+| denial carrying `Consent.Refusal` | — (field new) | `Refusal` redirected instead of `access_denied`; only the RFC 6749 §4.1.2.1 and OIDC Core §3.1.2.6 authorization-endpoint codes travel, any other answers `server_error` |
+| approval carrying a `Refusal` | — | `server_error` (contradiction, fail closed) |
+| `ConsentFunc` returning `(nil, err)` | `server_error` | unchanged, whatever `err` — an `*oauth2.Error` included; the cause now reaches `OnError` |
+| `invalid_scope` / `unsupported_response_type` descriptions | echoed the request (`scope "x" is not allowed for this client`) | fixed text, never echoing the request |
+
+To migrate:
+
+1. Clients sending `response_mode` send nothing, or the default mode of
+   their response type; `form_post` is not supported.
+2. `ConsentFunc`s name the resource owner in `Consent.Subject` — at most 255
+   bytes (OIDC Core §2) — on every approval.
+3. A `ConsentFunc` refusing with a protocol code returns
+   `&oauth2.Consent{Refusal: oauth2.ErrLoginRequired}` (or
+   `ErrConsentRequired`, `ErrInteractionRequired`, … `access_denied` stays
+   the default). Its `Description` and `URI` reach the client's URL,
+   history and logs: never put personal data in them.
+
+### `oauth2`: error responses keep to the RFC 6749 syntax (#83)
+
+The error responses carried whatever a grant, or the server itself, put in
+an `*oauth2.Error`, although RFC 6749 §4.1.2.1 and §5.2 restrict codes and
+descriptions to `%x20-21 / %x23-5B / %x5D-7E` and `error_uri` to
+`%x21 / %x23-5B / %x5D-7E`. Errors that do not come from the server itself —
+a grant's, an extension's, a `Consent.Refusal` — are now held to that syntax:
+
+| Error | Before | After |
+| ----- | ------ | ----- |
+| code empty or outside the charset (`/token`, `/revoke`, `/introspect`) | written as is | `server_error`; the original reaches `OnError` as its cause |
+| code the authorization endpoint does not define, at `/authorize` | — (only the server's codes were redirected) | `server_error` |
+| `error_description` outside the charset | written as is | left out, the code kept |
+| `error_uri` outside the charset, or not a URI reference | written as is (`/authorize`: never sent) | left out; a valid one is now redirected too |
+
+Nothing to do unless a custom grant relied on such values: keep codes,
+descriptions and URIs within the RFC 6749 syntax — a localized description
+with accents is dropped.
+
+### `oauth2`: protocol extension points; `GrantResponse.ExtraParams` removed (#83)
+
+`GrantResponse.ExtraParams` was never serialized: a grant setting it changed
+nothing on the wire. It is removed. The members a token response may carry
+are fields, so nothing can shadow `access_token`, `token_type`,
+`expires_in`, `refresh_token` or `scope`; `GrantResponse.IDToken` is the one
+an `oauth2.Extension` adds (`id_token`, OIDC Core §3.1.3.3).
+
+| Before | After |
+| ------ | ----- |
+| `GrantResponse.ExtraParams map[string]any` (dropped) | removed; `GrantResponse.IDToken` (serialized when non-empty) |
+| no way to extend the authorization-code flow | `ServerConfig.Extension` (`oauth2.Extension`): `ValidateAuthorizeRequest`, `CompleteAuthorization`, `ExtendTokenResponse`; `AuthorizeRequest.ExtensionRequest`, `Consent.ExtensionResult`; `GrantRequest.Extension` |
+| a refresh token with every code exchange that has a generator | unchanged by default; `grant.Config.RefreshTokenScope` (e.g. `offline_access`, OIDC Core §11) issues one only when the grant holds that scope |
+
+To migrate:
+
+1. Drop `ExtraParams` assignments (they had no effect); an id_token goes in
+   `IDToken`.
+2. Grant decorators forward the `GrantRequest` unchanged — `Extension`
+   included — and custom grants redeeming an authorization call
+   `GrantRequest.Extension.ExtendTokenResponse` between minting their tokens
+   and persisting them, or answer without its members.
+3. Without an extension, nothing changes on the wire.

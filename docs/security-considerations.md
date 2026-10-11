@@ -156,6 +156,84 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   the same bytes as an unknown token (`{"active":false}`), so the response
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
+- **Issuer binding (realms)** — a subject is only meaningful within its
+  issuer (OIDC Core §16.15). `/authorize` resolves the issuer of the request
+  through the `IssuerResolver` right after the redirect URI is trusted;
+  the code and every token record it, and the `authorization_code` and
+  `refresh_token` grants refuse, with `invalid_grant`, a code or refresh
+  token issued under another issuer than the one resolved at `/token` — so a
+  client registered in several realms cannot carry an authorization across
+  them. A refused refresh consumes nothing; a code replayed at another issuer
+  revokes nothing, since it could not have redeemed the code — while a
+  consumed refresh token presented at another issuer still revokes its
+  family, the reuse check coming first (RFC 9700 §4.14.2). Records written
+  before issuers were recorded fail closed. The resolver is the realm
+  boundary: it must return the same issuer for `/authorize` and `/token` of
+  a realm, and the `ConsentFunc` must authenticate the resource owner within
+  `AuthorizeRequest.Issuer` — a session of another realm is no
+  authentication. `IntrospectedToken.Issuer` lets an `IntrospectionPolicy`
+  enforce the same boundary.
+- **Authorization responses** — a `response_mode` other than the one the
+  server answers in (`query` for the code flow, `fragment` for an enabled
+  implicit flow) gets a bare 400, never redirected: the answer could not be
+  encoded as the client expects (OIDC Core 1.0 incorporating errata set 2,
+  §3.1.2.6). Redirected errors carry only the codes the authorization
+  endpoint defines (RFC 6749 §4.1.2.1, OIDC Core §3.1.2.6); descriptions and
+  `error_uri`s outside the RFC 6749 charset are left out, and the server's
+  own descriptions never echo the request. An approval names its subject —
+  non-empty, at most 255 bytes — or fails closed with `server_error`. A
+  `ConsentFunc` refuses with a protocol code through `Consent.Refusal`; a
+  `ConsentFunc` error is always a `server_error`. A refusal's description
+  and URI travel in the client's URL — browser history, logs, `Referer` —
+  so they must never carry personal data.
+
+### Protocol extensions
+
+`ServerConfig.Extension` (`oauth2.Extension`) is trusted code — the
+`oidc/provider` OpenID Provider, or the application's own — plugged into the
+authorization-code flow. The server keeps every OAuth 2.0 check and runs it
+first:
+
+- **Bounded authority.** The extension only sees requests and exchanges the
+  core accepted (client, redirect URI, response mode and type, scope, PKCE;
+  client, issuer, redirect URI, verifier and expiry at `/token`). It can
+  narrow a granted scope, never broaden it, and add an `id_token` member to
+  a token response, never replace `access_token`, `token_type`,
+  `expires_in`, `refresh_token` or `scope` — the response members are typed
+  fields, not a map. Callbacks get copies of the validated request: neither
+  the `ConsentFunc` nor the extension can change the redirect target, the
+  state, the scope or the PKCE parameters the server records.
+- **Grant context.** What `CompleteAuthorization` records (`ExtensionData`:
+  at most 4096 bytes of UTF-8 without NUL, so every store keeps it
+  byte-exact) is persisted with the code and copied onto every token derived
+  from it; the stores refuse a refresh-token rotation that would change it,
+  or the issuer. It can only be read back through the record its own code or
+  refresh token designates: it cannot be substituted across clients,
+  issuers, codes or token families, and a refresh never rewrites the
+  authentication event it rests on (OIDC Core §12.2).
+- **No partial success.** `ExtendTokenResponse` runs after the tokens are
+  minted and before their single atomic write: when it fails nothing is
+  persisted — a redeemed code stays consumed and a retry is a replay, a
+  presented refresh token stays usable — and its `id_token` is dropped when
+  the write fails afterwards. A replay of the code that revokes the family
+  while the hook runs wins: the exchange in flight answers `invalid_grant`
+  without its `id_token`. The hooks must therefore have no externally
+  visible side effects.
+- **Consumers of the context.** `AccessToken.ExtensionData` is empty for
+  tokens no authorization precedes — `client_credentials`, whose `Subject` is
+  a client ID, and the legacy `password` grant — and for records written
+  before it existed. An endpoint serving end-user data from an access token
+  (an OpenID Connect UserInfo endpoint) must require its extension's context
+  and an `Issuer` equal to the issuer it serves, or it would serve the
+  claims of whatever user shares a subject with a client ID.
+- **Integration contracts.** `prompt=none` forbids any login or consent UI
+  (OIDC Core §3.1.2.3): a raw `ConsentFunc` that renders a page runs before
+  any hook can stop it, so an OpenID provider owns the `ConsentFunc` it
+  hands the application. `CompleteAuthorization` binds the authentication
+  event it records to `Consent.Subject` and refuses a trusted result it did
+  not define. The hooks see the raw `/authorize` form — credentials
+  included when a login form posts to it — and the raw access token: they
+  must never log or persist either.
 
 ### Token-family revocation (storage guarantees)
 
@@ -310,6 +388,13 @@ span catalog.
       revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
+- [ ] Make the `IssuerResolver` return the same issuer for `/authorize` and
+      `/token` of a realm, and authenticate users within
+      `AuthorizeRequest.Issuer` in the `ConsentFunc`.
+- [ ] With `store/sql`, apply the `ALTER TABLE` statements of each release
+      (MIGRATION.md) before deploying it; keep PostgreSQL databases in
+      `UTF8` and MySQL tables in `utf8mb4` with a strict `sql_mode` — a
+      non-strict MySQL truncates an over-long value instead of refusing it.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

@@ -40,6 +40,29 @@ than future refactor phases.
   run on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
   READ COMMITTED on PostgreSQL, InnoDB on MySQL) are argued from their
   locking semantics, not tested.
+- **SQL schema upgrades are manual** — `Store.Migrate` creates missing
+  tables and never alters an existing one: the columns a release adds (#80's
+  `consumed`, #83's `issuer` and `extension_data`) are added with the
+  statements MIGRATION.md lists, through your migration tool.
+- **No RFC 9207 `iss` authorization-response parameter** — `/authorize` does
+  not tell the client which issuer answered. A client talking to several
+  authorization servers (or to several realms of one `IssuerResolver`) must
+  defend against mix-up attacks with a distinct redirect URI per issuer
+  (RFC 9700 §4.4.2.2) until it is added; the issuer is already resolved
+  before any redirected answer, so adding it is local to `/authorize`.
+- **`/introspect` returns no `iss`** — the token's issuer reaches an
+  `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
+- **Duplicated request parameters are not refused** — `/authorize` and
+  `/token` read the first value of a repeated parameter, while RFC 6749 §3.1
+  says request parameters MUST NOT be included more than once. An
+  `oauth2.Extension` sees every value in `r.Form` and can refuse its own.
+- **The `nonce` parameter is not bounded by the core** — `/authorize` records
+  it as sent; an OpenID provider extension bounds it.
+- **`oauth2.Extension` scope** — it extends the `authorization_code` and
+  `refresh_token` exchanges; the implicit flow runs its authorization hooks
+  and records their context, but its fragment members are fixed (RFC 6749
+  §4.2.2), and the `client_credentials` and `password` grants never call it.
+  Response modes are `query` and `fragment` only: `form_post` is refused.
 
 ## Transports
 

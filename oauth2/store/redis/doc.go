@@ -20,6 +20,12 @@
 //     least as long as every token of the family and, once revoked, for
 //     oauth2.FamilyRevocationRetention.
 //
+// Codes and tokens carry their issuer and extension data as optional JSON
+// string fields (issuer, extension_data): a payload written before they
+// existed reads them as empty, and the rotation script reads a missing or
+// null field as the empty string when it checks that a replacement keeps
+// the grant context of the token it replaces.
+//
 // # Deployment requirements
 //
 // The token-family guarantees of oauth2.Storage hold under these

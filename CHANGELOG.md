@@ -108,6 +108,45 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `oauth2.IsCode` and the wire, and carries the retained record for
   `errors.As`.
 
+- **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
+  takes an `oauth2.Extension` — the contract an OpenID Provider (the
+  `oidc/provider` module) builds on, without a second `/token` endpoint and
+  without `oauth2` depending on OIDC or JOSE. `ValidateAuthorizeRequest`
+  validates the extension's own `/authorize` parameters after every core
+  check, its view reaching the `ConsentFunc` as
+  `AuthorizeRequest.ExtensionRequest`; `CompleteAuthorization` turns the
+  application's trusted result (`Consent.ExtensionResult`) into an
+  `oauth2.ExtensionGrant` — a scope that can only narrow the grant, and
+  opaque `Data` (at most `oauth2.MaxExtensionDataLength`, 4096 bytes of UTF-8
+  without NUL) recorded on the code and on every token derived from it, the
+  same across refreshes (OIDC Core §12.2, RFC 9068 §2.2.1);
+  `ExtendTokenResponse` runs in the `authorization_code` and `refresh_token`
+  grants between minting the tokens and their single atomic write, with a
+  copy of the access token (OIDC Core §3.1.3.6 `at_hash`), the grant context
+  and the code's nonce, and returns an `oauth2.TokenResponseExtension` whose
+  `IDToken` becomes the `id_token` member (`GrantResponse.IDToken`). The RFC
+  6749 §5.1 members cannot be overwritten, and no response is partially
+  successful: a hook failure persists nothing, and an `id_token` only travels
+  with a persisted pair. `GrantRequest.Extension` carries the hook to the
+  grants; `oauth2.GrantTypeAuthorizationCode` / `GrantTypeRefreshToken` name
+  the exchanges; `oauth2.ErrUnredirectableRequest` lets a hook refuse
+  without redirecting. See `ExampleExtension`.
+- **OAuth2 consent refusals**: `Consent.Refusal` redirects an
+  authorization-endpoint error instead of `access_denied` — e.g.
+  `oauth2.ErrLoginRequired`, `ErrConsentRequired`, `ErrInteractionRequired`,
+  `ErrAccountSelectionRequired`, the new `Code*` constants and `Err*`
+  sentinels for the nine OIDC Core §3.1.2.6 codes (`ErrRequestNotSupported`,
+  `ErrRequestURINotSupported`, `ErrRegistrationNotSupported`,
+  `ErrInvalidRequestURI`, `ErrInvalidRequestObject`).
+- **OAuth2 grant context on codes and tokens**: `AuthorizationCode`,
+  `AccessToken` and `RefreshToken` gain `Issuer` and `ExtensionData`;
+  `AuthorizeRequest.Issuer` and `IntrospectedToken.Issuer` expose the realm
+  (an `IntrospectionPolicy` can now enforce it, RFC 7662 §4).
+- **OAuth2 refresh-token gate**: `grant.Config.RefreshTokenScope` makes the
+  `authorization_code` and legacy `password` grants issue a refresh token
+  only when the granted scope holds that scope token — e.g.
+  `offline_access` (OIDC Core §11). Opt-in; rotation is unaffected.
+
 ### Changed
 
 - The repository is now a Go workspace (`go.work`) of independent modules,
@@ -157,6 +196,32 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a lost reply no longer fails the exchange; the memory store no longer
   keeps the raw code. Every instance must be upgraded at once. See
   [MIGRATION.md](MIGRATION.md).
+
+- **OAuth2 codes and tokens carry an issuer and a grant context
+  (breaking).** `AuthorizationCode`, `AccessToken` and `RefreshToken` gain
+  `Issuer` and `ExtensionData`, which every store persists byte-exact and
+  returns from every read. `TokenPair.Validate` refuses a refresh token whose
+  issuer or extension data differ from its access token's, and
+  `RotateRefreshToken` refuses, with `invalid_request` and without writing
+  anything, a replacement whose issuer or extension data differ from the
+  presented token's. `store/sql` adds nullable `issuer` and `extension_data`
+  `TEXT` columns to the code and token tables — `Migrate` creates them for new
+  installs only, existing databases apply the `ALTER TABLE` statements of
+  [MIGRATION.md](MIGRATION.md) (an optional single-issuer backfill keeps users
+  signed in); `store/redis` adds optional payload fields. Every instance must
+  be upgraded at once.
+- **OAuth2 `GrantResponse.ExtraParams` removed (breaking)**: it was never
+  serialized. `GrantResponse.IDToken` is the typed member a token response
+  may add (`id_token`).
+- **OAuth2 `/authorize`** resolves the issuer right after the redirect URI is
+  trusted, for both flows: a resolver failure answers a redirected
+  `server_error` before the `ConsentFunc` runs. The `ConsentFunc` gets a copy
+  of the validated request: rewriting it no longer changes the redirect
+  target, the state, the scope or the PKCE parameters. An approval must name
+  its subject — non-empty, at most 255 bytes (OIDC Core §2) — or it is
+  answered `server_error` and issues nothing (breaking for `ConsentFunc`s
+  approving without one). A `ConsentFunc` error still answers `server_error`,
+  whatever the error, and its cause now reaches `OnError`.
 
 ### Fixed
 
@@ -335,3 +400,30 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   clients that sent an empty Basic password — they must use `none` — and
   clients registered as confidential or untyped that authenticated with an
   empty Basic password. See [MIGRATION.md](MIGRATION.md).
+- OAuth2 authorization codes and refresh tokens are bound to the issuer they
+  were issued under (OIDC Core §16.15). In a deployment whose
+  `IssuerResolver` serves several realms, a client could redeem a code
+  authorized at one issuer, or refresh a token issued there, at another one
+  — obtaining tokens, and with an OpenID provider ID Tokens, of realm B for a
+  subject of realm A. Both are now refused with `invalid_grant`; a refused
+  refresh consumes nothing, and a code replayed at another issuer revokes
+  nothing (it could not have redeemed the code). Codes and refresh tokens
+  written before the upgrade carry no issuer and are refused — users
+  re-authenticate — unless the SQL backfill of [MIGRATION.md](MIGRATION.md)
+  applies.
+- OAuth2 `/authorize` refuses a `response_mode` it cannot honor — anything
+  but the response type's default, `query` for the code flow or `fragment`
+  for an enabled implicit flow — with a bare `400` that is never redirected
+  (OAuth 2.0 Multiple Response Type Encoding Practices §2.1; OIDC Core 1.0
+  incorporating errata set 2, §3.1.2.6), before any other check that would
+  redirect. It used to ignore the parameter and answer, code included, in a
+  mode the client had not asked for. This breaks clients sending an
+  unsupported `response_mode` such as `form_post`.
+- OAuth2 error responses keep to the RFC 6749 §4.1.2.1 / §5.2 syntax: a
+  malformed error code from a grant, an extension or a `Consent.Refusal` is
+  answered `server_error` (the original reaching `OnError`), a description or
+  `error_uri` outside the charset is left out, and `/authorize` redirects only
+  the error codes the authorization endpoint defines. The `invalid_scope` and
+  `unsupported_response_type` descriptions no longer quote or echo the
+  request: the former put a double quote, outside the charset, in every
+  `invalid_scope` redirect.
