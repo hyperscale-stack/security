@@ -34,8 +34,8 @@ type issuance struct {
 	extensionData string
 }
 
-// issueTokenPair mints an access token — and, when the config carries a
-// refresh-token generator, a companion refresh token — for iss, lets the
+// issueTokenPair mints an access token — and, when the config issues one
+// for the granted scope, a companion refresh token — for iss, lets the
 // server's extension extend the response, persists the pair atomically,
 // and returns the grant response. It is the shared issuance path of the
 // authorization_code grant, whose family is derived from the code, and of
@@ -51,7 +51,7 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) 
 
 	pair := &oauth2.TokenPair{Access: *access}
 
-	if cfg.RefreshTokens != nil {
+	if cfg.issuesRefreshFor(iss.refreshScope) {
 		if pair.Refresh, err = mintRefresh(ctx, cfg, req, iss); err != nil {
 			return nil, err
 		}

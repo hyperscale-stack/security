@@ -21,6 +21,8 @@ package grant
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -34,7 +36,8 @@ type Config struct {
 	// AccessTokens issues access tokens (opaque or JWT).
 	AccessTokens token.AccessTokenGenerator
 	// RefreshTokens issues refresh tokens. Optional for authorization_code
-	// and password, which emit no refresh token without it. Required by
+	// and password, which emit no refresh token without it — nor for a
+	// grant missing RefreshTokenScope, when that is set. Required by
 	// refresh_token whenever it rotates — always under
 	// [oauth2.Profile20BCP] and [oauth2.Profile21Draft] — since the
 	// replacement is minted with it; see [ErrRotationRequiresGenerator].
@@ -44,6 +47,15 @@ type Config struct {
 	// RefreshTTL is the refresh-token expiry window. Honored when
 	// RefreshTokens is non-nil.
 	RefreshTTL time.Duration
+	// RefreshTokenScope, when set, makes the authorization_code and legacy
+	// password grants issue a refresh token only when the granted scope
+	// holds this exact scope token — e.g. "offline_access", the consent
+	// OpenID Connect Core §11 requires before a refresh token enabling
+	// offline access is returned. Empty, the default, issues one whenever
+	// RefreshTokens is set. A refresh_token exchange keeps rotating the
+	// token it is presented: the replacement keeps that token's scope (RFC
+	// 6749 §6), so the rule governs the grants authorized after it is set.
+	RefreshTokenScope string
 	// RequirePKCE forces PKCE on authorization_code, independently of
 	// public-vs-confidential client type. [oauth2.Profile20BCP] and
 	// [oauth2.Profile21Draft] require PKCE whatever this field says.
@@ -68,6 +80,17 @@ type Config struct {
 	// instead, so wire both to the same sink. Optional; see
 	// [oauth2.ErrorHook].
 	OnError oauth2.ErrorHook
+}
+
+// issuesRefreshFor reports whether an exchange granting scope gets a
+// refresh token: the config carries a generator and, when
+// RefreshTokenScope is set, scope holds it.
+func (c Config) issuesRefreshFor(scope string) bool {
+	if c.RefreshTokens == nil {
+		return false
+	}
+
+	return c.RefreshTokenScope == "" || slices.Contains(strings.Fields(scope), c.RefreshTokenScope)
 }
 
 // notifyError hands err to the configured [oauth2.ErrorHook], if any.
