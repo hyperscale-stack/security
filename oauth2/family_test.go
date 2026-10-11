@@ -24,9 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newClientPair returns a pair issued to the test client in family:
-// refresh token raw and access token raw+"-access", for alice with scope
-// api:read, both valid for an hour.
+// newClientPair returns a pair issued to the test client in family under
+// the test servers' issuer: refresh token raw and access token
+// raw+"-access", for alice with scope api:read, both valid for an hour.
 func newClientPair(raw, family string) *oauth2.TokenPair {
 	now := time.Now()
 
@@ -34,12 +34,12 @@ func newClientPair(raw, family string) *oauth2.TokenPair {
 		Access: oauth2.AccessToken{
 			Token: raw + "-access", TokenHash: oauth2.HashToken(nil, raw+"-access"),
 			ClientID: testClientID, Subject: "alice", Scope: "api:read", Audience: "api",
-			FamilyID: family, IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+			FamilyID: family, IssuedAt: now, ExpiresAt: now.Add(time.Hour), Issuer: "https://auth.example",
 		},
 		Refresh: &oauth2.RefreshToken{
 			Token: raw, TokenHash: oauth2.HashToken(nil, raw),
 			ClientID: testClientID, Subject: "alice", Scope: "api:read",
-			FamilyID: family, IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+			FamilyID: family, IssuedAt: now, ExpiresAt: now.Add(time.Hour), Issuer: "https://auth.example",
 		},
 	}
 }

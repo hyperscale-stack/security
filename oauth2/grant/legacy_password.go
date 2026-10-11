@@ -87,7 +87,11 @@ func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, er
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	return issueTokenPair(ctx, g.cfg, req, subject, scope, familyID)
+	// No authorization precedes this grant: its tokens carry no grant
+	// context.
+	return issueTokenPair(ctx, g.cfg, req, issuance{
+		subject: subject, scope: scope, refreshScope: scope, familyID: familyID,
+	})
 }
 
 // Compile-time interface check.

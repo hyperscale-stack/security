@@ -120,7 +120,7 @@ func codeRequest(t *testing.T, store oauth2.Storage, raw string) grant.Request {
 		Code: raw, CodeHash: oauth2.HashToken(nil, raw),
 		ClientID: clientID, Subject: subject, RedirectURI: redirectURI, Scope: "read:mail",
 		CodeChallenge: codeChallenge, CodeChallengeMethod: string(pkce.MethodS256),
-		IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+		IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Issuer: "https://auth.example",
 	}))
 
 	return grant.Request{

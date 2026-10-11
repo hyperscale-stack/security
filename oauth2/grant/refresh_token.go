@@ -17,8 +17,11 @@ import (
 // The flow:
 //
 //  1. Look up the refresh token; a consumed one (rotated, or of a revoked
-//     family) is reuse: revoke the family and refuse with invalid_grant.
-//  2. Re-bind client (refresh.ClientID MUST match the authenticated client).
+//     family) is reuse: revoke the family and refuse with invalid_grant —
+//     whatever the client or issuer presenting it.
+//  2. Re-bind client (refresh.ClientID MUST match the authenticated client)
+//     and issuer (refresh.Issuer MUST match the issuer resolved for the
+//     request; a token stored without one only matches an empty issuer).
 //  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
 //  4. Decide rotation before minting anything: mandatory under
 //     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
@@ -27,7 +30,10 @@ import (
 //     ([ErrRotationRequiresGenerator]).
 //  5. Mint a fresh access token.
 //  6. When rotating, mint a fresh refresh token in the same family with
-//     the presented token's scope (RFC 6749 §6), then consume the old token
+//     the presented token's scope (RFC 6749 §6) — every minted token keeps
+//     the presented token's issuer and grant context, the authentication
+//     event a refresh rests on never changes (OIDC Core §12.2, RFC 9068
+//     §2.2.1) — then consume the old token
 //     and persist the new pair in one atomic
 //     [oauth2.RefreshTokenStore.RotateRefreshToken]; otherwise persist the
 //     access token alone into the family. Either write fails, persisting
@@ -95,6 +101,10 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued for a different client")
 	}
 
+	if rt.Issuer != req.Issuer {
+		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued by another issuer")
+	}
+
 	scope, err := narrowScopesForRefresh(req.Form.Get("scope"), rt.Scope)
 	if err != nil {
 		return nil, err
@@ -138,7 +148,12 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	access, err := mintAccess(ctx, g.cfg, req, old.Subject, scope, old.FamilyID)
+	iss := issuance{
+		subject: old.Subject, scope: scope, refreshScope: old.Scope,
+		familyID: old.FamilyID, extensionData: old.ExtensionData,
+	}
+
+	access, err := mintAccess(ctx, g.cfg, req, iss)
 	if err != nil {
 		return nil, err
 	}
@@ -156,8 +171,9 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	}
 
 	// RFC 6749 §6: the new refresh token keeps the scope of the one it
-	// replaces; a narrowed request only narrows the access token.
-	if pair.Refresh, err = mintRefresh(ctx, g.cfg, req, old.Subject, old.Scope, old.FamilyID); err != nil {
+	// replaces (iss.refreshScope); a narrowed request only narrows the
+	// access token.
+	if pair.Refresh, err = mintRefresh(ctx, g.cfg, req, iss); err != nil {
 		return nil, err
 	}
 

@@ -54,8 +54,11 @@ type OpaqueTokenGenerator interface {
 }
 
 // AuthorizeRequest is the parsed and validated /authorize request handed to
-// a [ConsentFunc]. By the time the ConsentFunc sees it, the client and the
-// redirect URI are already verified.
+// a [ConsentFunc]. By the time the ConsentFunc sees it, the client, the
+// redirect URI, the response type, the scope and the PKCE parameters are
+// verified and the issuer is resolved. It is a copy: the handler keeps the
+// request it validated, so changing it changes neither the redirect nor
+// what is granted.
 type AuthorizeRequest struct {
 	// Client is the resolved, registered client.
 	Client Client
@@ -78,6 +81,11 @@ type AuthorizeRequest struct {
 	CodeChallengeMethod string
 	// Nonce echoes the OIDC nonce parameter, when present.
 	Nonce string
+	// Issuer is the issuer the IssuerResolver returned for the request: the
+	// realm the authorization code — or implicit access token — is bound
+	// to. A ConsentFunc authenticates the resource owner within it: a
+	// session established at another issuer is no authentication here.
+	Issuer string
 }
 
 // Consent is the resource-owner decision returned by a [ConsentFunc].
@@ -95,8 +103,8 @@ type Consent struct {
 
 // ConsentFunc is the application hook invoked by [Server.AuthorizeHandler]
 // once the /authorize request is validated. The application authenticates
-// the resource owner, renders its own login / consent UI, and returns the
-// decision.
+// the resource owner — within the realm of ar.Issuer —, renders its own
+// login / consent UI, and returns the decision.
 //
 // Return contract:
 //   - (consent, nil): the handler proceeds — it mints the authorization
@@ -132,10 +140,11 @@ type AuthorizeConfig struct {
 // when [AuthorizeConfig.AllowImplicit] is set, the legacy implicit flow.
 //
 // The handler validates the request (client, redirect URI, response type,
-// scope, PKCE) and then calls consent. The library owns the protocol
-// plumbing — request validation, code / token minting, the redirect —
-// while the application owns the login and consent UI through the
-// [ConsentFunc].
+// scope, PKCE), resolves its issuer through the [IssuerResolver] — the
+// realm the code, or implicit token, is bound to — and then calls consent.
+// The library owns the protocol plumbing — request validation, code /
+// token minting, the redirect — while the application owns the login and
+// consent UI through the [ConsentFunc].
 //
 // Errors that occur before the redirect URI is trusted (unknown client,
 // unregistered redirect URI) are returned directly with a 400 status and
@@ -208,31 +217,86 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	state := r.FormValue("state")
-
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	flow, oerr := resolveFlow(cfg, r.FormValue("response_type"))
-	if oerr != nil {
-		// The response type is unknown — default to a query-string error.
-		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, false)
-
+	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI)
+	if !ok {
 		return
 	}
 
-	useFragment := flow == flowImplicit
+	s.authorize(cfg, consent, w, r, st)
+}
+
+// authorizeState is a validated /authorize request: the snapshot the
+// server works from. Callbacks only ever get copies of it, so whatever they
+// do to the [AuthorizeRequest] they are handed, the redirect target, the
+// state, the scope, the PKCE parameters and the issuer the server uses are
+// the ones it validated.
+type authorizeState struct {
+	ar AuthorizeRequest
+	// audience is the audience the IssuerResolver returned with ar.Issuer;
+	// the implicit flow stamps it on its access token.
+	audience string
+	// fragment reports that responses travel in the redirect fragment (the
+	// implicit flow, RFC 6749 §4.2.2) rather than in the query string.
+	fragment bool
+}
+
+// request returns a copy of the validated request for a callback.
+func (st *authorizeState) request() *AuthorizeRequest {
+	ar := st.ar
+
+	return &ar
+}
+
+// validateAuthorize validates the request behind a trusted redirect URI:
+// it resolves the issuer, the flow, the scope and the PKCE parameters, and
+// answers the first failure with a redirect. The issuer comes first, so
+// every later redirect is answered within the realm of the request.
+func (s *Server) validateAuthorize(
+	cfg AuthorizeConfig,
+	w http.ResponseWriter,
+	r *http.Request,
+	client Client,
+	redirectURI string,
+) (*authorizeState, bool) {
+	state := r.FormValue("state")
+
+	// An unsupported response type is answered in the query string.
+	flow, flowErr := resolveFlow(cfg, r.FormValue("response_type"))
+	fragment := flowErr == nil && flow == flowImplicit
+
+	issuer, audience, err := s.cfg.IssuerResolver.Resolve(r.Context(), r)
+	if err != nil {
+		s.redirectAuthorizeError(w, r, redirectURI, state, ErrServerError.WithCause(err), fragment)
+
+		return nil, false
+	}
+
+	if flowErr != nil {
+		s.redirectAuthorizeError(w, r, redirectURI, state, flowErr, false)
+
+		return nil, false
+	}
 
 	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
 	if oerr != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, useFragment)
+		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, fragment)
 
-		return
+		return nil, false
 	}
 
-	decision, err := consent(w, r, ar)
+	ar.Issuer = issuer
+
+	return &authorizeState{ar: *ar, audience: audience, fragment: fragment}, true
+}
+
+// authorize runs the ConsentFunc on a validated request and issues what
+// the resource owner granted.
+func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.ResponseWriter, r *http.Request, st *authorizeState) {
+	decision, err := consent(w, r, st.request())
 	if err != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
-			ErrServerError.WithDescription("consent handler failed"), useFragment)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithDescription("consent handler failed").WithCause(err))
 
 		return
 	}
@@ -243,19 +307,41 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	if !decision.Approved {
-		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
-			ErrAccessDenied.WithDescription("the resource owner denied the request"), useFragment)
+		s.refuseAuthorize(w, r, st, ErrAccessDenied.WithDescription("the resource owner denied the request"))
 
 		return
 	}
 
-	if flow == flowImplicit {
-		s.issueImplicitToken(cfg, w, r, ar, decision)
+	granted, err := grantedScope(&st.ar, decision)
+	if err != nil {
+		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request"))
 
 		return
 	}
 
-	s.issueAuthorizationCode(cfg, w, r, ar, decision)
+	grant := authorizedGrant{subject: decision.Subject, scope: granted, now: s.cfg.Now()}
+
+	if st.fragment {
+		s.issueImplicitToken(cfg, w, r, st, grant)
+
+		return
+	}
+
+	s.issueAuthorizationCode(cfg, w, r, st, grant)
+}
+
+// authorizedGrant is what an approved authorization issues: to whom, which
+// scope, and when.
+type authorizedGrant struct {
+	subject string
+	scope   string
+	now     time.Time
+}
+
+// refuseAuthorize redirects oerr back to the client of the validated
+// request st, in the flow's response mode.
+func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *authorizeState, oerr *Error) {
+	s.redirectAuthorizeError(w, r, st.ar.RedirectURI, st.ar.State, oerr, st.fragment)
 }
 
 // resolveFlow maps the response_type parameter to a flow, refusing the
@@ -348,54 +434,46 @@ func (s *Server) issueAuthorizationCode(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	ar *AuthorizeRequest,
-	decision *Consent,
+	st *authorizeState,
+	grant authorizedGrant,
 ) {
-	granted, err := grantedScope(ar, decision)
-	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
-			ErrInvalidScope.WithDescription("granted scope exceeds the request"), false)
-
-		return
-	}
-
 	raw, err := randomCode()
 	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
-	now := s.cfg.Now()
 	// Authorization codes are stored pepper-free (HashToken(nil, …)); the
 	// authorization_code grant looks them up the same way.
 	code := &AuthorizationCode{
 		Code:                raw,
 		CodeHash:            HashToken(nil, raw),
-		ClientID:            ar.Client.ID(),
-		Subject:             decision.Subject,
-		RedirectURI:         ar.RedirectURI,
-		Scope:               granted,
-		CodeChallenge:       ar.CodeChallenge,
-		CodeChallengeMethod: ar.CodeChallengeMethod,
-		Nonce:               ar.Nonce,
-		IssuedAt:            now,
-		ExpiresAt:           now.Add(cfg.CodeTTL),
+		ClientID:            st.ar.Client.ID(),
+		Subject:             grant.subject,
+		RedirectURI:         st.ar.RedirectURI,
+		Scope:               grant.scope,
+		CodeChallenge:       st.ar.CodeChallenge,
+		CodeChallengeMethod: st.ar.CodeChallengeMethod,
+		Nonce:               st.ar.Nonce,
+		IssuedAt:            grant.now,
+		ExpiresAt:           grant.now.Add(cfg.CodeTTL),
+		Issuer:              st.ar.Issuer,
 	}
 
 	if err := s.cfg.Storage.SaveAuthorizationCode(r.Context(), code); err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
 	params := url.Values{"code": {raw}}
-	if ar.State != "" {
-		params.Set("state", ar.State)
+	if st.ar.State != "" {
+		params.Set("state", st.ar.State)
 	}
 
 	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, false), http.StatusFound)
+	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, false), http.StatusFound)
 }
 
 // issueImplicitToken mints an access token, persists it, and redirects it
@@ -404,46 +482,31 @@ func (s *Server) issueImplicitToken(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	ar *AuthorizeRequest,
-	decision *Consent,
+	st *authorizeState,
+	grant authorizedGrant,
 ) {
-	granted, err := grantedScope(ar, decision)
-	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
-			ErrInvalidScope.WithDescription("granted scope exceeds the request"), true)
-
-		return
-	}
-
-	_, audience, ierr := s.resolveIssuer(r.Context(), r)
-	if ierr != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(ierr), true)
-
-		return
-	}
-
 	raw, hash, err := cfg.ImplicitTokens.Generate(r.Context())
 	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
-	now := s.cfg.Now()
 	at := &AccessToken{
 		Token:     raw,
 		TokenHash: hash,
-		ClientID:  ar.Client.ID(),
-		Subject:   decision.Subject,
-		Scope:     granted,
-		Audience:  audience,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(cfg.ImplicitTTL),
+		ClientID:  st.ar.Client.ID(),
+		Subject:   grant.subject,
+		Scope:     grant.scope,
+		Audience:  st.audience,
+		IssuedAt:  grant.now,
+		ExpiresAt: grant.now.Add(cfg.ImplicitTTL),
+		Issuer:    st.ar.Issuer,
 	}
 
 	// An implicit token belongs to no family: it is never gated by one.
 	if err := s.cfg.Storage.SaveTokenPair(r.Context(), &TokenPair{Access: *at}); err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
@@ -453,16 +516,16 @@ func (s *Server) issueImplicitToken(
 		"token_type":   {TokenTypeBearer},
 		"expires_in":   {strconv.Itoa(int(cfg.ImplicitTTL.Seconds()))},
 	}
-	if granted != "" {
-		params.Set("scope", granted)
+	if grant.scope != "" {
+		params.Set("scope", grant.scope)
 	}
 
-	if ar.State != "" {
-		params.Set("state", ar.State)
+	if st.ar.State != "" {
+		params.Set("state", st.ar.State)
 	}
 
 	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, true), http.StatusFound)
+	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, true), http.StatusFound)
 }
 
 // grantedScope resolves the scope to grant: the consent value when it

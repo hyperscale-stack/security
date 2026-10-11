@@ -151,10 +151,12 @@ func seedTokens(t *testing.T, store *memory.Store) {
 			access: oauth2.AccessToken{
 				TokenHash: oauth2.HashToken(nil, "at-app"), ClientID: "app", Subject: "alice", Scope: "read",
 				Audience: "api", FamilyID: "fam-app", IssuedAt: seededIssuedAt, ExpiresAt: seededAccessExp,
+				Issuer: "https://auth.example",
 			},
 			refresh: oauth2.RefreshToken{
 				TokenHash: oauth2.HashToken(nil, "rt-app"), ClientID: "app", Subject: "alice", Scope: "read",
 				FamilyID: "fam-app", IssuedAt: seededIssuedAt, ExpiresAt: seededRefreshExp,
+				Issuer: "https://auth.example",
 			},
 		},
 		{
@@ -451,12 +453,15 @@ func TestIntrospectionPolicyInputs(t *testing.T) {
 		assert.Equal(t, oauth2.ClientConfidential, c.caller.Type())
 	}
 
+	// The issuer the token was issued under is the realm a policy enforces
+	// (RFC 7662 §4).
 	assert.Equal(t, oauth2.IntrospectedToken{
 		Kind:      oauth2.TokenKindAccess,
 		ClientID:  "app",
 		Subject:   "alice",
 		Scope:     "read",
 		Audience:  "api",
+		Issuer:    "https://auth.example",
 		IssuedAt:  seededIssuedAt,
 		ExpiresAt: seededAccessExp,
 	}, calls[0].token)
@@ -467,6 +472,7 @@ func TestIntrospectionPolicyInputs(t *testing.T) {
 		ClientID:  "app",
 		Subject:   "alice",
 		Scope:     "read",
+		Issuer:    "https://auth.example",
 		IssuedAt:  seededIssuedAt,
 		ExpiresAt: seededRefreshExp,
 	}, calls[1].token)
