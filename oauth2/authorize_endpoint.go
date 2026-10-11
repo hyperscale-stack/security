@@ -99,13 +99,27 @@ type AuthorizeRequest struct {
 type Consent struct {
 	// Approved reports whether the resource owner granted the request.
 	Approved bool
-	// Subject is the authenticated resource-owner identifier. It is
-	// required when Approved is true.
+	// Subject is the authenticated resource-owner identifier. An approval
+	// MUST name one, of at most 255 bytes (OpenID Connect Core §2): an
+	// empty or longer one fails the request with server_error, nothing
+	// issued.
 	Subject string
 	// Scope is the granted scope. Empty means "exactly what was requested";
 	// a non-empty value MUST be a subset of [AuthorizeRequest.Scope] — the
 	// consent step may narrow the grant but never broaden it.
 	Scope string
+	// Refusal, on a decision that does not approve the request, is the
+	// error redirected to the client instead of access_denied — e.g.
+	// [ErrLoginRequired] or [ErrConsentRequired] for an OpenID Connect
+	// prompt=none request the application cannot complete silently (OIDC
+	// Core §3.1.2.6). Only the authorization-endpoint codes of RFC 6749
+	// §4.1.2.1 and OIDC Core §3.1.2.6 travel; any other is answered
+	// server_error. Its Description and URI travel only when they fit the
+	// RFC 6749 §4.1.2.1 charset — otherwise they are left out, the code
+	// kept — and they reach the client's URL, history and logs: never put
+	// personal data in them. An approval carrying a Refusal contradicts
+	// itself and fails closed with server_error.
+	Refusal *Error
 }
 
 // ConsentFunc is the application hook invoked by [Server.AuthorizeHandler]
@@ -114,12 +128,16 @@ type Consent struct {
 // login / consent UI, and returns the decision.
 //
 // Return contract:
-//   - (consent, nil): the handler proceeds — it mints the authorization
-//     code (or implicit token) and redirects to the client's redirect URI.
+//   - (consent, nil): the handler proceeds. An approval mints the
+//     authorization code (or implicit token) and redirects to the client's
+//     redirect URI; a refusal redirects its Refusal, or access_denied.
 //   - (nil, nil): the ConsentFunc has already written a response to w
 //     (typically the login / consent page on the initial GET); the handler
 //     does nothing more.
-//   - (nil, err): the handler redirects to the client with a server_error.
+//   - (nil, err): the ConsentFunc failed: the handler redirects to the
+//     client with a server_error, whatever err — an [*Error] included,
+//     since a refusal is a decision, returned as [Consent.Refusal] — and
+//     hands err to the [ErrorHook].
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -327,8 +345,8 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 		return
 	}
 
-	if !decision.Approved {
-		s.refuseAuthorize(w, r, st, ErrAccessDenied.WithDescription("the resource owner denied the request"))
+	if oerr := checkDecision(decision); oerr != nil {
+		s.refuseAuthorize(w, r, st, oerr)
 
 		return
 	}
@@ -349,6 +367,40 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 	}
 
 	s.issueAuthorizationCode(cfg, w, r, st, grant)
+}
+
+// maxSubjectLength is the longest Consent.Subject, in bytes, an approval
+// may name: OpenID Connect Core 1.0 §2 caps sub at 255 ASCII characters,
+// and the SQL store keeps subjects in a VARCHAR(255) column.
+const maxSubjectLength = 255
+
+// Why a decision is refused although the ConsentFunc did not fail. They are
+// the causes the ErrorHook gets; the client gets a bare server_error.
+var (
+	errContradictoryDecision = errors.New("oauth2: consent approved the request and refused it")
+	errMissingSubject        = errors.New("oauth2: consent approved the request without a subject")
+	errLongSubject           = errors.New("oauth2: consent approved a subject longer than 255 bytes")
+)
+
+// checkDecision returns the answer to a decision that does not approve the
+// request — its Refusal, or access_denied — or that cannot be honored: an
+// approval carrying a Refusal, or naming no or an over-long subject, fails
+// closed with server_error. It returns nil for a valid approval.
+func checkDecision(d *Consent) *Error {
+	switch {
+	case d.Approved && d.Refusal != nil:
+		return ErrServerError.WithCause(errContradictoryDecision).WithCause(d.Refusal)
+	case d.Refusal != nil:
+		return d.Refusal
+	case !d.Approved:
+		return ErrAccessDenied.WithDescription("the resource owner denied the request")
+	case d.Subject == "":
+		return ErrServerError.WithCause(errMissingSubject)
+	case len(d.Subject) > maxSubjectLength:
+		return ErrServerError.WithCause(errLongSubject)
+	default:
+		return nil
+	}
 }
 
 // authorizedGrant is what an approved authorization issues: to whom, which
@@ -627,9 +679,12 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 }
 
 // redirectAuthorizeError sends an RFC 6749 §4.1.2.1 / §4.2.2.1 error
-// response by redirecting back to the client's redirect URI. The envelope —
-// cause included — is handed to the configured [ErrorHook] first: the
-// redirect carries only the code and the description.
+// response by redirecting back to the client's redirect URI. Only a code
+// the authorization endpoint defines travels (authorizeErrorCodes), any
+// other is answered server_error; a description or error_uri outside the
+// RFC 6749 charset is left out. The envelope — cause included — is handed
+// to the configured [ErrorHook] first: the redirect carries only the code,
+// the description and the URI.
 func (s *Server) redirectAuthorizeError(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -637,11 +692,16 @@ func (s *Server) redirectAuthorizeError(
 	oerr *Error,
 	useFragment bool,
 ) {
+	oerr = authorizeWireError(oerr)
 	s.notifyError(r.Context(), oerr)
 
 	params := url.Values{"error": {oerr.Code}}
-	if oerr.Description != "" {
-		params.Set("error_description", oerr.Description)
+	if desc := wireDescription(oerr.Description); desc != "" {
+		params.Set("error_description", desc)
+	}
+
+	if uri := wireURI(oerr.URI); uri != "" {
+		params.Set("error_uri", uri)
 	}
 
 	if state != "" {

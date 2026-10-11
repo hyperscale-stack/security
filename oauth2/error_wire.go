@@ -76,3 +76,38 @@ func jsonWireError(oe *Error) *Error {
 
 	return ErrServerError.WithCause(oe)
 }
+
+// authorizeErrorCodes are the codes an authorization error response may
+// carry: RFC 6749 §4.1.2.1 / §4.2.2.1 and the OpenID Connect Core 1.0
+// §3.1.2.6 extensions registered for the authorization endpoint (RFC 6749
+// §8.5, §11.4). Token-endpoint codes, and codes no registry ties to the
+// authorization endpoint, are not among them.
+var authorizeErrorCodes = map[string]struct{}{
+	CodeInvalidRequest:           {},
+	CodeUnauthorizedClient:       {},
+	CodeAccessDenied:             {},
+	CodeUnsupportedResponseType:  {},
+	CodeInvalidScope:             {},
+	CodeServerError:              {},
+	CodeTemporarilyUnavailable:   {},
+	CodeInteractionRequired:      {},
+	CodeLoginRequired:            {},
+	CodeAccountSelectionRequired: {},
+	CodeConsentRequired:          {},
+	CodeInvalidRequestURI:        {},
+	CodeInvalidRequestObject:     {},
+	CodeRequestNotSupported:      {},
+	CodeRequestURINotSupported:   {},
+	CodeRegistrationNotSupported: {},
+}
+
+// authorizeWireError returns the envelope an authorization error response
+// carries for oe: oe itself when its code is one of authorizeErrorCodes,
+// a server_error wrapping it otherwise.
+func authorizeWireError(oe *Error) *Error {
+	if _, ok := authorizeErrorCodes[oe.Code]; ok {
+		return oe
+	}
+
+	return ErrServerError.WithCause(oe)
+}

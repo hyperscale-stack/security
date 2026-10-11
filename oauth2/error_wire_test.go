@@ -80,8 +80,8 @@ func TestTokenErrorsStayWithinTheRFC6749Charset(t *testing.T) {
 			wantCode: oauth2.CodeInvalidGrant, wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
 		},
 		{
-			name: "valid description and error_uri",
-			err:  &oauth2.Error{Code: oauth2.CodeInvalidGrant, Description: "grant expired", URI: "https://docs.example/errors#grant"},
+			name:     "valid description and error_uri",
+			err:      &oauth2.Error{Code: oauth2.CodeInvalidGrant, Description: "grant expired", URI: "https://docs.example/errors#grant"},
 			wantCode: oauth2.CodeInvalidGrant, wantDesc: "grant expired", wantURI: "https://docs.example/errors#grant",
 			wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
 		},

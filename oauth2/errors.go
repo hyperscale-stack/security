@@ -73,6 +73,62 @@ const (
 	CodeTemporarilyUnavailable  = "temporarily_unavailable"
 )
 
+// The OpenID Connect Core 1.0 §3.1.2.6 error codes, registered in the IANA
+// OAuth Extensions Error Registry for the authorization endpoint (RFC 6749
+// §8.5). Like the RFC 6749 §4.1.2.1 codes, they may travel back to the
+// client in an authorization error response — a [Consent.Refusal], or an
+// error an [Extension] returns.
+const (
+	CodeInteractionRequired      = "interaction_required"
+	CodeLoginRequired            = "login_required"
+	CodeAccountSelectionRequired = "account_selection_required"
+	CodeConsentRequired          = "consent_required"
+	CodeInvalidRequestURI        = "invalid_request_uri"
+	CodeInvalidRequestObject     = "invalid_request_object"
+	CodeRequestNotSupported      = "request_not_supported"
+	CodeRequestURINotSupported   = "request_uri_not_supported"
+	CodeRegistrationNotSupported = "registration_not_supported"
+)
+
+// Sentinels for the OpenID Connect Core 1.0 §3.1.2.6 error codes — the
+// answers to an authentication request that cannot be completed without
+// interaction (prompt=none) or that uses a parameter the server does not
+// support. They read 400 through HTTPStatus but are meant to be
+// redirected: return one as a [Consent.Refusal].
+var (
+	// ErrInteractionRequired -> interaction_required: the request needs
+	// some end-user interaction.
+	ErrInteractionRequired = newCoded(CodeInteractionRequired, "end-user interaction is required", security.ErrAccessDenied)
+	// ErrLoginRequired -> login_required: the request needs the end-user to
+	// authenticate.
+	ErrLoginRequired = newCoded(CodeLoginRequired, "end-user authentication is required", security.ErrAccessDenied)
+	// ErrAccountSelectionRequired -> account_selection_required: the
+	// end-user must select one of their sessions.
+	ErrAccountSelectionRequired = newCoded(CodeAccountSelectionRequired,
+		"end-user account selection is required", security.ErrAccessDenied)
+	// ErrConsentRequired -> consent_required: the request needs the
+	// end-user's consent.
+	ErrConsentRequired = newCoded(CodeConsentRequired, "end-user consent is required", security.ErrAccessDenied)
+	// ErrInvalidRequestURI -> invalid_request_uri: the request_uri
+	// returns an error or invalid data.
+	ErrInvalidRequestURI = newCoded(CodeInvalidRequestURI, "the request_uri is invalid", security.ErrInvalidCredentials)
+	// ErrInvalidRequestObject -> invalid_request_object: the request
+	// parameter carries an invalid request object.
+	ErrInvalidRequestObject = newCoded(CodeInvalidRequestObject, "the request object is invalid", security.ErrInvalidCredentials)
+	// ErrRequestNotSupported -> request_not_supported: the request
+	// parameter is not supported.
+	ErrRequestNotSupported = newCoded(CodeRequestNotSupported,
+		"the request parameter is not supported", security.ErrUnsupportedCredential)
+	// ErrRequestURINotSupported -> request_uri_not_supported: the
+	// request_uri parameter is not supported.
+	ErrRequestURINotSupported = newCoded(CodeRequestURINotSupported,
+		"the request_uri parameter is not supported", security.ErrUnsupportedCredential)
+	// ErrRegistrationNotSupported -> registration_not_supported: the
+	// registration parameter is not supported.
+	ErrRegistrationNotSupported = newCoded(CodeRegistrationNotSupported,
+		"the registration parameter is not supported", security.ErrUnsupportedCredential)
+)
+
 // Sentinel constructors returning *Error values. They wrap the core security
 // sentinels so HTTP / gRPC error mappers route them to the right status.
 var (
