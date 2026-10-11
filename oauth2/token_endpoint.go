@@ -151,7 +151,8 @@ type errorResponse struct {
 }
 
 // writeOAuthError serializes err as an RFC 6749 §5.2 envelope. Non-OAuth
-// errors collapse to server_error so the wire response stays compliant.
+// errors, and *Error values whose code is malformed, collapse to
+// server_error so the wire response stays compliant.
 //
 // The normalized envelope — cause included — is handed to the configured
 // [ErrorHook] before anything is written, since the wire body carries only
@@ -162,18 +163,24 @@ func (s *Server) writeOAuthError(ctx context.Context, w http.ResponseWriter, err
 		oe = ErrServerError.WithCause(err)
 	}
 
+	oe = jsonWireError(oe)
+
 	s.notifyError(ctx, oe)
 	writeErrorResponse(w, oe)
 }
 
 // writeErrorResponse writes oe as the RFC 6749 §5.2 JSON body, with the
-// status code it maps to. It does not notify the [ErrorHook]: callers that
-// already reported the failure behind oe use it directly.
+// status code it maps to: a malformed code is answered server_error, and a
+// description or error_uri outside the RFC 6749 charset is left out. It
+// does not notify the [ErrorHook]: callers that already reported the
+// failure behind oe use it directly.
 func writeErrorResponse(w http.ResponseWriter, oe *Error) {
+	oe = jsonWireError(oe)
+
 	body := errorResponse{
 		Error:            oe.Code,
-		ErrorDescription: oe.Description,
-		ErrorURI:         oe.URI,
+		ErrorDescription: wireDescription(oe.Description),
+		ErrorURI:         wireURI(oe.URI),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

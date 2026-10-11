@@ -38,6 +38,13 @@ const (
 	responseTypeToken = "token"
 )
 
+// The response_mode values of the response types above (OAuth 2.0
+// Multiple Response Type Encoding Practices §2.1).
+const (
+	responseModeQuery    = "query"
+	responseModeFragment = "fragment"
+)
+
 // authorizeFlow identifies which /authorize flow a request runs.
 type authorizeFlow int
 
@@ -149,8 +156,13 @@ type AuthorizeConfig struct {
 // Errors that occur before the redirect URI is trusted (unknown client,
 // unregistered redirect URI) are returned directly with a 400 status and
 // are NOT redirected, per RFC 6749 §4.1.2.1 (open-redirector protection).
-// Every later error is redirected back to the client — in the query string
-// for the code flow, in the fragment for the implicit flow.
+// So is a response_mode other than the one the handler answers in —
+// fragment for an enabled implicit flow, query otherwise (OAuth 2.0
+// Multiple Response Type Encoding Practices §2.1; OIDC Core 1.0
+// incorporating errata set 2, §3.1.2.6). Every later error is redirected
+// back to the client — in the query string for the code flow, in the
+// fragment for the implicit flow — and only with an error code the
+// authorization endpoint defines.
 //
 // AuthorizeHandler panics on a nil consent, and on an implicit-flow
 // misconfiguration (AllowImplicit on a non-Profile20 server, or without an
@@ -213,6 +225,15 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	if !ok {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri"))
 		http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
+
+		return
+	}
+
+	// The response mode decides how every later answer travels: one the
+	// handler cannot honor leaves no way to answer the client at all.
+	if !responseModeSupported(cfg, r) {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("unsupported response_mode"))
+		http.Error(w, "oauth2: unsupported response_mode", http.StatusBadRequest)
 
 		return
 	}
@@ -344,8 +365,31 @@ func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *aut
 	s.redirectAuthorizeError(w, r, st.ar.RedirectURI, st.ar.State, oerr, st.fragment)
 }
 
+// responseModeSupported reports whether the request's response_mode is
+// the mode the handler answers in (OAuth 2.0 Multiple Response Type
+// Encoding Practices §2.1): fragment for the implicit flow when it is
+// enabled (RFC 6749 §4.2.2), query for every other request, errors
+// included. An absent or empty one (RFC 6749 §3.1) is that default. Any
+// other value — the other mode, form_post, an unknown one — cannot be
+// honored, and the answer could not even be encoded as the client
+// expects: OIDC Core 1.0 incorporating errata set 2, §3.1.2.6, answers it
+// with a bare 400 Bad Request.
+func responseModeSupported(cfg AuthorizeConfig, r *http.Request) bool {
+	mode := r.FormValue("response_mode")
+	if mode == "" {
+		return true
+	}
+
+	if cfg.AllowImplicit && r.FormValue("response_type") == responseTypeToken {
+		return mode == responseModeFragment
+	}
+
+	return mode == responseModeQuery
+}
+
 // resolveFlow maps the response_type parameter to a flow, refusing the
-// implicit flow when it is not enabled.
+// implicit flow when it is not enabled. The description never echoes the
+// request.
 func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Error) {
 	switch responseType {
 	case responseTypeCode:
@@ -357,8 +401,7 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 
 		return flowImplicit, nil
 	default:
-		return 0, ErrUnsupportedResponseType.WithDescription(
-			"response_type " + responseType + " is not supported")
+		return 0, ErrUnsupportedResponseType.WithDescription("response_type is not supported")
 	}
 }
 
@@ -560,6 +603,10 @@ func resolveRedirectURI(client Client, requested string) (string, bool) {
 	return "", false
 }
 
+// errScopeNotAllowed reports a requested scope outside the allowed set. Its
+// text is the error_description: it never echoes the request.
+var errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+
 // authorizeScope checks that every requested scope is in the allowed set
 // and returns the normalized (space-joined) scope. An empty allowed set
 // means the client carries no scope restriction.
@@ -572,7 +619,7 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 
 	for _, s := range fields {
 		if !slices.Contains(allowed, s) {
-			return "", fmt.Errorf("scope %q is not allowed for this client", s)
+			return "", errScopeNotAllowed
 		}
 	}
 
