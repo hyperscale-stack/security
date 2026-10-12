@@ -69,7 +69,9 @@ func authMethodsServer(t *testing.T) (*oauth2.Server, *countingClients) {
 // client than the one authenticated is invalid_request (RFC 6749 §5.2:
 // "includes multiple credentials, utilizes more than one mechanism for
 // authenticating the client") — the first two before any client is loaded.
-// A body client_id naming the authenticated client is accepted (§3.2.1).
+// An empty occurrence hides nothing (RFC 6749 §3.1): a body credential
+// after one counts. A body client_id naming the authenticated client is
+// accepted (§3.2.1).
 func TestOneClientAuthenticationMethodPerRequest(t *testing.T) {
 	t.Parallel()
 
@@ -96,9 +98,13 @@ func TestOneClientAuthenticationMethodPerRequest(t *testing.T) {
 			http.StatusBadRequest, "more than one client authentication method", true},
 		{"a wrong basic and a body secret", []string{basic("machine", "wrong")}, url.Values{"client_id": {"machine"}, "client_secret": {"machine-secret"}},
 			http.StatusBadRequest, "more than one client authentication method", true},
+		{"basic and a body secret after an empty one", []string{basic("machine", "machine-secret")}, url.Values{"client_secret": {"", "wrong"}},
+			http.StatusBadRequest, "more than one client authentication method", true},
 		{"two Authorization fields", []string{basic("machine", "machine-secret"), basic("machine", "machine-secret")}, url.Values{},
 			http.StatusBadRequest, "more than one Authorization header", true},
 		{"basic and another body client_id", []string{basic("machine", "machine-secret")}, url.Values{"client_id": {"spa"}},
+			http.StatusBadRequest, "client_id does not name the authenticated client", false},
+		{"basic and another body client_id after an empty one", []string{basic("machine", "machine-secret")}, url.Values{"client_id": {"", "spa"}},
 			http.StatusBadRequest, "client_id does not name the authenticated client", false},
 		{"basic and a case variant of its client_id", []string{basic("machine", "machine-secret")}, url.Values{"client_id": {"MACHINE"}},
 			http.StatusBadRequest, "client_id does not name the authenticated client", false},

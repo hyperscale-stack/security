@@ -185,7 +185,8 @@ func TestAuthorizeParameterInQueryAndBody(t *testing.T) {
 // TestAuthorizeEmptyRepetitionIsNoRepetition pins RFC 6749 §3.1:
 // "Parameters sent without a value MUST be treated as if they were omitted
 // from the request" — an empty occurrence repeats nothing, and never hides
-// the value that follows it from the server.
+// the value that follows it from the server: a redirect_uri after an empty
+// occurrence was included, so the token request must carry it (§4.1.3).
 func TestAuthorizeEmptyRepetitionIsNoRepetition(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +218,53 @@ func TestAuthorizeEmptyRepetitionIsNoRepetition(t *testing.T) {
 	require.NotNil(t, seen)
 	assert.Equal(t, "write", seen.Scope)
 	assert.Equal(t, "later", seen.State)
+
+	form := codeExchangeForm(params.Get("code"))
+	form.Del("redirect_uri")
+
+	rec = env.token(form, "machine", "machine-secret")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, oauth2.CodeInvalidGrant, jsonBody(t, rec)["error"])
+}
+
+// TestAuthorizeEmptyOccurrenceHidesNoGuardedValue: the checks made before
+// the redirect URI is trusted read the value after an empty occurrence too
+// (RFC 6749 §3.1) — the client, the redirect URI among several registered
+// ones, the response mode.
+func TestAuthorizeEmptyOccurrenceHidesNoGuardedValue(t *testing.T) {
+	t.Parallel()
+
+	const other = "https://app.example/other"
+
+	client := confidentialClient([]string{oauth2.GrantTypeAuthorizationCode}, []string{"read"})
+	client.RedirectURIValues = []string{redirectURI, other}
+
+	t.Run("client_id and redirect_uri", func(t *testing.T) {
+		t.Parallel()
+
+		q := machineQuery()
+		q.Del("client_id")
+		q.Del("redirect_uri")
+
+		env := newPolicyEnv(t, oauth2.Profile20BCP, client)
+		rec, consented := authorizeRaw(env, "client_id=&client_id=machine&redirect_uri=&redirect_uri="+url.QueryEscape(other)+"&"+q.Encode())
+		require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
+		assert.True(t, consented)
+
+		loc := mustLocation(t, rec)
+		assert.Equal(t, other, loc.Scheme+"://"+loc.Host+loc.Path)
+		assert.NotEmpty(t, loc.Query().Get("code"))
+	})
+
+	t.Run("response_mode", func(t *testing.T) {
+		t.Parallel()
+
+		env := newPolicyEnv(t, oauth2.Profile20BCP, client)
+		rec, consented := authorizeRaw(env, "response_mode=&response_mode=fragment&"+machineQuery().Encode())
+		require.Equal(t, http.StatusBadRequest, rec.Code, "the code flow is not answered in the fragment")
+		assert.Empty(t, rec.Header().Get("Location"))
+		assert.False(t, consented)
+	})
 }
 
 // TestAuthorizeIgnoresRepeatedUnknownParameters pins RFC 6749 §3.1: "The
@@ -299,7 +347,7 @@ func TestTokenEmptyRepetitionIsNoRepetition(t *testing.T) {
 
 	env := repeatedParamsEnv(t)
 
-	rec := env.postRaw(env.srv.TokenHandler(), "grant_type=client_credentials&scope=&scope=read", "machine", "machine-secret")
+	rec := env.postRaw(env.srv.TokenHandler(), "grant_type=&grant_type=client_credentials&scope=&scope=read", "machine", "machine-secret")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Equal(t, "read", jsonBody(t, rec)["scope"])
 
@@ -370,6 +418,34 @@ func TestTokenLookupParametersRepeated(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestTokenLookupEmptyRepetitionIsNoRepetition: at /introspect and /revoke
+// too, an empty occurrence is omitted — the token that follows it is the
+// one described, then revoked.
+func TestTokenLookupEmptyRepetitionIsNoRepetition(t *testing.T) {
+	t.Parallel()
+
+	env := repeatedParamsEnv(t)
+
+	rec := env.token(url.Values{"grant_type": {oauth2.GrantTypeClientCredentials}, "scope": {"read"}}, "machine", "machine-secret")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	accessToken, _ := jsonBody(t, rec)["access_token"].(string)
+	require.NotEmpty(t, accessToken)
+
+	body := "token=&token=" + url.QueryEscape(accessToken) + "&token_type_hint=&token_type_hint=access_token"
+
+	rec = env.postRaw(env.srv.IntrospectHandler(), body, "machine", "machine-secret")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, true, jsonBody(t, rec)["active"])
+
+	rec = env.postRaw(env.srv.RevokeHandler(), body, "machine", "machine-secret")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = env.postRaw(env.srv.IntrospectHandler(), "token="+url.QueryEscape(accessToken), "machine", "machine-secret")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, false, jsonBody(t, rec)["active"], "the token after the empty occurrence was revoked")
 }
 
 // TestUnsupportedGrantTypeDoesNotEchoTheRequest: the unsupported_grant_type
