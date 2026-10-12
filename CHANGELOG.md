@@ -618,6 +618,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   their secrets with the verbs their `String` method does not cover (`%d`,
   `%t`…). Every one now prints its redacted form with every verb
   (`fmt.Formatter`) and logs without secrets in `slog` (#86).
+- `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
+  or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
+  `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key
+  set holding one (fmt prints the unexported fields of a struct pointer),
+  and `encoding/json` — so `slog`'s JSON handler — wrote the material of
+  every private key. Keys, signers, key sets, verifiers and
+  `OAuth2AccessTokenSigner` now print, log and encode their key IDs,
+  algorithms and key types only, whatever the verb; an asymmetric
+  `PublicKey` still encodes as before (#86).
 - Multi-issuer deployments can keep each client in its realm: with the
   `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
   can no longer send another issuer's end-users to that issuer's login page

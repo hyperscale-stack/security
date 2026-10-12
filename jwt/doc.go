@@ -22,6 +22,10 @@
 //   - Explicit typing (RFC 8725 §3.11): signers write a "typ" header —
 //     "JWT" by default, "at+jwt" for the RFC 9068 access tokens of
 //     NewOAuth2AccessTokenSigner — and WithType makes a verifier require one.
+//   - Key material is never printed: keys, signers, key sets and verifiers
+//     print (every fmt verb), log (slog) and JSON-encode key IDs,
+//     algorithms and key types only; an asymmetric PublicKey still
+//     JSON-encodes its public fields.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

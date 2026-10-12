@@ -664,6 +664,24 @@ To migrate:
    `jwtsec.WithType(jwtsec.TypeAccessToken)` to their verifier (RFC 9068 §4).
    A verifier that compared `typ` with `JWT` must accept `at+jwt` now.
 
+### `jwt`: keys print, log and encode without their material (#86)
+
+A `jwtsec.PrivateKey` holding an Ed25519 or HMAC key — or an HMAC secret
+carried as a `PublicKey` — printed its material with `fmt`, and so did a
+`Signer` or a static key set holding one; `encoding/json` wrote the material
+of every private key, so `slog`'s JSON handler logged it:
+
+| | Before | After |
+| --- | --- | --- |
+| `fmt` of a key, a `Signer`, a `NewStaticJWKS` provider or key set, a `Verifier`, an `OAuth2AccessTokenSigner` | Ed25519 and HMAC key bytes (`%v` and most verbs) | key IDs, algorithm and key type, e.g. `jwtsec.PrivateKey{KeyID: "k1", Algorithm: EdDSA, Key: ed25519.PrivateKey REDACTED}`, whatever the verb |
+| `log/slog` of a key | its fields | `kid`, `alg` and the key type |
+| `encoding/json` of a `PrivateKey` or an HMAC `PublicKey` | the key material | `{"KeyID": …, "Algorithm": …, "Key": "<key type> REDACTED"}` |
+| `encoding/json` of an asymmetric `PublicKey` | its public fields | unchanged |
+
+Nothing to migrate unless code serialized private keys with `encoding/json`
+— it could not read them back (`Key` is an interface). Publish public keys
+with `MarshalJWKS`; keep private keys in a secret store.
+
 ### `oauth2`: clients can be bound to the issuers they are registered at (#84)
 
 With one `ClientStore` behind an `IssuerResolver` that serves several
