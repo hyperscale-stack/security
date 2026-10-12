@@ -13,6 +13,7 @@ import (
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/grant"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -333,4 +334,40 @@ func TestNonConfidentialRefreshWithoutAGeneratorFailsClosed(t *testing.T) {
 			assert.Zero(t, spy.calls, "nothing minted")
 		})
 	}
+}
+
+// TestRefreshTokenRefusalsCarryTheirCause: a refresh refused because the
+// client declares no scope at all carries ErrNoScopesDeclared; a malformed
+// narrowing scope carries the scopes sentinel. Neither consumes anything.
+func TestRefreshTokenRefusalsCarryTheirCause(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	seedRefresh(t, store, "cause-rt", "read:mail", time.Now().Add(time.Hour))
+
+	g := grant.NewRefreshToken(grant.Config{
+		Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),
+		AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour,
+	})
+
+	undeclared := &oauth2.DefaultClient{
+		IDValue: clientID, TypeValue: oauth2.ClientConfidential, GrantTypeValues: []string{oauth2.GrantTypeRefreshToken},
+	}
+
+	_, err := g.Handle(context.Background(), grant.Request{
+		Client: undeclared, Form: url.Values{"refresh_token": {"cause-rt"}}, Now: time.Now(), Issuer: "https://auth.example",
+	})
+	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
+	assert.ErrorIs(t, err, oauth2.ErrNoScopesDeclared)
+
+	_, err = g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: url.Values{"refresh_token": {"cause-rt"}, "scope": {"read:mail\tadmin"}},
+		Now: time.Now(), Issuer: "https://auth.example",
+	})
+	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
+	assert.ErrorIs(t, err, scopes.ErrMalformed)
+
+	stored, err := store.LookupRefreshToken(context.Background(), oauth2.HashToken(nil, "cause-rt"))
+	require.NoError(t, err)
+	assert.False(t, stored.Consumed, "nothing consumed")
 }
