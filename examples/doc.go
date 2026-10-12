@@ -20,4 +20,5 @@
 //   - oauth2            — OAuth2 authorization server + Bearer resource server.
 //   - oidc-client       — OpenID Connect sign-in through external providers.
 //   - oidc-provider     — OpenID Provider with its own login and consent pages.
+//   - saml-sp           — SAML 2.0 Service Provider: SP-initiated login with an enterprise IdP.
 package examples

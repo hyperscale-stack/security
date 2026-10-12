@@ -27,9 +27,12 @@ replace github.com/hyperscale-stack/security/oidc/client => ../oidc/client
 
 replace github.com/hyperscale-stack/security/oidc/provider => ../oidc/provider
 
+replace github.com/hyperscale-stack/security/saml/sp => ../saml/sp
+
 require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/grpchealth v1.5.0
+	github.com/beevik/etree v1.8.1
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/basic v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000
@@ -41,7 +44,9 @@ require (
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/password v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/saml/sp v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/session v0.0.0-00010101000000-000000000000
+	github.com/russellhaering/goxmldsig v1.6.1
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.2
 )
@@ -51,6 +56,9 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
+	github.com/mattermost/xml-roundtrip-validator v0.1.0 // indirect
+	github.com/russellhaering/gosaml2 v0.12.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
