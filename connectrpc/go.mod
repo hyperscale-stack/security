@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/connectrpc
 
-go 1.26.5
+go 1.27.2
 
 require (
 	connectrpc.com/connect v1.21.0

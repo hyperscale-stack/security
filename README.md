@@ -42,6 +42,9 @@ The core module also ships `…/security/outbound`, an SSRF-safe
 
 ## Install
 
+Every module requires **Go 1.27.2** or later (`go` line of each `go.mod`);
+with the default `GOTOOLCHAIN=auto` an older go command downloads it.
+
 ```sh
 go get github.com/hyperscale-stack/security
 go get github.com/hyperscale-stack/security/http   # and any other module you need

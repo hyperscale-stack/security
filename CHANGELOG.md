@@ -514,6 +514,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
   without the client secret and the keys, whatever the `fmt` verb. The example
   reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
+- **Go 1.27.2 minimum** (breaking): every module and `go.work` declare
+  `go 1.27.2`, so no consumer can build the library with a toolchain that
+  carries the standard-library advisories of go1.26.5, the version CI tested
+  with until now (HTTP/2 crashes, request smuggling, `crypto/tls`,
+  `encoding/asn1`; govulncheck finds none on go1.27.2). CI runs the version
+  `go.work` names. See [MIGRATION.md](MIGRATION.md).
 - **Development tools in their own modules**: golangci-lint (v2.14.0, Go
   1.27 support), govulncheck (v1.9.0) and mockery (v3.8.1) are pinned in one
   module each under `tools/`, outside `go.work`. The core module no longer

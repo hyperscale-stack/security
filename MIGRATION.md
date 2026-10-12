@@ -794,3 +794,45 @@ To migrate:
 2. A `Profile20` client that sends a `code_verifier` without having sent a
    `code_challenge` now fails: send the matching `code_challenge` (S256) in
    its authorization requests, or stop sending the verifier.
+
+### Toolchain: every module requires Go 1.27.2
+
+Every `go.mod`, and `go.work`, now declares `go 1.27.2`. Since Go 1.21 the
+`go` line is a minimum: a module that requires one of ours must declare
+`go 1.27.2` or later, and building it needs a go1.27.2 or later toolchain.
+The modules used to declare `go 1.26.0` or `go 1.26.5`, and the toolchain CI
+tested with (go1.26.5) carries standard-library advisories reachable from
+the library's own call paths: HTTP/2 server crashes and request smuggling in
+`net/http`, `crypto/tls`, `encoding/asn1`, `net/url`, `encoding/xml`. All of
+them are fixed in go1.27.2, on which `govulncheck` reports none.
+
+|                                            | Before                    | After                                                      |
+| ------------------------------------------ | ------------------------- | ---------------------------------------------------------- |
+| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.2`                                                |
+| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.2 or later (switched to under `GOTOOLCHAIN=auto`)   |
+| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.2, read from `go.work`                              |
+
+Behaviour the Go 1.27 floor brings to every consumer (Go 1.27 release
+notes):
+
+- `encoding/json` runs on the `encoding/json/v2` implementation: what is
+  marshaled and unmarshaled is unchanged, but error texts may differ, so
+  never match on them;
+- `net/http`: closing an HTTP/1 `Response.Body` drains the unread content;
+- `crypto/x509`: on darwin and windows `SystemCertPool` honours
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` (`GODEBUG=x509sslcertoverrideplatform=0`
+  restores the platform verifier);
+- `compress/flate` (and so `gzip`) output differs from Go 1.26 for the same
+  input.
+
+To migrate:
+
+1. Set your module's `go` line to `1.27.2` or later: `go get` of one of our
+   modules does it, or run `go mod edit -go=1.27.2`.
+2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.2
+   from the module proxy, verified by the checksum database. Where
+   `GOTOOLCHAIN=local` (some Linux distributions, hermetic CI), install
+   go1.27.2 or later first: an older toolchain stops with
+   `go.mod requires go >= 1.27.2`.
+3. Build and ship with the latest Go patch release: the `go` line is a
+   floor, not the toolchain to release with.

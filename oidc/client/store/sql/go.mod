@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/oidc/client/store/sql
 
-go 1.26.5
+go 1.27.2
 
 require (
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000

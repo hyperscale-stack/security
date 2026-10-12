@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/saml/sp/store/redis
 
-go 1.26.5
+go 1.27.2
 
 replace github.com/hyperscale-stack/security/saml/sp => ../../
 

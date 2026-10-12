@@ -153,7 +153,8 @@ for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
 for the OIDC client and SAML SP stores, which also replace
 `oidc/client => ../../` or `saml/sp => ../../`) plus
 one per in-repo module of its graph, so local dev works without published
-versions. New modules declare `go 1.26.5`, like the core.
+versions. New modules declare `go 1.27.2`: every `go.mod` and `go.work`
+carry the same `go` line.
 
 ## Core architecture
 
@@ -391,6 +392,7 @@ by response content).
   linters including `gosec`, `wrapcheck`, `errorlint`, `wsl_v5`,
   `forcetypeassert`. `gocyclo` max complexity 18. Tests are excluded from
   lint (`run.tests: false`). All wrapped errors must keep `%w`.
-- Go 1.26. Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
+- Go 1.27.2 in every `go.mod` and in `go.work` (CI installs the version
+  `go.work` names). Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
   2 spaces in YAML (see `.editorconfig`). All source files carry the MIT
   copyright header.

@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/internal/interop/oidcrp
 
-go 1.26.5
+go 1.27.2
 
 require (
 	github.com/chromedp/cdproto v0.157.9
