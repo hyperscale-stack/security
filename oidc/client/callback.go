@@ -168,7 +168,7 @@ func (c *Client) Complete(ctx context.Context, cb Callback) (*Identity, error) {
 // parseCallback checks the shape of the response.
 func (c *Client) parseCallback(cb Callback) (authorizationResponse, error) {
 	if cb.Mode != c.cfg.ResponseMode {
-		return authorizationResponse{}, fmt.Errorf("%w: response mode %q, connection uses %s", ErrInvalidCallback, cb.Mode, c.cfg.ResponseMode)
+		return authorizationResponse{}, fmt.Errorf("%w: response mode %s, connection uses %s", ErrInvalidCallback, quoted(string(cb.Mode)), c.cfg.ResponseMode)
 	}
 
 	if !c.receivedOnRedirect(cb.URL) {

@@ -287,15 +287,15 @@ func validateExtraParams(params map[string]string, endpointParams map[string]str
 
 		switch {
 		case !isParamName(name):
-			return fmt.Errorf("%w: invalid ExtraParams name %q", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: invalid ExtraParams name %s", ErrInvalidAuthRequest, quoted(name))
 		case isReservedParam(key):
-			return fmt.Errorf("%w: ExtraParams cannot set %q", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: ExtraParams cannot set %s", ErrInvalidAuthRequest, quoted(name))
 		case inEndpoint:
-			return fmt.Errorf("%w: ExtraParams cannot set %q, which the authorization endpoint's query sets", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: ExtraParams cannot set %s, which the authorization endpoint's query sets", ErrInvalidAuthRequest, quoted(name))
 		case repeated:
-			return fmt.Errorf("%w: ExtraParams name %q repeats another one", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: ExtraParams name %s repeats another one", ErrInvalidAuthRequest, quoted(name))
 		case !validText(params[name], maxExtraValueLength):
-			return fmt.Errorf("%w: invalid ExtraParams value for %q", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: invalid ExtraParams value for %s", ErrInvalidAuthRequest, quoted(name))
 		}
 
 		seen[key] = struct{}{}

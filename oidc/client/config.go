@@ -285,7 +285,7 @@ func (c Config) validateClient() error {
 			return fmt.Errorf("%w: a public client (none) has no ClientSecret", ErrInvalidConfig)
 		}
 	default:
-		return fmt.Errorf("%w: unsupported AuthMethod %q", ErrInvalidConfig, c.AuthMethod)
+		return fmt.Errorf("%w: unsupported AuthMethod %s", ErrInvalidConfig, quoted(string(c.AuthMethod)))
 	}
 
 	return nil
@@ -294,7 +294,7 @@ func (c Config) validateClient() error {
 func (c Config) validateFlow() error {
 	switch {
 	case c.ResponseMode != "" && c.ResponseMode != ResponseModeQuery && c.ResponseMode != ResponseModeFormPost:
-		return fmt.Errorf("%w: unsupported ResponseMode %q", ErrInvalidConfig, c.ResponseMode)
+		return fmt.Errorf("%w: unsupported ResponseMode %s", ErrInvalidConfig, quoted(string(c.ResponseMode)))
 	case c.Store == nil:
 		return fmt.Errorf("%w: Store is required", ErrInvalidConfig)
 	case c.TransactionTTL < 0 || c.TransactionTTL > MaxTransactionTTL || c.TransactionTTL%time.Second != 0:
@@ -471,7 +471,7 @@ func normalizeScopes(in []string) ([]string, error) {
 
 	for _, s := range in {
 		if !isScopeToken(s) {
-			return nil, fmt.Errorf("%w: invalid scope %q", ErrInvalidConfig, s)
+			return nil, fmt.Errorf("%w: invalid scope %s", ErrInvalidConfig, quoted(s))
 		}
 
 		if !slices.Contains(out, s) {
@@ -501,7 +501,7 @@ func normalizeAlgorithms(in []Algorithm) ([]Algorithm, error) {
 
 	for _, alg := range in {
 		if !slices.Contains(supportedAlgorithms, alg) {
-			return nil, fmt.Errorf("%w: unsupported ID Token algorithm %q", ErrInvalidConfig, alg)
+			return nil, fmt.Errorf("%w: unsupported ID Token algorithm %s", ErrInvalidConfig, quoted(string(alg)))
 		}
 
 		if !slices.Contains(out, alg) {

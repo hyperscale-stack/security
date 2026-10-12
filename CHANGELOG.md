@@ -710,6 +710,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   endpoint's query, or to another entry (`ErrInvalidAuthRequest`), and
   `New` refuses an authorization endpoint whose query does the same
   (`ErrInvalidMetadata`).
+- `oidc/client` errors echoed provider-controlled text without bound: a
+  900 KB issuer in a discovery document made a 900 KB error, and so did a
+  media type, a redirect target (the `Location` of a refused redirect, which
+  `net/http` puts in its error), a JOSE header member quoted by go-jose, or
+  the names of the authorization endpoint's query; `%q` could also
+  multiply hostile bytes by four. Every echoed value is now Go-quoted, then
+  cut to 256 bytes (beginning and end kept), invalid UTF-8 replaced;
+  wrapped errors keep their chain (`errors.Is`/`errors.As`). Configuration
+  and `AuthOptions` values echoed into errors are bounded the same way.
 - `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
   or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
   `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key

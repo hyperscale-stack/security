@@ -151,7 +151,9 @@ at several issuers defeats the distinct redirect URIs).
   answer 303 to a clean URL, so the code leaves the browser history.
 - Show users a generic message on failure: `AuthorizationError` and
   `TokenError` carry the provider's untrusted text, and errors of `New` may
-  name an allowed destination's address.
+  name an allowed destination's address. Provider-controlled text an error
+  echoes — an issuer, a media type, a redirect target, a JOSE header
+  member — is quoted and cut to 256 bytes, so it cannot flood a log.
 
 ### Several instances
 

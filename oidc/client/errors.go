@@ -7,15 +7,21 @@ package oidcclient
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/hyperscale-stack/security"
 )
 
 // Sentinel errors. Errors returned by the package wrap one of them with %w:
-// match them with errors.Is. They never carry a state, code, binding,
-// nonce, verifier or token. The errors that mean "this login is not
-// authentic" also match security.ErrInvalidCredentials, so transport error
-// mappers classify them as authentication failures.
+// match them with errors.Is, never with ==. They never carry a state, code,
+// binding, nonce, verifier or token, and the provider-controlled or input
+// text they echo — an issuer, a media type, a redirect target, a JOSE
+// header member, a parameter name — is quoted and cut to a few hundred
+// bytes. The errors that mean "this login is not authentic" also match
+// security.ErrInvalidCredentials, so transport error mappers classify them
+// as authentication failures.
 var (
 	// ErrInvalidConfig reports a Config New refuses.
 	ErrInvalidConfig = errors.New("oidcclient: invalid configuration")
@@ -188,3 +194,56 @@ func (e *TokenError) Error() string {
 
 // Unwrap returns ErrTokenEndpoint.
 func (e *TokenError) Unwrap() error { return ErrTokenEndpoint }
+
+// maxEchoLength bounds the bytes of untrusted text an error echoes, per
+// value.
+const maxEchoLength = 256
+
+// clip bounds untrusted text echoed into an error: invalid UTF-8 is
+// replaced, then text longer than maxEchoLength keeps its first and last
+// maxEchoLength/2 bytes — the beginning names the operation, the end the
+// cause — around "...", cut on rune boundaries.
+func clip(s string) string {
+	s = strings.ToValidUTF8(s, string(utf8.RuneError))
+	if len(s) <= maxEchoLength {
+		return s
+	}
+
+	head, tail := maxEchoLength/2, len(s)-maxEchoLength/2
+	for i := 0; i < utf8.UTFMax && !utf8.RuneStart(s[head]); i++ {
+		head--
+	}
+
+	for i := 0; i < utf8.UTFMax && !utf8.RuneStart(s[tail]); i++ {
+		tail++
+	}
+
+	return s[:head] + "..." + s[tail:]
+}
+
+// quoted renders untrusted text for an error: Go-quoted — control
+// characters and invalid UTF-8 escaped — then clipped, so that escaping
+// cannot inflate it past the bound.
+func quoted(s string) string { return clip(strconv.Quote(s)) }
+
+// clippedError bounds the text of a wrapped error that may echo
+// provider-controlled data — a redirect target in a *url.Error, a JOSE
+// header member, a certificate's names; errors.Is and errors.As still
+// reach the original.
+type clippedError struct{ err error }
+
+// Error returns the original text, clipped.
+func (e *clippedError) Error() string { return clip(e.err.Error()) }
+
+// Unwrap returns the original error.
+func (e *clippedError) Unwrap() error { return e.err }
+
+// clipped returns err with its text bounded; nil and short errors are
+// returned as they are.
+func clipped(err error) error {
+	if err == nil || len(err.Error()) <= maxEchoLength {
+		return err
+	}
+
+	return &clippedError{err: err}
+}

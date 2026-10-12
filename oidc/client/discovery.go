@@ -119,7 +119,7 @@ func discover(ctx context.Context, client *http.Client, issuer string, allowHTTP
 	}
 
 	if md.Issuer != issuer {
-		return nil, fmt.Errorf("%w: got %q", ErrIssuerMismatch, md.Issuer)
+		return nil, fmt.Errorf("%w: got %s", ErrIssuerMismatch, quoted(md.Issuer))
 	}
 
 	if err := md.validate(allowHTTP); err != nil {
@@ -187,7 +187,7 @@ func validateEndpoint(name, raw string, required, allowHTTP bool) (*url.URL, err
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrInvalidMetadata, name, err)
+		return nil, fmt.Errorf("%w: %s: %w", ErrInvalidMetadata, name, clipped(err))
 	}
 
 	switch {
@@ -221,9 +221,9 @@ func endpointParams(u *url.URL) (map[string]struct{}, error) {
 
 		switch {
 		case isReservedParam(key):
-			return nil, fmt.Errorf("%w: authorization_endpoint query sets %q", ErrInvalidMetadata, name)
+			return nil, fmt.Errorf("%w: authorization_endpoint query sets %s", ErrInvalidMetadata, quoted(name))
 		case repeated || len(query[name]) > 1:
-			return nil, fmt.Errorf("%w: authorization_endpoint query repeats %q", ErrInvalidMetadata, name)
+			return nil, fmt.Errorf("%w: authorization_endpoint query repeats %s", ErrInvalidMetadata, quoted(name))
 		}
 
 		keys[key] = struct{}{}
@@ -286,7 +286,7 @@ func fetchJSON(ctx context.Context, client *http.Client, rawURL string, mediaTyp
 	// metadata, and client enforces the outbound policy at connect time.
 	resp, err := client.Do(req) //nolint:gosec // G107/G704: SSRF handled by the outbound policy
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
+		return nil, fmt.Errorf("request: %w", clipped(err))
 	}
 
 	defer func() { _ = resp.Body.Close() }()
@@ -296,7 +296,7 @@ func fetchJSON(ctx context.Context, client *http.Client, rawURL string, mediaTyp
 	}
 
 	if !hasMediaType(resp.Header.Get("Content-Type"), mediaTypes...) {
-		return nil, fmt.Errorf("unexpected content type %q", resp.Header.Get("Content-Type"))
+		return nil, fmt.Errorf("unexpected content type %s", quoted(resp.Header.Get("Content-Type")))
 	}
 
 	body, err := io.ReadAll(resp.Body)

@@ -80,7 +80,7 @@ func (c *Client) UserInfo(ctx context.Context, id *Identity) (*UserInfo, error) 
 
 	resp, err := c.send.Do(req) //nolint:gosec // G107/G704: endpoint from validated metadata, outbound policy enforced
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUserInfo, err)
+		return nil, fmt.Errorf("%w: %w", ErrUserInfo, clipped(err)) // a refused redirect names its Location
 	}
 
 	defer func() { _ = resp.Body.Close() }()
