@@ -521,6 +521,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- The OAuth2 token endpoint refuses a `code_verifier` presented for an
+  authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
+  §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is
+  optional — it used to ignore the verifier and issue tokens, so an
+  attacker could strip `code_challenge` from its own authorization request
+  and inject the resulting code into a victim's session at a client relying
+  on PKCE instead of `state` (the PKCE downgrade attack).
 - The integrity MAC of an `oidc/client` login transaction is keyed by a
   server-held transaction key as well as by the login's binding secret
   (#86). Keyed by the binding secret alone, it could be recomputed by an

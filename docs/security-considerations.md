@@ -64,7 +64,14 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   bound to a `code_challenge`, `/token` answers `invalid_grant` to a
   `code_verifier` that is not 43–128 unreserved characters. The code is
   consumed whether the verifier is malformed or wrong. Well-formed
-  verifiers are compared in constant time.
+  verifiers are compared in constant time. A `code_verifier` sent for a
+  code issued without `code_challenge` is refused with `invalid_grant`
+  under every profile (RFC 9700 §4.8.2, the PKCE downgrade attack: an
+  attacker strips `code_challenge` from its own authorization request and
+  injects the code into a victim's session); a parameter without value
+  counts as absent (RFC 6749 §3.1). The refusal burns the code but revokes
+  nothing: a replay of a code redeemed without PKCE still revokes its
+  tokens, whatever `code_verifier` it carries.
 - **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
   and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
   every refresh exchange consumes the presented token and issues a new one

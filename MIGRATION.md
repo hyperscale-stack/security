@@ -727,3 +727,30 @@ To migrate:
 4. To rotate a key later without failing a login: add the new key last on
    every instance; once all of them run with it, move it first; remove the
    old key once `TransactionTTL` (10 minutes by default) has elapsed.
+
+### `oauth2`: a `code_verifier` without `code_challenge` is refused (PKCE downgrade, #86)
+
+RFC 9700 §4.8.2: "the authorization server MUST ensure that if there was no
+code_challenge in the authorization request, a request to the token endpoint
+containing a code_verifier is rejected". Under `Profile20`, where PKCE is
+optional (unless `grant.Config.RequirePKCE`), `/token` ignored a
+`code_verifier` sent for a code issued without `code_challenge`: an attacker
+could strip `code_challenge` from its own authorization request and inject the
+code into a victim's session at a client that relies on PKCE rather than
+`state`.
+
+| Code issued | `code_verifier` in the token request | Before | After |
+| --- | --- | --- | --- |
+| without `code_challenge`, `Profile20` | absent, or present without a value | issued | unchanged |
+| without `code_challenge`, `Profile20` | with a value (any occurrence) | issued, verifier ignored | `400 invalid_grant` ("code_verifier sent for a code issued without code_challenge"); the code is consumed, nothing is issued or revoked |
+| without `code_challenge`, `Profile20BCP` / `Profile21Draft` | any | `invalid_grant` ("PKCE required") | unchanged |
+| with `code_challenge` | any | verified (RFC 7636 §4.6) | unchanged |
+| replay of a code redeemed without PKCE, otherwise valid | with a value | `invalid_grant`, family revoked (#80) | unchanged |
+
+To migrate:
+
+1. Nothing for clients that use PKCE (send `code_challenge`, then
+   `code_verifier`) or none of it.
+2. A `Profile20` client that sends a `code_verifier` without having sent a
+   `code_challenge` now fails: send the matching `code_challenge` (S256) in
+   its authorization requests, or stop sending the verifier.

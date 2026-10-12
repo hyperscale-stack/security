@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -29,7 +30,13 @@ import (
 //     Core §16.15).
 //  4. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
 //  5. Verify PKCE when present / required, then check that the client may
-//     use the grant.
+//     use the grant. A code issued without code_challenge is refused when
+//     the request carries a code_verifier, under every profile: the PKCE
+//     downgrade attack (RFC 9700 §2.1.1, §4.8.2) strips code_challenge from
+//     an attacker's own authorization request to inject the code it gets
+//     into a victim's session. The code is burned. This refusal applies to
+//     issuance only: a replay of a code redeemed without PKCE still revokes
+//     its family (see below), whatever code_verifier it carries.
 //  6. Generate the access token (+ optional refresh token) in the code's
 //     family, carrying its issuer and grant context, let the server's
 //     extension extend the response (an OpenID Connect id_token, with the
@@ -92,11 +99,22 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 		return nil, err
 	}
 
+	if code.CodeChallenge == "" && hasCodeVerifier(req.Form) {
+		return nil, oauth2.ErrInvalidGrant.WithDescription("code_verifier sent for a code issued without code_challenge")
+	}
+
 	return issueTokenPair(ctx, g.cfg, req, issuance{
 		grantType: oauth2.GrantTypeAuthorizationCode, nonce: code.Nonce,
 		subject: code.Subject, scope: code.Scope, refreshScope: code.Scope,
 		familyID: familyID, extensionData: code.ExtensionData,
 	})
+}
+
+// hasCodeVerifier reports whether form carries a code_verifier with a
+// value — any of its occurrences: a parameter without value is omitted
+// (RFC 6749 §3.1), not a way to hide a repeated one.
+func hasCodeVerifier(form url.Values) bool {
+	return slices.ContainsFunc(form["code_verifier"], func(v string) bool { return v != "" })
 }
 
 // validateExchange checks that req may redeem code, in order: the code has
