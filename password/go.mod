@@ -2,7 +2,7 @@ module github.com/hyperscale-stack/security/password
 
 go 1.26.0
 
-require golang.org/x/crypto v0.56.0
+require golang.org/x/crypto v0.57.0
 
 require go.yaml.in/yaml/v3 v3.0.5 // indirect
 
