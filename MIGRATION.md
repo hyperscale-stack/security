@@ -145,6 +145,7 @@ make test         # generate, then race + coverage, aggregated into build/covera
 make lint         # golangci-lint (tools/golangci-lint) on every module with the shared config
 make vuln         # govulncheck -test on every module, outside the workspace
 make tidy         # go work sync + go mod tidy on every module and tool + go work sync
+make check-modules # one go line, go.work complete, sync no-op, every module on its own (GOWORK=off)
 make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 ```
 
@@ -172,7 +173,13 @@ Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
 for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
 for the OIDC client and SAML SP stores), plus one for each in-repo module
 of its graph,
-so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
+so local development and CI work without published versions. Releases are
+cut per module with `module/vX.Y.Z` tags (`vX.Y.Z` for the core). Consumers
+ignore these `replace` directives, so the in-repo requirements keep the
+`v0.0.0-00010101000000-000000000000` placeholder only until a module's first
+release: the release commit sets them to the released versions, and
+`make release-check` builds each tagged module the way a consumer resolves
+it (see [docs/releasing.md](docs/releasing.md)).
 
 ## Breaking changes before the first release
 

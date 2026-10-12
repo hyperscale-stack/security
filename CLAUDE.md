@@ -14,15 +14,15 @@ The whole `v0.x` series was replaced by a ground-up transport-agnostic
 rewrite; the legacy `authentication/` / `authorization/` packages were
 removed. The rewrite is functionally complete and currently `[Unreleased]`:
 its first release is **v1.0.0** for every module (the module paths carry
-no `/vN` suffix). Remaining gaps are tracked as GitHub issues, not refactor
-phases. Source-of-truth docs:
+no `/vN` suffix; see `docs/releasing.md`). Remaining gaps are tracked as
+GitHub issues, not refactor phases. Source-of-truth docs:
 
 - `CHANGELOG.md` — what the first release ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
 - `docs/` — `architecture.md`, `oidc-provider.md`, `oidc-client.md`,
   `oidc-conformance.md`, `saml-sp.md`, `observability.md`,
-  `security-considerations.md`, `migration-from-v0.md`.
+  `security-considerations.md`, `migration-from-v0.md`, `releasing.md`.
 
 ## Working rules
 
@@ -60,6 +60,8 @@ make lint       # golangci-lint (pinned in tools/golangci-lint, shared .golangci
 make vuln       # govulncheck -test on every module, outside the workspace
 make tools      # build the pinned tools (tools/<name>) into build/bin
 make tidy       # go work sync + go mod tidy per module (and tools/*) + go work sync
+make check-modules # one go line, go.work complete, sync no-op, every module tidy/buildable with GOWORK=off
+make release-check TAG=oauth2/v1.0.0 # pre-push check of a release tag (docs/releasing.md)
 make sync       # go work sync
 make bench      # benchmarks across all modules
 make coverage   # go tool cover -func on the aggregated profile
@@ -153,8 +155,10 @@ for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
 for the OIDC client and SAML SP stores, which also replace
 `oidc/client => ../../` or `saml/sp => ../../`) plus
 one per in-repo module of its graph, so local dev works without published
-versions. New modules declare `go 1.27.2`: every `go.mod` and `go.work`
-carry the same `go` line.
+versions; consumers ignore them, so a release commit sets the in-repo
+requirements to real versions (`docs/releasing.md`). New modules declare
+`go 1.27.2`: every `go.mod` and `go.work` carry the same `go` line, and a
+new module must be added to `go.work` (`make check-modules` enforces both).
 
 ## Core architecture
 

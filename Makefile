@@ -105,6 +105,20 @@ vuln: generate $(BIN_DIR)/govulncheck
 		(cd "$$mod" && GOWORK=off $(BIN_DIR)/govulncheck -test ./...) || exit 1; \
 	done
 
+# Every module on its own (scripts/check-modules.sh): one go line, go.work
+# lists every module, `go work sync` is a no-op, and every module builds,
+# vets and is tidy with GOWORK=off, with and without the generated mocks.
+# CI runs it on every change.
+.PHONY: check-modules
+check-modules: $(BIN_DIR)/mockery
+	@./scripts/check-modules.sh
+
+# Checks a release tag before it is pushed (docs/releasing.md):
+#   make release-check TAG=oauth2/v1.0.0
+.PHONY: release-check
+release-check: generate
+	@./scripts/release-check.sh "$(TAG)"
+
 # Opt-in browser suites (Tales and Chrome, prerequisites in docs/saml-sp.md
 # and e2e/oidc/run.sh): never part of `make test` nor of CI.
 .PHONY: e2e
@@ -143,15 +157,3 @@ tidy: generate
 		(cd "tools/$$tool" && GOWORK=off go mod tidy) || exit 1; \
 	done
 	@go work sync
-
-.PHONY: release
-release:
-	@echo "Release v$(version)"
-	@git pull
-	@git checkout master
-	@git pull
-	@git checkout develop
-	@git flow release start $(version)
-	@git flow release finish $(version) -p -m "Release v$(version)"
-	@git checkout develop
-	@echo "Release v$(version) finished."

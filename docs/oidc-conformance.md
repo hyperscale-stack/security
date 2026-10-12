@@ -305,7 +305,9 @@ driver's `results.json`); `OIDC_CONFORMANCE_PLANS=op` or `rp` runs one side.
 
 ## Release checklist
 
-Before tagging `oidc/provider` or `oidc/client`:
+The release process itself (versions, order, `make release-check`) is in
+[releasing.md](releasing.md). Before tagging `oidc/provider` or
+`oidc/client`, also check:
 
 1. CI is green (`make sync build test lint`): every test cited above.
 2. `make e2e-oidc` passes: 21 scenarios.

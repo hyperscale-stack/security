@@ -520,6 +520,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   with until now (HTTP/2 crashes, request smuggling, `crypto/tls`,
   `encoding/asn1`; govulncheck finds none on go1.27.2). CI runs the version
   `go.work` names. See [MIGRATION.md](MIGRATION.md).
+- **Module and release checks**: `make check-modules` (run by CI) fails
+  unless `go.work` and every `go.mod` share one `go` line, `go.work` lists
+  every module, `go work sync` changes nothing and every module builds, vets
+  and is tidy on its own (`GOWORK=off`). `make release-check TAG=…` (also run
+  by the release workflow) accepts only canonical `v1.x.y` tags of released
+  modules, refuses placeholder requirements and commits off `master`, and
+  builds the module as a consumer resolves it, without its in-repo
+  `replace` directives. The first release of every module is `v1.0.0`; the
+  checklist is [docs/releasing.md](docs/releasing.md).
 - **Development tools in their own modules**: golangci-lint (v2.14.0, Go
   1.27 support), govulncheck (v1.9.0) and mockery (v3.8.1) are pinned in one
   module each under `tools/`, outside `go.work`. The core module no longer
