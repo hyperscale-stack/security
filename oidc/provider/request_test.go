@@ -410,6 +410,22 @@ func TestRequestView(t *testing.T) {
 	assert.Nil(t, req.MaxAge)
 }
 
+// TestRequestReportsOfflineAccessForEveryRequest: the interaction learns
+// that offline_access is requested — an OpenID request or a plain OAuth 2.0
+// one — so that it can ask the end-user.
+func TestRequestReportsOfflineAccessForEveryRequest(t *testing.T) {
+	t.Parallel()
+
+	for scope, openID := range map[string]bool{"read offline_access": false, "openid offline_access": true} {
+		e := newEnv(t)
+		require.NotEmpty(t, redirect(t, e.authorize(with(authorizeQuery(), "scope", scope))).Get("code"))
+
+		req := e.lastRequest()
+		assert.Equal(t, openID, req.OpenID, scope)
+		assert.True(t, req.OfflineAccess, scope)
+	}
+}
+
 // TestPlainOAuth2RequestKeepsOAuth2Semantics: without openid the request
 // is an OAuth 2.0 one: OpenID parameters are not parsed, the interaction
 // is always interactive, and the token response carries no id_token.

@@ -1436,3 +1436,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   under their exact spelling, names that are case variants of one another
   never, nor invalid names or values whose member names alias at any depth
   (OIDC Core §2, §5.3.2; RFC 7519 §4). See [MIGRATION.md](MIGRATION.md).
+- `oidc/provider` drops `offline_access` from every grant its
+  `Decision` does not grant it to — plain OAuth 2.0 requests included,
+  which the OIDC Core §11 rules used to skip: an approval meant for
+  something else (a consent remembered per client, a page that never
+  offered the choice) handed out a refresh token with
+  `RefreshTokenScope = offline_access`, even right after the end-user
+  declined offline access. `Request.OfflineAccess` is now set for every
+  request; `OfflineAccessPrompted` needs no `prompt=consent` for a plain
+  request, `OfflineAccessByPolicy` keeps the former behaviour, and an
+  approval left without any scope answers `access_denied` (breaking, see
+  [MIGRATION.md](MIGRATION.md)).

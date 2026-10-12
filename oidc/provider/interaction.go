@@ -83,6 +83,10 @@ type Request struct {
 	RedirectURI string
 	// Scopes are the requested scope values.
 	Scopes []string
+	// OfflineAccess reports a requested offline_access scope (Core §11) —
+	// for every request, OpenID or plain OAuth 2.0: the provider keeps it
+	// only when Decision.OfflineAccess grants it.
+	OfflineAccess bool
 	// OpenID reports an OpenID Connect authentication request (scope
 	// openid). The fields below are only set for one.
 	OpenID bool
@@ -121,8 +125,6 @@ type Request struct {
 	Display       string
 	UILocales     []string
 	ClaimsLocales []string
-	// OfflineAccess reports a requested offline_access scope (Core §11).
-	OfflineAccess bool
 }
 
 // AuthenticationEvent is the end-user authentication a grant rests on: it
@@ -150,23 +152,26 @@ type AuthenticationEvent struct {
 }
 
 // OfflineAccessConsent says why a requested offline_access is granted (Core
-// §11, §17.4); its zero value refuses it.
+// §11, §17.4); its zero value refuses it. It applies to every request the
+// provider serves: offline_access has one meaning at its server.
 type OfflineAccessConsent int
 
 const (
 	// NoOfflineAccess ignores the offline_access request: the scope is
 	// dropped from the grant, and no refresh token enabling offline access
-	// is issued.
+	// is issued — an approval granting nothing else answers access_denied.
 	NoOfflineAccess OfflineAccessConsent = iota
 	// OfflineAccessPrompted grants it after the end-user consented in the
-	// consent dialog the request asked for: valid only when
-	// Request.Prompt.Consent is set (Core §11 "MUST ensure that the prompt
-	// parameter contains consent").
+	// consent dialog — for an OpenID request, the one it asked for: valid
+	// only when Request.Prompt.Consent is set (Core §11 "MUST ensure that
+	// the prompt parameter contains consent"); prompt being no OAuth 2.0
+	// parameter, a plain OAuth 2.0 request needs none.
 	OfflineAccessPrompted
 	// OfflineAccessByPolicy grants it under "other conditions for
 	// processing the request permitting offline access" (Core §11) — the
 	// application's documented policy, e.g. an explicit consent to offline
-	// access recorded earlier for this client.
+	// access recorded earlier for this client, or plain OAuth 2.0 clients
+	// for which offline_access needs no end-user choice.
 	OfflineAccessByPolicy
 )
 
@@ -194,8 +199,9 @@ type Decision struct {
 	// serves both targets: a name releases its ID Token and its UserInfo
 	// requests alike. A name Request.Claims does not hold releases nothing.
 	Claims []string
-	// OfflineAccess grants a requested offline_access scope (see
-	// OfflineAccessConsent).
+	// OfflineAccess grants a requested offline_access scope, for an OpenID
+	// or a plain OAuth 2.0 request alike (see OfflineAccessConsent):
+	// without it, offline_access is dropped from the grant.
 	OfflineAccess OfflineAccessConsent
 	// InteractionStartedAt is, when the login of this request spanned
 	// several HTTP requests, when the application started it — taken from

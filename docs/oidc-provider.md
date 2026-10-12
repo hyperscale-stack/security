@@ -49,7 +49,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | ------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | Authorization Code flow                     | Core §3.1                          | Supported                                                                                                                                                                                                                            | `TestIDTokenClaims`, interop: `TestInteropCodeFlowS256`, `TestInteropCodeReplay` |
 | PKCE                                        | RFC 7636                           | As the core's `Profile` decides: `S256` required under `Profile20BCP` (default) and `Profile21Draft`; optional under `Profile20`, which also allows `plain`                                                                          | `TestDiscoveryPKCEMethodsFollowTheProfile`, interop: `TestInteropPublicClient`                                          |
-| Plain OAuth 2.0 requests (no `openid`)      | Core §3.1.2.1                      | Unchanged OAuth 2.0 semantics: no ID Token, no UserInfo, realm rule only                                                                                                                                                             | `TestPlainOAuth2RequestKeepsOAuth2Semantics`, `TestPlainOAuth2CodeExchange`, `TestRefreshOfAPlainOAuth2Grant`           |
+| Plain OAuth 2.0 requests (no `openid`)      | Core §3.1.2.1                      | OAuth 2.0 semantics: no ID Token, no UserInfo; the realm rule and the `offline_access` rule only | `TestPlainOAuth2RequestKeepsOAuth2Semantics`, `TestPlainOAuth2CodeExchange`, `TestRefreshOfAPlainOAuth2Grant`, `TestPlainOAuth2OfflineAccessNeedsTheDecision` |
 | Implicit and hybrid flows                   | Core §3.2, §3.3                    | Not supported, not advertised: an OpenID request with another `response_type` gets `unsupported_response_type`                                                                                                                      | `TestOpenIDImplicitRefused`                                                                                             |
 | Response modes                              | Core §3.1.2.1; OAuth 2.0 Multiple Response Types | `query` only (advertised); the core refuses any other with a bare `400`, never redirected                                                                                                                              | `TestDiscoveryDocument`, oauth2: `TestAuthorizeRefusesUnsupportedResponseModes`                                                                   |
 | `redirect_uri`                              | Core §3.1.2.1                      | REQUIRED for OpenID requests: missing → `400`, never redirected — once the core accepted the request: the core's response type, scope and PKCE checks run first and redirect their errors to the client's sole registered redirect URI (OAuth 2.0 behaviour) | `TestOpenIDRequestWithoutRedirectURIIsNotRedirected` |
@@ -68,7 +68,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | `registration` parameter                    | Core §7.2.1                        | Not supported: `registration_not_supported`                                                                                                                                                                                          | `TestRequestObjectParametersRefused`                                                                                    |
 | Realm of the authentication                 | Core §16.15                        | `AuthenticationEvent.Issuer` must be the request's issuer: else `login_required` (OpenID) or `access_denied` (OAuth 2.0)                                                                                                            | `TestRealmIsEnforced`, `TestRequestCheck`, stack: `TestRefusalsRevealNoSession` |
 | Consent                                     | Core §3.1.2.4                      | `Decision`: approval, `Scope` narrowing (keeps `openid`), `Claims`, `Refusal`; an empty decision → `access_denied`                                                                                                                 | `TestDecisionScopeNarrows`, `TestInteractionFailures`, `TestApprovalContractViolations`, interop: `TestInteropConsentNarrowsScope` |
-| `offline_access`                            | Core §11                           | OpenID requests: granted only with consent — the `prompt=consent` dialog (`OfflineAccessPrompted`) or the application's policy (`OfflineAccessByPolicy`) — else dropped from the grant; a refresh token without that consent fails closed (`server_error` at issuance, `invalid_grant` at refresh) unless `Config.AllowRefreshWithoutOfflineAccess`. Plain OAuth 2.0 requests keep OAuth 2.0 semantics (narrow them with `Decision.Scope`) | `TestOfflineAccessRequiresConsent`, `TestRefreshWithoutOfflineConsentFailsClosed`, interop: `TestInteropRefresh`        |
+| `offline_access`                            | Core §11                           | Every request: kept only when `Decision.OfflineAccess` grants it — the consent dialog (`OfflineAccessPrompted`: `prompt=consent` required for an OpenID request, `prompt` being no OAuth 2.0 parameter) or the application's policy (`OfflineAccessByPolicy`) — else dropped from the grant; an approval left without any scope → `access_denied`. OpenID grants: a refresh token without that consent fails closed (`server_error` at issuance, `invalid_grant` at refresh) unless `Config.AllowRefreshWithoutOfflineAccess`. Plain OAuth 2.0 grants carry no context: only their scope is gated, their refresh tokens follow `grant.Config.RefreshTokenScope` | `TestOfflineAccessRequiresConsent`, `TestPlainOAuth2OfflineAccessNeedsTheDecision`, `TestRequestReportsOfflineAccessForEveryRequest`, `TestRefreshWithoutOfflineConsentFailsClosed`, interop: `TestInteropRefresh` |
 
 ### ID Tokens and refresh
 
@@ -149,7 +149,10 @@ mux.Handle("GET "+paths.JWKS, op.JWKSHandler())
   `/.well-known/oauth-authorization-server/tenant`. Revocation and
   introspection are advertised: mount them.
 - Wire `grant.Config.RefreshTokenScope = oidcprovider.ScopeOfflineAccess`:
-  refresh tokens then only come with a consented `offline_access`.
+  refresh tokens then only come with an `offline_access` the `Decision`
+  granted, for OpenID and plain OAuth 2.0 requests alike. Only the scope is
+  gated: without that wiring, a plain OAuth 2.0 grant — which carries no
+  provider context — gets refresh tokens whatever its scope.
 - CORS, when browsers call `/token` or UserInfo, is the application's
   middleware.
 
@@ -191,8 +194,11 @@ travels to the client, and must not tell it what sessions the browser holds.
   `prompt=none`.
 - `Decision.Scope` can only narrow the request and keeps `openid`;
   `Decision.Claims` names the requested claims the end-user releases;
-  `Decision.OfflineAccess` grants a requested `offline_access` —
-  `OfflineAccessPrompted` only for a request with `prompt=consent`.
+  `Decision.OfflineAccess` grants a requested `offline_access`
+  (`Request.OfflineAccess`, for every request) — `OfflineAccessPrompted`
+  needs `prompt=consent` for an OpenID request, none for a plain OAuth 2.0
+  one; without it, `offline_access` is dropped from the grant, and an
+  approval left without any scope answers `access_denied`.
 - The login and consent pages are the application's: a CSRF token on every
   form, no framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), no
   caching, a return address limited to the authorization endpoint (never

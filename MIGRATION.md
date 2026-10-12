@@ -1748,3 +1748,41 @@ To migrate:
    `ClaimsQuery.Names` as untrusted input in directory or database lookups.
 4. Relying parties key accounts on (`iss`, `sub`) only (Core §5.7), and
    decode tokens strictly (`oidc/client` refuses case-variant member names).
+
+### `oidc/provider`: `offline_access` needs the decision's grant on every request
+
+OIDC Core §11 binds OpenID requests only, and the provider applied it to them
+only: a plain OAuth 2.0 request (no `openid`) for `offline_access` kept it as
+the `Interaction` approved it, and `Request.OfflineAccess` was never set for
+one — an application had to parse `Request.Scopes` to even notice. With
+`grant.Config.RefreshTokenScope = offline_access`, an approval meant for
+something else (a consent remembered per client, a page that never offered
+the choice) handed out a refresh token: `examples/oidc-provider` did, even
+right after the end-user had declined offline access. `offline_access` now
+has one meaning at the provider's server:
+
+| Request served by `Provider.AuthorizeHandler` | Before | After |
+| --- | --- | --- |
+| plain OAuth 2.0, `offline_access` requested | `Request.OfflineAccess` false | true |
+| plain OAuth 2.0, `Decision.OfflineAccess` unset | `offline_access` granted | dropped from the grant (no refresh token with `RefreshTokenScope = offline_access`) |
+| plain OAuth 2.0, only `offline_access` requested, `Decision.OfflineAccess` unset | code issued | `access_denied`, nothing issued |
+| plain OAuth 2.0, `OfflineAccessPrompted` or `OfflineAccessByPolicy` | granted | granted (`prompt=consent` is not required: no OAuth 2.0 parameter) |
+| OpenID request | §11 rules | unchanged |
+| plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged |
+
+Only the scope is gated: a plain OAuth 2.0 grant carries no provider context,
+so its refresh tokens still follow `grant.Config.RefreshTokenScope` alone.
+
+To migrate:
+
+1. In the `Interaction`, ask the end-user about offline access whenever
+   `Request.OfflineAccess` is set — for an OpenID request only with
+   `prompt=consent` (Core §11) — and set `Decision.OfflineAccess =
+   OfflineAccessPrompted` when she grants it. Never grant it from a
+   remembered consent: "a previously saved user consent is not always
+   sufficient to grant offline access" (§11).
+2. To keep the former behaviour for plain OAuth 2.0 clients whose refresh
+   tokens need no end-user choice, set `Decision.OfflineAccess =
+   OfflineAccessByPolicy` for them, as a documented policy.
+3. An `Interaction` that read `Request.OfflineAccess` as "an OpenID request
+   with offline_access" also checks `Request.OpenID`.

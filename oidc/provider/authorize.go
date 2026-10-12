@@ -32,6 +32,10 @@ var (
 	errOfflineWithoutConsent = errors.New("oidcprovider: OfflineAccessPrompted without prompt=consent")
 )
 
+// errOnlyOfflineAccess is the cause of the access_denied answering an
+// approval that grants nothing once its offline_access is dropped.
+var errOnlyOfflineAccess = errors.New("oidcprovider: offline_access, the only scope granted, was not granted")
+
 // completeAuthorization verifies an approved decision against the request
 // and returns what the grant records: the authentication event and the
 // released claims as its context, and the granted scope without an
@@ -45,14 +49,20 @@ func (p *Provider) completeAuthorization(ar *oauth2.AuthorizeRequest, consent oa
 	result, ok := consent.ExtensionResult.(*authResult)
 
 	if !view.openID {
-		// An OAuth 2.0 request: no context, the realm rule only. Without the
-		// provider's result, another ConsentFunc approved it — OAuth 2.0
-		// semantics, unchanged.
+		// An OAuth 2.0 request: no context; the realm rule and the
+		// offline_access rule only. Without the provider's result, another
+		// ConsentFunc approved it — OAuth 2.0 semantics, unchanged.
 		if !ok || result == nil {
 			return oauth2.ExtensionGrant{}, nil
 		}
 
-		return oauth2.ExtensionGrant{}, view.public().Check(result.event, time.Time{})
+		if err := view.public().Check(result.event, time.Time{}); err != nil {
+			return oauth2.ExtensionGrant{}, err
+		}
+
+		scope, _, err := view.offlineScope(consent.Scope, result.offline)
+
+		return oauth2.ExtensionGrant{Scope: scope}, err
 	}
 
 	if !ok || result == nil {
@@ -129,10 +139,13 @@ func printableASCII(s string) bool {
 
 // offlineScope applies OpenID Connect Core §11 to a granted scope holding
 // offline_access: kept, and recorded as consented, when the end-user
-// consented through the prompt=consent dialog the request asked for, or
-// under the application's other conditions; dropped — "MUST ignore the
-// offline_access request" — otherwise. It returns the narrowed scope, ""
-// when nothing changes.
+// consented through a consent dialog — the prompt=consent one for an
+// OpenID request — or under the application's other conditions; dropped —
+// "MUST ignore the offline_access request" — otherwise. The rule applies
+// to plain OAuth 2.0 requests too: the provider gives offline_access one
+// meaning. It returns the narrowed scope, "" when nothing changes, or
+// access_denied when nothing would be left: a blank scope keeps the
+// granted one (oauth2.ExtensionGrant).
 func (v *authRequest) offlineScope(granted string, consent OfflineAccessConsent) (string, bool, error) {
 	if !hasScope(granted, ScopeOfflineAccess) {
 		return "", false, nil
@@ -140,7 +153,8 @@ func (v *authRequest) offlineScope(granted string, consent OfflineAccessConsent)
 
 	switch consent {
 	case OfflineAccessPrompted:
-		if !v.prompt.Consent {
+		// prompt is no OAuth 2.0 parameter: a plain request needs none.
+		if v.openID && !v.prompt.Consent {
 			return "", false, errOfflineWithoutConsent
 		}
 
@@ -156,6 +170,10 @@ func (v *authRequest) offlineScope(granted string, consent OfflineAccessConsent)
 		if s != ScopeOfflineAccess {
 			kept = append(kept, s)
 		}
+	}
+
+	if len(kept) == 0 {
+		return "", false, oauth2.ErrAccessDenied.WithCause(errOnlyOfflineAccess)
 	}
 
 	return strings.Join(kept, " "), false, nil

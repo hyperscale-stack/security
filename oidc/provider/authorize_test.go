@@ -5,6 +5,7 @@
 package oidcprovider_test
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -259,6 +260,70 @@ func TestOfflineAccessRequiresConsent(t *testing.T) {
 			assert.NotEmpty(t, resp.IDToken)
 		})
 	}
+}
+
+// TestPlainOAuth2OfflineAccessNeedsTheDecision: offline_access means the
+// same at every request the provider serves — a refresh token enabling
+// access while the end-user is away (Core §11). A plain OAuth 2.0 request
+// keeps it only when Decision.OfflineAccess grants it — prompt being no
+// OAuth 2.0 parameter, OfflineAccessPrompted needs none — and loses it
+// otherwise; an approval left without any scope answers access_denied,
+// issuing nothing. Another ConsentFunc keeps OAuth 2.0 semantics.
+func TestPlainOAuth2OfflineAccessNeedsTheDecision(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		scope   string
+		consent oidcprovider.OfflineAccessConsent
+		granted string // the granted scope; "" when the request is denied
+	}{
+		{"not granted", "read offline_access", oidcprovider.NoOfflineAccess, "read"},
+		{"prompted", "read offline_access", oidcprovider.OfflineAccessPrompted, "read offline_access"},
+		{"by policy", "read offline_access", oidcprovider.OfflineAccessByPolicy, "read offline_access"},
+		{"nothing else requested", "offline_access", oidcprovider.NoOfflineAccess, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			spy := &spyStore{}
+			e := newEnv(t, withSpy(spy))
+			e.decide(nil, func(d *oidcprovider.Decision) { d.OfflineAccess = tc.consent })
+
+			params := redirect(t, e.authorize(with(authorizeQuery(), "scope", tc.scope)))
+			if tc.granted == "" {
+				assert.Equal(t, oauth2.CodeAccessDenied, params.Get("error"))
+				assert.Empty(t, params.Get("code"))
+				assert.Zero(t, spy.codes.Load(), "no code persisted")
+
+				return
+			}
+
+			resp := tokens(t, e.exchange(params.Get("code")))
+			assert.Equal(t, tc.granted, resp.Scope)
+			assert.Equal(t, strings.Contains(tc.granted, "offline_access"), resp.RefreshToken != "",
+				"a refresh token with offline_access only (RefreshTokenScope)")
+			assert.Empty(t, resp.IDToken)
+		})
+	}
+
+	t.Run("another ConsentFunc", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t)
+		approving := e.op.Server().AuthorizeHandler(oauth2.AuthorizeConfig{},
+			func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+				return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
+			})
+
+		code := redirect(t, serve(approving, get("/oauth2/authorize?"+
+			with(authorizeQuery(), "scope", "read offline_access").Encode()))).Get("code")
+		resp := tokens(t, e.exchange(code))
+		assert.Equal(t, "read offline_access", resp.Scope, "OAuth 2.0 semantics, unchanged")
+		assert.NotEmpty(t, resp.RefreshToken)
+	})
 }
 
 // TestReleasedClaims pins the release rule: only the individually requested

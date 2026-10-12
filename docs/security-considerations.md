@@ -561,9 +561,12 @@ is, never for the protocol rules:
   `[ReceivedAt − 15 min, ReceivedAt + 5 s]` and ignores it under
   `prompt=none`.
 - **Offline access needs consent** (OIDC Core §11): `offline_access` is
-  dropped unless the end-user consented, and a refresh token issued without
-  that consent fails closed. Wire `grant.Config.RefreshTokenScope =
-  oidcprovider.ScopeOfflineAccess`.
+  dropped from every grant — OpenID or plain OAuth 2.0 — unless the
+  `Decision` grants it (the end-user's consent, or the application's
+  policy), and a refresh token issued to an OpenID grant without that
+  consent fails closed. Wire `grant.Config.RefreshTokenScope =
+  oidcprovider.ScopeOfflineAccess`: only the scope is gated, and a plain
+  OAuth 2.0 grant gets refresh tokens per that setting.
 - **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
   is the client ID, and an access token whose audience equals a client ID is
   refused at issuance; JWT access tokens are typed `at+jwt`. Resource
@@ -1111,7 +1114,7 @@ What the protocol leaves open is policy, and stays with the application:
 | Tenants and connections    | issuer equality, a transaction bound to its connection, issuer, client and redirect URI, RFC 9207 `iss`; realms and issuer-bound clients (provider) | which connections exist, routing a login start to one, distinct redirect URIs, which issuers tenants may configure |
 | Identity and accounts      | the (issuer, subject) pair, UserInfo `sub` equality                                                                      | account linking (on connection, issuer, subject), just-in-time provisioning, link flows bound to a session    |
 | Authentication strength    | `max_age`/`auth_time`, `acr` among `acr_values` (client); freshness, essential `acr` (provider)                          | the acr levels required, step-up and MFA, AMR policy, the login pages                                         |
-| Consent                    | released claims, a scope that only narrows, `offline_access` only with `prompt=consent` or the application's policy      | the consent pages and records, the offline-access policy                                                      |
+| Consent                    | released claims, a scope that only narrows, `offline_access` only with the decision's grant — `prompt=consent` for OpenID requests — or the application's policy, for every request | the consent pages and records, the offline-access policy                                                      |
 | Sessions                   | no session of another realm or end-user, no state revealed under `prompt=none`                                           | session lifetime, a fresh session after each login, sign-out (no logout specification is supported)          |
 | Account disabling          | `ErrUnknownSubject` stops every grant at its next use (exchange, refresh, UserInfo)                                     | disabling accounts, revoking their token families for immediate effect                                        |
 | Keys                       | rings validated on every use, public keys only published; the client's bounded JWK Set cache                             | key custody (KMS), the rotation schedule, the response to a leaked key                                       |

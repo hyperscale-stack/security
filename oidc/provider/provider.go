@@ -61,8 +61,9 @@ type Config struct {
 	// such a grant cannot be refreshed. The recommended wiring issues refresh
 	// tokens on consented offline_access only:
 	// grant.Config.RefreshTokenScope = [ScopeOfflineAccess]. The policy
-	// concerns OpenID grants only: a plain OAuth 2.0 request keeps OAuth 2.0
-	// semantics (see [ScopeOfflineAccess]).
+	// concerns OpenID grants only: a plain OAuth 2.0 grant carries no
+	// provider context, and its refresh tokens follow RefreshTokenScope
+	// (see [ScopeOfflineAccess]).
 	AllowRefreshWithoutOfflineAccess bool
 	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
 	// localhost or a loopback IP address — for development only: OpenID

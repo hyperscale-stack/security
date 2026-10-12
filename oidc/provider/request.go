@@ -105,12 +105,14 @@ func (v *authRequest) public() *Request {
 // validateRequest validates the OpenID parameters of an authorization
 // request the core validated (client, redirect URI, response mode and type,
 // scope, PKCE) and returns the provider's view of it. A request without the
-// openid scope is an OAuth 2.0 one: nothing of OpenID Connect is parsed.
+// openid scope is an OAuth 2.0 one: nothing of OpenID Connect is parsed —
+// only whether it requests offline_access.
 func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oauth2.AuthorizeRequest) (*authRequest, error) {
 	scopes := strings.Fields(ar.Scope)
 	view := &authRequest{
 		openID: slices.Contains(scopes, ScopeOpenID), issuer: ar.Issuer, client: ar.Client,
 		redirectURI: ar.RedirectURI, scopes: scopes, receivedAt: p.now(),
+		offline: slices.Contains(scopes, ScopeOfflineAccess),
 	}
 
 	if !view.openID {
@@ -288,7 +290,6 @@ func (v *authRequest) parseParameters(form url.Values) error {
 
 	v.prompt, v.maxAge, v.claims = prompt, maxAge, claims
 	v.essentialACR = claims.essentialACR()
-	v.offline = slices.Contains(v.scopes, ScopeOfflineAccess)
 
 	v.acrValues = tokens(value(form, "acr_values"))
 	v.uiLocales = tokens(value(form, "ui_locales"))
