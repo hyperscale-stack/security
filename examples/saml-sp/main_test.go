@@ -21,11 +21,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beevik/etree"
+	samlsp "github.com/hyperscale-stack/security/saml/sp"
 	dsig "github.com/russellhaering/goxmldsig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -351,7 +353,7 @@ func TestSAMLSPExample(t *testing.T) {
 	assert.Equal(t, "/account", resp.Header.Get("Location"))
 
 	_, body = h.get(h.client, "/")
-	assert.Contains(t, body, "corp|"+nameID)
+	assert.Contains(t, body, nameID)
 	assert.Contains(t, body, "alice@example.com")
 
 	// The same response cannot be used twice: a generic page, never an
@@ -395,12 +397,16 @@ func TestSAMLSPExampleRefusesOtherBrowsers(t *testing.T) {
 func TestSAMLSPExampleNoOpenRedirect(t *testing.T) {
 	t.Parallel()
 
-	h := newHarness(t)
-	id, relayState := h.startLogin(h.client, "https://evil.example/phish")
+	// Browsers strip TAB, LF and CR from URLs: "/\t/evil.example" is
+	// "//evil.example", another origin (code review F1).
+	for _, target := range []string{"https://evil.example/phish", "/\t/evil.example/phish", "/%2F/evil.example"} {
+		h := newHarness(t)
+		id, relayState := h.startLogin(h.client, target)
 
-	resp, _ := h.post(h.client, h.respond(id, time.Now().Add(time.Hour)), relayState)
-	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
-	assert.Equal(t, "/", resp.Header.Get("Location"))
+		resp, _ := h.post(h.client, h.respond(id, time.Now().Add(time.Hour)), relayState)
+		require.Equal(t, http.StatusSeeOther, resp.StatusCode, target)
+		assert.Equal(t, "/", resp.Header.Get("Location"), target)
+	}
 }
 
 func TestSAMLSPExampleSessionEndsWithTheIdPSession(t *testing.T) {
@@ -426,17 +432,72 @@ func TestSafeReturn(t *testing.T) {
 	t.Parallel()
 
 	for target, want := range map[string]string{
-		"/account":             "/account",
-		"/a?b=c":               "/a?b=c",
+		"/account":                   "/account",
+		"/a/b?c=d&e=f":               "/a/b?c=d&e=f",
+		"/":                          "/",
+		"/caf%C3%A9":                 "/caf%C3%A9",
+		"/~user/a-b_c.d!$'()*+,;=:@": "/~user/a-b_c.d!$'()*+,;=:@",
+
 		"":                     "/",
+		"account":              "/",
 		"https://evil.example": "/",
+		"javascript:alert(1)":  "/",
 		"//evil.example":       "/",
 		"/\\evil.example":      "/",
+		"\\/evil.example":      "/",
 		"/x\r\nSet-Cookie: a":  "/",
-		"account":              "/",
+		"/a#fragment":          "/",
+		// WHATWG URL parsers strip TAB, LF and CR, which turns these into
+		// "//evil.example" (code review F1); every other control, white
+		// space and non-ASCII character is refused too.
+		"/\t/evil.example/phish": "/",
+		"/\n/evil.example":       "/",
+		"/\r/evil.example":       "/",
+		"\t//evil.example":       "/",
+		"/\x0b/evil.example":     "/",
+		"/\x00/evil.example":     "/",
+		"/\x7f/evil.example":     "/",
+		"/ /evil.example":        "/",
+		" /account":              "/",
+		"/\u00a0/evil.example":   "/",
+		"/\u3000/evil.example":   "/",
+		// Percent-decoding must not reveal another origin either.
+		"/%2F/evil.example":             "/",
+		"/%2f%2fevil.example":           "/",
+		"/%5Cevil.example":              "/",
+		"/%09/evil.example":             "/",
+		"/%zz":                          "/",
+		"/" + strings.Repeat("a", 1024): "/",
 	} {
-		assert.Equal(t, want, safeReturn(target), target)
+		assert.Equal(t, want, safeReturn(target), "%q", target)
 	}
+}
+
+func TestAccountKey(t *testing.T) {
+	t.Parallel()
+
+	id := func(conn, issuer, nameID string) *samlsp.Identity {
+		return &samlsp.Identity{
+			ConnectionID: conn, Issuer: issuer, Audience: "https://sp.example.test/saml/" + conn,
+			NameID: samlsp.NameID{Value: nameID, Format: samlsp.NameIDFormatPersistent},
+		}
+	}
+
+	// ("a|b", "c") and ("a", "b|c") must not collide (code review F11).
+	assert.NotEqual(t, accountKey(id("a|b", idpEntityID, "c")), accountKey(id("a", idpEntityID, "b|c")))
+
+	// The issuer and the qualifiers are part of the key; absent qualifiers
+	// stand for the issuer and the audience.
+	base := id("corp", idpEntityID, "u")
+	assert.Equal(t, accountKey(base), accountKey(id("corp", idpEntityID, "u")))
+	assert.NotEqual(t, accountKey(base), accountKey(id("corp", "https://other-idp.example.test", "u")))
+
+	qualified := id("corp", idpEntityID, "u")
+	qualified.NameID.NameQualifier, qualified.NameID.SPNameQualifier = idpEntityID, qualified.Audience
+	assert.Equal(t, accountKey(base), accountKey(qualified))
+
+	qualified.NameID.SPNameQualifier = "https://other-sp.example.test"
+	assert.NotEqual(t, accountKey(base), accountKey(qualified))
 }
 
 func TestNewServerRejectsBadMetadata(t *testing.T) {

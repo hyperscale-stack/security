@@ -29,6 +29,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -36,9 +37,12 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	httpsec "github.com/hyperscale-stack/security/http"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
@@ -149,14 +153,74 @@ func newServer(cfg appConfig) (http.Handler, error) {
 	return mux, nil
 }
 
-// safeReturn keeps only local paths: the return target lives server-side
-// in the transaction, but it came from the browser (no open redirect).
+// maxReturnLen bounds a return target.
+const maxReturnLen = 1024
+
+// safeReturn returns target when it is a local path, "/" otherwise: the
+// target lives server-side in the transaction, but it came from the browser
+// (no open redirect). It accepts an absolute path, with an optional query,
+// made of RFC 3986 path and query characters only, starting with exactly
+// one slash, which stays a local path once percent-decoded. Everything else
+// is refused rather than cleaned: browsers drop TAB, LF and CR inside a URL
+// ("/\t/evil.example" is "//evil.example", another origin) and treat "\"
+// as "/". With one leading slash and no "\", no browser or url.Parse can
+// read a scheme or a host in the result.
 func safeReturn(target string) string {
-	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.ContainsAny(target, "\\\r\n") {
+	if len(target) > maxReturnLen || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		return "/"
+	}
+
+	for i := 0; i < len(target); i++ {
+		if !isPathOrQueryChar(target[i]) {
+			return "/"
+		}
+	}
+
+	path, _, _ := strings.Cut(target, "?")
+
+	decoded, err := url.PathUnescape(path)
+	if err != nil || strings.HasPrefix(decoded, "//") || strings.ContainsFunc(decoded, func(r rune) bool {
+		return r == '\\' || unicode.IsControl(r) || unicode.IsSpace(r)
+	}) {
 		return "/"
 	}
 
 	return target
+}
+
+// isPathOrQueryChar reports the RFC 3986 characters of a path and a query
+// (§3.3, §3.4): unreserved, sub-delims, ":", "@", "/", "?" and "%" (whose
+// escapes safeReturn decodes and checks).
+func isPathOrQueryChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	default:
+		return strings.IndexByte("-._~!$&'()*+,;=:@/?%", c) >= 0
+	}
+}
+
+// accountKey is the application's key for the external account of id: the
+// connection, the issuer, the NameID qualifiers (absent ones stand for the
+// issuer and the SP) and the NameID, each length-prefixed so that no two
+// identities share a key ("a|b"+"c" and "a"+"b|c" would). The connection
+// requires a persistent NameID: transient NameIDs and email attributes never
+// key accounts, and accounts are never linked by email.
+func accountKey(id *samlsp.Identity) string {
+	var b strings.Builder
+
+	for _, part := range []string{
+		id.ConnectionID, id.Issuer,
+		cmp.Or(id.NameID.NameQualifier, id.Issuer), cmp.Or(id.NameID.SPNameQualifier, id.Audience),
+		id.NameID.Format, id.NameID.Value,
+	} {
+		b.WriteString(strconv.Itoa(len(part)))
+		b.WriteByte(':')
+		b.WriteString(part)
+		b.WriteByte(';')
+	}
+
+	return b.String()
 }
 
 // login starts an SP-initiated login with the configured connection.
@@ -200,14 +264,16 @@ func (a *app) acs(w http.ResponseWriter, r *http.Request) {
 	// The stable key: connection + persistent NameID (never an email).
 	// Login mints the session into a scratch header; its cookie is written
 	// once, by Touch, after the values are set.
-	s, err := a.sessions.Login(r.Context(), http.Header{}, principal{subject: id.ConnectionID + "|" + id.NameID.Value})
+	s, err := a.sessions.Login(r.Context(), http.Header{}, principal{subject: accountKey(&id)})
 	if err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 
 		return
 	}
 
+	s.Values["nameid"] = id.NameID.Value
 	s.Values["mail"] = strings.Join(id.AttributeValues(mailAttribute), ", ")
+
 	if !id.SessionNotOnOrAfter.IsZero() {
 		s.Values["saml_session_end"] = id.SessionNotOnOrAfter.Unix()
 	}
@@ -230,14 +296,14 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub, _ := s.Values["sub"].(string)
+	nameID, _ := s.Values["nameid"].(string)
 	mail, _ := s.Values["mail"].(string)
 
 	//nolint:gosec // G705: every interpolated value is HTML-escaped
 	fmt.Fprintf(w, `<h1>Signed in</h1><p>%s (%s)</p>
 <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="%s">
 <button type="submit">Log out (local session only, not Single Logout)</button></form>`,
-		html.EscapeString(sub), html.EscapeString(mail), html.EscapeString(session.CSRFToken(s)))
+		html.EscapeString(nameID), html.EscapeString(mail), html.EscapeString(session.CSRFToken(s)))
 }
 
 // samlSessionEnded honors the IdP's SessionNotOnOrAfter (Core §2.7.2): the
