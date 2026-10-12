@@ -41,8 +41,8 @@ future refactor phases.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`, the codes'
-  `redirect_uri_omitted`) are added with the statements MIGRATION.md lists,
-  through your migration tool.
+  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) are added
+  with the statements MIGRATION.md lists, through your migration tool.
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels

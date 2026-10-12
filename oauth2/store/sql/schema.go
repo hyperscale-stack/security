@@ -28,9 +28,10 @@ import (
 // created before them is upgraded with the statements MIGRATION.md lists
 // and ends up with the same columns as a new one. The store writes an
 // empty value as the empty string and reads NULL as the empty string. The
-// redirect_uri_omitted flag of codes is a SMALLINT NOT NULL DEFAULT 0,
-// which every engine also accepts on a populated table: a row written
-// before it reads 0, a code whose token request needs redirect_uri.
+// redirect_uri_omitted flag of codes is a SMALLINT NOT NULL DEFAULT 0, and
+// the family_issued_at of refresh tokens a BIGINT NOT NULL DEFAULT 0 (0: no
+// recorded family start), which every engine also accepts on a populated
+// table: a row written before them reads 0.
 //
 // The statements are idempotent (CREATE TABLE IF NOT EXISTS). Production
 // deployments typically run them through a migration tool rather than via
@@ -75,7 +76,8 @@ func Schema(_ Dialect) []string {
 			issued_at  BIGINT       NOT NULL,
 			expires_at BIGINT       NOT NULL,
 			issuer         TEXT,
-			extension_data TEXT
+			extension_data TEXT,
+			family_issued_at BIGINT NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
 			family_id  VARCHAR(64)  PRIMARY KEY,

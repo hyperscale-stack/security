@@ -145,6 +145,13 @@ type RefreshToken struct {
 	// carries it unchanged — the authentication event a refresh relies on
 	// never changes (OIDC Core §12.2, RFC 9068 §2.2.1).
 	ExtensionData string
+	// FamilyIssuedAt is when the family's first refresh token was issued —
+	// the code exchange or password grant that started it — carried
+	// unchanged by every rotation: grant.Config.RefreshFamilyTTL counts
+	// from it. Zero for a record written before it existed: the grant then
+	// counts from IssuedAt, the latest the family can have started. Every
+	// store persists it, to the second.
+	FamilyIssuedAt time.Time
 }
 
 // IsExpired reports whether the token has passed its expiry.

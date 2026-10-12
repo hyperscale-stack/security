@@ -78,6 +78,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"GrantContextRoundTrip", testGrantContextRoundTrip},
 		{"GrantContextLongestData", testGrantContextLongestData},
 		{"RotationKeepsGrantContext", testRotationKeepsGrantContext},
+		{"RefreshTokenFamilyIssuedAt", testRefreshFamilyIssuedAt},
 	}
 
 	for _, c := range cases {

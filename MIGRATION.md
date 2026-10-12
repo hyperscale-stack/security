@@ -1149,3 +1149,42 @@ To migrate:
    exists: an earlier build writes the column default (required) and
    requires `redirect_uri` itself, which only refuses what it refused
    before.
+
+### `oauth2`: an optional absolute lifetime for refresh-token families
+
+`grant.Config.RefreshTTL` expires a refresh token its client leaves unused,
+the inactivity expiry RFC 9700 §4.14.2 recommends; every rotation restarts
+it, so a family refreshed often enough lived forever — including one a thief
+keeps alive by rotating a token stolen from an idle client. Refresh tokens
+now record when their family started (`oauth2.RefreshToken.FamilyIssuedAt`,
+carried unchanged by every rotation), and the new
+`grant.Config.RefreshFamilyTTL` bounds a family's lifetime from that start:
+
+| | Before | After |
+| --- | --- | --- |
+| `RefreshFamilyTTL` zero (the default) | — | unchanged: families slide with `RefreshTTL` |
+| `RefreshFamilyTTL` set | — | no refresh token expires past the family's start + `RefreshFamilyTTL`; a refresh after it is `invalid_grant` ("refresh token family expired"), nothing consumed; it applies at once to existing families |
+| a refresh token written before the upgrade | — | its family counts from the token's own `IssuedAt` |
+
+To migrate:
+
+1. **SQL.** `oauth2_refresh_tokens` gains a `family_issued_at` column, which
+   `Migrate` does not add to an existing table. Until it exists, every
+   refresh-token write and lookup fails with `server_error`. Apply, through
+   your migration tool and before the new build serves traffic — the same
+   statement on PostgreSQL, MySQL and SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_refresh_tokens ADD COLUMN family_issued_at BIGINT NOT NULL DEFAULT 0;
+   ```
+
+   Existing rows read `0`: no recorded start.
+2. **Redis and memory** need nothing: a payload without the field has no
+   recorded start.
+3. **Custom stores** persist and return `FamilyIssuedAt` on every refresh
+   token — a consumed one included — the zero time as the zero time, and
+   pass `storetest.RunConformance`.
+4. To bound sessions, set `grant.Config.RefreshFamilyTTL` on the grants —
+   the `refresh_token` grant and the grants issuing refresh tokens — to the
+   longest session you accept: users then sign in again at least that
+   often.

@@ -6,6 +6,7 @@ package grant
 
 import (
 	"context"
+	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/token"
@@ -32,6 +33,9 @@ type issuance struct {
 	// extensionData is the grant context of the authorization, copied
 	// verbatim onto every token (see oauth2.AuthorizationCode).
 	extensionData string
+	// familyIssuedAt is the start of the family: the request's instant at a
+	// first issuance, the presented token's family start at a refresh.
+	familyIssuedAt time.Time
 }
 
 // issueTokenPair mints an access token — and, when the config issues one
@@ -129,8 +133,9 @@ func mintRefresh(ctx context.Context, cfg Config, req Request, iss issuance) (*o
 
 	return &oauth2.RefreshToken{
 		Token: raw, TokenHash: hash, ClientID: req.Client.ID(), Subject: iss.subject,
-		Scope: iss.refreshScope, IssuedAt: req.Now, ExpiresAt: req.Now.Add(cfg.RefreshTTL),
+		Scope: iss.refreshScope, IssuedAt: req.Now, ExpiresAt: cfg.refreshExpiry(req.Now, iss.familyIssuedAt),
 		FamilyID: iss.familyID, Issuer: req.Issuer, ExtensionData: iss.extensionData,
+		FamilyIssuedAt: iss.familyIssuedAt,
 	}, nil
 }
 

@@ -90,7 +90,7 @@ func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, er
 	// No authorization precedes this grant: its tokens carry no grant
 	// context.
 	return issueTokenPair(ctx, g.cfg, req, issuance{
-		subject: subject, scope: scope, refreshScope: scope, familyID: familyID,
+		subject: subject, scope: scope, refreshScope: scope, familyID: familyID, familyIssuedAt: req.Now,
 	})
 }
 

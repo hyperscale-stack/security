@@ -108,7 +108,7 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 	return issueTokenPair(ctx, g.cfg, req, issuance{
 		grantType: oauth2.GrantTypeAuthorizationCode, nonce: code.Nonce,
 		subject: code.Subject, scope: code.Scope, refreshScope: code.Scope,
-		familyID: familyID, extensionData: code.ExtensionData,
+		familyID: familyID, extensionData: code.ExtensionData, familyIssuedAt: req.Now,
 	})
 }
 

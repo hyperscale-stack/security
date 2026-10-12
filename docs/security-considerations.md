@@ -128,7 +128,11 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   [Token-family revocation](#token-family-revocation-storage-guarantees).
   Clients MUST keep the refresh token returned by each exchange (RFC 6749
   §6) and must not refresh concurrently with the same token, or they lose
-  the family. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`)
+  the family. `RefreshTTL` is an inactivity expiry that every rotation
+  restarts; `grant.Config.RefreshFamilyTTL` adds an absolute bound from the
+  family's first issuance (`RefreshToken.FamilyIssuedAt`), which also ends a
+  family a thief keeps alive by rotating a stolen token — zero, the
+  default, sets none. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`)
   for confidential clients only: without it their refresh token stays
   reusable until it expires, while the refresh token of a client that is
   not confidential — public or untyped — always rotates (RFC 9700 §2.2.2,
@@ -1100,6 +1104,9 @@ span catalog.
       revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
+- [ ] Bound refresh-token families with `grant.Config.RefreshFamilyTTL` —
+      the longest session you accept, 30 days for instance — so a stolen
+      refresh token kept alive by rotation dies with its family.
 - [ ] Make the `IssuerResolver` return the same issuer for every endpoint
       of a realm (`/authorize`, `/token`, `/revoke`, `/introspect`), and
       authenticate users within `AuthorizeRequest.Issuer` in the

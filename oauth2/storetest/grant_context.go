@@ -7,6 +7,7 @@ package storetest
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 )
@@ -147,4 +148,23 @@ func testRotationKeepsGrantContext(t *testing.T, s oauth2.Storage) {
 	err = s.RotateRefreshToken(ctx(), revoked.Refresh.TokenHash, reboundRevoked)
 	mustCode(t, err, oauth2.CodeInvalidRequest, "rotate a token of a revoked family into another grant context")
 	requireAbsent(t, s, reboundRevoked)
+}
+
+// testRefreshFamilyIssuedAt round-trips the start of a refresh token's
+// family: a zero one — a record written before it existed — stays zero, a
+// set one is kept to the second through a rotation, on the replacement and
+// on the consumed token the Redis rotation script re-encodes.
+func testRefreshFamilyIssuedAt(t *testing.T, s oauth2.Storage) {
+	unset := newPair("start-unset", "fam-start-unset")
+	unset.Refresh.FamilyIssuedAt = time.Time{}
+	mustSave(t, s, unset)
+	requireContext(t, s, unset)
+
+	first, next := newPair("start-0", "fam-start"), newPair("start-1", "fam-start")
+	next.Refresh.FamilyIssuedAt = first.Refresh.FamilyIssuedAt
+
+	mustSave(t, s, first)
+	mustRotate(t, s, first, next)
+	requireContext(t, s, next)
+	requireContext(t, s, first)
 }

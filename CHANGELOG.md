@@ -424,6 +424,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `OIDC_PROVIDER_ISSUER`, `OIDC_PROVIDER_ADDR` and
   `OIDC_PROVIDER_REDIRECT_URI`; the default redirect URI is the callback of
   the `demo` connection of `examples/oidc-client` (#86).
+- **OAuth2 absolute refresh-family lifetime**: `grant.Config.RefreshFamilyTTL`
+  (opt-in, zero by default) bounds a refresh-token family's lifetime from its
+  first issuance, which refresh tokens now record
+  (`oauth2.RefreshToken.FamilyIssuedAt`, carried unchanged by every rotation):
+  no refresh token outlives the deadline and a later refresh is
+  `invalid_grant`. `RefreshTTL` keeps its inactivity semantics (RFC 9700
+  §4.14.2).
 
 ### Changed
 
@@ -586,6 +593,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`store/sql`: a `redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0` column
   existing databases add with the `ALTER TABLE` of
   [MIGRATION.md](MIGRATION.md)).
+- **OAuth2 `RefreshToken.FamilyIssuedAt` (storage, breaking for custom stores
+  and SQL schemas)**: every store persists it (`store/sql`: a
+  `family_issued_at BIGINT NOT NULL DEFAULT 0` column existing databases add
+  with the `ALTER TABLE` of [MIGRATION.md](MIGRATION.md)).
 
 ### Fixed
 

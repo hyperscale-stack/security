@@ -134,6 +134,7 @@ func TestRedisLegacyPayloadsReadEmptyContext(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, rt.Issuer)
 			assert.Empty(t, rt.ExtensionData)
+			assert.True(t, rt.FamilyIssuedAt.IsZero(), "a legacy refresh token has no recorded family start")
 		})
 	}
 }

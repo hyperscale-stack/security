@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
@@ -23,7 +24,9 @@ import (
 //     whatever the client or issuer presenting it.
 //  2. Re-bind client (refresh.ClientID MUST match the authenticated client)
 //     and issuer (refresh.Issuer MUST match the issuer resolved for the
-//     request; a token stored without one only matches an empty issuer).
+//     request; a token stored without one only matches an empty issuer),
+//     and refuse a family past [Config.RefreshFamilyTTL] (invalid_grant,
+//     nothing consumed).
 //  3. Optionally narrow scope (RFC 6749 §6 forbids broadening), then
 //     require the access token's scope within the client's current scope
 //     registration (invalid_scope otherwise, nothing consumed).
@@ -35,8 +38,10 @@ import (
 //     with server_error ([ErrRotationRequiresGenerator]).
 //  5. Mint a fresh access token.
 //  6. When rotating, mint a fresh refresh token in the same family with
-//     the presented token's scope (RFC 6749 §6) — every minted token keeps
-//     the presented token's issuer and grant context, the authentication
+//     the presented token's scope (RFC 6749 §6) and family start, expiring
+//     RefreshTTL later but never past the family's deadline — every minted
+//     token keeps the presented token's issuer and grant context, the
+//     authentication
 //     event a refresh rests on never changes (OIDC Core §12.2, RFC 9068
 //     §2.2.1) — then consume the old token
 //     and persist the new pair in one atomic
@@ -113,6 +118,10 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued by another issuer")
 	}
 
+	if g.cfg.familyExpired(familyStart(rt), req.Now) {
+		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh token family expired")
+	}
+
 	scope, err := narrowScopesForRefresh(req.Form.Get("scope"), rt.Scope)
 	if err != nil {
 		return nil, err
@@ -123,6 +132,17 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 	}
 
 	return g.issueRotated(ctx, req, rt, scope)
+}
+
+// familyStart returns the start of rt's family: its recorded
+// FamilyIssuedAt or, for a record written before families recorded it, its
+// own IssuedAt — the latest the family can have started.
+func familyStart(rt *oauth2.RefreshToken) time.Time {
+	if rt.FamilyIssuedAt.IsZero() {
+		return rt.IssuedAt
+	}
+
+	return rt.FamilyIssuedAt
 }
 
 // checkRegisteredScope refuses, with invalid_scope (RFC 6749 §5.2), an
@@ -199,6 +219,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		grantType: oauth2.GrantTypeRefreshToken,
 		subject:   old.Subject, scope: scope, refreshScope: old.Scope,
 		familyID: old.FamilyID, extensionData: old.ExtensionData,
+		familyIssuedAt: familyStart(old),
 	}
 
 	access, err := mintAccess(ctx, g.cfg, req, iss)

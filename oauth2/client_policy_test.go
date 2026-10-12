@@ -793,3 +793,43 @@ func TestPublicClientRefreshTokensRotateUnderProfile20(t *testing.T) {
 	rec = refresh(second)
 	require.Equal(t, http.StatusBadRequest, rec.Code, "the reuse revoked the family")
 }
+
+// TestRefreshFamilyLifetimeThroughTheServer replays the audit's probe
+// end to end with an injected clock: with grant.Config.RefreshFamilyTTL
+// 72h, the family authorized at T is refused after T+72h whatever the
+// rotations in between.
+func TestRefreshFamilyLifetimeThroughTheServer(t *testing.T) {
+	t.Parallel()
+
+	env := newExtensionEnv(t, &fakeExtension{}, func(_ *oauth2.ServerConfig, g *grant.Config) {
+		g.RefreshFamilyTTL = 72 * time.Hour
+	})
+
+	q := authorizeQuery()
+	q.Set("scope", "read")
+
+	rt, _ := jsonBody(t, env.exchange(env.code(t, q, approve)))["refresh_token"].(string)
+	require.NotEmpty(t, rt)
+
+	for range 3 {
+		env.clock.Advance(23 * time.Hour)
+
+		rec := env.refresh(rt)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+		rt, _ = jsonBody(t, rec)["refresh_token"].(string)
+	}
+
+	env.clock.Advance(3 * time.Hour) // T+72h: the deadline itself still refreshes
+
+	rec := env.refresh(rt)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rt, _ = jsonBody(t, rec)["refresh_token"].(string)
+
+	env.clock.Advance(time.Second) // past T+72h: the family is over
+
+	rec = env.refresh(rt)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, oauth2.CodeInvalidGrant, jsonBody(t, rec)["error"])
+}

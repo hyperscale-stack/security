@@ -48,6 +48,18 @@ type Config struct {
 	// RefreshTTL is the refresh-token expiry window. Honored when
 	// RefreshTokens is non-nil.
 	RefreshTTL time.Duration
+	// RefreshFamilyTTL, when positive, bounds the lifetime of a
+	// refresh-token family — every refresh token derived from one
+	// authorization — counted from its first issuance
+	// ([oauth2.RefreshToken.FamilyIssuedAt]): a refresh after that is
+	// refused with invalid_grant, nothing consumed, and no refresh token is
+	// minted expiring later. RefreshTTL keeps expiring a token its client
+	// leaves unused — the inactivity expiry RFC 9700 §4.14.2 recommends;
+	// this absolute bound also ends a family a thief keeps alive by
+	// rotating it. Zero, the default, sets no bound. It applies to existing
+	// families as soon as it is set: every family records its start.
+	// Access tokens are not capped: they live AccessTTL.
+	RefreshFamilyTTL time.Duration
 	// RefreshTokenScope, when set, makes the authorization_code and legacy
 	// password grants issue a refresh token only when the granted scope
 	// holds this exact scope token — e.g. "offline_access", the consent
@@ -98,6 +110,27 @@ func (c Config) issuesRefreshFor(client oauth2.Client, scope string) bool {
 	}
 
 	return c.RefreshTokenScope == "" || slices.Contains(strings.Fields(scope), c.RefreshTokenScope)
+}
+
+// refreshExpiry is the expiry of a refresh token minted at now into a
+// family started at start: RefreshTTL after now, never past the family's
+// deadline when RefreshFamilyTTL sets one.
+func (c Config) refreshExpiry(now, start time.Time) time.Time {
+	expires := now.Add(c.RefreshTTL)
+
+	if c.RefreshFamilyTTL > 0 {
+		if deadline := start.Add(c.RefreshFamilyTTL); expires.After(deadline) {
+			return deadline
+		}
+	}
+
+	return expires
+}
+
+// familyExpired reports whether a family started at start is past its
+// deadline — RefreshFamilyTTL after start, when set — at now.
+func (c Config) familyExpired(start, now time.Time) bool {
+	return c.RefreshFamilyTTL > 0 && now.After(start.Add(c.RefreshFamilyTTL))
 }
 
 // checkGrantType returns nil when client declares grantType
