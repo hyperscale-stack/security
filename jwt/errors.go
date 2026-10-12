@@ -63,6 +63,11 @@ var (
 	// [MarshalJWKS]). The key material never appears in the error.
 	ErrInvalidKey = newJWTError("invalid key", security.ErrInvalidCredentials)
 
+	// ErrInvalidClaims signals a well-formed, verified token whose claims
+	// the verifier refuses: [BearerVerifier] requires a non-empty sub, the
+	// principal (RFC 9068 §2.2). Wraps [security.ErrInvalidCredentials].
+	ErrInvalidClaims = newJWTError("invalid claims", security.ErrInvalidCredentials)
+
 	// ErrUnsignableClaims signals claims a signer refuses to sign: claims
 	// that cannot be encoded — a [NumericDate] before 1970 or after year
 	// 9999, the zero time.Time included — or, for the RFC 9068 access

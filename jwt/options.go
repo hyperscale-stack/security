@@ -52,17 +52,23 @@ func WithAllowedAlgorithms(algs ...Algorithm) Option {
 	return func(c *config) { c.allowed = slices.Clone(algs) }
 }
 
-// WithIssuer pins the expected `iss` claim. Empty issuer disables the check
-// (the default), which is acceptable only when the verifier sits behind a
-// trust boundary that already authenticates the issuer.
+// WithIssuer pins the expected `iss` claim, compared exactly (RFC 9068 §4).
+// Empty issuer disables the check (the default), which is acceptable only
+// when the verifier sits behind a trust boundary that already
+// authenticates the issuer; [BearerVerifier] requires one.
 func WithIssuer(iss string) Option {
 	return func(c *config) { c.issuer = iss }
 }
 
 // WithAudience pins the expected `aud` claim values. At verification time
 // the token is accepted when AT LEAST ONE of its audiences is in the list.
-// Passing zero audiences disables the check.
+// Passing zero audiences disables the check; an empty audience panics — it
+// would match a token whose aud is "".
 func WithAudience(aud ...string) Option {
+	if slices.Contains(aud, "") {
+		panic("jwtsec.WithAudience: empty audience")
+	}
+
 	return func(c *config) { c.audiences = slices.Clone(aud) }
 }
 

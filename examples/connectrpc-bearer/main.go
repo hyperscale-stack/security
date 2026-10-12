@@ -40,6 +40,7 @@ import (
 	"github.com/hyperscale-stack/security/bearer"
 	connectrpcsec "github.com/hyperscale-stack/security/connectrpc"
 	jwtsec "github.com/hyperscale-stack/security/jwt"
+	oauth2token "github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/hyperscale-stack/security/voter"
 )
 
@@ -47,6 +48,7 @@ const (
 	issuer   = "https://issuer.example"
 	audience = "https://connect.example"
 	keyID    = "demo-key"
+	clientID = "demo-client"
 	scope    = "health:read"
 	addr     = ":9091"
 )
@@ -63,7 +65,7 @@ func newServer() (http.Handler, minter, error) {
 		return nil, nil, fmt.Errorf("generate key: %w", err)
 	}
 
-	signer, err := jwtsec.NewSigner(jwtsec.PrivateKey{
+	signer, err := jwtsec.NewOAuth2AccessTokenSigner(jwtsec.PrivateKey{
 		KeyID:     keyID,
 		Algorithm: jwtsec.EdDSA,
 		Key:       priv,
@@ -81,6 +83,7 @@ func newServer() (http.Handler, minter, error) {
 	verifier := jwtsec.NewVerifier(jwks,
 		jwtsec.WithIssuer(issuer),
 		jwtsec.WithAudience(audience),
+		jwtsec.WithType(jwtsec.TypeAccessToken), // RFC 9068 §4: refuse ID Tokens
 	)
 
 	engine := security.NewEngine(
@@ -104,12 +107,13 @@ func newServer() (http.Handler, minter, error) {
 	mint := func(grant string) (string, error) {
 		now := time.Now()
 
-		token, err := signer.Sign(context.Background(), &jwtsec.StandardClaims{
+		token, err := signer.SignAccessToken(context.Background(), oauth2token.AccessTokenClaims{
 			Issuer:    issuer,
 			Subject:   "demo-user",
-			Audience:  jwtsec.Audience{audience},
-			IssuedAt:  jwtsec.NewNumericDate(now),
-			ExpiresAt: jwtsec.NewNumericDate(now.Add(time.Hour)),
+			Audience:  audience,
+			ClientID:  clientID,
+			IssuedAt:  now,
+			ExpiresAt: now.Add(time.Hour),
 			Scope:     grant,
 		})
 		if err != nil {
