@@ -18,7 +18,9 @@ import (
 //  1. Enforces POST + application/x-www-form-urlencoded.
 //  2. Authenticates the client via the configured ClientAuthenticators.
 //  3. Looks up the grant_type and dispatches to the matching Grant.
-//  4. Serializes the response per RFC 6749 §5.1 (success) or §5.2 (error).
+//  4. Serializes the response per RFC 6749 §5.1 (success) — plus the
+//     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
+//     (error).
 //
 // Errors are emitted as JSON: {"error":"...","error_description":"..."}.
 func (s *Server) TokenHandler() http.Handler {
@@ -72,12 +74,13 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	now := s.cfg.Now()
 
 	resp, err := handler.Handle(r.Context(), GrantRequest{
-		Client:   client,
-		Form:     r.PostForm,
-		Issuer:   issuer,
-		Audience: audience,
-		Now:      now,
-		Profile:  s.cfg.Profile,
+		Client:    client,
+		Form:      r.PostForm,
+		Issuer:    issuer,
+		Audience:  audience,
+		Now:       now,
+		Profile:   s.cfg.Profile,
+		Extension: s.cfg.Extension,
 	})
 	if err != nil {
 		s.writeOAuthError(r.Context(), w, err)
@@ -98,6 +101,8 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"` //nolint:gosec // wire field name mandated by RFC 6749
 	Scope        string `json:"scope,omitempty"`
+	// IDToken is the OpenID Connect Core §3.1.3.3 member an Extension adds.
+	IDToken string `json:"id_token,omitempty"`
 }
 
 // writeTokenResponse serializes resp to the standard JSON body and adds
@@ -110,6 +115,7 @@ func writeTokenResponse(w http.ResponseWriter, resp *GrantResponse, now time.Tim
 		TokenType:   resp.TokenType,
 		ExpiresIn:   expiresIn(resp.Pair.Access.ExpiresAt, now),
 		Scope:       resp.Scope,
+		IDToken:     resp.IDToken,
 	}
 
 	if resp.Pair.Refresh != nil {
@@ -151,29 +157,36 @@ type errorResponse struct {
 }
 
 // writeOAuthError serializes err as an RFC 6749 §5.2 envelope. Non-OAuth
-// errors collapse to server_error so the wire response stays compliant.
+// errors, and *Error values whose code is malformed, collapse to
+// server_error so the wire response stays compliant.
 //
 // The normalized envelope — cause included — is handed to the configured
 // [ErrorHook] before anything is written, since the wire body carries only
 // the code, the description and the URI.
 func (s *Server) writeOAuthError(ctx context.Context, w http.ResponseWriter, err error) {
 	var oe *Error
-	if !errors.As(err, &oe) {
+	if !errors.As(err, &oe) || oe == nil {
 		oe = ErrServerError.WithCause(err)
 	}
+
+	oe = jsonWireError(oe)
 
 	s.notifyError(ctx, oe)
 	writeErrorResponse(w, oe)
 }
 
 // writeErrorResponse writes oe as the RFC 6749 §5.2 JSON body, with the
-// status code it maps to. It does not notify the [ErrorHook]: callers that
-// already reported the failure behind oe use it directly.
+// status code it maps to: a malformed code is answered server_error, and a
+// description or error_uri outside the RFC 6749 charset is left out. It
+// does not notify the [ErrorHook]: callers that already reported the
+// failure behind oe use it directly.
 func writeErrorResponse(w http.ResponseWriter, oe *Error) {
+	oe = jsonWireError(oe)
+
 	body := errorResponse{
 		Error:            oe.Code,
-		ErrorDescription: oe.Description,
-		ErrorURI:         oe.URI,
+		ErrorDescription: wireDescription(oe.Description),
+		ErrorURI:         wireURI(oe.URI),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

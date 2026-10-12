@@ -22,12 +22,12 @@ import (
 
 // Shared fixtures.
 const (
-	clientID       = "client-1"
-	clientSecret   = "secret-1"
-	subject        = "alice"
-	redirectURI    = "https://app.example/cb"
-	codeVerifier   = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-	codeChallenge  = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	clientID      = "client-1"
+	clientSecret  = "secret-1"
+	subject       = "alice"
+	redirectURI   = "https://app.example/cb"
+	codeVerifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	codeChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 )
 
 func newClient() oauth2.Client {
@@ -67,6 +67,7 @@ func newAuthCodeReq(ctx context.Context, store *memory.Store, withPKCE bool) (*g
 		Scope:       "read:mail",
 		IssuedAt:    time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
 		ExpiresAt:   time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
+		Issuer:      "https://auth.example",
 	}
 
 	if withPKCE {

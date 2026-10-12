@@ -32,12 +32,12 @@ func clientPair(raw, family, scope string, expiresAt time.Time) *oauth2.TokenPai
 		Access: oauth2.AccessToken{
 			Token: raw + "-access", TokenHash: oauth2.HashToken(nil, raw+"-access"),
 			ClientID: clientID, Subject: subject, Scope: scope, Audience: "api",
-			FamilyID: family, IssuedAt: issuedAt, ExpiresAt: expiresAt,
+			FamilyID: family, IssuedAt: issuedAt, ExpiresAt: expiresAt, Issuer: "https://auth.example",
 		},
 		Refresh: &oauth2.RefreshToken{
 			Token: raw, TokenHash: oauth2.HashToken(nil, raw),
 			ClientID: clientID, Subject: subject, Scope: scope,
-			FamilyID: family, IssuedAt: issuedAt, ExpiresAt: expiresAt,
+			FamilyID: family, IssuedAt: issuedAt, ExpiresAt: expiresAt, Issuer: "https://auth.example",
 		},
 	}
 }

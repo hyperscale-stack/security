@@ -29,8 +29,13 @@ type Error struct {
 	Cause error
 }
 
-// Error implements the error interface.
+// Error implements the error interface. A nil *Error — returned as an
+// error by mistake — reads "oauth2: <nil>".
 func (e *Error) Error() string {
+	if e == nil {
+		return "oauth2: <nil>"
+	}
+
 	if e.Description != "" {
 		return fmt.Sprintf("oauth2: %s: %s", e.Code, e.Description)
 	}
@@ -38,8 +43,15 @@ func (e *Error) Error() string {
 	return "oauth2: " + e.Code
 }
 
-// Unwrap exposes the embedded cause to errors.Is / errors.As.
-func (e *Error) Unwrap() error { return e.Cause }
+// Unwrap exposes the embedded cause to errors.Is / errors.As; a nil *Error
+// wraps nothing.
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Cause
+}
 
 // HTTPStatus returns the canonical HTTP status code for this error per
 // RFC 6749 §5.2 / RFC 7009 / RFC 7662.
@@ -71,6 +83,62 @@ const (
 	CodeAccessDenied            = "access_denied"
 	CodeServerError             = "server_error"
 	CodeTemporarilyUnavailable  = "temporarily_unavailable"
+)
+
+// The OpenID Connect Core 1.0 §3.1.2.6 error codes, registered in the IANA
+// OAuth Extensions Error Registry for the authorization endpoint (RFC 6749
+// §8.5). Like the RFC 6749 §4.1.2.1 codes, they may travel back to the
+// client in an authorization error response — a [Consent.Refusal], or an
+// error an [Extension] returns.
+const (
+	CodeInteractionRequired      = "interaction_required"
+	CodeLoginRequired            = "login_required"
+	CodeAccountSelectionRequired = "account_selection_required"
+	CodeConsentRequired          = "consent_required"
+	CodeInvalidRequestURI        = "invalid_request_uri"
+	CodeInvalidRequestObject     = "invalid_request_object"
+	CodeRequestNotSupported      = "request_not_supported"
+	CodeRequestURINotSupported   = "request_uri_not_supported"
+	CodeRegistrationNotSupported = "registration_not_supported"
+)
+
+// Sentinels for the OpenID Connect Core 1.0 §3.1.2.6 error codes — the
+// answers to an authentication request that cannot be completed without
+// interaction (prompt=none) or that uses a parameter the server does not
+// support. They read 400 through HTTPStatus but are meant to be
+// redirected: return one as a [Consent.Refusal].
+var (
+	// ErrInteractionRequired -> interaction_required: the request needs
+	// some end-user interaction.
+	ErrInteractionRequired = newCoded(CodeInteractionRequired, "end-user interaction is required", security.ErrAccessDenied)
+	// ErrLoginRequired -> login_required: the request needs the end-user to
+	// authenticate.
+	ErrLoginRequired = newCoded(CodeLoginRequired, "end-user authentication is required", security.ErrAccessDenied)
+	// ErrAccountSelectionRequired -> account_selection_required: the
+	// end-user must select one of their sessions.
+	ErrAccountSelectionRequired = newCoded(CodeAccountSelectionRequired,
+		"end-user account selection is required", security.ErrAccessDenied)
+	// ErrConsentRequired -> consent_required: the request needs the
+	// end-user's consent.
+	ErrConsentRequired = newCoded(CodeConsentRequired, "end-user consent is required", security.ErrAccessDenied)
+	// ErrInvalidRequestURI -> invalid_request_uri: the request_uri
+	// returns an error or invalid data.
+	ErrInvalidRequestURI = newCoded(CodeInvalidRequestURI, "the request_uri is invalid", security.ErrInvalidCredentials)
+	// ErrInvalidRequestObject -> invalid_request_object: the request
+	// parameter carries an invalid request object.
+	ErrInvalidRequestObject = newCoded(CodeInvalidRequestObject, "the request object is invalid", security.ErrInvalidCredentials)
+	// ErrRequestNotSupported -> request_not_supported: the request
+	// parameter is not supported.
+	ErrRequestNotSupported = newCoded(CodeRequestNotSupported,
+		"the request parameter is not supported", security.ErrUnsupportedCredential)
+	// ErrRequestURINotSupported -> request_uri_not_supported: the
+	// request_uri parameter is not supported.
+	ErrRequestURINotSupported = newCoded(CodeRequestURINotSupported,
+		"the request_uri parameter is not supported", security.ErrUnsupportedCredential)
+	// ErrRegistrationNotSupported -> registration_not_supported: the
+	// registration parameter is not supported.
+	ErrRegistrationNotSupported = newCoded(CodeRegistrationNotSupported,
+		"the registration parameter is not supported", security.ErrUnsupportedCredential)
 )
 
 // Sentinel constructors returning *Error values. They wrap the core security
@@ -146,10 +214,10 @@ func newCoded(code, desc string, cause error) *Error {
 }
 
 // IsCode returns the OAuth2 error code embedded in err, or "" when err is
-// not an [*Error] in its chain.
+// not an [*Error] in its chain — a nil *Error included.
 func IsCode(err error) string {
 	var e *Error
-	if errors.As(err, &e) {
+	if errors.As(err, &e) && e != nil {
 		return e.Code
 	}
 

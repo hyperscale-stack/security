@@ -17,8 +17,11 @@ import (
 // The flow:
 //
 //  1. Look up the refresh token; a consumed one (rotated, or of a revoked
-//     family) is reuse: revoke the family and refuse with invalid_grant.
-//  2. Re-bind client (refresh.ClientID MUST match the authenticated client).
+//     family) is reuse: revoke the family and refuse with invalid_grant —
+//     whatever the client or issuer presenting it.
+//  2. Re-bind client (refresh.ClientID MUST match the authenticated client)
+//     and issuer (refresh.Issuer MUST match the issuer resolved for the
+//     request; a token stored without one only matches an empty issuer).
 //  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
 //  4. Decide rotation before minting anything: mandatory under
 //     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
@@ -27,7 +30,10 @@ import (
 //     ([ErrRotationRequiresGenerator]).
 //  5. Mint a fresh access token.
 //  6. When rotating, mint a fresh refresh token in the same family with
-//     the presented token's scope (RFC 6749 §6), then consume the old token
+//     the presented token's scope (RFC 6749 §6) — every minted token keeps
+//     the presented token's issuer and grant context, the authentication
+//     event a refresh rests on never changes (OIDC Core §12.2, RFC 9068
+//     §2.2.1) — then consume the old token
 //     and persist the new pair in one atomic
 //     [oauth2.RefreshTokenStore.RotateRefreshToken]; otherwise persist the
 //     access token alone into the family. Either write fails, persisting
@@ -95,6 +101,10 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued for a different client")
 	}
 
+	if rt.Issuer != req.Issuer {
+		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued by another issuer")
+	}
+
 	scope, err := narrowScopesForRefresh(req.Form.Get("scope"), rt.Scope)
 	if err != nil {
 		return nil, err
@@ -138,7 +148,13 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
 
-	access, err := mintAccess(ctx, g.cfg, req, old.Subject, scope, old.FamilyID)
+	iss := issuance{
+		grantType: oauth2.GrantTypeRefreshToken,
+		subject:   old.Subject, scope: scope, refreshScope: old.Scope,
+		familyID: old.FamilyID, extensionData: old.ExtensionData,
+	}
+
+	access, err := mintAccess(ctx, g.cfg, req, iss)
 	if err != nil {
 		return nil, err
 	}
@@ -148,16 +164,29 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	if !rotate {
 		// The legacy Profile20 refresh: the access token alone joins the
 		// family, which the store refuses once revoked.
-		if err := g.cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
-			return nil, storageFailure(err)
+		idToken, err := extendResponse(ctx, req, iss, pair)
+		if err != nil {
+			return nil, err
 		}
 
-		return pairResponse(pair, scope), nil
+		if err := g.cfg.Storage.SaveTokenPair(ctx, pair); err != nil {
+			return nil, grantFailure(err)
+		}
+
+		return pairResponse(pair, scope, idToken), nil
 	}
 
 	// RFC 6749 §6: the new refresh token keeps the scope of the one it
-	// replaces; a narrowed request only narrows the access token.
-	if pair.Refresh, err = mintRefresh(ctx, g.cfg, req, old.Subject, old.Scope, old.FamilyID); err != nil {
+	// replaces (iss.refreshScope); a narrowed request only narrows the
+	// access token.
+	if pair.Refresh, err = mintRefresh(ctx, g.cfg, req, iss); err != nil {
+		return nil, err
+	}
+
+	// Extended before the rotation: a failure leaves the presented token
+	// usable.
+	idToken, err := extendResponse(ctx, req, iss, pair)
+	if err != nil {
 		return nil, err
 	}
 
@@ -165,17 +194,17 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		return nil, g.rotationFailure(ctx, old.FamilyID, err)
 	}
 
-	return pairResponse(pair, scope), nil
+	return pairResponse(pair, scope, idToken), nil
 }
 
 // rotationFailure maps a failed rotation. Reuse — the token was consumed
 // since the lookup — answers the bare invalid_grant
 // [oauth2.ErrRefreshTokenReused]; when the store could not revoke the
 // family on that path, the revocation is retried as for a reuse the grant
-// detects itself. Anything else goes through storageFailure.
+// detects itself. Anything else goes through grantFailure.
 func (g *RefreshToken) rotationFailure(ctx context.Context, familyID string, err error) error {
 	if !errors.Is(err, oauth2.ErrRefreshTokenReused) {
-		return storageFailure(err)
+		return grantFailure(err)
 	}
 
 	if errors.Is(err, oauth2.ErrTokenFamilyRevocationFailed) {

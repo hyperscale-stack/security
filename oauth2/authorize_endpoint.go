@@ -38,6 +38,13 @@ const (
 	responseTypeToken = "token"
 )
 
+// The response_mode values of the response types above (OAuth 2.0
+// Multiple Response Type Encoding Practices §2.1).
+const (
+	responseModeQuery    = "query"
+	responseModeFragment = "fragment"
+)
+
 // authorizeFlow identifies which /authorize flow a request runs.
 type authorizeFlow int
 
@@ -54,8 +61,14 @@ type OpaqueTokenGenerator interface {
 }
 
 // AuthorizeRequest is the parsed and validated /authorize request handed to
-// a [ConsentFunc]. By the time the ConsentFunc sees it, the client and the
-// redirect URI are already verified.
+// a [ConsentFunc]. By the time the ConsentFunc sees it, the client, the
+// redirect URI, the response type, the scope and the PKCE parameters are
+// verified and the issuer is resolved. It is a read-only copy of the
+// request the handler validated: a callback changing any field but
+// ExtensionRequest, or the identity of the Client it shares with the server,
+// fails the authorization with server_error ([ErrAuthorizeRequestModified]).
+// A consent narrows the grant through [Consent.Scope]. The values Client and
+// ExtensionRequest point to are shared: never mutate them.
 type AuthorizeRequest struct {
 	// Client is the resolved, registered client.
 	Client Client
@@ -76,35 +89,77 @@ type AuthorizeRequest struct {
 	// challenge is well-formed for it (RFC 7636 §4.2).
 	CodeChallenge       string
 	CodeChallengeMethod string
-	// Nonce echoes the OIDC nonce parameter, when present.
+	// Nonce echoes the OIDC nonce parameter, when present. The core does not
+	// bound it: an extension relying on it MUST bound it (see LIMITATIONS).
 	Nonce string
+	// Issuer is the issuer the IssuerResolver returned for the request: the
+	// realm the authorization code — or implicit access token — is bound
+	// to. A ConsentFunc authenticates the resource owner within it: a
+	// session established at another issuer is no authentication here.
+	Issuer string
+	// ExtensionRequest is what the server's [Extension] returned from
+	// ValidateAuthorizeRequest — its validated view of its own parameters,
+	// e.g. an OpenID Connect provider's prompt and max_age; nil without an
+	// extension, or when it has nothing to add. The value is shared: never
+	// mutate it.
+	ExtensionRequest any
 }
 
 // Consent is the resource-owner decision returned by a [ConsentFunc].
 type Consent struct {
 	// Approved reports whether the resource owner granted the request.
 	Approved bool
-	// Subject is the authenticated resource-owner identifier. It is
-	// required when Approved is true.
+	// Subject is the authenticated resource-owner identifier. An approval
+	// MUST name one, of at most 255 bytes (OpenID Connect Core §2): an
+	// empty or longer one fails the request with server_error, nothing
+	// issued.
 	Subject string
 	// Scope is the granted scope. Empty means "exactly what was requested";
 	// a non-empty value MUST be a subset of [AuthorizeRequest.Scope] — the
 	// consent step may narrow the grant but never broaden it.
 	Scope string
+	// Refusal, on a decision that does not approve the request, is the
+	// error redirected to the client instead of access_denied — e.g.
+	// [ErrLoginRequired] or [ErrConsentRequired] for an OpenID Connect
+	// prompt=none request the application cannot complete silently (OIDC
+	// Core §3.1.2.6). Only the authorization-endpoint codes of RFC 6749
+	// §4.1.2.1 and OIDC Core §3.1.2.6 travel; any other is answered
+	// server_error. Its Description and URI travel only when they fit the
+	// RFC 6749 §4.1.2.1 charset — otherwise they are left out, the code
+	// kept — and they reach the client's URL, history and logs: never put
+	// personal data in them. An approval carrying a Refusal contradicts
+	// itself and fails closed with server_error.
+	Refusal *Error
+	// ExtensionResult is the trusted, extension-defined result of the
+	// authentication and consent — for an OpenID Connect provider, the
+	// time, ACR and AMR of the authentication event and the claims released
+	// — handed to Extension.CompleteAuthorization on an approval, which
+	// validates it and decides what the grant records. It is ignored
+	// without an extension and never persisted as is. The value is shared:
+	// never mutate it after returning it.
+	ExtensionResult any
 }
 
 // ConsentFunc is the application hook invoked by [Server.AuthorizeHandler]
 // once the /authorize request is validated. The application authenticates
-// the resource owner, renders its own login / consent UI, and returns the
-// decision.
+// the resource owner — within the realm of ar.Issuer —, renders its own
+// login / consent UI, and returns the decision.
 //
 // Return contract:
-//   - (consent, nil): the handler proceeds — it mints the authorization
-//     code (or implicit token) and redirects to the client's redirect URI.
+//   - (consent, nil): the handler proceeds. An approval mints the
+//     authorization code (or implicit token) and redirects to the client's
+//     redirect URI; a refusal redirects its Refusal, or access_denied.
 //   - (nil, nil): the ConsentFunc has already written a response to w
 //     (typically the login / consent page on the initial GET); the handler
 //     does nothing more.
-//   - (nil, err): the handler redirects to the client with a server_error.
+//   - (nil, err): the ConsentFunc failed: the handler redirects to the
+//     client with a server_error, whatever err — an [*Error] included,
+//     since a refusal is a decision, returned as [Consent.Refusal] — and
+//     hands err to the [ErrorHook].
+//
+// ar is read-only: a decision returned after changing it is answered with
+// a server_error ([ErrAuthorizeRequestModified]); narrow the grant with
+// Consent.Scope instead.
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -132,16 +187,22 @@ type AuthorizeConfig struct {
 // when [AuthorizeConfig.AllowImplicit] is set, the legacy implicit flow.
 //
 // The handler validates the request (client, redirect URI, response type,
-// scope, PKCE) and then calls consent. The library owns the protocol
-// plumbing — request validation, code / token minting, the redirect —
-// while the application owns the login and consent UI through the
-// [ConsentFunc].
+// scope, PKCE), resolves its issuer through the [IssuerResolver] — the
+// realm the code, or implicit token, is bound to — and then calls consent.
+// The library owns the protocol plumbing — request validation, code /
+// token minting, the redirect — while the application owns the login and
+// consent UI through the [ConsentFunc].
 //
 // Errors that occur before the redirect URI is trusted (unknown client,
 // unregistered redirect URI) are returned directly with a 400 status and
 // are NOT redirected, per RFC 6749 §4.1.2.1 (open-redirector protection).
-// Every later error is redirected back to the client — in the query string
-// for the code flow, in the fragment for the implicit flow.
+// So is a response_mode other than the one the handler answers in —
+// fragment for an enabled implicit flow, query otherwise (OAuth 2.0
+// Multiple Response Type Encoding Practices §2.1; OIDC Core 1.0
+// incorporating errata set 2, §3.1.2.6). Every later error is redirected
+// back to the client — in the query string for the code flow, in the
+// fragment for the implicit flow — and only with an error code the
+// authorization endpoint defines.
 //
 // AuthorizeHandler panics on a nil consent, and on an implicit-flow
 // misconfiguration (AllowImplicit on a non-Profile20 server, or without an
@@ -208,31 +269,168 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	state := r.FormValue("state")
+	// The response mode decides how every later answer travels: one the
+	// handler cannot honor leaves no way to answer the client at all.
+	if !responseModeSupported(cfg, r) {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("unsupported response_mode"))
+		http.Error(w, "oauth2: unsupported response_mode", http.StatusBadRequest)
+
+		return
+	}
 
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	flow, oerr := resolveFlow(cfg, r.FormValue("response_type"))
-	if oerr != nil {
-		// The response type is unknown — default to a query-string error.
-		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, false)
-
+	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI)
+	if !ok {
 		return
 	}
 
-	useFragment := flow == flowImplicit
+	s.authorize(cfg, consent, w, r, st)
+}
+
+// authorizeState is a validated /authorize request: the snapshot the
+// server works from. Callbacks only ever get copies of it, so whatever they
+// do to the [AuthorizeRequest] they are handed, the redirect target, the
+// state, the scope, the PKCE parameters and the issuer the server uses are
+// the ones it validated.
+type authorizeState struct {
+	ar AuthorizeRequest
+	// clientID is the identifier of the validated client, read once: the
+	// code and the implicit token are bound to it, and a callback changing
+	// the identity of the client it shares with the server is detected.
+	clientID string
+	// audience is the audience the IssuerResolver returned with ar.Issuer;
+	// the implicit flow stamps it on its access token.
+	audience string
+	// fragment reports that responses travel in the redirect fragment (the
+	// implicit flow, RFC 6749 §4.2.2) rather than in the query string.
+	fragment bool
+}
+
+// request returns a copy of the validated request for a callback.
+func (st *authorizeState) request() *AuthorizeRequest {
+	ar := st.ar
+
+	return &ar
+}
+
+// modified reports whether a callback changed the copy cp it was handed —
+// any field but ExtensionRequest, the extension's own — or the identity of
+// the client the copy shares with the validated request.
+func (st *authorizeState) modified(cp *AuthorizeRequest) bool {
+	if cp.Client == nil || cp.Client.ID() != st.clientID || st.ar.Client.ID() != st.clientID {
+		return true
+	}
+
+	return cp.ResponseType != st.ar.ResponseType ||
+		cp.RedirectURI != st.ar.RedirectURI ||
+		cp.Scope != st.ar.Scope ||
+		cp.State != st.ar.State ||
+		cp.CodeChallenge != st.ar.CodeChallenge ||
+		cp.CodeChallengeMethod != st.ar.CodeChallengeMethod ||
+		cp.Nonce != st.ar.Nonce ||
+		cp.Issuer != st.ar.Issuer
+}
+
+// refuseModified answers a request a callback modified: server_error, the
+// callback's own error, if any, joined to the cause.
+func (s *Server) refuseModified(w http.ResponseWriter, r *http.Request, st *authorizeState, err error) {
+	s.refuseAuthorize(w, r, st, ErrServerError.WithCause(errors.Join(ErrAuthorizeRequestModified, err)))
+}
+
+// validateAuthorize validates the request behind a trusted redirect URI:
+// it resolves the issuer, the flow, the scope and the PKCE parameters, and
+// answers the first failure with a redirect. The issuer comes first, so
+// every later redirect is answered within the realm of the request.
+func (s *Server) validateAuthorize(
+	cfg AuthorizeConfig,
+	w http.ResponseWriter,
+	r *http.Request,
+	client Client,
+	redirectURI string,
+) (*authorizeState, bool) {
+	state := r.FormValue("state")
+
+	// An unsupported response type is answered in the query string.
+	flow, flowErr := resolveFlow(cfg, r.FormValue("response_type"))
+	fragment := flowErr == nil && flow == flowImplicit
+
+	issuer, audience, err := s.cfg.IssuerResolver.Resolve(r.Context(), r)
+	if err != nil {
+		s.redirectAuthorizeError(w, r, redirectURI, state, ErrServerError.WithCause(err), fragment)
+
+		return nil, false
+	}
+
+	if flowErr != nil {
+		s.redirectAuthorizeError(w, r, redirectURI, state, flowErr, false)
+
+		return nil, false
+	}
 
 	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
 	if oerr != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, useFragment)
+		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, fragment)
+
+		return nil, false
+	}
+
+	ar.Issuer = issuer
+	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: fragment}
+
+	if s.cfg.Extension == nil {
+		return st, true
+	}
+
+	cp := st.request()
+
+	view, err := s.cfg.Extension.ValidateAuthorizeRequest(r.Context(), r, cp)
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, err)
+
+		return nil, false
+	}
+
+	if err != nil {
+		s.extensionFailed(w, r, st, err)
+
+		return nil, false
+	}
+
+	st.ar.ExtensionRequest = view
+
+	return st, true
+}
+
+// extensionFailed answers the error an [Extension] authorization hook
+// returned: [ErrUnredirectableRequest] with a bare 400, a protocol [*Error]
+// with a redirect — authorization-endpoint codes only, see
+// redirectAuthorizeError — and anything else with a redirected
+// server_error.
+func (s *Server) extensionFailed(w http.ResponseWriter, r *http.Request, st *authorizeState, err error) {
+	if errors.Is(err, ErrUnredirectableRequest) {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("authorization request refused without redirect").WithCause(err))
+		http.Error(w, "oauth2: invalid authorization request", http.StatusBadRequest)
 
 		return
 	}
 
-	decision, err := consent(w, r, ar)
+	var oe *Error
+	if !errors.As(err, &oe) || oe == nil {
+		oe = ErrServerError.WithDescription("authorization extension failed").WithCause(err)
+	}
+
+	s.refuseAuthorize(w, r, st, oe)
+}
+
+// authorize runs the ConsentFunc on a validated request and issues what
+// the resource owner granted.
+func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.ResponseWriter, r *http.Request, st *authorizeState) {
+	cp := st.request()
+
+	decision, err := consent(w, r, cp)
 	if err != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
-			ErrServerError.WithDescription("consent handler failed"), useFragment)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithDescription("consent handler failed").WithCause(err))
 
 		return
 	}
@@ -242,24 +440,153 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	if !decision.Approved {
-		s.redirectAuthorizeError(w, r, redirectURI, ar.State,
-			ErrAccessDenied.WithDescription("the resource owner denied the request"), useFragment)
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, nil)
 
 		return
 	}
 
-	if flow == flowImplicit {
-		s.issueImplicitToken(cfg, w, r, ar, decision)
+	if oerr := checkDecision(decision); oerr != nil {
+		s.refuseAuthorize(w, r, st, oerr)
 
 		return
 	}
 
-	s.issueAuthorizationCode(cfg, w, r, ar, decision)
+	granted, err := grantedScope(&st.ar, decision)
+	if err != nil {
+		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request"))
+
+		return
+	}
+
+	grant := authorizedGrant{subject: decision.Subject, scope: granted, now: s.cfg.Now()}
+
+	if s.cfg.Extension != nil && !s.completeAuthorization(w, r, st, decision, &grant) {
+		return
+	}
+
+	if st.fragment {
+		s.issueImplicitToken(cfg, w, r, st, grant)
+
+		return
+	}
+
+	s.issueAuthorizationCode(cfg, w, r, st, grant)
+}
+
+// maxSubjectLength is the longest Consent.Subject, in bytes, an approval
+// may name: OpenID Connect Core 1.0 §2 caps sub at 255 ASCII characters,
+// and the SQL store keeps subjects in a VARCHAR(255) column.
+const maxSubjectLength = 255
+
+// Why a decision is refused although the ConsentFunc did not fail. They are
+// the causes the ErrorHook gets; the client gets a bare server_error.
+var (
+	errContradictoryDecision = errors.New("oauth2: consent approved the request and refused it")
+	errMissingSubject        = errors.New("oauth2: consent approved the request without a subject")
+	errLongSubject           = errors.New("oauth2: consent approved a subject longer than 255 bytes")
+)
+
+// checkDecision returns the answer to a decision that does not approve the
+// request — its Refusal, or access_denied — or that cannot be honored: an
+// approval carrying a Refusal, or naming no or an over-long subject, fails
+// closed with server_error. It returns nil for a valid approval.
+func checkDecision(d *Consent) *Error {
+	switch {
+	case d.Approved && d.Refusal != nil:
+		return ErrServerError.WithCause(errContradictoryDecision).WithCause(d.Refusal)
+	case d.Refusal != nil:
+		return d.Refusal
+	case !d.Approved:
+		return ErrAccessDenied.WithDescription("the resource owner denied the request")
+	case d.Subject == "":
+		return ErrServerError.WithCause(errMissingSubject)
+	case len(d.Subject) > maxSubjectLength:
+		return ErrServerError.WithCause(errLongSubject)
+	default:
+		return nil
+	}
+}
+
+// authorizedGrant is what an approved authorization issues: to whom, which
+// scope, when, and the grant context the extension recorded.
+type authorizedGrant struct {
+	subject string
+	scope   string
+	now     time.Time
+	data    string
+}
+
+// completeAuthorization runs Extension.CompleteAuthorization on an
+// approved decision and applies the ExtensionGrant it returns to grant. It
+// answers a failure itself and reports whether the authorization goes on.
+func (s *Server) completeAuthorization(
+	w http.ResponseWriter,
+	r *http.Request,
+	st *authorizeState,
+	decision *Consent,
+	grant *authorizedGrant,
+) bool {
+	consent := *decision
+	consent.Scope = grant.scope
+	cp := st.request()
+
+	g, err := s.cfg.Extension.CompleteAuthorization(r.Context(), cp, consent, grant.now)
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, err)
+
+		return false
+	}
+
+	if err != nil {
+		s.extensionFailed(w, r, st, err)
+
+		return false
+	}
+
+	scope, oerr := applyExtensionGrant(grant.scope, g)
+	if oerr != nil {
+		s.refuseAuthorize(w, r, st, oerr)
+
+		return false
+	}
+
+	grant.scope, grant.data = scope, g.Data
+
+	return true
+}
+
+// refuseAuthorize redirects oerr back to the client of the validated
+// request st, in the flow's response mode.
+func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *authorizeState, oerr *Error) {
+	s.redirectAuthorizeError(w, r, st.ar.RedirectURI, st.ar.State, oerr, st.fragment)
+}
+
+// responseModeSupported reports whether the request's response_mode is
+// the mode the handler answers in (OAuth 2.0 Multiple Response Type
+// Encoding Practices §2.1): fragment for the implicit flow when it is
+// enabled (RFC 6749 §4.2.2), query for every other request, errors
+// included. An absent or empty one (RFC 6749 §3.1) is that default. Any
+// other value — the other mode, form_post, an unknown one — cannot be
+// honored, and the answer could not even be encoded as the client
+// expects: OIDC Core 1.0 incorporating errata set 2, §3.1.2.6, answers it
+// with a bare 400 Bad Request.
+func responseModeSupported(cfg AuthorizeConfig, r *http.Request) bool {
+	mode := r.FormValue("response_mode")
+	if mode == "" {
+		return true
+	}
+
+	if cfg.AllowImplicit && r.FormValue("response_type") == responseTypeToken {
+		return mode == responseModeFragment
+	}
+
+	return mode == responseModeQuery
 }
 
 // resolveFlow maps the response_type parameter to a flow, refusing the
-// implicit flow when it is not enabled.
+// implicit flow when it is not enabled. The description never echoes the
+// request.
 func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Error) {
 	switch responseType {
 	case responseTypeCode:
@@ -271,8 +598,7 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 
 		return flowImplicit, nil
 	default:
-		return 0, ErrUnsupportedResponseType.WithDescription(
-			"response_type " + responseType + " is not supported")
+		return 0, ErrUnsupportedResponseType.WithDescription("response_type is not supported")
 	}
 }
 
@@ -348,54 +674,47 @@ func (s *Server) issueAuthorizationCode(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	ar *AuthorizeRequest,
-	decision *Consent,
+	st *authorizeState,
+	grant authorizedGrant,
 ) {
-	granted, err := grantedScope(ar, decision)
-	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
-			ErrInvalidScope.WithDescription("granted scope exceeds the request"), false)
-
-		return
-	}
-
 	raw, err := randomCode()
 	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
-	now := s.cfg.Now()
 	// Authorization codes are stored pepper-free (HashToken(nil, …)); the
 	// authorization_code grant looks them up the same way.
 	code := &AuthorizationCode{
 		Code:                raw,
 		CodeHash:            HashToken(nil, raw),
-		ClientID:            ar.Client.ID(),
-		Subject:             decision.Subject,
-		RedirectURI:         ar.RedirectURI,
-		Scope:               granted,
-		CodeChallenge:       ar.CodeChallenge,
-		CodeChallengeMethod: ar.CodeChallengeMethod,
-		Nonce:               ar.Nonce,
-		IssuedAt:            now,
-		ExpiresAt:           now.Add(cfg.CodeTTL),
+		ClientID:            st.clientID,
+		Subject:             grant.subject,
+		RedirectURI:         st.ar.RedirectURI,
+		Scope:               grant.scope,
+		CodeChallenge:       st.ar.CodeChallenge,
+		CodeChallengeMethod: st.ar.CodeChallengeMethod,
+		Nonce:               st.ar.Nonce,
+		IssuedAt:            grant.now,
+		ExpiresAt:           grant.now.Add(cfg.CodeTTL),
+		Issuer:              st.ar.Issuer,
+		ExtensionData:       grant.data,
 	}
 
 	if err := s.cfg.Storage.SaveAuthorizationCode(r.Context(), code); err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), false)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
 	params := url.Values{"code": {raw}}
-	if ar.State != "" {
-		params.Set("state", ar.State)
+	if st.ar.State != "" {
+		params.Set("state", st.ar.State)
 	}
 
 	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, false), http.StatusFound)
+	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, false), http.StatusFound)
 }
 
 // issueImplicitToken mints an access token, persists it, and redirects it
@@ -404,46 +723,32 @@ func (s *Server) issueImplicitToken(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	ar *AuthorizeRequest,
-	decision *Consent,
+	st *authorizeState,
+	grant authorizedGrant,
 ) {
-	granted, err := grantedScope(ar, decision)
-	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State,
-			ErrInvalidScope.WithDescription("granted scope exceeds the request"), true)
-
-		return
-	}
-
-	_, audience, ierr := s.resolveIssuer(r.Context(), r)
-	if ierr != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(ierr), true)
-
-		return
-	}
-
 	raw, hash, err := cfg.ImplicitTokens.Generate(r.Context())
 	if err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
 
-	now := s.cfg.Now()
 	at := &AccessToken{
-		Token:     raw,
-		TokenHash: hash,
-		ClientID:  ar.Client.ID(),
-		Subject:   decision.Subject,
-		Scope:     granted,
-		Audience:  audience,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(cfg.ImplicitTTL),
+		Token:         raw,
+		TokenHash:     hash,
+		ClientID:      st.clientID,
+		Subject:       grant.subject,
+		Scope:         grant.scope,
+		Audience:      st.audience,
+		IssuedAt:      grant.now,
+		ExpiresAt:     grant.now.Add(cfg.ImplicitTTL),
+		Issuer:        st.ar.Issuer,
+		ExtensionData: grant.data,
 	}
 
 	// An implicit token belongs to no family: it is never gated by one.
 	if err := s.cfg.Storage.SaveTokenPair(r.Context(), &TokenPair{Access: *at}); err != nil {
-		s.redirectAuthorizeError(w, r, ar.RedirectURI, ar.State, ErrServerError.WithCause(err), true)
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
 
 		return
 	}
@@ -453,16 +758,16 @@ func (s *Server) issueImplicitToken(
 		"token_type":   {TokenTypeBearer},
 		"expires_in":   {strconv.Itoa(int(cfg.ImplicitTTL.Seconds()))},
 	}
-	if granted != "" {
-		params.Set("scope", granted)
+	if grant.scope != "" {
+		params.Set("scope", grant.scope)
 	}
 
-	if ar.State != "" {
-		params.Set("state", ar.State)
+	if st.ar.State != "" {
+		params.Set("state", st.ar.State)
 	}
 
 	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(ar.RedirectURI, params, true), http.StatusFound)
+	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, true), http.StatusFound)
 }
 
 // grantedScope resolves the scope to grant: the consent value when it
@@ -497,6 +802,10 @@ func resolveRedirectURI(client Client, requested string) (string, bool) {
 	return "", false
 }
 
+// errScopeNotAllowed reports a requested scope outside the allowed set. Its
+// text is the error_description: it never echoes the request.
+var errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+
 // authorizeScope checks that every requested scope is in the allowed set
 // and returns the normalized (space-joined) scope. An empty allowed set
 // means the client carries no scope restriction.
@@ -509,7 +818,7 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 
 	for _, s := range fields {
 		if !slices.Contains(allowed, s) {
-			return "", fmt.Errorf("scope %q is not allowed for this client", s)
+			return "", errScopeNotAllowed
 		}
 	}
 
@@ -517,9 +826,12 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 }
 
 // redirectAuthorizeError sends an RFC 6749 §4.1.2.1 / §4.2.2.1 error
-// response by redirecting back to the client's redirect URI. The envelope —
-// cause included — is handed to the configured [ErrorHook] first: the
-// redirect carries only the code and the description.
+// response by redirecting back to the client's redirect URI. Only a code
+// the authorization endpoint defines travels (authorizeErrorCodes), any
+// other is answered server_error; a description or error_uri outside the
+// RFC 6749 charset is left out. The envelope — cause included — is handed
+// to the configured [ErrorHook] first: the redirect carries only the code,
+// the description and the URI.
 func (s *Server) redirectAuthorizeError(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -527,11 +839,16 @@ func (s *Server) redirectAuthorizeError(
 	oerr *Error,
 	useFragment bool,
 ) {
+	oerr = authorizeWireError(oerr)
 	s.notifyError(r.Context(), oerr)
 
 	params := url.Values{"error": {oerr.Code}}
-	if oerr.Description != "" {
-		params.Set("error_description", oerr.Description)
+	if desc := wireDescription(oerr.Description); desc != "" {
+		params.Set("error_description", desc)
+	}
+
+	if uri := wireURI(oerr.URI); uri != "" {
+		params.Set("error_uri", uri)
 	}
 
 	if state != "" {

@@ -77,13 +77,15 @@ func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.Authoriz
 
 	const q = `INSERT INTO oauth2_auth_codes
 		(code_hash, client_id, subject, redirect_uri, scope,
-		 code_challenge, code_challenge_method, nonce, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 code_challenge, code_challenge_method, nonce, issued_at, expires_at,
+		 issuer, extension_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.exec(ctx, q,
 		code.CodeHash, code.ClientID, code.Subject, code.RedirectURI, code.Scope,
 		code.CodeChallenge, code.CodeChallengeMethod, code.Nonce,
-		code.IssuedAt.Unix(), code.ExpiresAt.Unix())
+		code.IssuedAt.Unix(), code.ExpiresAt.Unix(),
+		code.Issuer, code.ExtensionData)
 	if err != nil {
 		return fmt.Errorf("sqlstore: save authorization code: %w", err)
 	}
@@ -140,7 +142,8 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 // without a row is an unknown code: [oauth2.ErrCodeAlreadyUsed].
 func (s *Store) selectCode(ctx context.Context, tx *sql.Tx, codeHash string) (*oauth2.AuthorizationCode, error) {
 	const sel = `SELECT client_id, subject, redirect_uri, scope,
-		code_challenge, code_challenge_method, nonce, issued_at, expires_at
+		code_challenge, code_challenge_method, nonce, issued_at, expires_at,
+		COALESCE(issuer, ''), COALESCE(extension_data, '')
 		FROM oauth2_auth_codes WHERE code_hash = ?`
 
 	var (
@@ -151,7 +154,7 @@ func (s *Store) selectCode(ctx context.Context, tx *sql.Tx, codeHash string) (*o
 	err := tx.QueryRowContext(ctx, s.dialect.rebind(sel), codeHash).Scan(
 		&code.ClientID, &code.Subject, &code.RedirectURI, &code.Scope,
 		&code.CodeChallenge, &code.CodeChallengeMethod, &code.Nonce,
-		&issuedAt, &expires,
+		&issuedAt, &expires, &code.Issuer, &code.ExtensionData,
 	)
 
 	switch {
@@ -194,7 +197,7 @@ func (s *Store) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error
 // family is reported as [oauth2.ErrTokenFamilyRevoked].
 func (s *Store) LookupAccessToken(ctx context.Context, tokenHash string) (*oauth2.AccessToken, error) {
 	const q = `SELECT t.client_id, t.subject, t.scope, t.family_id, t.audience, t.issued_at, t.expires_at,
-			f.revoked_at
+			COALESCE(t.issuer, ''), COALESCE(t.extension_data, ''), f.revoked_at
 		FROM oauth2_access_tokens t
 		LEFT JOIN oauth2_token_families f ON f.family_id = t.family_id
 		WHERE t.token_hash = ?`
@@ -207,7 +210,7 @@ func (s *Store) LookupAccessToken(ctx context.Context, tokenHash string) (*oauth
 
 	row := s.db.QueryRowContext(ctx, s.dialect.rebind(q), tokenHash)
 	if err := row.Scan(&t.ClientID, &t.Subject, &t.Scope, &t.FamilyID, &t.Audience,
-		&issuedAt, &expires, &revokedAt); err != nil {
+		&issuedAt, &expires, &t.Issuer, &t.ExtensionData, &revokedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, oauth2.ErrInvalidGrant.WithDescription("access token not found")
 		}
@@ -240,7 +243,7 @@ func (s *Store) RevokeAccessToken(ctx context.Context, tokenHash string) error {
 // family, which no valid pair carries.
 func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oauth2.RefreshToken, error) {
 	const q = `SELECT t.client_id, t.subject, t.scope, t.family_id, t.consumed, t.issued_at, t.expires_at,
-			f.revoked_at
+			COALESCE(t.issuer, ''), COALESCE(t.extension_data, ''), f.revoked_at
 		FROM oauth2_refresh_tokens t
 		LEFT JOIN oauth2_token_families f ON f.family_id = t.family_id
 		WHERE t.token_hash = ?`
@@ -254,7 +257,7 @@ func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oaut
 
 	row := s.db.QueryRowContext(ctx, s.dialect.rebind(q), tokenHash)
 	if err := row.Scan(&t.ClientID, &t.Subject, &t.Scope, &t.FamilyID,
-		&consumed, &issuedAt, &expires, &revokedAt); err != nil {
+		&consumed, &issuedAt, &expires, &t.Issuer, &t.ExtensionData, &revokedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
 		}
@@ -276,7 +279,8 @@ func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*oaut
 //     rotation never creates an active family — then read the old token
 //     under lock.
 //  2. Decide in the contract's order: unknown old token (invalid_grant),
-//     next in another family (invalid_request), revoked family
+//     next in another family or carrying another grant context — issuer,
+//     extension data — (invalid_request), revoked family
 //     ([oauth2.ErrTokenFamilyRevoked]), consumed old token (reuse).
 //  3. On reuse, record the family revoked and commit. A failure there is
 //     reported as [oauth2.ErrRefreshTokenReused] joined with
@@ -426,19 +430,22 @@ func (s *Store) rotateTx(ctx context.Context, tx *sql.Tx, oldHash string, next *
 	}
 
 	var (
-		oldFamily string
-		consumed  int64
+		old      grantRow
+		consumed int64
 	)
 
-	err = tx.QueryRowContext(ctx, s.dialect.rebind(s.dialect.lockRefresh()), oldHash).Scan(&oldFamily, &consumed)
+	err = tx.QueryRowContext(ctx, s.dialect.rebind(s.dialect.lockRefresh()), oldHash).
+		Scan(&old.familyID, &consumed, &old.issuer, &old.extensionData)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
 	case err != nil:
 		return false, fmt.Errorf("sqlstore: lock refresh token: %w", err)
-	case oldFamily != familyID:
+	case old.familyID != familyID:
 		return false, oauth2.ErrInvalidRequest.WithDescription("sqlstore: rotation into another token family")
+	case old.issuer != next.Access.Issuer || old.extensionData != next.Access.ExtensionData:
+		return false, oauth2.ErrInvalidRequest.WithDescription("sqlstore: rotation into another grant context")
 	case revoked:
 		return false, oauth2.ErrTokenFamilyRevoked
 	case consumed != 0:
@@ -521,10 +528,11 @@ func (s *Store) insertPair(ctx context.Context, tx *sql.Tx, pair *oauth2.TokenPa
 	at := &pair.Access
 
 	if _, err := tx.ExecContext(ctx, s.dialect.rebind(`INSERT INTO oauth2_access_tokens
-		(token_hash, client_id, subject, scope, family_id, audience, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		(token_hash, client_id, subject, scope, family_id, audience, issued_at, expires_at,
+		 issuer, extension_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		at.TokenHash, at.ClientID, at.Subject, at.Scope, at.FamilyID, at.Audience,
-		at.IssuedAt.Unix(), at.ExpiresAt.Unix()); err != nil {
+		at.IssuedAt.Unix(), at.ExpiresAt.Unix(), at.Issuer, at.ExtensionData); err != nil {
 		return fmt.Errorf("sqlstore: insert access token: %w", err)
 	}
 
@@ -534,10 +542,11 @@ func (s *Store) insertPair(ctx context.Context, tx *sql.Tx, pair *oauth2.TokenPa
 	}
 
 	if _, err := tx.ExecContext(ctx, s.dialect.rebind(`INSERT INTO oauth2_refresh_tokens
-		(token_hash, client_id, subject, scope, family_id, consumed, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, 0, ?, ?)`),
+		(token_hash, client_id, subject, scope, family_id, consumed, issued_at, expires_at,
+		 issuer, extension_data)
+		VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`),
 		rt.TokenHash, rt.ClientID, rt.Subject, rt.Scope, rt.FamilyID,
-		rt.IssuedAt.Unix(), rt.ExpiresAt.Unix()); err != nil {
+		rt.IssuedAt.Unix(), rt.ExpiresAt.Unix(), rt.Issuer, rt.ExtensionData); err != nil {
 		return fmt.Errorf("sqlstore: insert refresh token: %w", err)
 	}
 
@@ -545,6 +554,14 @@ func (s *Store) insertPair(ctx context.Context, tx *sql.Tx, pair *oauth2.TokenPa
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// grantRow is what a rotation reads of the presented refresh token under
+// lock: its family and its grant context, which the replacement must keep.
+type grantRow struct {
+	familyID      string
+	issuer        string
+	extensionData string
+}
 
 // familyActive reports whether a token of familyID may be used: it is
 // outside any family, or its family's record says active. A NULL revokedAt

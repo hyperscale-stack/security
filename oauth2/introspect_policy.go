@@ -38,6 +38,10 @@ type IntrospectedToken struct {
 	// a refresh token, and empty for an access token when the
 	// IssuerResolver returned no audience.
 	Audience string
+	// Issuer is the issuer the token was issued under — the realm of its
+	// authorization; empty for a token written before tokens recorded it.
+	// A policy enforcing realm boundaries compares it with the caller's.
+	Issuer string
 	// IssuedAt is the issuance time.
 	IssuedAt time.Time
 	// ExpiresAt is the expiry time.

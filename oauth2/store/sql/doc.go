@@ -28,9 +28,22 @@
 //     error fails the operation, closed.
 //   - Lookups must reach the primary database: a replica DSN or a
 //     read/write-splitting proxy could answer from before a revocation.
+//   - Text is stored as UTF-8 and compared exactly: a PostgreSQL database
+//     in the UTF8 encoding; MySQL tables in utf8mb4 with a strict sql_mode,
+//     since a non-strict MySQL truncates an over-long value — a subject, an
+//     extension's data — instead of refusing it.
 //
 // The CI of this module exercises SQLite only: the PostgreSQL and MySQL
 // guarantees rest on the locking described in [Store].
+//
+// # Upgrading
+//
+// Migrate only creates the tables that are missing. When a release adds
+// columns to existing tables — the issuer and extension_data columns of
+// codes and tokens, for instance — MIGRATION.md lists the ALTER TABLE
+// statements to apply, through your migration tool, before the release
+// serves traffic; a row written before them reads the new columns as
+// empty.
 //
 // # Cleanup
 //

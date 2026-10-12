@@ -25,7 +25,7 @@ import only what you need.
 | `…/security/password`                               | BCrypt + Argon2id hashers (`NeedsRehash`)                       |
 | `…/security/jwt`                                    | `jwtsec` — JWT signer/verifier, JWKS                            |
 | `…/security/session`                                | Stateless encrypted cookie sessions + CSRF                      |
-| `…/security/oauth2`                                 | OAuth2 server: profiles, grants, endpoints                      |
+| `…/security/oauth2`                                 | OAuth2 server: profiles, grants, endpoints, extension points    |
 | `…/security/oauth2/store/sql`                       | Production OAuth2 storage on `database/sql`                     |
 | `…/security/oauth2/store/redis`                     | Production OAuth2 storage on Redis                              |
 

@@ -122,6 +122,7 @@ func plainPKCECode(t *testing.T, store oauth2.Storage, verifier string) url.Valu
 		CodeChallenge: verifier, CodeChallengeMethod: "",
 		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
 		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
+		Issuer:    "https://auth.example",
 	}))
 
 	form := url.Values{}
@@ -143,7 +144,7 @@ func TestAuthorizationCodePlainPKCEAcceptedUnderProfile20(t *testing.T) {
 	})
 
 	resp, err := g.Handle(context.Background(), grant.Request{
-		Client: newClient(), Form: form, Profile: oauth2.Profile20,
+		Client: newClient(), Form: form, Profile: oauth2.Profile20, Issuer: "https://auth.example",
 		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
 	})
 	require.NoError(t, err)
@@ -164,7 +165,7 @@ func TestAuthorizationCodePlainPKCERefusedUnderBCP(t *testing.T) {
 
 	// Profile20BCP (and 21Draft) mandate S256 — "plain" must be refused.
 	_, err := g.Handle(context.Background(), grant.Request{
-		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP,
+		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP, Issuer: "https://auth.example",
 		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
 	})
 	require.Error(t, err)
@@ -189,6 +190,7 @@ func TestAuthorizationCodeProfileRequiresPKCE(t *testing.T) {
 		ClientID: clientID, Subject: subject, RedirectURI: redirectURI, Scope: "read:mail",
 		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
 		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
+		Issuer:    "https://auth.example",
 	}))
 
 	// The grant itself does not force PKCE (RequirePKCE false), but the
@@ -202,7 +204,7 @@ func TestAuthorizationCodeProfileRequiresPKCE(t *testing.T) {
 	form.Set("redirect_uri", redirectURI)
 
 	_, err := g.Handle(ctx, grant.Request{
-		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP,
+		Client: newClient(), Form: form, Profile: oauth2.Profile20BCP, Issuer: "https://auth.example",
 		Now: time.Date(2026, 5, 20, 12, 5, 0, 0, time.UTC),
 	})
 	require.Error(t, err)
@@ -371,7 +373,9 @@ func TestRefreshTokenNarrowsScope(t *testing.T) {
 	form.Set("refresh_token", "narrow-rt")
 	form.Set("scope", "read:mail") // a subset of the original grant
 
-	resp, err := g.Handle(context.Background(), grant.Request{Client: newClient(), Form: form, Now: time.Now()})
+	resp, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: form, Now: time.Now(), Issuer: "https://auth.example",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "read:mail", resp.Scope)
 	assert.Equal(t, "read:mail", resp.Pair.Access.Scope)
@@ -388,6 +392,7 @@ func TestRefreshTokenNarrowsScope(t *testing.T) {
 	// So the next exchange without a scope gets the whole original grant back.
 	next, err := g.Handle(context.Background(), grant.Request{
 		Client: newClient(), Form: url.Values{"refresh_token": {resp.Pair.Refresh.Token}}, Now: time.Now(),
+		Issuer: "https://auth.example",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "read:mail write:mail", next.Scope)
@@ -407,7 +412,9 @@ func TestRefreshTokenRefusesBroadenedScope(t *testing.T) {
 	form.Set("refresh_token", "broaden-rt")
 	form.Set("scope", "read:mail admin") // admin was not in the original grant
 
-	_, err := g.Handle(context.Background(), grant.Request{Client: newClient(), Form: form, Now: time.Now()})
+	_, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: form, Now: time.Now(), Issuer: "https://auth.example",
+	})
 	require.Error(t, err)
 	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
 }
@@ -441,7 +448,10 @@ func TestRefreshTokenWithoutRotationUnderProfile20(t *testing.T) {
 			form := url.Values{}
 			form.Set("refresh_token", "static-rt")
 
-			req := grant.Request{Client: newClient(), Form: form, Now: time.Now(), Profile: oauth2.Profile20}
+			req := grant.Request{
+				Client: newClient(), Form: form, Now: time.Now(), Profile: oauth2.Profile20,
+				Issuer: "https://auth.example",
+			}
 
 			for range 2 {
 				resp, err := g.Handle(context.Background(), req)

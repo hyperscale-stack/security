@@ -134,6 +134,7 @@ func (s *Server) lookupActiveToken(ctx context.Context, rawToken string) (Intros
 			Subject:   at.Subject,
 			Scope:     at.Scope,
 			Audience:  at.Audience,
+			Issuer:    at.Issuer,
 			IssuedAt:  at.IssuedAt,
 			ExpiresAt: at.ExpiresAt,
 		}, true
@@ -149,6 +150,7 @@ func (s *Server) lookupActiveToken(ctx context.Context, rawToken string) (Intros
 			ClientID:  rt.ClientID,
 			Subject:   rt.Subject,
 			Scope:     rt.Scope,
+			Issuer:    rt.Issuer,
 			IssuedAt:  rt.IssuedAt,
 			ExpiresAt: rt.ExpiresAt,
 		}, true

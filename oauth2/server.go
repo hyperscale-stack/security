@@ -76,6 +76,12 @@ type ServerConfig struct {
 	// lets any authenticated confidential client introspect any token. See
 	// [IntrospectionPolicy].
 	IntrospectionPolicy IntrospectionPolicy
+	// Extension, when set, plugs a protocol extension — an OpenID Connect
+	// provider — into /authorize and into the authorization_code and
+	// refresh_token exchanges of /token: see [Extension]. Optional: without
+	// one the server is a plain OAuth 2.0 authorization server, and its
+	// responses carry no extension member.
+	Extension Extension
 }
 
 // Server is the OAuth2 authorization server. It exposes one

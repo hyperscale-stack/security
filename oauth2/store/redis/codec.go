@@ -31,7 +31,11 @@ func marshalJSON(v any) ([]byte, error) {
 // and the code-consumption script reads the code's `consumed` and writes
 // it with `consumed_by`. Both scripts re-encode the record they consume
 // with cjson, which may escape "/" as "\/" and prints numbers with 14
-// significant digits: Go decodes either unchanged.
+// significant digits: Go decodes either unchanged. The issuer and
+// extension_data fields are plain strings — the only JSON values cjson
+// round-trips byte-exact — and absent from a record written before they
+// existed, which decodes them as "". The rotation script compares them,
+// reading a missing or null field as "".
 
 type codeDTO struct {
 	ClientID            string `json:"client_id"`
@@ -43,6 +47,8 @@ type codeDTO struct {
 	Nonce               string `json:"nonce"`
 	IssuedAt            int64  `json:"issued_at"`
 	ExpiresAt           int64  `json:"expires_at"`
+	Issuer              string `json:"issuer,omitempty"`
+	ExtensionData       string `json:"extension_data,omitempty"`
 	// Consumed and ConsumedBy are only written by consumeCodeScript: the
 	// flag of a consumed code and the nonce of the call that consumed it.
 	// A payload without them — or with nulls — is an unconsumed code.
@@ -61,6 +67,8 @@ func encodeCode(c *oauth2.AuthorizationCode) ([]byte, error) {
 		Nonce:               c.Nonce,
 		IssuedAt:            c.IssuedAt.Unix(),
 		ExpiresAt:           c.ExpiresAt.Unix(),
+		Issuer:              c.Issuer,
+		ExtensionData:       c.ExtensionData,
 	})
 }
 
@@ -83,28 +91,34 @@ func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, bool, strin
 		Nonce:               d.Nonce,
 		IssuedAt:            time.Unix(d.IssuedAt, 0),
 		ExpiresAt:           time.Unix(d.ExpiresAt, 0),
+		Issuer:              d.Issuer,
+		ExtensionData:       d.ExtensionData,
 	}, d.Consumed, d.ConsumedBy, nil
 }
 
 type accessDTO struct {
-	ClientID  string `json:"client_id"`
-	Subject   string `json:"subject"`
-	Scope     string `json:"scope"`
-	FamilyID  string `json:"family_id"`
-	Audience  string `json:"audience"`
-	IssuedAt  int64  `json:"issued_at"`
-	ExpiresAt int64  `json:"expires_at"`
+	ClientID      string `json:"client_id"`
+	Subject       string `json:"subject"`
+	Scope         string `json:"scope"`
+	FamilyID      string `json:"family_id"`
+	Audience      string `json:"audience"`
+	IssuedAt      int64  `json:"issued_at"`
+	ExpiresAt     int64  `json:"expires_at"`
+	Issuer        string `json:"issuer,omitempty"`
+	ExtensionData string `json:"extension_data,omitempty"`
 }
 
 func encodeAccess(t *oauth2.AccessToken) ([]byte, error) {
 	return marshalJSON(accessDTO{
-		ClientID:  t.ClientID,
-		Subject:   t.Subject,
-		Scope:     t.Scope,
-		FamilyID:  t.FamilyID,
-		Audience:  t.Audience,
-		IssuedAt:  t.IssuedAt.Unix(),
-		ExpiresAt: t.ExpiresAt.Unix(),
+		ClientID:      t.ClientID,
+		Subject:       t.Subject,
+		Scope:         t.Scope,
+		FamilyID:      t.FamilyID,
+		Audience:      t.Audience,
+		IssuedAt:      t.IssuedAt.Unix(),
+		ExpiresAt:     t.ExpiresAt.Unix(),
+		Issuer:        t.Issuer,
+		ExtensionData: t.ExtensionData,
 	})
 }
 
@@ -115,36 +129,42 @@ func decodeAccess(hash string, raw []byte) (*oauth2.AccessToken, error) {
 	}
 
 	return &oauth2.AccessToken{
-		TokenHash: hash,
-		ClientID:  d.ClientID,
-		Subject:   d.Subject,
-		Scope:     d.Scope,
-		FamilyID:  d.FamilyID,
-		Audience:  d.Audience,
-		IssuedAt:  time.Unix(d.IssuedAt, 0),
-		ExpiresAt: time.Unix(d.ExpiresAt, 0),
+		TokenHash:     hash,
+		ClientID:      d.ClientID,
+		Subject:       d.Subject,
+		Scope:         d.Scope,
+		FamilyID:      d.FamilyID,
+		Audience:      d.Audience,
+		IssuedAt:      time.Unix(d.IssuedAt, 0),
+		ExpiresAt:     time.Unix(d.ExpiresAt, 0),
+		Issuer:        d.Issuer,
+		ExtensionData: d.ExtensionData,
 	}, nil
 }
 
 type refreshDTO struct {
-	ClientID  string `json:"client_id"`
-	Subject   string `json:"subject"`
-	Scope     string `json:"scope"`
-	FamilyID  string `json:"family_id"`
-	Consumed  bool   `json:"consumed"`
-	IssuedAt  int64  `json:"issued_at"`
-	ExpiresAt int64  `json:"expires_at"`
+	ClientID      string `json:"client_id"`
+	Subject       string `json:"subject"`
+	Scope         string `json:"scope"`
+	FamilyID      string `json:"family_id"`
+	Consumed      bool   `json:"consumed"`
+	IssuedAt      int64  `json:"issued_at"`
+	ExpiresAt     int64  `json:"expires_at"`
+	Issuer        string `json:"issuer,omitempty"`
+	ExtensionData string `json:"extension_data,omitempty"`
 }
 
 func encodeRefresh(t *oauth2.RefreshToken) ([]byte, error) {
 	return marshalJSON(refreshDTO{
-		ClientID:  t.ClientID,
-		Subject:   t.Subject,
-		Scope:     t.Scope,
-		FamilyID:  t.FamilyID,
-		Consumed:  t.Consumed,
-		IssuedAt:  t.IssuedAt.Unix(),
-		ExpiresAt: t.ExpiresAt.Unix(),
+		ClientID:      t.ClientID,
+		Subject:       t.Subject,
+		Scope:         t.Scope,
+		FamilyID:      t.FamilyID,
+		Consumed:      t.Consumed,
+		IssuedAt:      t.IssuedAt.Unix(),
+		ExpiresAt:     t.ExpiresAt.Unix(),
+		Issuer:        t.Issuer,
+		ExtensionData: t.ExtensionData,
 	})
 }
 
@@ -155,14 +175,16 @@ func decodeRefresh(hash string, raw []byte) (*oauth2.RefreshToken, error) {
 	}
 
 	return &oauth2.RefreshToken{
-		TokenHash: hash,
-		ClientID:  d.ClientID,
-		Subject:   d.Subject,
-		Scope:     d.Scope,
-		FamilyID:  d.FamilyID,
-		Consumed:  d.Consumed,
-		IssuedAt:  time.Unix(d.IssuedAt, 0),
-		ExpiresAt: time.Unix(d.ExpiresAt, 0),
+		TokenHash:     hash,
+		ClientID:      d.ClientID,
+		Subject:       d.Subject,
+		Scope:         d.Scope,
+		FamilyID:      d.FamilyID,
+		Consumed:      d.Consumed,
+		IssuedAt:      time.Unix(d.IssuedAt, 0),
+		ExpiresAt:     time.Unix(d.ExpiresAt, 0),
+		Issuer:        d.Issuer,
+		ExtensionData: d.ExtensionData,
 	}, nil
 }
 

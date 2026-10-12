@@ -44,6 +44,7 @@ func seedPKCECode(
 		CodeChallenge: challenge, CodeChallengeMethod: string(method),
 		IssuedAt:  time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
 		ExpiresAt: time.Date(2026, 5, 20, 12, 10, 0, 0, time.UTC),
+		Issuer:    "https://auth.example",
 	}))
 
 	form := url.Values{}

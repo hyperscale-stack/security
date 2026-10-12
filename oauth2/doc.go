@@ -37,6 +37,19 @@
 //     answers a bare 503 (RFC 7009 §2.2.1) — a family revocation that
 //     failed after a refresh-token reuse or an authorization-code replay,
 //     and a failed IntrospectionPolicy. See ErrorHook.
+//   - Every authorization is bound to the issuer the IssuerResolver
+//     returned at /authorize: the code and every token record it, and the
+//     authorization_code and refresh_token grants refuse them at another
+//     issuer.
+//   - ServerConfig.Extension plugs an optional protocol extension — the
+//     oidc/provider module's OpenID Provider — into the authorization-code
+//     flow: it validates its own /authorize parameters after the core
+//     checks, turns the application's trusted authentication result
+//     (Consent.ExtensionResult) into the grant context the code and every
+//     token derived from it record (ExtensionData, unchanged across
+//     refreshes), and adds an id_token to the token response before
+//     anything is persisted. A ConsentFunc refuses with an OpenID Connect
+//     code through Consent.Refusal. See Extension.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

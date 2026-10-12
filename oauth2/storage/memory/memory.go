@@ -164,11 +164,11 @@ func (s *Store) LookupRefreshToken(_ context.Context, tokenHash string) (*oauth2
 
 // RotateRefreshToken implements [oauth2.RefreshTokenStore]. Under the
 // store's mutex it decides, in the contract's order: unknown token
-// (invalid_grant), next in another family (invalid_request), revoked
-// family ([oauth2.ErrTokenFamilyRevoked]), consumed token (reuse: the
-// family is revoked in the same critical section, which cannot fail, and
-// [oauth2.ErrRefreshTokenReused] is returned). Otherwise it consumes the
-// old token and persists next.
+// (invalid_grant), next in another family or carrying another grant
+// context (invalid_request), revoked family ([oauth2.ErrTokenFamilyRevoked]),
+// consumed token (reuse: the family is revoked in the same critical
+// section, which cannot fail, and [oauth2.ErrRefreshTokenReused] is
+// returned). Otherwise it consumes the old token and persists next.
 func (s *Store) RotateRefreshToken(_ context.Context, oldHash string, next *oauth2.TokenPair) error {
 	if err := validateRotation(next); err != nil {
 		return err
@@ -184,6 +184,8 @@ func (s *Store) RotateRefreshToken(_ context.Context, oldHash string, next *oaut
 		return oauth2.ErrInvalidGrant.WithDescription("refresh token not found")
 	case old.FamilyID != next.Access.FamilyID:
 		return oauth2.ErrInvalidRequest.WithDescription("storage: rotation into another token family")
+	case old.Issuer != next.Access.Issuer || old.ExtensionData != next.Access.ExtensionData:
+		return oauth2.ErrInvalidRequest.WithDescription("storage: rotation into another grant context")
 	case s.isRevoked(old.FamilyID):
 		return oauth2.ErrTokenFamilyRevoked
 	case old.Consumed:

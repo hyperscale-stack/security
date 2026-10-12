@@ -74,6 +74,9 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"FamilyAccessOnlyIssuanceIsGated", testFamilyAccessOnlyIssuanceIsGated},
 		{"FamilyRevokeRacesRotationChain", testFamilyRevokeRacesRotationChain},
 		{"FamilyRevokeRacesIssuance", testFamilyRevokeRacesIssuance},
+		{"GrantContextRoundTrip", testGrantContextRoundTrip},
+		{"GrantContextLongestData", testGrantContextLongestData},
+		{"RotationKeepsGrantContext", testRotationKeepsGrantContext},
 	}
 
 	for _, c := range cases {
@@ -94,6 +97,20 @@ const testScope = "read"
 
 // testRedirectURI is the fixed redirect URI of the suite's codes.
 const testRedirectURI = "https://app.example/cb"
+
+// testIssuer is the issuer the suite's codes and tokens are bound to, and
+// otherIssuer the one a rotation must not re-bind them to.
+const (
+	testIssuer  = "https://issuer.example/realm-a"
+	otherIssuer = "https://issuer.example/realm-b"
+)
+
+// trickyData is extension data that stresses every store's encoding: text
+// Redis' cjson re-encodes on the replay and rotation paths (\/, U+2028,
+// U+2029, an empty JSON array), characters Go escapes for HTML, control
+// characters, DEL, multi-byte runes, quotes and backslashes, JSON-looking
+// text and surrounding spaces. Every store must return it byte-exact.
+const trickyData = " {\"auth_time\":1700000000,\"amr\":[\"pwd\",\"otp\"],\"a\":[]} \\/ <>& \"q\" é 🔑    \x7f \x01\x1f\t\n\r "
 
 func ctx() context.Context { return context.Background() }
 
@@ -161,6 +178,8 @@ func sampleCode(hash string) *oauth2.AuthorizationCode {
 		Nonce:               "nonce-" + hash,
 		IssuedAt:            now,
 		ExpiresAt:           now.Add(10 * time.Minute),
+		Issuer:              testIssuer,
+		ExtensionData:       trickyData + hash,
 	}
 }
 
@@ -294,6 +313,7 @@ func testAccessLifecycle(t *testing.T, s oauth2.Storage) {
 	mustNoError(t, err, "lookup")
 	mustEqual(t, got.Subject, testSubject, "lookup lost the subject")
 	mustEqual(t, got.Audience, cc.Access.Audience, "lookup lost the audience")
+	requireContext(t, s, cc)
 
 	mustNoError(t, s.RevokeAccessToken(ctx(), cc.Access.TokenHash), "revoke")
 	requireUnusable(t, s, cc)
@@ -316,6 +336,7 @@ func testRefreshSaveLookup(t *testing.T, s oauth2.Storage) {
 	mustNoError(t, err, "lookup refresh token")
 	mustEqual(t, got.FamilyID, "fam-save", "lookup lost the family")
 	mustEqual(t, got.Scope, testScope, "lookup lost the scope")
+	requireContext(t, s, pair)
 }
 
 func testRefreshRotation(t *testing.T, s oauth2.Storage) {
@@ -327,6 +348,10 @@ func testRefreshRotation(t *testing.T, s oauth2.Storage) {
 
 	requireConsumed(t, s, first.Refresh.TokenHash)
 	requireUsable(t, s, next)
+	requireContext(t, s, next)
+	// The consumed token keeps its own record: the Redis rotation script
+	// re-encodes it with cjson, the context must survive that byte-exact.
+	requireContext(t, s, first)
 
 	// Rotation consumes the presented refresh token only: the access token
 	// issued alongside it lives on until it expires.

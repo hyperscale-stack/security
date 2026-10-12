@@ -23,12 +23,17 @@ import (
 //  1. Derive the code's token family from its hash, then consume the code
 //     atomically (single-use enforcement).
 //  2. Refuse an expired code.
-//  3. Re-bind client (code.ClientID MUST match the authenticated client).
+//  3. Re-bind client (code.ClientID MUST match the authenticated client)
+//     and issuer (code.Issuer MUST match the issuer resolved for the
+//     request: a code is redeemed in the realm that authorized it, OIDC
+//     Core §16.15).
 //  4. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
 //  5. Verify PKCE when present / required, then check that the client may
 //     use the grant.
 //  6. Generate the access token (+ optional refresh token) in the code's
-//     family, persist both atomically and return the pair.
+//     family, carrying its issuer and grant context, let the server's
+//     extension extend the response (an OpenID Connect id_token, with the
+//     code's nonce), persist both atomically and return the pair.
 //
 // A replay — the store still retains the consumed code — is refused with
 // invalid_grant. When the replay passes steps 2-5 itself, proving
@@ -37,9 +42,9 @@ import (
 // code issued stops working, and an exchange of the code still in flight
 // fails at step 6 with invalid_grant instead of issuing, while the store
 // keeps the family's revoked record (see [oauth2.Storage]). A replay
-// failing those steps — another client, a missing or wrong verifier,
-// another redirect_uri, an expired code — revokes nothing (OAuth 2.1
-// §4.1.3, §7.5.3).
+// failing those steps — another client or issuer, a missing or wrong
+// verifier, another redirect_uri, an expired code — revokes nothing
+// (OAuth 2.1 §4.1.3, §7.5.3).
 type AuthorizationCode struct {
 	cfg Config
 }
@@ -87,14 +92,21 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 		return nil, err
 	}
 
-	return issueTokenPair(ctx, g.cfg, req, code.Subject, code.Scope, familyID)
+	return issueTokenPair(ctx, g.cfg, req, issuance{
+		grantType: oauth2.GrantTypeAuthorizationCode, nonce: code.Nonce,
+		subject: code.Subject, scope: code.Scope, refreshScope: code.Scope,
+		familyID: familyID, extensionData: code.ExtensionData,
+	})
 }
 
 // validateExchange checks that req may redeem code, in order: the code has
-// not expired, was issued to the authenticated client for the same
-// redirect_uri (RFC 6749 §4.1.3), its PKCE verifier matches when present or
-// required (RFC 7636 §4.6), and the client may use the grant. A replay
-// passing it proves possession of the code.
+// not expired, was issued to the authenticated client, under the issuer
+// resolved for the request, for the same redirect_uri (RFC 6749 §4.1.3),
+// its PKCE verifier matches when present or required (RFC 7636 §4.6), and
+// the client may use the grant. A replay passing it proves possession of
+// the code. A code stored without an issuer — before codes recorded it —
+// only matches a request whose resolved issuer is empty too: it fails
+// closed.
 func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.AuthorizationCode) error {
 	if code.IsExpired(req.Now) {
 		return oauth2.ErrInvalidGrant.WithDescription("authorization code expired")
@@ -102,6 +114,10 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 
 	if code.ClientID != req.Client.ID() {
 		return oauth2.ErrInvalidGrant.WithDescription("code issued for a different client")
+	}
+
+	if code.Issuer != req.Issuer {
+		return oauth2.ErrInvalidGrant.WithDescription("authorization code issued by another issuer")
 	}
 
 	if redirect := req.Form.Get("redirect_uri"); redirect != code.RedirectURI {

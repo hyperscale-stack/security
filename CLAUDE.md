@@ -183,9 +183,23 @@ configurable via `ServerConfig.RoutePrefix`).
   `clientauth/` (`client_secret_basic` / `_post` / `none`), `token/` (opaque +
   JWT generators), `pkce/`.
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
+- Every authorization is **bound to its issuer**: `/authorize` resolves it
+  (the `IssuerResolver` is the realm), codes and tokens record it, and the
+  `authorization_code` / `refresh_token` grants refuse it elsewhere.
+- **Extension points** (`ServerConfig.Extension`, `oauth2.Extension`): the
+  contract `oidc/provider` builds on — `ValidateAuthorizeRequest` after the
+  core checks, `CompleteAuthorization` turning `Consent.ExtensionResult` into
+  an `ExtensionGrant` (narrowing scope + opaque `ExtensionData` ≤ 4 KiB,
+  copied onto every token, unchanged across refreshes), `ExtendTokenResponse`
+  between minting and the single atomic write (typed `id_token`). Protocol
+  refusals go through `Consent.Refusal` (`oauth2.ErrLoginRequired`, …);
+  `grant.Config.RefreshTokenScope` gates refresh tokens on a scope
+  (`offline_access`). `oauth2` never imports OIDC/JOSE.
 - `Storage` implementations: `oauth2/storage/memory` (dev/tests),
   `oauth2/store/sql`, `oauth2/store/redis`. Every implementation must pass
-  the shared `oauth2/storetest` conformance suite.
+  the shared `oauth2/storetest` conformance suite; `store/sql`'s `Migrate`
+  only creates tables — schema additions ship as `ALTER` statements in
+  `MIGRATION.md`.
 
 `examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
 `examples/` also has `basic-http`, `bearer-jwt`, `grpc-bearer`,

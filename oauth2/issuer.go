@@ -13,6 +13,16 @@ import (
 // the request being processed. The interface lets multi-tenant deployments
 // dispatch on the Host header or a routing prefix without baking the
 // tenant into every grant handler.
+//
+// The issuer is the realm of a grant: /authorize records it with the
+// authorization code, and every token records it; the authorization_code
+// and refresh_token grants refuse, with invalid_grant, a code or refresh
+// token issued under another issuer than the one resolved for the /token
+// request (OIDC Core §16.15: a subject is only meaningful within its
+// issuer). A resolver MUST therefore return the same issuer for every
+// request of one realm — /authorize, /token — and issuers are compared
+// exactly. Changing an issuer invalidates the outstanding codes and
+// refresh tokens issued under the former one.
 type IssuerResolver interface {
 	Resolve(ctx context.Context, r *http.Request) (issuer, audience string, err error)
 }

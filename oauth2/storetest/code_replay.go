@@ -22,8 +22,9 @@ const (
 )
 
 // redeemCode saves the authorization code raw — S256 PKCE, issued to the
-// test client — into s, redeems it through g, and returns the /token
-// request it sent and the pair the exchange issued.
+// test client under the suite's issuer — into s, redeems it through g at
+// that issuer, and returns the /token request it sent and the pair the
+// exchange issued.
 func redeemCode(t *testing.T, s oauth2.Storage, g *grant.AuthorizationCode, raw string) (grant.Request, *oauth2.TokenPair) {
 	t.Helper()
 
@@ -33,7 +34,7 @@ func redeemCode(t *testing.T, s oauth2.Storage, g *grant.AuthorizationCode, raw 
 		Code: raw, CodeHash: oauth2.HashToken(nil, raw),
 		ClientID: testClientID, Subject: testSubject, RedirectURI: testRedirectURI, Scope: testScope,
 		CodeChallenge: replayChallenge, CodeChallengeMethod: string(pkce.MethodS256),
-		IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+		IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Issuer: testIssuer,
 	}), "save code "+raw)
 
 	req := grant.Request{
@@ -42,6 +43,7 @@ func redeemCode(t *testing.T, s oauth2.Storage, g *grant.AuthorizationCode, raw 
 			RedirectURIValues: []string{testRedirectURI},
 		},
 		Form:    url.Values{"code": {raw}, "redirect_uri": {testRedirectURI}, "code_verifier": {replayVerifier}},
+		Issuer:  testIssuer,
 		Now:     now,
 		Profile: oauth2.Profile20BCP,
 	}

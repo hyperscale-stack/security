@@ -43,6 +43,18 @@ type AuthorizationCode struct {
 	// ExpiresAt is the wall-clock expiry time. Codes typically live 10
 	// minutes (RFC 6749 §4.1.2).
 	ExpiresAt time.Time
+	// Issuer is the issuer identifier the authorization endpoint resolved
+	// for the request (AuthorizeRequest.Issuer): the realm the code is bound
+	// to. The authorization_code grant refuses the code at any other issuer
+	// (OIDC Core §16.15) — a code stored without one included, unless the
+	// issuer resolved at /token is empty too.
+	Issuer string
+	// ExtensionData is the opaque state the server's [Extension] recorded
+	// for the authorization (ExtensionGrant.Data), copied verbatim to every
+	// token issued from the code. Empty without an extension. Stores persist
+	// it byte-exact: at most [MaxExtensionDataLength] bytes of valid UTF-8
+	// without NUL, which the authorization endpoint enforces.
+	ExtensionData string
 }
 
 // IsExpired reports whether the code has passed its expiry.
@@ -71,6 +83,20 @@ type AccessToken struct {
 	// identifier). Single-valued in this model; servers needing multi-aud
 	// should rebuild the model in their JWT signer.
 	Audience string
+	// Issuer is the issuer identifier the token was issued under: the
+	// realm of the authorization it derives from, for every grant. Empty
+	// for a record written before issuers were recorded. A consumer serving
+	// end-user data (an OpenID Connect UserInfo endpoint) MUST require it to
+	// equal the issuer it serves.
+	Issuer string
+	// ExtensionData is the opaque state of the authorization the token
+	// derives from (see [AuthorizationCode.ExtensionData]), copied verbatim
+	// through every refresh. It is empty for client_credentials and
+	// password tokens, for tokens issued without an [Extension], and for
+	// records written before it existed: a consumer serving end-user data
+	// MUST require the context its extension recorded — the Subject of a
+	// client_credentials token is a client ID, not a resource owner.
+	ExtensionData string
 }
 
 // IsExpired reports whether the token has passed its expiry.
@@ -99,6 +125,16 @@ type RefreshToken struct {
 	// reuse, which MUST trigger family revocation. Lookups set it; a new
 	// token is never persisted consumed.
 	Consumed bool
+	// Issuer is the issuer identifier the token was issued under. The
+	// refresh_token grant refuses the token at any other issuer — a token
+	// stored without one included, unless the issuer resolved at /token is
+	// empty too. A rotation keeps it ([RefreshTokenStore.RotateRefreshToken]).
+	Issuer string
+	// ExtensionData is the opaque state of the authorization the token
+	// derives from (see [AuthorizationCode.ExtensionData]). A rotation
+	// carries it unchanged — the authentication event a refresh relies on
+	// never changes (OIDC Core §12.2, RFC 9068 §2.2.1).
+	ExtensionData string
 }
 
 // IsExpired reports whether the token has passed its expiry.
@@ -121,9 +157,9 @@ type TokenPair struct {
 // Validate reports, as an invalid_request [*Error], a pair no [Storage]
 // may persist: a nil pair, an access token without hash or with a family
 // ID longer than [MaxFamilyIDLength], or a refresh token without hash,
-// outside a family, in another family than the access token, or already
-// consumed. A refresh token only ever travels with an access token of its
-// own family.
+// outside a family, in another family than the access token, under another
+// issuer or with other extension data, or already consumed. A refresh token
+// only ever travels with an access token of its own grant.
 func (p *TokenPair) Validate() error {
 	switch {
 	case p == nil:
@@ -140,6 +176,8 @@ func (p *TokenPair) Validate() error {
 		return ErrInvalidRequest.WithDescription("storage: refresh token outside a token family")
 	case p.Refresh.FamilyID != p.Access.FamilyID:
 		return ErrInvalidRequest.WithDescription("storage: refresh and access tokens in different families")
+	case p.Refresh.Issuer != p.Access.Issuer || p.Refresh.ExtensionData != p.Access.ExtensionData:
+		return ErrInvalidRequest.WithDescription("storage: refresh and access tokens of different grants")
 	case p.Refresh.Consumed:
 		return ErrInvalidRequest.WithDescription("storage: refresh token already consumed")
 	default:

@@ -74,7 +74,17 @@ The hook fires for:
 - an `IntrospectionPolicy` that failed: `/introspect` withholds the token
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain
-  refusal by the policy is an expected outcome and is not reported.
+  refusal by the policy is an expected outcome and is not reported;
+- at `/authorize`, an unsupported `response_mode` (`invalid_request`, answered
+  with a bare 400), a failing `IssuerResolver`, a failing `ConsentFunc`
+  (`consent handler failed`, its error as cause), a `Consent.Refusal` (as
+  returned), an approval without a valid subject, and every error of an
+  `oauth2.Extension` hook — a protocol code as returned, anything else as a
+  `server_error` (`authorization extension failed`) carrying it. An error
+  whose code the endpoint cannot send reaches the hook as a `server_error`
+  whose cause is the original;
+- at `/token`, an `ExtendTokenResponse` failure: its `invalid_grant` as
+  returned, anything else as a `server_error` carrying it.
 
 `grant.Config.OnError` is the same hook for the errors a grant swallows
 before returning — today, a family revocation that failed after a

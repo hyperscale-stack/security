@@ -169,6 +169,27 @@ The `oauth2` module is an authorization server, not just a provider:
   row locks), Redis (Lua scripts). All three pass the shared
   `oauth2/storetest` conformance suite, which states the guarantees through
   the public API.
+- **Issuer binding** — `/authorize` resolves the issuer of the request
+  through the `IssuerResolver` (the application's realm) before any
+  redirected answer; the code and every token record it, and the
+  `authorization_code` and `refresh_token` grants refuse them at another
+  issuer.
+- **Extension points** — `ServerConfig.Extension` plugs an optional protocol
+  extension, the `oidc/provider` OpenID Provider, into the authorization-code
+  flow without a second `/token` endpoint and without `oauth2` depending on
+  OIDC or JOSE:
+
+  ```
+  /authorize  core checks ─► issuer ─► Extension.ValidateAuthorizeRequest ─► ConsentFunc
+              ─► Extension.CompleteAuthorization(Consent.ExtensionResult) ─► code {Issuer, ExtensionData}
+  /token      grant checks (client, issuer, redirect_uri, PKCE) ─► mint tokens (context copied)
+              ─► Extension.ExtendTokenResponse ─► one atomic write ─► {…, id_token}
+  ```
+
+  The extension only sees what the core accepted, can only narrow a scope
+  and add an `id_token` member, and its grant context (`ExtensionData`)
+  travels unchanged through every refresh — the stores refuse a rotation
+  that would change it.
 
 Tokens and authorization codes are **never stored in cleartext** — the
 store only ever sees a hash.

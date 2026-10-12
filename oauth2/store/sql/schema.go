@@ -21,7 +21,13 @@ import (
 //
 // The DDL sticks to the subset every supported engine accepts, so it is
 // the same for every [Dialect]: the argument is accepted for API stability
-// and ignored.
+// and ignored. The issuer and extension_data columns of codes and tokens —
+// the realm a grant is bound to and the opaque state an oauth2.Extension
+// recorded for it — are nullable TEXT, the only form every engine accepts
+// in an ALTER TABLE … ADD COLUMN on a populated table, so a database
+// created before them is upgraded with the statements MIGRATION.md lists
+// and ends up with the same columns as a new one. The store writes an
+// empty value as the empty string and reads NULL as the empty string.
 //
 // The statements are idempotent (CREATE TABLE IF NOT EXISTS). Production
 // deployments typically run them through a migration tool rather than via
@@ -39,7 +45,9 @@ func Schema(_ Dialect) []string {
 			nonce                 TEXT         NOT NULL,
 			consumed              SMALLINT     NOT NULL DEFAULT 0,
 			issued_at             BIGINT       NOT NULL,
-			expires_at            BIGINT       NOT NULL
+			expires_at            BIGINT       NOT NULL,
+			issuer                TEXT,
+			extension_data        TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_access_tokens (
 			token_hash VARCHAR(128) PRIMARY KEY,
@@ -49,7 +57,9 @@ func Schema(_ Dialect) []string {
 			family_id  VARCHAR(64)  NOT NULL,
 			audience   VARCHAR(255) NOT NULL,
 			issued_at  BIGINT       NOT NULL,
-			expires_at BIGINT       NOT NULL
+			expires_at BIGINT       NOT NULL,
+			issuer         TEXT,
+			extension_data TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_refresh_tokens (
 			token_hash VARCHAR(128) PRIMARY KEY,
@@ -59,7 +69,9 @@ func Schema(_ Dialect) []string {
 			family_id  VARCHAR(64)  NOT NULL,
 			consumed   SMALLINT     NOT NULL DEFAULT 0,
 			issued_at  BIGINT       NOT NULL,
-			expires_at BIGINT       NOT NULL
+			expires_at BIGINT       NOT NULL,
+			issuer         TEXT,
+			extension_data TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
 			family_id  VARCHAR(64)  PRIMARY KEY,
@@ -71,7 +83,9 @@ func Schema(_ Dialect) []string {
 
 // Migrate applies [Schema] to the store's database. It is safe to call
 // repeatedly (every statement is IF NOT EXISTS): it creates the missing
-// tables and never alters an existing one.
+// tables and never alters an existing one — the columns a release adds to
+// an existing table are added with the statements MIGRATION.md lists,
+// through your migration tool, before the release serves traffic.
 func (s *Store) Migrate(ctx context.Context) error {
 	for _, stmt := range Schema(s.dialect) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
