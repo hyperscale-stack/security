@@ -88,15 +88,19 @@ func TestSpans(t *testing.T) {
 	assert.Equal(t, connID, ok[samlsp.AttrConnectionID])
 	assert.Equal(t, idpEntity, ok[samlsp.AttrIdPEntityID])
 	assert.Equal(t, "true", ok[samlsp.AttrInsecureSHA1])
+	assert.Equal(t, "true", ok[samlsp.AttrTransactionConsumed])
 
+	// Refused after the consumption: the operator sees the login is over.
 	rejected := byName["samlsp.ServiceProvider.CompleteLogin"][1]
 	assert.Equal(t, "rejected", attrs(rejected)[samlsp.AttrOutcome])
 	assert.Equal(t, "audience_mismatch", attrs(rejected)[samlsp.AttrReason])
+	assert.Equal(t, "true", attrs(rejected)[samlsp.AttrTransactionConsumed])
 	assert.Equal(t, codes.Error, rejected.Status().Code)
 
 	failed := attrs(byName["samlsp.ServiceProvider.CompleteLogin"][2])
 	assert.Equal(t, "error", failed[samlsp.AttrOutcome])
 	assert.Equal(t, "error", failed[samlsp.AttrReason])
+	assert.NotContains(t, failed, samlsp.AttrTransactionConsumed, "failed before the consumption")
 
 	// No span carries identity data, RelayState, cookie or request ID.
 	for _, s := range spans {

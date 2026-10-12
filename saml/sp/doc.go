@@ -56,8 +56,10 @@
 // writer of the store can neither rebind a transaction nor relax its
 // checks ([ErrTransactionIntegrity]). CompleteLogin accepts a Response only
 // for an unexpired, unconsumed transaction of the same browser and
-// connection, whose signed SubjectConfirmationData answers its request ID;
-// it consumes the transaction atomically (one winner across instances) and
+// connection, whose signed SubjectConfirmationData answers its request ID.
+// It consumes the transaction atomically (one winner across instances)
+// before verifying any signature: a login allows one verification, and a
+// response refused from then on ends it (the user starts over). It then
 // records the assertion in the replay cache. Unsolicited (IdP-initiated) responses are
 // refused, and RelayState is never a URL: the application's return target
 // stays server-side in [LoginOptions].AppState (no open redirect).

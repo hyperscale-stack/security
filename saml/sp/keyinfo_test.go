@@ -102,7 +102,7 @@ func TestCompleteLogin_CertificatelessKeyInfo(t *testing.T) {
 	t.Run("a cut KeyInfo extends no trust", func(t *testing.T) {
 		t.Parallel()
 
-		reject(t, respOpts{
+		rejectConsumed(t, respOpts{
 			assertionSig: sigOpts{signer: k.attacker},
 			after:        keyInfoContent(assertionSignature, keyName),
 		}, samlsp.ErrInvalidSignature)

@@ -32,6 +32,8 @@ func TestCompleteLogin_SignatureFailures(t *testing.T) {
 
 	k := keys(t)
 
+	// Every case but the unsigned response is refused by the verifier,
+	// after the consumption.
 	cases := []struct {
 		name string
 		o    respOpts
@@ -66,7 +68,13 @@ func TestCompleteLogin_SignatureFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reject(t, tc.o, samlsp.ErrInvalidSignature)
+			if tc.name == "no signature at all" {
+				reject(t, tc.o, samlsp.ErrInvalidSignature) // the profile refuses it before the consumption
+
+				return
+			}
+
+			rejectConsumed(t, tc.o, samlsp.ErrInvalidSignature)
 		})
 	}
 }
@@ -463,7 +471,7 @@ func TestCompleteLogin_InclusiveNamespacesPrefixList(t *testing.T) {
 	reject(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: prefixes(33)}}, samlsp.ErrInvalidSignature)
 
 	// The resigning helper is sound: a tampered SignedInfo fails.
-	reject(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: "xs"}, after: func(r *etree.Element) {
+	rejectConsumed(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: "xs"}, after: func(r *etree.Element) {
 		path(assertionSignature(r), "SignedInfo", "Reference", "Transforms").ChildElements()[1].
 			FindElement("./InclusiveNamespaces").CreateAttr("PrefixList", "xs xsi")
 	}}, samlsp.ErrInvalidSignature)
@@ -677,7 +685,7 @@ func TestCompleteLogin_CommentInNameIDIsCanonical(t *testing.T) {
 
 	// With exc-c14n#WithComments the comment is signed content: injecting
 	// one breaks the signature.
-	reject(t, respOpts{assertionSig: sigOpts{canon: exclusiveWithComments()}, raw: func(s string) string {
+	rejectConsumed(t, respOpts{assertionSig: sigOpts{canon: exclusiveWithComments()}, raw: func(s string) string {
 		return strings.Replace(s, ">"+nameIDValue+"<", ">alice-pair<!-- x -->wise-0001<", 1)
 	}}, samlsp.ErrInvalidSignature)
 }
@@ -724,7 +732,7 @@ func TestCompleteLogin_CertificateRollover(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reject(t, tc.o, samlsp.ErrInvalidSignature, tc.opts...)
+			rejectConsumed(t, tc.o, samlsp.ErrInvalidSignature, tc.opts...)
 		})
 	}
 }

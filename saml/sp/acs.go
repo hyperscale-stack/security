@@ -36,7 +36,7 @@ type LoginResult struct {
 // generic error page (Bindings §3.5.6 forbids HTTP error codes for SAML
 // processing failures). CompleteLogin writes no HTTP response.
 //
-// In order, without side effects until step 10:
+// In order, without side effects until step 8:
 //
 //  1. the request: POST, form content type, body within MaxResponseSize (or,
 //     for a form the application already parsed, the SAMLResponse value),
@@ -68,23 +68,28 @@ type LoginResult struct {
 //  7. a non-Success status yields a [*StatusError] carrying the AppState;
 //     a Success Response must answer the transaction's request in its own
 //     InResponseTo (Core §3.2.2);
-//  8. the signatures are verified by gosaml2/goxmldsig with the
+//  8. the transaction is consumed atomically (one winner across
+//     instances), under the ID derived from the request and the digest of
+//     the cookie the browser presented: a login allows one verification,
+//     and from here every refusal is final — the user starts over;
+//  9. the signatures are verified by gosaml2/goxmldsig with the
 //     connection's certificates: the Response or the Assertion must be
 //     signed (Profiles §4.1.3.5/§4.1.4.5 as amended by errata E93/E26) and
 //     every value used afterwards comes from the verified canonical bytes;
-//  9. the processing rules: Destination (required when the Response is
+//     a signature without KeyInfo tries the certificate that verified the
+//     connection's last such signature first;
+//  10. the processing rules: Destination (required when the Response is
 //     signed), Issuers, IssueInstants, Recipient, InResponseTo (the request
 //     ID of the transaction), NotOnOrAfter/NotBefore with the clock skew,
 //     audiences, AuthnStatement, ForceAuthn, requested context class and
 //     NameID format;
-//  10. the transaction is consumed atomically (one winner across
-//     instances), then the assertion is recorded in the replay cache
-//     (Profiles §4.1.4.5). A failure after the consumption leaves it
-//     consumed: the user starts over.
+//  11. the assertion is recorded in the replay cache (Profiles §4.1.4.5).
 //
 // Every refusal matches [ErrRejected] and a specific sentinel; error
 // messages never contain message content. A store or resolver failure is
-// returned as is and does not match ErrRejected.
+// returned as is and does not match ErrRejected. A refusal before step 8
+// leaves the transaction to its browser; from step 8 on, the span carries
+// samlsp.transaction_consumed (AttrTransactionConsumed).
 func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, connectionID string) (_ *LoginResult, err error) {
 	ctx, span := startSpan(ctx, "samlsp.ServiceProvider.CompleteLogin")
 	defer func() { endSpan(span, err) }()
@@ -128,6 +133,14 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 	if err := checkResponseInResponseTo(raw, tx); err != nil {
 		return nil, err
 	}
+
+	// From here every outcome is final for the transaction: one
+	// verification per login (audit SAML-01).
+	if err := sp.consume(ctx, st); err != nil {
+		return nil, err
+	}
+
+	span.SetAttributes(AttrTransactionConsumed.Bool(true))
 
 	return sp.finish(ctx, raw, conn, st, tx, now)
 }
@@ -407,8 +420,24 @@ func statusError(raw *rawResponse, tx *transaction, conn *Connection) error {
 	}
 }
 
-// finish verifies the signatures, applies the processing rules, consumes
-// the transaction and records the assertion.
+// consume marks the transaction consumed, under the ID derived from the
+// request and the digest of the cookie the browser presented: the store
+// compares it with the stored one again, under its own atomicity (audit
+// SAML-I8). Of concurrent calls, one wins; the others are refused.
+func (sp *ServiceProvider) consume(ctx context.Context, st *storedTransaction) error {
+	if err := sp.cfg.Transactions.ConsumeTransaction(ctx, st.id, st.bindingHash); err != nil {
+		if errors.Is(err, ErrRejected) {
+			return reject(err, "", nil)
+		}
+
+		return fmt.Errorf("samlsp: consume transaction: %w", err)
+	}
+
+	return nil
+}
+
+// finish verifies the signatures of a response whose transaction is
+// consumed, applies the processing rules and records the assertion.
 func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *Connection, st *storedTransaction,
 	tx *transaction, now time.Time,
 ) (*LoginResult, error) {
@@ -422,16 +451,6 @@ func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *C
 	identity, replayExpiry, err := v.check()
 	if err != nil {
 		return nil, err
-	}
-
-	// The store compares the presented binding with the stored one again,
-	// under its own atomicity (audit SAML-I8).
-	if err := sp.cfg.Transactions.ConsumeTransaction(ctx, st.id, st.bindingHash); err != nil {
-		if errors.Is(err, ErrRejected) {
-			return nil, reject(err, "", nil)
-		}
-
-		return nil, fmt.Errorf("samlsp: consume transaction: %w", err)
 	}
 
 	key := replayKey(conn.ID, identity.Issuer, identity.AssertionID)

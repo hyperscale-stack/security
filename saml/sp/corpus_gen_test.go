@@ -307,6 +307,41 @@ type corpusSpec struct {
 	file   string // optional file name override (reuse another entry's bytes)
 }
 
+// refusedAfterConsumption declares the rules that refuse a response after
+// its transaction was consumed — signature verification, the processing
+// rules on the verified values and the replay cache — by sentinel and
+// detail: an entry refused by one of them declares Consumed (audit
+// SAML-01, one verification per login). Every other rule refuses before
+// the consumption, and the generator checks both against the Service
+// Provider.
+var refusedAfterConsumption = map[[2]string]bool{
+	{"ErrInvalidSignature", "signature verification failed"}:                         true,
+	{"ErrInvalidSignature", "no trusted certificate is currently valid"}:             true,
+	{"ErrIssuerMismatch", ""}:                                                        true,
+	{"ErrDestinationMismatch", ""}:                                                   true,
+	{"ErrDestinationMismatch", "signed Response without Destination"}:                true,
+	{"ErrRecipientMismatch", ""}:                                                     true,
+	{"ErrInResponseToMismatch", "InResponseTo is not the request ID"}:                true,
+	{"ErrUnsolicitedResponse", "no InResponseTo in the bearer confirmation"}:         true,
+	{"ErrAudienceMismatch", "an AudienceRestriction does not name the SP entity ID"}: true,
+	{"ErrAudienceMismatch", "no AudienceRestriction"}:                                true,
+	{"ErrAssertionExpired", ""}:                                                      true,
+	{"ErrAssertionExpired", "assertion expired"}:                                     true,
+	{"ErrAssertionExpired", "session already ended"}:                                 true,
+	{"ErrAssertionExpired", "subject confirmation expired"}:                          true,
+	{"ErrAssertionNotYetValid", "AuthnInstant in the future"}:                        true,
+	{"ErrAssertionNotYetValid", "IssueInstant in the future"}:                        true,
+	{"ErrAssertionNotYetValid", "assertion not yet valid"}:                           true,
+	{"ErrInvalidAssertion", "NotBefore is not before NotOnOrAfter"}:                  true,
+	{"ErrInvalidAssertion", "issued before the AuthnRequest it answers"}:             true,
+	{"ErrInvalidAssertion", "missing element"}:                                       true,
+	{"ErrInvalidAssertion", "missing or empty NameID"}:                               true,
+	{"ErrAuthnContextMismatch", ""}:                                                  true,
+	{"ErrNameIDFormatMismatch", ""}:                                                  true,
+	{"ErrStaleAuthentication", ""}:                                                   true,
+	{"ErrAssertionReplayed", ""}:                                                     true,
+}
+
 // rejected declares a refusal: the sentinel and the static detail of the
 // rule that must refuse ("" for a sentinel without detail).
 func rejected(sentinel, detail string) corpusExpect {
@@ -478,6 +513,10 @@ func (g *corpusGen) entry(s corpusSpec) (corpusEntry, []byte) {
 	}
 
 	category, _, _ := strings.Cut(s.id, "/")
+
+	if s.expect.Outcome == outcomeRejected && refusedAfterConsumption[[2]string{s.expect.Sentinel, s.expect.Detail}] {
+		s.expect.Consumed = true
+	}
 
 	return corpusEntry{
 		ID: s.id, Category: category, Attack: s.attack, Refs: s.refs, File: file,

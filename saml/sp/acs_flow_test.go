@@ -39,10 +39,24 @@ func requireRejected(t *testing.T, e *env, lr loginResult, err error, target err
 	require.ErrorIs(t, err, security.ErrInvalidCredentials)
 
 	_, lerr := e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
-	require.NoError(t, lerr, "a rejected response consumes nothing")
+	require.NoError(t, lerr, "a response refused before the consumption consumes nothing")
 }
 
-// reject runs a full flow with o and asserts the rejection.
+// requireRejectedConsumed asserts a rejection after the consumption of the
+// transaction: the login is over, the user starts over (audit SAML-01).
+func requireRejectedConsumed(t *testing.T, e *env, lr loginResult, err error, target error) {
+	t.Helper()
+
+	require.ErrorIs(t, err, target)
+	require.ErrorIs(t, err, samlsp.ErrRejected)
+	require.ErrorIs(t, err, security.ErrInvalidCredentials)
+
+	_, lerr := e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
+	require.ErrorIs(t, lerr, samlsp.ErrTransactionConsumed, "a response refused after the consumption ends the login")
+}
+
+// reject runs a full flow with o and asserts a rejection before the
+// consumption: the transaction is untouched.
 func reject(t *testing.T, o respOpts, target error, opts ...envOption) {
 	t.Helper()
 
@@ -52,6 +66,19 @@ func reject(t *testing.T, o respOpts, target error, opts ...envOption) {
 	res, err := complete(e, lr, respond(t, lr.requestID, o))
 	assert.Nil(t, res)
 	requireRejected(t, e, lr, err, target)
+}
+
+// rejectConsumed runs a full flow with o and asserts a rejection after the
+// consumption (signature verification or a processing rule).
+func rejectConsumed(t *testing.T, o respOpts, target error, opts ...envOption) {
+	t.Helper()
+
+	e := newEnv(t, opts...)
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	res, err := complete(e, lr, respond(t, lr.requestID, o))
+	assert.Nil(t, res)
+	requireRejectedConsumed(t, e, lr, err, target)
 }
 
 func TestCompleteLogin_Success(t *testing.T) {
@@ -289,7 +316,23 @@ func TestCompleteLogin_ConcurrentConsumptionAcrossInstances(t *testing.T) {
 func TestCompleteLogin_FailureSemantics(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a rejected response consumes nothing", func(t *testing.T) {
+	t.Run("a response refused before the consumption consumes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t)
+		lr := begin(t, e, samlsp.LoginOptions{})
+
+		_, err := complete(e, lr, respond(t, lr.requestID, onResponse(func(r *etree.Element) {
+			r.CreateAttr("InResponseTo", "_evil-other-request")
+		})))
+		require.ErrorIs(t, err, samlsp.ErrInResponseToMismatch)
+		assert.NotContains(t, err.Error(), "evil", "error messages never echo message content")
+
+		_, err = complete(e, lr, respond(t, lr.requestID, respOpts{}))
+		require.NoError(t, err, "the transaction survived the response refused before the consumption")
+	})
+
+	t.Run("a response refused after the consumption ends the login", func(t *testing.T) {
 		t.Parallel()
 
 		e := newEnv(t)
@@ -302,7 +345,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		assert.NotContains(t, err.Error(), "evil", "error messages never echo message content")
 
 		_, err = complete(e, lr, respond(t, lr.requestID, respOpts{}))
-		require.NoError(t, err, "the transaction survived the forged response")
+		require.ErrorIs(t, err, samlsp.ErrTransactionConsumed, "one verification per login: the user starts over (audit SAML-01)")
 	})
 
 	t.Run("replay cache failure after consumption", func(t *testing.T) {

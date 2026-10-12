@@ -32,6 +32,9 @@ const (
 	AttrReason = attribute.Key("samlsp.reason")
 	// AttrInsecureSHA1 is set when the connection accepts SHA-1.
 	AttrInsecureSHA1 = attribute.Key("samlsp.insecure_sha1")
+	// AttrTransactionConsumed is set when the call consumed the login
+	// transaction: on a rejection, the user must start the login over.
+	AttrTransactionConsumed = attribute.Key("samlsp.transaction_consumed")
 )
 
 // startSpan starts a span of this module.

@@ -84,8 +84,10 @@ var (
 	// already purged after expiry.
 	ErrTransactionNotFound = newRejection("transaction not found")
 
-	// ErrTransactionConsumed reports a transaction that already completed:
-	// a replayed or concurrent duplicate response.
+	// ErrTransactionConsumed reports a transaction already consumed: a
+	// replayed or concurrent duplicate response, or any response after one
+	// refused once the transaction was consumed (a login allows one
+	// verification: the user starts over).
 	ErrTransactionConsumed = newRejection("transaction already consumed")
 
 	// ErrBrowserBindingMismatch reports a response presented by a browser
