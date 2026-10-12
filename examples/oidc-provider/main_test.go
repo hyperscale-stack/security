@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -16,11 +17,17 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
+	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/hyperscale-stack/security/outbound"
+	"github.com/hyperscale-stack/security/password"
+	"github.com/hyperscale-stack/security/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -737,4 +744,187 @@ func TestConsentEndpointRefusals(t *testing.T) {
 		resp, _ := h.do(h.browser, http.MethodPost, h.issuer+"/consent", elsewhere)
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, target)
 	}
+}
+
+// testClock is the injectable clock of the provider and the application.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
+}
+
+// pendingCount returns the authorization requests in progress the
+// application holds.
+func (a *app) pendingCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return len(a.pending)
+}
+
+// TestPendingRequestsAreBounded: every authorization request of a browser
+// without a session opens a login page and leaves server-side state; the
+// application holds at most its limit of them, and purges those older than
+// oidcprovider.MaxInteractionDuration — however many requests come.
+func TestPendingRequestsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "http://127.0.0.1:1"
+
+	clock := &testClock{now: time.Now()}
+	handler, a, err := buildServer(config{Issuer: issuer, RedirectURI: defaultRedirectURI}, clock.Now)
+	require.NoError(t, err)
+
+	a.pendingLimit = 50
+
+	request := func(i int) {
+		t.Helper()
+
+		_, challenge := pkce()
+		q := url.Values{
+			"response_type": {"code"}, "client_id": {rpClientID}, "redirect_uri": {defaultRedirectURI},
+			"scope": {"openid"}, "state": {strconv.Itoa(i)}, "nonce": {"n"},
+			"code_challenge": {challenge}, "code_challenge_method": {"S256"},
+		}
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, issuer+"/oauth2/authorize?"+q.Encode(), nil))
+		require.Equal(t, http.StatusOK, rec.Code, "the login page")
+	}
+
+	for i := range 200 {
+		request(i)
+	}
+
+	assert.LessOrEqual(t, a.pendingCount(), 50, "at most the limit")
+
+	clock.Advance(oidcprovider.MaxInteractionDuration + time.Minute)
+	request(200)
+	assert.Equal(t, 1, a.pendingCount(), "the expired ones are purged")
+}
+
+// countingHasher records the hashes the login compares a password with.
+type countingHasher struct {
+	password.Hasher
+
+	mu     sync.Mutex
+	hashes []string
+}
+
+func (c *countingHasher) Verify(ctx context.Context, encodedHash, pass string) (bool, error) {
+	c.mu.Lock()
+	c.hashes = append(c.hashes, encodedHash)
+	c.mu.Unlock()
+
+	return c.Hasher.Verify(ctx, encodedHash, pass) //nolint:wrapcheck // test double
+}
+
+// TestUnknownUsernamesCostAPasswordVerification: every login attempt costs
+// one password-hash comparison of the same cost — an unknown username is
+// compared with a dummy hash — so that the response time does not tell
+// whether an account exists.
+func TestUnknownUsernamesCostAPasswordVerification(t *testing.T) {
+	t.Parallel()
+
+	_, a, err := buildServer(config{Issuer: "http://127.0.0.1:1", RedirectURI: defaultRedirectURI}, time.Now)
+	require.NoError(t, err)
+
+	counting := &countingHasher{Hasher: a.hasher}
+	a.hasher = counting
+
+	assert.False(t, a.verifyPassword(t.Context(), "nobody", "alice-secret"))
+	assert.False(t, a.verifyPassword(t.Context(), "alice", "wrong"))
+	assert.True(t, a.verifyPassword(t.Context(), "alice", "alice-secret"))
+
+	require.Len(t, counting.hashes, 3, "one comparison per attempt, known username or not")
+	assert.NotEqual(t, counting.hashes[1], counting.hashes[0], "an unknown username is compared with a dummy hash")
+	assert.False(t, counting.NeedsRehash(counting.hashes[0]), "of the cost of real hashes")
+}
+
+// TestHTTPServerHasTimeouts: the demo server bounds the time a client may
+// take to send its request and to read the response, and how long an idle
+// connection stays open.
+func TestHTTPServerHasTimeouts(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer("localhost:0", http.NotFoundHandler())
+	assert.Positive(t, srv.ReadHeaderTimeout)
+	assert.Positive(t, srv.ReadTimeout)
+	assert.Positive(t, srv.WriteTimeout)
+	assert.Positive(t, srv.IdleTimeout)
+}
+
+// TestDocumentsAreServedAtTheirPathsOnly: the discovery document and the
+// JWK Set are mounted exactly at their Paths — the provider's handlers do
+// not check the request path, and relying parties require the issuer to be
+// the URL they fetched the document from (Discovery §4.3).
+func TestDocumentsAreServedAtTheirPathsOnly(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	for _, path := range []string{
+		"/tenant/.well-known/openid-configuration", "/.well-known/openid-configuration/x", "/x/.well-known/jwks.json",
+	} {
+		resp, _ := h.do(http.DefaultClient, http.MethodGet, h.issuer+path, nil)
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
+	}
+}
+
+// TestPendingRequestsExpire: a login start or a consent answer unused for
+// oidcprovider.MaxInteractionDuration no longer counts.
+func TestPendingRequestsExpire(t *testing.T) {
+	t.Parallel()
+
+	clock := &testClock{now: time.Now()}
+	_, a, err := buildServer(config{Issuer: "http://127.0.0.1:1", RedirectURI: defaultRedirectURI}, clock.Now)
+	require.NoError(t, err)
+
+	browser := &session.Session{ID: "browser"}
+	a.begin(browser.ID, "request", clock.Now())
+
+	a.mu.Lock()
+	a.update(browser.ID, "request", func(p *pendingRequest) { p.answer = &consentAnswer{allow: true} })
+	a.mu.Unlock()
+
+	_, answered := a.answerOf(browser, "request")
+	require.True(t, answered)
+	require.False(t, a.startedAt(browser, "request").IsZero())
+
+	clock.Advance(oidcprovider.MaxInteractionDuration + time.Second)
+
+	_, answered = a.answerOf(browser, "request")
+	assert.False(t, answered, "an answer expires with its request")
+	assert.True(t, a.startedAt(browser, "request").IsZero(), "so does a login start")
+}
+
+// matchingHasher reports every password as matching.
+type matchingHasher struct{ password.Hasher }
+
+func (matchingHasher) Verify(context.Context, string, string) (bool, error) { return true, nil }
+
+// TestUnknownUsernamesNeverSignIn: whatever the dummy comparison answers,
+// an unknown username is refused.
+func TestUnknownUsernamesNeverSignIn(t *testing.T) {
+	t.Parallel()
+
+	_, a, err := buildServer(config{Issuer: "http://127.0.0.1:1", RedirectURI: defaultRedirectURI}, time.Now)
+	require.NoError(t, err)
+
+	a.hasher = matchingHasher{a.hasher}
+	assert.False(t, a.verifyPassword(t.Context(), "nobody", "anything"))
+	assert.True(t, a.verifyPassword(t.Context(), "alice", "anything"))
 }

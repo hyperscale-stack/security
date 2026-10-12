@@ -38,10 +38,12 @@
 // The demo cuts corners a deployment must not: an http issuer
 // (AllowInsecureLoopbackIssuer — production issuers are https), a key
 // generated at startup (production keys come from a KMS-backed KeySource
-// and rotate through KeyRing.Published), and in-memory storage. Consent is
-// remembered in memory, per end-user and client, for the scopes and claims
-// the end-user last allowed — offline access never: it is asked for every
-// time (OpenID Connect Core §11).
+// and rotate through KeyRing.Published), and in-memory storage: tokens,
+// consents and the logins in progress — the latter bounded (10,000) and
+// expiring after 15 minutes of disuse. Consent is remembered per end-user
+// and client, for the scopes and claims the end-user last allowed —
+// offline access never: it is asked for every time (OpenID Connect Core
+// §11).
 package main
 
 import (
@@ -150,40 +152,71 @@ type consentRecord struct{ scopes, claims []string }
 // to it through Interaction and ClaimsSource: end-user sessions, the login
 // and consent pages, consent records and end-user claims.
 type app struct {
+	now      func() time.Time
 	issuer   string
 	paths    oidcprovider.Paths
 	sessions *session.Manager
 	hasher   password.Hasher
 	accounts map[string]account
+	// dummyHash is what the password of an unknown username is compared
+	// with: a login attempt takes as long whether the account exists or not.
+	dummyHash string
 
 	mu sync.Mutex
 	// consents remembers, by subject and client, what the end-user last
 	// allowed the client.
 	consents map[string]consentRecord
-	// started records when the login of an authorization request began,
-	// by browser session and request: server-side state bound to this
-	// browser and this request (Decision.InteractionStartedAt), carried over
-	// to the session a login opens.
-	started map[string]map[string]time.Time
-	// answers holds consent page answers, by session and authorization
-	// request.
-	answers map[string]consentAnswer
+	// pending holds the authorization requests in progress, by browser
+	// session and request: server-side state bound to this browser and this
+	// request (Decision.InteractionStartedAt, consent answers), carried over
+	// to the session a login opens. At most pendingLimit entries.
+	pending      map[string]*pendingRequest
+	pendingLimit int
+	lastPurge    time.Time
+}
+
+// Bounds on the authorization requests in progress the demo remembers.
+const (
+	// maxPendingRequests is the default limit, across all browsers.
+	maxPendingRequests = 10000
+	// pendingPurgeInterval spaces the purges of expired ones.
+	pendingPurgeInterval = time.Minute
+)
+
+// pendingRequest is the server-side state of an authorization request in
+// progress in one browser: when its login began and the answer of its
+// consent page. Unused for oidcprovider.MaxInteractionDuration, it has
+// expired.
+type pendingRequest struct {
+	started time.Time
+	answer  *consentAnswer
+	updated time.Time
 }
 
 // newServer builds the provider of cfg and the application around it. It
 // is separate from main so that the end-to-end test drives the exact same
 // wiring.
 func newServer(cfg config) (http.Handler, error) {
+	handler, _, err := buildServer(cfg, time.Now)
+
+	return handler, err
+}
+
+// buildServer is newServer with the clock now, shared by the provider and
+// the application.
+func buildServer(cfg config, now func() time.Time) (http.Handler, *app, error) {
 	issuer := cfg.Issuer
 
 	a, err := newApp(issuer)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	a.now = now
 
 	keys, err := demoKeys()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	store := memory.New()
@@ -204,6 +237,7 @@ func newServer(cfg config) (http.Handler, error) {
 		IssuerResolver: oauth2.StaticIssuer(issuer, apiAudience),
 		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost(), clientauth.NewNone()},
 		Grants:         []oauth2.Grant{grant.NewAuthorizationCode(grants), grant.NewRefreshToken(grants)},
+		Now:            now,
 	}, oidcprovider.Config{
 		Keys:        keys,
 		Claims:      a,
@@ -213,11 +247,11 @@ func newServer(cfg config) (http.Handler, error) {
 		AllowInsecureLoopbackIssuer: true, // http://localhost demo only
 	})
 	if err != nil {
-		return nil, fmt.Errorf("new provider: %w", err)
+		return nil, nil, fmt.Errorf("new provider: %w", err)
 	}
 
 	if a.paths, err = op.Paths(issuer); err != nil {
-		return nil, fmt.Errorf("paths: %w", err)
+		return nil, nil, fmt.Errorf("paths: %w", err)
 	}
 
 	srv := op.Server()
@@ -236,7 +270,7 @@ func newServer(cfg config) (http.Handler, error) {
 	mux.HandleFunc("POST /login", a.login)
 	mux.HandleFunc("POST /consent", a.consent)
 
-	return mux, nil
+	return mux, a, nil
 }
 
 func newApp(issuer string) (*app, error) {
@@ -257,10 +291,16 @@ func newApp(issuer string) (*app, error) {
 		return nil, fmt.Errorf("hash alice: %w", err)
 	}
 
+	dummyHash, err := hasher.Hash(context.Background(), "no account has this password")
+	if err != nil {
+		return nil, fmt.Errorf("dummy hash: %w", err)
+	}
+
 	// Secure cookies need https: off for an http (loopback) issuer only.
 	secure := strings.HasPrefix(issuer, "https://")
 
 	return &app{
+		now:      time.Now,
 		issuer:   issuer,
 		sessions: session.NewManager(codec, session.WithCookieName("op_session"), session.WithSecure(secure)),
 		hasher:   hasher,
@@ -268,9 +308,10 @@ func newApp(issuer string) (*app, error) {
 			"name": "Alice Liddell", "given_name": "Alice", "family_name": "Liddell",
 			"email": "alice@example.com", "email_verified": true,
 		}}},
-		consents: map[string]consentRecord{},
-		started:  map[string]map[string]time.Time{},
-		answers:  map[string]consentAnswer{},
+		dummyHash:    dummyHash,
+		consents:     map[string]consentRecord{},
+		pending:      map[string]*pendingRequest{},
+		pendingLimit: maxPendingRequests,
 	}, nil
 }
 
@@ -493,7 +534,9 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resume := r.PostFormValue("return_to")
-	if _, ok := a.authorizationRequest(resume); !ok {
+
+	form, ok := a.authorizationRequest(resume)
+	if !ok {
 		http.Error(w, "invalid return_to", http.StatusBadRequest)
 
 		return
@@ -516,7 +559,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.carryOver(s.ID, signedIn.ID)
+	a.carryOver(s.ID, signedIn.ID, requestKey(form))
 
 	//nolint:gosec // G710: resume is a relative URL of the authorization endpoint (authorizationRequest)
 	http.Redirect(w, r, resume, http.StatusSeeOther)
@@ -545,8 +588,10 @@ func (a *app) consent(w http.ResponseWriter, r *http.Request) {
 	// remembers an allowed consent from that request once it resumes.
 	allow := r.PostFormValue("decision") == "allow"
 
+	answer := consentAnswer{allow: allow, offline: allow && r.PostFormValue("offline_access") == "on"}
+
 	a.mu.Lock()
-	a.answers[s.ID+"\x00"+requestKey(form)] = consentAnswer{allow: allow, offline: allow && r.PostFormValue("offline_access") == "on"}
+	a.update(s.ID, requestKey(form), func(p *pendingRequest) { p.answer = &answer })
 	a.mu.Unlock()
 
 	//nolint:gosec // G710: resume is a relative URL of the authorization endpoint (authorizationRequest)
@@ -555,14 +600,18 @@ func (a *app) consent(w http.ResponseWriter, r *http.Request) {
 
 // verifyPassword checks the credentials of username.
 func (a *app) verifyPassword(ctx context.Context, username, pass string) bool {
-	acc, ok := a.accounts[username]
-	if !ok {
-		return false
+	acc, known := a.accounts[username]
+
+	hash := acc.passwordHash
+	if !known {
+		// The same work for an unknown username: the response time does not
+		// tell whether an account exists.
+		hash = a.dummyHash
 	}
 
-	match, err := a.hasher.Verify(ctx, acc.passwordHash, pass)
+	match, err := a.hasher.Verify(ctx, hash, pass)
 
-	return err == nil && match
+	return known && err == nil && match
 }
 
 // authorizationRequest returns the parameters of resume, a relative URL of
@@ -594,15 +643,11 @@ func (a *app) begin(sessionID, key string, at time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	requests := a.started[sessionID]
-	if requests == nil {
-		requests = map[string]time.Time{}
-		a.started[sessionID] = requests
+	if p, ok := a.pendingOf(sessionID, key); ok && !p.started.IsZero() && at.Sub(p.started) <= oidcprovider.MaxInteractionDuration {
+		return
 	}
 
-	if started, ok := requests[key]; !ok || at.Sub(started) > oidcprovider.MaxInteractionDuration {
-		requests[key] = at
-	}
+	a.update(sessionID, key, func(p *pendingRequest) { p.started = at })
 }
 
 // startedAt returns when the login of an authorization request began in
@@ -616,23 +661,23 @@ func (a *app) startedAt(s *session.Session, key string) time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	started, ok := a.started[s.ID][key]
-	if !ok || time.Since(started) > oidcprovider.MaxInteractionDuration {
+	p, ok := a.pendingOf(s.ID, key)
+	if !ok || p.started.IsZero() || a.now().Sub(p.started) > oidcprovider.MaxInteractionDuration {
 		return time.Time{}
 	}
 
-	return started
+	return p.started
 }
 
-// carryOver moves the pending logins of a session to the session its login
-// opened: the browser is the same.
-func (a *app) carryOver(from, to string) {
+// carryOver moves the pending authorization request of key from the session
+// a login replaced to the session it opened: the browser is the same.
+func (a *app) carryOver(from, to, key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if requests, ok := a.started[from]; ok {
-		a.started[to] = requests
-		delete(a.started, from)
+	if p, ok := a.pending[pendingKey(from, key)]; ok {
+		delete(a.pending, pendingKey(from, key))
+		a.pending[pendingKey(to, key)] = p
 	}
 }
 
@@ -641,9 +686,73 @@ func (a *app) answerOf(s *session.Session, key string) (consentAnswer, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	answer, ok := a.answers[s.ID+"\x00"+key]
+	p, ok := a.pendingOf(s.ID, key)
+	if !ok || p.answer == nil {
+		return consentAnswer{}, false
+	}
 
-	return answer, ok
+	return *p.answer, true
+}
+
+// pendingKey identifies the authorization request of key in the browser
+// of session sessionID.
+func pendingKey(sessionID, key string) string { return sessionID + "\x00" + key }
+
+// pendingOf returns the pending authorization request of key in session
+// sessionID, unless it expired. The caller holds a.mu.
+func (a *app) pendingOf(sessionID, key string) (*pendingRequest, bool) {
+	p, ok := a.pending[pendingKey(sessionID, key)]
+	if !ok || a.now().Sub(p.updated) > oidcprovider.MaxInteractionDuration {
+		return nil, false
+	}
+
+	return p, true
+}
+
+// update applies change to the pending authorization request of key in
+// session sessionID, created when missing. The caller holds a.mu.
+func (a *app) update(sessionID, key string, change func(*pendingRequest)) {
+	id := pendingKey(sessionID, key)
+
+	p, ok := a.pending[id]
+	if !ok {
+		a.makeRoom()
+
+		p = &pendingRequest{}
+		a.pending[id] = p
+	}
+
+	change(p)
+	p.updated = a.now()
+}
+
+// makeRoom keeps the pending authorization requests below pendingLimit:
+// it purges the expired ones — a full scan, at most once per
+// pendingPurgeInterval — then evicts arbitrary ones. A flood of requests
+// costs a pending login one more sign-in, never memory. The caller holds
+// a.mu.
+func (a *app) makeRoom() {
+	if len(a.pending) < a.pendingLimit {
+		return
+	}
+
+	if now := a.now(); now.Sub(a.lastPurge) >= pendingPurgeInterval {
+		a.lastPurge = now
+
+		for id, p := range a.pending {
+			if now.Sub(p.updated) > oidcprovider.MaxInteractionDuration {
+				delete(a.pending, id)
+			}
+		}
+	}
+
+	for id := range a.pending {
+		if len(a.pending) < a.pendingLimit {
+			break
+		}
+
+		delete(a.pending, id)
+	}
 }
 
 // covered reports whether the consent the end-user last gave the client of
@@ -702,8 +811,7 @@ func (a *app) done(s *session.Session, key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	delete(a.started[s.ID], key)
-	delete(a.answers, s.ID+"\x00"+key)
+	delete(a.pending, pendingKey(s.ID, key))
 }
 
 // pageData is what the login and consent pages show.
@@ -785,6 +893,20 @@ func render(w http.ResponseWriter, status int, page *template.Template, data pag
 	return nil
 }
 
+// newHTTPServer is the demo's HTTP server: it bounds the time a client may
+// take to send a request and to read the response, and how long an idle
+// connection stays open — a slow client cannot hold one forever.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+}
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -796,7 +918,7 @@ func main() {
 		log.Fatalf("oidc-provider: %v", err)
 	}
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	srv := newHTTPServer(cfg.Addr, handler)
 
 	log.Printf("oidc-provider: issuer %s, listening on %s", cfg.Issuer, cfg.Addr)
 	log.Fatal(srv.ListenAndServe())

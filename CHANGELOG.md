@@ -1455,3 +1455,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   request of that client, new claims included. A consent answer applies to
   the very request its page showed, no longer to another one sharing its
   `client_id`, `state`, `nonce` and `code_challenge`.
+- `examples/oidc-provider` bounds the logins in progress it remembers (at
+  most 10,000; unused for 15 minutes, they expire and are purged): every
+  authorization request of a browser without a session used to leave an
+  entry for the life of the process. It compares the password of an
+  unknown username with a dummy hash — the response time told whether an
+  account existed — and its HTTP server sets read, write and idle timeouts.
