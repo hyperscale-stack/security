@@ -4,7 +4,11 @@
 
 package basic
 
-import "github.com/hyperscale-stack/security"
+import (
+	"slices"
+
+	"github.com/hyperscale-stack/security"
+)
 
 // Authentication is the [security.Authentication] produced by the Basic
 // [Extractor]. It carries the supplied username/password pair before
@@ -73,8 +77,9 @@ func (a Authentication) Credentials() any {
 	return a.password
 }
 
-// Authorities implements [security.Authentication].
-func (a Authentication) Authorities() []string { return a.authorities }
+// Authorities implements [security.Authentication]. It returns a copy: the
+// Authentication stays immutable whatever the caller does with the slice.
+func (a Authentication) Authorities() []string { return slices.Clone(a.authorities) }
 
 // IsAuthenticated implements [security.Authentication].
 func (a Authentication) IsAuthenticated() bool { return a.authed }

@@ -1169,3 +1169,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   username field) and wrapped store errors — as status description and
   exception event; they now carry the error class only, and
   `basic.Authenticator` no longer puts the typed username in its errors.
+- `Authorities()` of the `basic`, `bearer` and `session` authentications
+  returned their internal slice: a caller could rewrite the authorities of
+  an authenticated value (`ROLE_USER` → `ROLE_ADMIN`). They now return a
+  copy, and the `security.Authentication` contract requires it.

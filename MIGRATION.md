@@ -1295,3 +1295,6 @@ To migrate:
    authenticated value on success, and an error wrapping a security sentinel
    otherwise.
 3. Pass non-nil managers, extractors, authenticators, voters and attributes.
+4. Make the `Authorities` method of your own `Authentication` types return a
+   copy (`slices.Clone`): `basic`, `bearer` and `session` now do, so a caller
+   can no longer rewrite the authorities of an authenticated value.

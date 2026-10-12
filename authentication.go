@@ -38,8 +38,9 @@ type Authentication interface {
 	Credentials() any
 
 	// Authorities returns the authorities (roles, scopes, permissions) the
-	// system has granted to this principal. The slice is read-only;
-	// implementations SHOULD return the same backing slice across calls.
+	// system has granted to this principal. Implementations MUST NOT expose
+	// their internal state through it — return a copy (slices.Clone) — so
+	// that no caller can rewrite the authorities of an immutable snapshot.
 	Authorities() []string
 
 	// IsAuthenticated reports whether the credentials have been validated by
