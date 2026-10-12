@@ -6,7 +6,6 @@ package jwtsec
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -119,14 +118,14 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, err)
 	}
 
-	var std StandardClaims
-	if err := json.Unmarshal(payload, &std); err != nil {
+	std, err := decodeClaims(payload)
+	if err != nil {
 		span.SetStatus(codes.Error, "unmarshal")
 
 		return nil, fmt.Errorf("%w: %w", ErrMalformedToken, err)
 	}
 
-	if err := validateStandardClaims(v.cfg, &std); err != nil {
+	if err := validateStandardClaims(v.cfg, std); err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
 
@@ -134,14 +133,18 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 	}
 
 	if claimsOut != nil {
-		if err := json.Unmarshal(payload, claimsOut); err != nil {
+		// The payload passed validateJSON in decodeClaims: decode it into
+		// the caller's type with the same exact name matching.
+		if err := unmarshalExact(payload, claimsOut); err != nil {
+			span.SetStatus(codes.Error, "unmarshal")
+
 			return nil, fmt.Errorf("%w: %w", ErrMalformedToken, err)
 		}
 	}
 
 	span.SetAttributes(attribute.String("jwt.iss", std.Issuer))
 
-	return &std, nil
+	return std, nil
 }
 
 // joseAllowed converts the typed allowlist to go-jose's SignatureAlgorithm

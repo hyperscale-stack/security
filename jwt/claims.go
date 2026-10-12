@@ -5,10 +5,108 @@
 package jwtsec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	josejson "github.com/go-jose/go-jose/v4/json"
 )
+
+// The JSON types of the registered claims StandardClaims decodes (RFC 7519
+// §4.1; scope: RFC 8693 §4.2). A member of another type — null included —
+// is refused, never read as an absent claim: "nbf": null must not disable
+// the not-before check.
+var (
+	stringClaims = []string{"iss", "sub", "jti", "scope"}
+	dateClaims   = []string{"exp", "nbf", "iat"}
+)
+
+// decodeClaims reads a verified JWS payload as a JWT Claims Set: one UTF-8
+// JSON object whose member names are unique, case-sensitive and free of
+// case-folding collisions (RFC 7519 §4, §7.2 step 10, §10.1.1; see
+// validateJSON), with registered claims of their JSON type, decoded with
+// exact name matching.
+func decodeClaims(payload []byte) (*StandardClaims, error) {
+	var members map[string]josejson.RawMessage
+	if err := decodeStrict(payload, &members); err != nil {
+		return nil, err
+	}
+
+	if err := checkClaimTypes(members); err != nil {
+		return nil, err
+	}
+
+	var std StandardClaims
+	if err := unmarshalExact(payload, &std); err != nil {
+		return nil, err
+	}
+
+	return &std, nil
+}
+
+// checkClaimTypes refuses a registered claim of the wrong JSON type.
+func checkClaimTypes(members map[string]josejson.RawMessage) error {
+	for _, name := range stringClaims {
+		if raw, ok := members[name]; ok && jsonKind(raw) != '"' {
+			return fmt.Errorf("%w: %s is not a string", errJSON, name)
+		}
+	}
+
+	for _, name := range dateClaims {
+		if raw, ok := members[name]; ok && !isJSONNumber(raw) {
+			return fmt.Errorf("%w: %s is not a number", errJSON, name)
+		}
+	}
+
+	if raw, ok := members["aud"]; ok && !isAudience(raw) {
+		return fmt.Errorf("%w: aud is neither a string nor an array of strings", errJSON)
+	}
+
+	return nil
+}
+
+// jsonKind returns the first byte of a JSON value: '"', '{', '[', 't',
+// 'f', 'n', or a number's first character; 0 for an empty value.
+func jsonKind(raw []byte) byte {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return 0
+	}
+
+	return raw[0]
+}
+
+// isJSONNumber reports whether raw is a JSON number (RFC 8259 §6).
+func isJSONNumber(raw []byte) bool {
+	k := jsonKind(raw)
+
+	return k == '-' || (k >= '0' && k <= '9')
+}
+
+// isAudience reports whether raw is a string or an array of strings (RFC
+// 7519 §4.1.3).
+func isAudience(raw []byte) bool {
+	switch jsonKind(raw) {
+	case '"':
+		return true
+	case '[':
+		var elems []josejson.RawMessage
+		if unmarshalExact(raw, &elems) != nil {
+			return false
+		}
+
+		for _, e := range elems {
+			if jsonKind(e) != '"' {
+				return false
+			}
+		}
+
+		return true
+	default:
+		return false
+	}
+}
 
 // StandardClaims maps the RFC 7519 registered claims plus the OAuth2-friendly
 // `scope` claim (RFC 9068 §2.2.3). Custom claims belong in caller-defined
