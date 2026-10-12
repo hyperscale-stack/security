@@ -15,9 +15,10 @@ than future refactor phases.
   public clients (authenticated with `none`), and an empty
   `GrantTypeValues` allows every grant: restrict `GrantTypeValues` for
   public clients.
-- **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
-  depends on a server-side public-key store; the `jwtsec` module already
-  provides the building blocks (`NewStaticJWKS`).
+- **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
+  none, although its RFC 8414 metadata advertises `jwks_uri`: JWKS
+  publication depends on a server-side public-key store. `jwtsec.MarshalJWKS`
+  serializes a public JWK Set (it refuses private and symmetric keys).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
   JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload

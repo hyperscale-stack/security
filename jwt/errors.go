@@ -55,6 +55,13 @@ var (
 	// type the verifier requires (see [WithType]) — e.g. an OpenID Connect
 	// ID Token presented as an RFC 9068 access token (RFC 9068 §4).
 	ErrInvalidType = newJWTError("invalid token type", security.ErrInvalidCredentials)
+
+	// ErrInvalidKey signals a key unfit for its use: not the public — or
+	// private — key its algorithm takes, too short, on another curve, an
+	// HMAC secret where a public key is required, a missing or repeated kid
+	// in a JWK Set (see [PublicKey.Validate], [PrivateKey.Validate],
+	// [MarshalJWKS]). The key material never appears in the error.
+	ErrInvalidKey = newJWTError("invalid key", security.ErrInvalidCredentials)
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via

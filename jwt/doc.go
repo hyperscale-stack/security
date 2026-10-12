@@ -12,6 +12,13 @@
 //     (RSA, RSA-PSS, ECDSA, EdDSA); HMAC algorithms are accepted only on
 //     explicit opt-in via WithAllowedAlgorithms, to avoid key confusion.
 //   - Issuer and audience checks are opt-in via WithIssuer / WithAudience.
+//   - MarshalJWKS publishes a JWK Set of public signature keys and refuses
+//     private or symmetric material; PublicKey.Validate and
+//     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,
+//     RFC 7518 key sizes and curves).
+//   - VerifySignature checks a signature and nothing else, for callers that
+//     validate claims under their own rules (e.g. an OpenID Provider's
+//     id_token_hint); Verifier is the general entry point.
 //   - Explicit typing (RFC 8725 §3.11): signers write a "typ" header —
 //     "JWT" by default, "at+jwt" for the RFC 9068 access tokens of
 //     NewOAuth2AccessTokenSigner — and WithType makes a verifier require one.

@@ -230,6 +230,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
   `offline_access` (OIDC Core §11). Opt-in; rotation is unaffected.
+- **JWT key publication and signature-only verification** (`jwtsec`):
+  `MarshalJWKS` serializes an RFC 7517 JWK Set of public signature keys —
+  every key with a unique `kid`, its `alg` and `use: sig` — and refuses
+  private or symmetric material, publishing nothing (OIDC Discovery §3);
+  `PublicKey.Validate`, `PrivateKey.Validate` and `PrivateKey.Public` bind a
+  key to its algorithm (RSA of at least 2048 bits for RS*/PS*, the matching
+  curve for ES*, Ed25519 for EdDSA — RFC 7518 §3.3–§3.5, RFC 8725 §3.1);
+  `VerifySignature` verifies a compact JWS against a key list (allowlisted
+  `alg`, key selected by `kid` and bound to that `alg`) and returns its
+  header and payload without validating any claim, for callers applying
+  their own claim rules. `ErrInvalidKey` reports an unfit key.
 - **JWT explicit typing** (`jwtsec`): `WithType` sets the `typ` header a
   `Signer` writes (`TypeJWT` by default) and makes a `Verifier` require it,
   compared as RFC 7515 §4.1.9 prescribes (case-insensitive, `application/`

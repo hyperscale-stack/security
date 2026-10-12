@@ -165,7 +165,8 @@ to `otelconnect`, which you compose alongside these interceptors.
 | Span                  | When               | Attributes                                              | Error status                                                        |
 | --------------------- | ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | `jwtsec.Signer.Sign`  | `Signer.Sign`      | `jwt.alg` (string), `jwt.kid` (string)                  | —                                                                     |
-| `jwtsec.Verifier.Verify` | `Verifier.Verify` | `jwt.alg` (string), `jwt.kid` (string), `jwt.iss` (string) | parse, multi-signature, disallowed alg, unknown kid, bad signature, malformed payload, claim validation |
+| `jwtsec.Verifier.Verify` | `Verifier.Verify` | `jwt.alg` (string), `jwt.kid` (string), `jwt.iss` (string) | parse, multi-signature, disallowed alg, typ, unknown kid, bad signature, malformed payload, claim validation |
+| `jwtsec.VerifySignature` | `VerifySignature` | `jwt.alg` (string), `jwt.kid` (string)                  | parse (disallowed alg included), multi-signature, kid (no single key, key bound to another alg), bad signature |
 
 ### Session — `github.com/hyperscale-stack/security/session`
 
