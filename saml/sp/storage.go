@@ -7,7 +7,6 @@ package samlsp
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -29,8 +28,10 @@ type TransactionRecord struct {
 	// BindingHash is the digest the consuming browser must match: 64
 	// lowercase hex characters.
 	BindingHash string
-	// Payload is the SP-encoded transaction state (valid UTF-8, no NUL,
-	// at most MaxTransactionPayloadSize bytes).
+	// Payload is the SP-encoded transaction state: 7-bit ASCII without NUL
+	// (the SP's JSON escapes every other character, so any column type and
+	// character set stores it unchanged), at most MaxTransactionPayloadSize
+	// bytes.
 	Payload string
 	// ExpiresAt is the expiry, in whole seconds. Stores MUST return it
 	// unchanged.
@@ -57,11 +58,22 @@ func (r *TransactionRecord) Validate() error {
 		return fmt.Errorf("%w: empty payload", ErrInvalidStoreRecord)
 	case len(r.Payload) > MaxTransactionPayloadSize:
 		return fmt.Errorf("%w: payload over %d bytes", ErrInvalidStoreRecord, MaxTransactionPayloadSize)
-	case !utf8.ValidString(r.Payload) || strings.IndexByte(r.Payload, 0) >= 0:
-		return fmt.Errorf("%w: payload is not NUL-free UTF-8", ErrInvalidStoreRecord)
+	case !isPayloadASCII(r.Payload):
+		return fmt.Errorf("%w: payload is not NUL-free 7-bit ASCII", ErrInvalidStoreRecord)
 	}
 
 	return ValidateExpiry(r.ExpiresAt)
+}
+
+// isPayloadASCII reports whether s holds bytes 0x01 to 0x7F only.
+func isPayloadASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 || s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+
+	return true
 }
 
 // ValidateStoreKey checks that key is 64 lowercase hexadecimal characters,

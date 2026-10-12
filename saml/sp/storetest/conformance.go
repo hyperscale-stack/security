@@ -95,7 +95,7 @@ func record(label string) *samlsp.TransactionRecord {
 	return &samlsp.TransactionRecord{
 		ID:          key("tx/" + label),
 		BindingHash: key("binding/" + label),
-		Payload:     `{"v":1,"label":"` + label + `","utf8":"é✓"}`,
+		Payload:     `{"v":1,"label":"` + label + `","escaped":"\u00e9\u2713"}`,
 		ExpiresAt:   expiry(),
 	}
 }
@@ -302,6 +302,7 @@ func testRejectsInvalidRecord(t *testing.T, s samlsp.Storage) {
 		}},
 		{"NUL in payload", func(r *samlsp.TransactionRecord) { r.Payload = "a\x00b" }},
 		{"invalid UTF-8 payload", func(r *samlsp.TransactionRecord) { r.Payload = "a\xffb" }},
+		{"non-ASCII payload", func(r *samlsp.TransactionRecord) { r.Payload = "{\"app\":\"\u00e9\"}" }},
 		{"zero expiry", func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Time{} }},
 		{"sub-second expiry", func(r *samlsp.TransactionRecord) { r.ExpiresAt = r.ExpiresAt.Add(time.Millisecond) }},
 	}

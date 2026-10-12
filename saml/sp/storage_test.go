@@ -21,15 +21,17 @@ func TestTransactionRecord_Validate(t *testing.T) {
 	require.NoError(t, valid.Validate())
 
 	cases := map[string]func(*samlsp.TransactionRecord){
-		"ID":           func(r *samlsp.TransactionRecord) { r.ID = "" },
-		"binding":      func(r *samlsp.TransactionRecord) { r.BindingHash = strings.Repeat("g", 64) },
-		"payload":      func(r *samlsp.TransactionRecord) { r.Payload = "" },
-		"payload size": func(r *samlsp.TransactionRecord) { r.Payload = strings.Repeat("x", samlsp.MaxTransactionPayloadSize+1) },
-		"payload NUL":  func(r *samlsp.TransactionRecord) { r.Payload = "\x00" },
-		"payload UTF8": func(r *samlsp.TransactionRecord) { r.Payload = "\xc3" },
-		"zero expiry":  func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Time{} },
-		"epoch":        func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Unix(0, 0) },
-		"sub-second":   func(r *samlsp.TransactionRecord) { r.ExpiresAt = t0.Add(time.Nanosecond) },
+		"ID":                func(r *samlsp.TransactionRecord) { r.ID = "" },
+		"binding":           func(r *samlsp.TransactionRecord) { r.BindingHash = strings.Repeat("g", 64) },
+		"payload":           func(r *samlsp.TransactionRecord) { r.Payload = "" },
+		"payload size":      func(r *samlsp.TransactionRecord) { r.Payload = strings.Repeat("x", samlsp.MaxTransactionPayloadSize+1) },
+		"payload NUL":       func(r *samlsp.TransactionRecord) { r.Payload = "\x00" },
+		"payload UTF8":      func(r *samlsp.TransactionRecord) { r.Payload = "\xc3" },
+		"payload not ASCII": func(r *samlsp.TransactionRecord) { r.Payload = "{\"app\":\"\u00e9\"}" },
+		"payload byte 0x80": func(r *samlsp.TransactionRecord) { r.Payload = "\x80" },
+		"zero expiry":       func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Time{} },
+		"epoch":             func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Unix(0, 0) },
+		"sub-second":        func(r *samlsp.TransactionRecord) { r.ExpiresAt = t0.Add(time.Nanosecond) },
 	}
 
 	for name, mutate := range cases {

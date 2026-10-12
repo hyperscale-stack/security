@@ -11,7 +11,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // randomBytes is the entropy of request IDs, RelayState handles and
@@ -120,12 +124,38 @@ type transaction struct {
 
 var errCorruptTransaction = errors.New("samlsp: corrupt transaction payload")
 
-// encode renders the payload. Marshaling cannot fail: the struct only
-// holds strings, integers and booleans.
+// encode renders the payload as ASCII-only JSON. Marshaling cannot fail:
+// the struct only holds strings, integers and booleans.
 func (t *transaction) encode() string {
 	b, _ := json.Marshal(t)
 
-	return string(b)
+	return asciiJSON(b)
+}
+
+// asciiJSON rewrites every non-ASCII character of a JSON text as a \uXXXX
+// escape (a UTF-16 surrogate pair above U+FFFF). Outside strings a JSON
+// text is ASCII, so the result decodes to the same value; and it holds
+// 7-bit ASCII only, which every SQL column type and character set stores
+// unchanged: no store needs utf8mb4 or a strict sql_mode for it (a latin1,
+// non-strict MySQL silently altered a raw UTF-8 AppState).
+func asciiJSON(b []byte) string {
+	var out strings.Builder
+
+	out.Grow(len(b))
+
+	for _, r := range string(b) {
+		switch {
+		case r < utf8.RuneSelf:
+			out.WriteRune(r)
+		case r > 0xFFFF:
+			hi, lo := utf16.EncodeRune(r)
+			fmt.Fprintf(&out, `\u%04x\u%04x`, hi, lo)
+		default:
+			fmt.Fprintf(&out, `\u%04x`, r)
+		}
+	}
+
+	return out.String()
 }
 
 // decodeTransaction parses a payload written by encode.

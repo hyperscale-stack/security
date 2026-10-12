@@ -63,7 +63,7 @@ func key(label string) string {
 
 func record(label string, ttl time.Duration) *samlsp.TransactionRecord {
 	return &samlsp.TransactionRecord{
-		ID: key("tx/" + label), BindingHash: key("b/" + label), Payload: `{"v":1,"app":"/é"}`,
+		ID: key("tx/" + label), BindingHash: key("b/" + label), Payload: `{"v":1,"app":"/\u00e9"}`,
 		ExpiresAt: time.Now().Add(ttl).Truncate(time.Second),
 	}
 }

@@ -18,11 +18,16 @@ package samlinterop_test
 //	SAMLSP_REDIS_ADDR=127.0.0.1:16379
 //	SAMLSP_POSTGRES_DSN=postgres://samlsp:<password>@127.0.0.1:15432/samlsp?sslmode=disable
 //	SAMLSP_MYSQL_DSN=root:<password>@tcp(127.0.0.1:13306)/
+//
+// With SAMLSP_MYSQL_DSN, a third MySQL backend uses a latin1 database and
+// a non-strict sql_mode with interpolated parameters: the deployment that
+// altered raw UTF-8 payloads (audit STORE-I2).
 
 import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -117,8 +122,10 @@ func storeBackends(t *testing.T) []storeBackend {
 
 	if base := os.Getenv("SAMLSP_MYSQL_DSN"); base != "" {
 		backends = append(backends,
-			storeBackend{name: "mysql", namespace: mysqlNamespace(base, "")},
-			storeBackend{name: "mysql-client-found-rows", namespace: mysqlNamespace(base, "clientFoundRows=true")},
+			storeBackend{name: "mysql", namespace: mysqlNamespace(base, "", "")},
+			storeBackend{name: "mysql-client-found-rows", namespace: mysqlNamespace(base, "clientFoundRows=true", "")},
+			storeBackend{name: "mysql-latin1-nonstrict", namespace: mysqlNamespace(base,
+				"sql_mode="+url.QueryEscape("''")+"&interpolateParams=true", "latin1")},
 		)
 	}
 
@@ -164,7 +171,7 @@ func postgresNamespace(dsn string) func(t *testing.T) func() samlsp.Storage {
 	}
 }
 
-func mysqlNamespace(base, params string) func(t *testing.T) func() samlsp.Storage {
+func mysqlNamespace(base, params, charset string) func(t *testing.T) func() samlsp.Storage {
 	return func(t *testing.T) func() samlsp.Storage {
 		db := "samlsp_it_" + unique()
 
@@ -172,7 +179,12 @@ func mysqlNamespace(base, params string) func(t *testing.T) func() samlsp.Storag
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = admin.Close() })
 
-		_, err = admin.Exec("CREATE DATABASE " + db)
+		create := "CREATE DATABASE " + db
+		if charset != "" {
+			create += " CHARACTER SET " + charset
+		}
+
+		_, err = admin.Exec(create)
 		require.NoError(t, err)
 		t.Cleanup(func() { _, _ = admin.Exec("DROP DATABASE " + db) })
 
@@ -501,6 +513,71 @@ func TestSharedStoreConformance(t *testing.T) {
 	for _, b := range storeBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			storetest.RunConformance(t, func() samlsp.Storage { return b.namespace(t)() })
+		})
+	}
+}
+
+// recordingStorage keeps the last record saved through it.
+type recordingStorage struct {
+	samlsp.Storage
+
+	mu    sync.Mutex
+	saved samlsp.TransactionRecord
+}
+
+func (r *recordingStorage) SaveTransaction(ctx context.Context, rec *samlsp.TransactionRecord) error {
+	r.mu.Lock()
+	r.saved = *rec
+	r.mu.Unlock()
+
+	return r.Storage.SaveTransaction(ctx, rec)
+}
+
+// TestSharedStorePayloadRoundTrip: the transaction BeginLogin stores for a
+// non-ASCII AppState comes back unchanged from every backend — the latin1,
+// non-strict MySQL included, which altered a raw UTF-8 payload before the
+// SP wrote ASCII-only JSON (audit STORE-I2).
+func TestSharedStorePayloadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	k := newKey(t, "idp")
+	conn := samlsp.Connection{
+		ID: "acme", SPEntityID: "https://sp.example.test/saml/acme", ACSURL: "https://sp.example.test/saml/acme/acs",
+		IdentityProvider: samlsp.IdentityProvider{
+			EntityID: "https://idp.example.test", SSOURL: "https://idp.example.test/sso",
+			SigningCertificates: []*x509.Certificate{k.cert},
+		},
+	}
+
+	const appState = "/retour?ville=Z\u00fcrich&ok=\u2713&emoji=\U0001f600"
+
+	for _, b := range storeBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			store := &recordingStorage{Storage: b.namespace(t)()}
+
+			sp, err := samlsp.New(samlsp.Config{
+				Connections: samlsp.ConnectionResolverFunc(func(context.Context, string) (*samlsp.Connection, error) {
+					c := conn
+
+					return &c, nil
+				}),
+				Transactions: store, ReplayCache: store,
+			})
+			require.NoError(t, err)
+
+			_, err = sp.BeginLogin(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/login", nil),
+				conn.ID, samlsp.LoginOptions{AppState: appState})
+			require.NoError(t, err)
+
+			store.mu.Lock()
+			saved := store.saved
+			store.mu.Unlock()
+
+			got, err := store.LookupTransaction(context.Background(), saved.ID)
+			require.NoError(t, err)
+			require.Equal(t, saved.Payload, got.Payload, "the payload round-trips byte for byte")
+			require.True(t, saved.ExpiresAt.Equal(got.ExpiresAt))
+			require.Equal(t, saved.BindingHash, got.BindingHash)
 		})
 	}
 }
