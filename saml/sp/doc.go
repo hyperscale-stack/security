@@ -14,8 +14,9 @@
 // The application owns its connections, one per trusted IdP (typically
 // one per tenant), and resolves them by ID through a [ConnectionResolver].
 // A [Connection] carries its own SP entity ID and ACS URL, the trusted
-// [IdentityProvider] (usually imported from administrator-provided metadata
-// with [ParseIdentityProviderMetadata]) and an optional NameID format:
+// [IdentityProvider] (imported from administrator-provided metadata with
+// [ParseIdentityProviderMetadata], or kept up to date from the IdP's
+// metadata URL by a [MetadataSource]) and an optional NameID format:
 //
 //	sp, err := samlsp.New(samlsp.Config{
 //		Connections:  resolver, // the application's connections
@@ -126,11 +127,39 @@
 // the independent IdP of the interoperability tests. See
 // docs/security-considerations.md for the full rationale.
 //
+// # Metadata retrieval
+//
+// [FetchIdentityProviderMetadata] downloads an IdP's metadata once;
+// a [MetadataSource] keeps it current for a resolver:
+//
+//	source, err := samlsp.NewMetadataSource(samlsp.MetadataSourceConfig{
+//		URL:      "https://idp.example.com/metadata", // configuration
+//		EntityID: "https://idp.example.com",          // pinned
+//	})
+//	...
+//	idp, err := source.IdentityProvider(ctx) // in the ConnectionResolver
+//
+// Both go through the outbound package: https only, publicly routable
+// destinations only (judged on the address dialed), no redirect, bounded
+// time and size, unless the application's outbound.Policy widens it (an
+// on-premises IdP's subnet in AllowedPrefixes). The metadata URL is
+// configuration — the application's or a tenant administrator's — never a
+// value read from a SAML message or a request, and no response content
+// ever triggers a fetch. Trust rests on TLS to the configured host and on
+// the pinned entity ID: keys and endpoints change only through a valid
+// document of that entity fetched from that URL. A MetadataSource
+// refreshes at the document's cacheDuration, clamped to [MinRefresh,
+// MaxRefresh], single-flight and rate-limited; while refreshes fail it
+// serves the last good document for at most MaxStale, never past its
+// validUntil, then fails closed with [ErrMetadataExpired]. The
+// samlsp.FetchMetadata span records each fetch.
+//
 // # Not supported
 //
 // Single Logout, IdP-initiated SSO, bindings other than HTTP-Redirect
 // (requests) and HTTP-POST (responses), encrypted assertions, the IdP role,
-// verification of signed metadata and network retrieval of metadata.
+// and signed metadata: an embedded signature is ignored, so federation
+// aggregates must not be fetched as trust sources.
 //
 // # Observability
 //

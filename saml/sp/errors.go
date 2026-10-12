@@ -58,6 +58,12 @@ var (
 	// ErrMetadataExpired reports IdP metadata past its validUntil: Metadata
 	// §4.3.2 (errata E94) forbids using invalid metadata.
 	ErrMetadataExpired = errors.New("samlsp: identity provider metadata expired")
+
+	// ErrMetadataUnavailable reports IdP metadata that could not be
+	// retrieved: a request refused by the outbound policy (the outbound
+	// errors stay matchable), a network failure, or an HTTP status other
+	// than 200.
+	ErrMetadataUnavailable = errors.New("samlsp: identity provider metadata unavailable")
 )
 
 // Store contract errors. ErrTransactionExists and ErrInvalidStoreRecord are

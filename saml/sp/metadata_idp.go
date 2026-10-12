@@ -35,8 +35,9 @@ type MetadataOptions struct {
 }
 
 // ParseIdentityProviderMetadata imports explicitly trusted IdP metadata
-// (SAML 2.0 Metadata): bytes from an administrator upload, a file, or a
-// pinned HTTPS location. Importing is the act of trust: an embedded
+// (SAML 2.0 Metadata): bytes from an administrator upload or a file; see
+// [FetchIdentityProviderMetadata] and [MetadataSource] for a metadata URL.
+// Importing is the act of trust: an embedded
 // ds:Signature is not verified, and aggregates (EntitiesDescriptor of many
 // entities) are only accepted with a pinned EntityID.
 //

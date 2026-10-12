@@ -103,6 +103,8 @@ var reasons = []struct {
 	{ErrUnknownConnection, "unknown_connection"},
 	{ErrInvalidConnection, "invalid_connection"},
 	{ErrMetadataExpired, "metadata_expired"},
+	{ErrMetadataUnavailable, "metadata_unavailable"},
+	{ErrInvalidMetadata, "invalid_metadata"},
 	{ErrInvalidLoginOptions, "invalid_login_options"},
 	{ErrInvalidConfig, "invalid_config"},
 	{ErrTransactionExists, "transaction_exists"},

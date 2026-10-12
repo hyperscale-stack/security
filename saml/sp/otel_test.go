@@ -7,6 +7,7 @@ package samlsp_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -106,4 +107,37 @@ func TestSpans(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestFetchMetadataSpan(t *testing.T) {
+	ok := newMetadataServer(t, serveMetadata(idpMetadataSpec{}.render(t)))
+	failing := newMetadataServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+
+	spans := recordSpans(func() {
+		_, err := fetchAt(t, ok, samlsp.FetchOptions{EntityID: idpEntity, Outbound: ok.policy()})
+		require.NoError(t, err)
+
+		_, err = fetchAt(t, failing, samlsp.FetchOptions{EntityID: idpEntity, Outbound: failing.policy()})
+		require.ErrorIs(t, err, samlsp.ErrMetadataUnavailable)
+	})
+
+	var outcomes []map[attribute.Key]string
+
+	for _, s := range spans {
+		if s.Name() != "samlsp.FetchMetadata" {
+			continue
+		}
+
+		a := attrs(s)
+		outcomes = append(outcomes, a)
+
+		for _, v := range a {
+			assert.NotContains(t, v, "127.0.0.1", "no URL or address on the span")
+		}
+	}
+
+	require.Len(t, outcomes, 2)
+	assert.Equal(t, "success", outcomes[0][samlsp.AttrOutcome])
+	assert.Equal(t, "error", outcomes[1][samlsp.AttrOutcome])
+	assert.Equal(t, "metadata_unavailable", outcomes[1][samlsp.AttrReason])
 }

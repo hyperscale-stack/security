@@ -125,6 +125,12 @@ func newIdentityProvider(t testing.TB, key testKey, signatureMethod string) *ide
 
 		i.idp.ServeSSO(w, r)
 	})
+	mux.HandleFunc("/metadata", func(w http.ResponseWriter, r *http.Request) {
+		i.cfgMu.Lock()
+		defer i.cfgMu.Unlock()
+
+		i.idp.ServeMetadata(w, r)
+	})
 
 	return i
 }
@@ -294,6 +300,23 @@ func (s *serviceProvider) addConnection(t testing.TB, id string, idpMetadata []b
 
 	if tune != nil {
 		tune(&c)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.conns[id] = c
+
+	return c
+}
+
+// setConnection trusts idp under connection id, as addConnection does.
+func (s *serviceProvider) setConnection(id string, idp *samlsp.IdentityProvider) samlsp.Connection {
+	c := samlsp.Connection{
+		ID:               id,
+		SPEntityID:       s.srv.URL + "/saml/" + id,
+		ACSURL:           s.srv.URL + "/saml/" + id + "/acs",
+		IdentityProvider: *idp,
 	}
 
 	s.mu.Lock()

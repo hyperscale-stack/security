@@ -5,6 +5,8 @@
 package samlinterop_test
 
 import (
+	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewjam/saml"
+	"github.com/hyperscale-stack/security/outbound"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -342,4 +345,46 @@ func TestConcurrentLoginsAcrossInstances(t *testing.T) {
 	}
 
 	assert.Equal(t, map[int]int{http.StatusOK: 1, http.StatusForbidden: posts - 1}, count)
+}
+
+func TestMetadataSourceAgainstTheIdP(t *testing.T) {
+	t.Parallel()
+
+	// The SP fetches crewjam's metadata from its URL, through the outbound
+	// client (loopback exempted, the test CA trusted), and logs in with it.
+	idpKey := newKey(t, "idp")
+	ip := newIdentityProvider(t, idpKey, rsaSHA256)
+	sp := newServiceProvider(t, spOptions{})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(ip.srv.Certificate())
+
+	src, err := samlsp.NewMetadataSource(samlsp.MetadataSourceConfig{
+		URL:      ip.srv.URL + "/metadata",
+		EntityID: ip.entityID(),
+		Outbound: outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
+	})
+	require.NoError(t, err)
+
+	idp, err := src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, ip.srv.URL+"/sso", idp.SSOURL)
+	require.Len(t, idp.SigningCertificates, 1)
+	assert.True(t, idp.SigningCertificates[0].Equal(idpKey.cert))
+	assert.Equal(t, saml.DefaultValidDuration, idp.CacheDuration)
+
+	sp.setConnection("acme", idp)
+	ip.registerSP(t, sp.metadata(t, "acme"))
+
+	b := newBrowser(t, sp.srv)
+	_, form := b.mustSignIn(t, sp, "acme")
+	require.Equal(t, http.StatusOK, b.mustPost(t, form))
+	require.NoError(t, sp.last(t).err)
+
+	// Without the loopback exemption, the same URL is refused.
+	strict, err := samlsp.NewMetadataSource(samlsp.MetadataSourceConfig{URL: ip.srv.URL + "/metadata", EntityID: ip.entityID()})
+	require.NoError(t, err)
+
+	_, err = strict.IdentityProvider(context.Background())
+	require.ErrorIs(t, err, outbound.ErrDestinationNotAllowed)
 }

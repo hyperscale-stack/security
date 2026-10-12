@@ -188,9 +188,9 @@ func validateEndpointURL(raw string) (*url.URL, error) {
 	}
 
 	switch u.Scheme {
-	case "https":
+	case schemeHTTPS:
 		return u, nil
-	case "http":
+	case schemeHTTP:
 		if isLoopbackHost(u.Hostname()) {
 			return u, nil
 		}
