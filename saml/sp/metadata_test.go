@@ -263,7 +263,7 @@ func TestParseIdentityProviderMetadata_ValidityMinimum(t *testing.T) {
 		root:        root,
 		entityExtra: ` validUntil="2026-10-25T00:00:00Z" cacheDuration="PT4H"`,
 		roleAttrs:   ` validUntil="2026-10-28T00:00:00Z" cacheDuration="PT1H"`,
-	}.render(t), samlsp.MetadataOptions{})
+	}.render(t), samlsp.MetadataOptions{EntityID: idpEntity})
 	require.NoError(t, err)
 
 	assert.True(t, idp.ValidUntil.Equal(time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)), "smallest validUntil (E76)")
@@ -287,10 +287,24 @@ func TestParseIdentityProviderMetadata_EntitiesDescriptor(t *testing.T) {
 	_, err = parseMetadata(idpMetadataSpec{root: two}.render(t), samlsp.MetadataOptions{})
 	require.ErrorIs(t, err, samlsp.ErrInvalidMetadata)
 
-	// A single entity needs no pin.
+	// An aggregate is imported only with a pinned entity ID, even when it
+	// lists a single entity: the next version of the document may list
+	// more, and the pin is what decides which one is trusted.
 	one := `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">ENTITY</md:EntitiesDescriptor>`
-	_, err = parseMetadata(idpMetadataSpec{root: one}.render(t), samlsp.MetadataOptions{})
+	idp, err = parseMetadata(idpMetadataSpec{root: one}.render(t), samlsp.MetadataOptions{})
+	require.ErrorIs(t, err, samlsp.ErrInvalidMetadata)
+	require.ErrorContains(t, err, "pinned entity ID")
+	assert.Nil(t, idp)
+
+	idp, err = parseMetadata(idpMetadataSpec{root: one}.render(t), samlsp.MetadataOptions{EntityID: idpEntity})
 	require.NoError(t, err)
+	assert.Equal(t, idpEntity, idp.EntityID)
+
+	// An EntityDescriptor root needs no pin (FetchOptions.EntityID is
+	// optional for discovery).
+	idp, err = parseMetadata(idpMetadataSpec{}.render(t), samlsp.MetadataOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, idpEntity, idp.EntityID)
 }
 
 func TestParseIdentityProviderMetadata_Refusals(t *testing.T) {
@@ -313,11 +327,11 @@ func TestParseIdentityProviderMetadata_Refusals(t *testing.T) {
 		{"too large", idpMetadataSpec{}.render(t), samlsp.MetadataOptions{MaxSize: 100}},
 		{"negative max size", idpMetadataSpec{}.render(t), samlsp.MetadataOptions{MaxSize: -1}},
 		{"nested aggregate", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">` +
-			`<md:EntitiesDescriptor>ENTITY</md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
+			`<md:EntitiesDescriptor>ENTITY</md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{EntityID: idpEntity}},
 		{"prefixed entityID only", []byte(strings.Replace(string(idpMetadataSpec{}.render(t)),
 			`entityID="https://idp.example.com/acme"`, `xmlns:foo="urn:example:foo" foo:entityID="https://idp.example.com/acme"`, 1)), samlsp.MetadataOptions{}},
 		{"nested aggregate next to the entity", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">ENTITY` +
-			`<md:EntitiesDescriptor><md:EntityDescriptor entityID="https://other.example.com"/></md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
+			`<md:EntitiesDescriptor><md:EntityDescriptor entityID="https://other.example.com"/></md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{EntityID: idpEntity}},
 		{"no redirect SSO", idpMetadataSpec{sso: `<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://idp.example.com/post"/>`}.render(t), samlsp.MetadataOptions{}},
 		{"http SSO", idpMetadataSpec{sso: redirect("http://idp.example.com/sso")}.render(t), samlsp.MetadataOptions{}},
 		{"SSO carrying SAMLRequest", idpMetadataSpec{sso: redirect("https://idp.example.com/sso?SAMLRequest=x")}.render(t), samlsp.MetadataOptions{}},
@@ -335,13 +349,13 @@ func TestParseIdentityProviderMetadata_Refusals(t *testing.T) {
 		{"bad validUntil", idpMetadataSpec{entityExtra: ` validUntil="soon"`}.render(t), samlsp.MetadataOptions{}},
 		{"bad cacheDuration", idpMetadataSpec{entityExtra: ` cacheDuration="1h"`}.render(t), samlsp.MetadataOptions{}},
 		{"cacheDuration of 2^63 ns", idpMetadataSpec{entityExtra: ` cacheDuration="PT9223372036.854775808S"`}.render(t), samlsp.MetadataOptions{}},
-		{"bad root cacheDuration", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" cacheDuration="x">ENTITY</md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
+		{"bad root cacheDuration", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" cacheDuration="x">ENTITY</md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{EntityID: idpEntity}},
 		{"bad role validUntil", idpMetadataSpec{roleAttrs: ` validUntil="x"`}.render(t), samlsp.MetadataOptions{}},
 		{"relative entity ID", idpMetadataSpec{entityID: "idp"}.render(t), samlsp.MetadataOptions{}},
 		{"bad validUntil of the selected entity", idpMetadataSpec{
 			root:        `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">ENTITY</md:EntitiesDescriptor>`,
 			entityExtra: ` validUntil="x"`,
-		}.render(t), samlsp.MetadataOptions{}},
+		}.render(t), samlsp.MetadataOptions{EntityID: idpEntity}},
 		{"certificate outside the dsig namespace", idpMetadataSpec{keyDescriptors: `<md:KeyDescriptor><ds:KeyInfo><ds:X509Data><x:X509Certificate xmlns:x="urn:x">` +
 			certB64(k.idpA.cert) + `</x:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>`}.render(t), samlsp.MetadataOptions{}},
 	}

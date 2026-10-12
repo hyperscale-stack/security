@@ -21,8 +21,9 @@ const DefaultMetadataMaxSize = 1 << 20
 // MetadataOptions tunes [ParseIdentityProviderMetadata].
 type MetadataOptions struct {
 	// EntityID, when set, pins the expected IdP entity ID: the document
-	// must describe exactly this entity. It is required to select one entity
-	// out of an EntitiesDescriptor that lists several.
+	// must describe exactly this entity. It is required to import an
+	// EntitiesDescriptor (an aggregate), even one listing a single entity:
+	// the pin, not the document, decides which entity is trusted.
 	EntityID string
 
 	// Now returns the current time used to evaluate validUntil (nil means
@@ -38,12 +39,13 @@ type MetadataOptions struct {
 // (SAML 2.0 Metadata): bytes from an administrator upload or a file; see
 // [FetchIdentityProviderMetadata] and [MetadataSource] for a metadata URL.
 // Importing is the act of trust: an embedded
-// ds:Signature is not verified, and aggregates (EntitiesDescriptor of many
-// entities) are only accepted with a pinned EntityID.
+// ds:Signature is not verified, and an aggregate (EntitiesDescriptor) is
+// only accepted with a pinned EntityID, whatever the number of entities it
+// lists.
 //
 // The document must have an EntityDescriptor root, or an
-// EntitiesDescriptor whose single (or pinned) EntityDescriptor is used;
-// nested EntitiesDescriptors are refused. The entity must have exactly one
+// EntitiesDescriptor with exactly one EntityDescriptor of the pinned
+// entity ID; nested EntitiesDescriptors are refused. The entity must have exactly one
 // IDPSSODescriptor supporting the SAML 2.0 protocol (several are ambiguous,
 // Metadata §2.3.2). The result carries:
 //
@@ -145,16 +147,21 @@ func (m *metadataReader) selectEntity(root *etree.Element, pin string) (*etree.E
 		return nil, fmt.Errorf("%w: root is not an EntityDescriptor or EntitiesDescriptor", ErrInvalidMetadata)
 	}
 
+	// An aggregate is imported only for a pinned entity: the document
+	// cannot decide which of its entities is trusted, even when it lists
+	// one today.
+	if pin == "" {
+		return nil, fmt.Errorf("%w: an EntitiesDescriptor needs a pinned entity ID", ErrInvalidMetadata)
+	}
+
 	var candidates []*etree.Element
 
 	for _, child := range root.ChildElements() {
 		switch {
 		case inNS(child, nsMetadata, "EntitiesDescriptor"):
 			return nil, fmt.Errorf("%w: nested EntitiesDescriptor (aggregates are not supported)", ErrInvalidMetadata)
-		case inNS(child, nsMetadata, "EntityDescriptor"):
-			if pin == "" || attrValue(child, "entityID") == pin {
-				candidates = append(candidates, child)
-			}
+		case inNS(child, nsMetadata, "EntityDescriptor") && attrValue(child, "entityID") == pin:
+			candidates = append(candidates, child)
 		}
 	}
 

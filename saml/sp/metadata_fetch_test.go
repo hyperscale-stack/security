@@ -309,6 +309,30 @@ func TestFetchIdentityProviderMetadata_NetworkPolicy(t *testing.T) {
 	})
 }
 
+// TestFetchIdentityProviderMetadata_AggregateNeedsPin: discovery without
+// a pin works for an EntityDescriptor only; an EntitiesDescriptor, even of
+// one entity, is imported only for the pinned entity ID.
+func TestFetchIdentityProviderMetadata_AggregateNeedsPin(t *testing.T) {
+	t.Parallel()
+
+	aggregate := idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">ENTITY</md:EntitiesDescriptor>`}.render(t)
+	m := newMetadataServer(t, serveMetadata(aggregate))
+
+	idp, err := fetchAt(t, m, samlsp.FetchOptions{Outbound: m.policy()})
+	require.ErrorIs(t, err, samlsp.ErrInvalidMetadata)
+	assert.Nil(t, idp)
+
+	idp, err = fetchAt(t, m, samlsp.FetchOptions{EntityID: idpEntity, Outbound: m.policy()})
+	require.NoError(t, err)
+	assert.Equal(t, idpEntity, idp.EntityID)
+
+	m.set(serveMetadata(idpMetadataSpec{}.render(t)))
+
+	idp, err = fetchAt(t, m, samlsp.FetchOptions{Outbound: m.policy()})
+	require.NoError(t, err, "an EntityDescriptor can be discovered without a pin")
+	assert.Equal(t, idpEntity, idp.EntityID)
+}
+
 func TestFetchIdentityProviderMetadata_Document(t *testing.T) {
 	t.Parallel()
 

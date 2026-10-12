@@ -57,8 +57,9 @@ const (
 // FetchOptions configures [FetchIdentityProviderMetadata].
 type FetchOptions struct {
 	// EntityID, when set, pins the entity ID the document must describe;
-	// it also selects the entity of an aggregate. Without it, any entity
-	// served at the URL is imported: pin it whenever the result replaces
+	// it is required when the URL serves an aggregate (EntitiesDescriptor).
+	// Without it, the entity of an EntityDescriptor served at the URL is
+	// imported, whatever its entity ID: pin it whenever the result replaces
 	// keys already configured (a refresh); leave it empty only to discover
 	// a new IdP's entity ID, then pin that.
 	EntityID string
