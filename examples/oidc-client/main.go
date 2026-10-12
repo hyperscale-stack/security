@@ -37,11 +37,15 @@
 //
 // Login starts are unauthenticated — non-browser clients pass the
 // cross-origin protection — and each stores a pending login for ten
-// minutes: the demo lets each client address (an IPv4 address, an IPv6 /64)
-// start 20 logins a minute, answering 429 Too Many Requests beyond, and
-// keeps at most 10 000 pending logins (memory.WithCapacity), answering 503
-// Service Unavailable beyond. Behind a reverse proxy, key the limit on the
-// client address your proxy forwards, or rate-limit at the edge.
+// minutes. The demo lets each client (an IPv4 address, an IPv6 /64) start
+// 20 logins a minute and each network (an IPv4 /24, an IPv6 /48) 60,
+// answering 429 Too Many Requests beyond, and keeps at most 10 000 pending
+// logins (memory.WithCapacity), answering 503 Service Unavailable beyond:
+// one network holds at most about 600 of them. The capacity bounds memory,
+// not availability: a flood from enough networks fills the store, and new
+// logins then answer 503 until its transactions expire — rate-limit at the
+// edge in production. Behind a reverse proxy, key the limits on the client
+// address your proxy forwards.
 //
 // Plain http on localhost is for development only: it drops the Secure
 // attribute of the cookies (oidcclient.Config.InsecureCookies and
@@ -100,8 +104,9 @@ type config struct {
 	// MaxPendingLogins bounds the logins in progress the store keeps
 	// (defaultMaxPendingLogins when not positive).
 	MaxPendingLogins int
-	// LoginStartsPerMinute is how many logins one client address may start
-	// per minute (defaultLoginStartsPerMinute when not positive).
+	// LoginStartsPerMinute is how many logins one client may start per
+	// minute, its network networkShare times as many
+	// (defaultLoginStartsPerMinute when not positive).
 	LoginStartsPerMinute int
 }
 
@@ -158,12 +163,12 @@ const (
 	// defaultMaxPendingLogins bounds the pending logins of the in-memory
 	// store: about 0.5 KB each, kept for the transaction TTL.
 	defaultMaxPendingLogins = 10_000
-	// defaultLoginStartsPerMinute is the login starts one client address
-	// may make per minute.
+	// defaultLoginStartsPerMinute is the login starts one client may make
+	// per minute; its network may make networkShare times as many.
 	defaultLoginStartsPerMinute = 20
-	// maxLimitedClients bounds the client addresses the limiter tracks per
-	// minute; the others share one budget.
-	maxLimitedClients = 10_000
+	// maxLimitedPrefixes bounds the prefixes each tier of the limiter
+	// tracks per minute; the others share one budget.
+	maxLimitedPrefixes = 10_000
 	// retryAfter is the Retry-After of a refused login start, in seconds.
 	retryAfter = "60"
 )
@@ -315,7 +320,7 @@ func newServer(ctx context.Context, cfg config) (http.Handler, error) {
 		connections: make(map[string]*oidcclient.Client, len(cfg.Connections)),
 		sessions:    session.NewManager(codec, session.WithSecure(!insecure)),
 		accounts:    &accounts{links: make(map[identityKey]string), identities: make(map[string][]identityKey)},
-		limiter: newLoginLimiter(orDefault(cfg.LoginStartsPerMinute, defaultLoginStartsPerMinute), maxLimitedClients,
+		limiter: newLoginLimiter(orDefault(cfg.LoginStartsPerMinute, defaultLoginStartsPerMinute), maxLimitedPrefixes,
 			time.Minute, time.Now),
 	}
 
@@ -423,9 +428,9 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Each start stores a pending login: limit them per client address
-	// (the store's capacity bounds them all).
-	if !a.limiter.allow(clientPrefix(r.RemoteAddr)) {
+	// Each start stores a pending login: limit them per client and per
+	// network (the store's capacity bounds them all).
+	if !a.limiter.allow(clientAddr(r.RemoteAddr)) {
 		w.Header().Set("Retry-After", retryAfter)
 		http.Error(w, "too many sign-in attempts, retry in a minute", http.StatusTooManyRequests)
 

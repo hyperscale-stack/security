@@ -117,7 +117,10 @@ mux.HandleFunc("GET /oidc/acme/callback", func(w http.ResponseWriter, r *http.Re
   `CrossOriginProtection`. With `storage/memory`, bound what a flood can
   hold with `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
   `examples/oidc-client` maps it to 503 and rate-limits starts per client
-  address).
+  and per network — an IPv4 /24, an IPv6 /48 — so that one network cannot
+  fill it). The capacity bounds memory, not availability: a flood from
+  enough networks fills the store and new logins fail until transactions
+  expire, so rate-limit at the edge too.
 - `Config.Outbound` is the request policy: the default reaches public https
   destinations only and follows no redirect. Exempt an on-premises
   provider's network with `AllowedPrefixes`; `AllowHTTP` is for local

@@ -428,11 +428,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 ### Changed
 
 - `examples/oidc-client` bounds its unauthenticated login starts: each
-  client address (an IPv4 address, an IPv6 /64) may start 20 logins a
-  minute — `429 Too Many Requests` with `Retry-After` beyond — and the
-  in-memory store keeps at most 10 000 pending logins
-  (`memory.WithCapacity`) — `503 Service Unavailable` beyond. It used to
-  accept and keep every start for ten minutes.
+  client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
+  each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
+  with `Retry-After` beyond — and the in-memory store keeps at most
+  10 000 pending logins (`memory.WithCapacity`) — `503 Service
+  Unavailable` beyond —, so that one network holds at most about 600 of
+  them. It used to accept and keep every start for ten minutes.
 - `oidc/client/storage/memory.New` takes options: `New(opts ...Option)`.
   Calls are unchanged; code using `memory.New` as a `func() *memory.Store`
   value needs a closure. Its periodic sweep now walks the transactions only
