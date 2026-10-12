@@ -5,6 +5,9 @@
 package jwtsec
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,18 +58,24 @@ func (k PrivateKey) MarshalJSON() ([]byte, error) {
 	return json.Marshal(keyJSON{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: fmt.Sprintf("%T %s", k.Key, redactedKey)}) //nolint:wrapcheck // strings only: never fails
 }
 
-// symmetric reports whether the verification key is a shared secret (HMAC).
-func (k PublicKey) symmetric() bool {
-	_, ok := k.Key.([]byte)
-
-	return ok
+// publicMaterial reports whether k holds a public asymmetric key — the only
+// key material a PublicKey ever prints or encodes. An HMAC secret, in any
+// form (bytes, a jose.JSONWebKey…), a private key carried by mistake and
+// any other type are redacted.
+func (k PublicKey) publicMaterial() bool {
+	switch k.Key.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey, ed25519.PublicKey:
+		return true
+	default:
+		return false
+	}
 }
 
 // String implements fmt.Stringer with the key's identifiers and type; the
-// material of a symmetric (HMAC) key, which is a secret, is redacted.
+// material of anything but a public asymmetric key is redacted.
 func (k PublicKey) String() string {
 	suffix := ""
-	if k.symmetric() {
+	if !k.publicMaterial() {
 		suffix = " " + redactedKey
 	}
 
@@ -83,11 +92,12 @@ func (k PublicKey) LogValue() slog.Value {
 		slog.String("key", fmt.Sprintf("%T", k.Key)))
 }
 
-// MarshalJSON implements json.Marshaler: the default encoding for an
-// asymmetric key — public material — and a redacted one for a symmetric
-// (HMAC) key.
+// MarshalJSON implements json.Marshaler: the default encoding for a public
+// asymmetric key (*rsa.PublicKey, *ecdsa.PublicKey, ed25519.PublicKey) and
+// a redacted one for anything else — an HMAC secret held as bytes or as a
+// jose.JSONWebKey, a private key, an unknown type.
 func (k PublicKey) MarshalJSON() ([]byte, error) {
-	if k.symmetric() {
+	if !k.publicMaterial() {
 		return json.Marshal(keyJSON{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: fmt.Sprintf("%T %s", k.Key, redactedKey)}) //nolint:wrapcheck // strings only: never fails
 	}
 
