@@ -1002,3 +1002,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   needs `authorization_code`, and `token` needs `implicit` (RFC 7591 §2.1);
   otherwise the request is answered `unauthorized_client` (RFC 6749
   §4.1.2.1, §4.2.2.1) before the extension or the `ConsentFunc` runs.
+- OAuth2 public clients must use PKCE under every profile (RFC 9700
+  §2.1.1), `Profile20` included: a public — or untyped — client obtained and
+  redeemed codes without any PKCE under `Profile20`, although the
+  documentation said public clients MUST use it. `/authorize` now answers
+  `invalid_request` without `code_challenge` (RFC 7636 §4.4.1), and `/token`
+  refuses such a client a code issued without challenge.

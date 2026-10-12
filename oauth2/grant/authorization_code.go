@@ -172,10 +172,11 @@ func (g *AuthorizationCode) revokeReplayed(ctx context.Context, req Request, cod
 func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCode) error {
 	verifier := req.Form.Get("code_verifier")
 
-	// PKCE is required when the grant is explicitly configured for it OR
-	// the active profile mandates it (BCP / OAuth 2.1). The profile can
-	// only tighten this, never relax it.
-	pkceRequired := g.cfg.RequirePKCE || req.Profile.RequiresPKCE()
+	// PKCE is required when the grant is explicitly configured for it, when
+	// the active profile mandates it (BCP / OAuth 2.1), and under every
+	// profile for a client that is not confidential (RFC 9700 §2.1.1:
+	// public clients MUST use PKCE). Each can only tighten the rule.
+	pkceRequired := g.cfg.RequirePKCE || req.Profile.RequiresPKCE() || req.Client.Type() != oauth2.ClientConfidential
 
 	if code.CodeChallenge == "" {
 		if pkceRequired {

@@ -57,9 +57,11 @@ type Config struct {
 	// token it is presented: the replacement keeps that token's scope (RFC
 	// 6749 §6), so the rule governs the grants authorized after it is set.
 	RefreshTokenScope string
-	// RequirePKCE forces PKCE on authorization_code, independently of
-	// public-vs-confidential client type. [oauth2.Profile20BCP] and
-	// [oauth2.Profile21Draft] require PKCE whatever this field says.
+	// RequirePKCE forces PKCE on authorization_code for confidential
+	// clients too. Every other client — public or untyped — needs PKCE under
+	// every profile (RFC 9700 §2.1.1), and [oauth2.Profile20BCP] and
+	// [oauth2.Profile21Draft] require it of every client, whatever this
+	// field says.
 	RequirePKCE bool
 	// RotateRefreshTokens makes refresh_token issue a fresh refresh token
 	// on every exchange and atomically mark the presented one consumed;

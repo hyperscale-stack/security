@@ -31,7 +31,8 @@ type AuthorizationCode struct {
 	// Scope is the granted (post-consent) scope.
 	Scope string
 	// CodeChallenge is the PKCE challenge (RFC 7636 §4.2). Required for
-	// public clients; required for every client under OAuth 2.0 BCP §2.1.1.
+	// every client that is not confidential under every profile, and for
+	// every client under Profile20BCP and Profile21Draft (RFC 9700 §2.1.1).
 	CodeChallenge string
 	// CodeChallengeMethod is the PKCE method ("S256" or "plain").
 	CodeChallengeMethod string

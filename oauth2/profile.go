@@ -9,7 +9,8 @@ package oauth2
 //
 //   - Profile20      — vanilla RFC 6749. Allows implicit and password
 //     grants when explicitly registered; PKCE and refresh-token
-//     rotation are opt-in.
+//     rotation are opt-in for confidential clients — every other
+//     client needs PKCE whatever the profile.
 //   - Profile20BCP   — IETF draft-ietf-oauth-security-topics ("OAuth 2.0
 //     Security Best Current Practice"). Refuses implicit
 //     and password grants outright; mandates PKCE on
@@ -49,7 +50,9 @@ func (p Profile) String() string {
 func (p Profile) AllowsLegacyGrant() bool { return p == Profile20 }
 
 // RequiresPKCE reports whether the profile mandates PKCE on
-// authorization_code. True for BCP and 21-draft.
+// authorization_code for every client. True for BCP and 21-draft. Under
+// every profile, a client that is not confidential needs PKCE anyway (RFC
+// 9700 §2.1.1).
 func (p Profile) RequiresPKCE() bool { return p != Profile20 }
 
 // RequiresRefreshRotation reports whether the profile mandates refresh-

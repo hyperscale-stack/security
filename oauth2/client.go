@@ -35,7 +35,9 @@ const (
 
 // ClientType describes whether an OAuth2 client is capable of safely keeping
 // a secret (confidential) or runs in an environment where it cannot
-// (public). Public clients MUST use PKCE per OAuth 2.0 BCP §2.1.1.
+// (public). Public clients MUST use PKCE (RFC 9700 §2.1.1): the server
+// requires it of every client that is not confidential — an untyped one
+// included — under every profile.
 type ClientType string
 
 const (

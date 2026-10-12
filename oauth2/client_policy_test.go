@@ -685,3 +685,57 @@ func TestAuthorizeChecksTheClientGrantTypes(t *testing.T) {
 			"unsupported_response_type keeps precedence")
 	})
 }
+
+// TestPublicClientsNeedPKCEUnderEveryProfile pins RFC 9700 §2.1.1 ("Public
+// clients MUST use PKCE") under every profile, Profile20 included: a
+// request without code_challenge from a public — or untyped, not known to
+// be confidential — client is answered invalid_request ("code challenge
+// required", RFC 7636 §4.4.1), redirected, nothing issued. A confidential
+// client may still omit PKCE under Profile20 only.
+func TestPublicClientsNeedPKCEUnderEveryProfile(t *testing.T) {
+	t.Parallel()
+
+	grants := []string{oauth2.GrantTypeAuthorizationCode}
+	scopes := []string{"read"}
+	clients := []oauth2.Client{
+		&oauth2.DefaultClient{
+			IDValue: "spa", TypeValue: oauth2.ClientPublic, RedirectURIValues: []string{redirectURI},
+			GrantTypeValues: grants, ScopeValues: scopes,
+		},
+		&oauth2.DefaultClient{
+			IDValue: "untyped", Secret: "untyped-secret", RedirectURIValues: []string{redirectURI},
+			GrantTypeValues: grants, ScopeValues: scopes,
+		},
+		confidentialClient(grants, scopes),
+	}
+
+	for _, profile := range []oauth2.Profile{oauth2.Profile20, oauth2.Profile20BCP, oauth2.Profile21Draft} {
+		for _, client := range clients {
+			t.Run(profile.String()+"/"+client.ID(), func(t *testing.T) {
+				t.Parallel()
+
+				env := newPolicyEnv(t, profile, clients...)
+
+				q := authorizeQuery()
+				q.Set("client_id", client.ID())
+				q.Del("code_challenge")
+				q.Del("code_challenge_method")
+
+				rec := runAuthorize(env.srv, q, approve)
+				require.Equal(t, http.StatusFound, rec.Code)
+
+				params := mustLocation(t, rec).Query()
+				if profile == oauth2.Profile20 && client.Type() == oauth2.ClientConfidential {
+					assert.NotEmpty(t, params.Get("code"), "PKCE stays optional for a confidential client under Profile20")
+
+					return
+				}
+
+				assert.Equal(t, oauth2.CodeInvalidRequest, params.Get("error"))
+				assert.Equal(t, "code_challenge is required", params.Get("error_description"))
+				assert.Empty(t, params.Get("code"))
+				assert.Zero(t, env.store.writes.Load())
+			})
+		}
+	}
+}

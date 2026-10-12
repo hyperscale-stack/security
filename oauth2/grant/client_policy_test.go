@@ -185,3 +185,48 @@ func TestRefreshTokenRechecksTheScopeRegistration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resp.Scope)
 }
+
+// TestAuthorizationCodeRequiresPKCEFromPublicClients pins RFC 9700 §2.1.1 at
+// the token endpoint too, under Profile20: a code issued without
+// code_challenge — before the authorization endpoint required it, or by
+// another authorization path — is refused to a public or untyped client
+// with invalid_grant ("PKCE required"), nothing issued; a confidential
+// client may still redeem it.
+func TestAuthorizationCodeRequiresPKCEFromPublicClients(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		typ    oauth2.ClientType
+		issued bool
+	}{
+		"public":       {oauth2.ClientPublic, false},
+		"untyped":      {"", false},
+		"confidential": {oauth2.ClientConfidential, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &replayStore{Store: newStore()}
+			req := seedPKCECode(t, store, "", "", "", oauth2.Profile20)
+			req.Form.Del("code_verifier")
+			req.Client = &oauth2.DefaultClient{
+				IDValue: clientID, TypeValue: tc.typ, RedirectURIValues: []string{redirectURI},
+				GrantTypeValues: allGrantTypes, ScopeValues: []string{"read:mail"},
+			}
+
+			resp, err := newPKCEGrant(store).Handle(context.Background(), req)
+			if tc.issued {
+				require.NoError(t, err)
+				assert.NotEmpty(t, resp.Pair.Access.Token)
+
+				return
+			}
+
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			assert.Equal(t, oauth2.CodeInvalidGrant, oauth2.IsCode(err))
+			assert.ErrorContains(t, err, "PKCE required")
+			assert.Empty(t, store.savedPairs())
+		})
+	}
+}

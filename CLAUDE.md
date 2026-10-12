@@ -239,7 +239,8 @@ Conventions baked into the core:
 configurable via `ServerConfig.RoutePrefix`).
 
 - `Profile` (2.0 / 2.0-BCP / 2.1-draft) is enforced at runtime on the grants
-  — PKCE required and `plain` PKCE refused under BCP/2.1; legacy `password`
+  — PKCE required and `plain` PKCE refused under BCP/2.1 (PKCE is required
+  of non-confidential clients under every profile); legacy `password`
   and `implicit` flows refused outside `Profile20`.
 - Sub-packages: `grant/` (`authorization_code`, `client_credentials`,
   `refresh_token` with rotation + reuse detection, opt-in legacy `password`),

@@ -760,7 +760,7 @@ func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectU
 
 	// PKCE applies to the authorization-code flow only.
 	if flow == flowCode {
-		if perr := s.validateAuthorizePKCE(challenge, method); perr != nil {
+		if perr := s.validateAuthorizePKCE(client, challenge, method); perr != nil {
 			return nil, ErrInvalidRequest.WithDescription(perr.Error())
 		}
 	}
@@ -777,13 +777,17 @@ func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectU
 	}, nil
 }
 
-// validateAuthorizePKCE enforces the profile's PKCE policy and the RFC 7636
-// §4.2 challenge syntax on the /authorize parameters. Presence, method and
-// profile are checked first, so they keep their errors when a request
-// breaks several rules. The descriptions never echo the input.
-func (s *Server) validateAuthorizePKCE(challenge, method string) error {
+// validateAuthorizePKCE enforces the PKCE policy and the RFC 7636 §4.2
+// challenge syntax on the /authorize parameters of client. A challenge is
+// required under the profiles that mandate PKCE, and under every profile
+// from a client that is not confidential (RFC 9700 §2.1.1: public clients
+// MUST use PKCE; an untyped client is not known to be confidential).
+// Presence, method and profile are checked first, so they keep their errors
+// when a request breaks several rules. The descriptions never echo the
+// input.
+func (s *Server) validateAuthorizePKCE(client Client, challenge, method string) error {
 	if challenge == "" {
-		if s.cfg.Profile.RequiresPKCE() {
+		if s.cfg.Profile.RequiresPKCE() || client.Type() != ClientConfidential {
 			return errors.New("code_challenge is required")
 		}
 

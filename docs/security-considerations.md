@@ -55,8 +55,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
 ## OAuth2
 
 - **PKCE** — `authorization_code` requires PKCE under `Profile20BCP` and
-  `Profile21Draft`; under `Profile20` it is optional unless
-  `grant.Config.RequirePKCE` is set. `S256` is the only method accepted
+  `Profile21Draft`, and of every client that is not confidential — public
+  or untyped — under every profile (RFC 9700 §2.1.1); under `Profile20` it
+  is optional for a confidential client unless `grant.Config.RequirePKCE`
+  is set. `S256` is the only method accepted
   under BCP / 2.1; `plain` is tolerated only under `Profile20`. Both ends
   enforce the RFC 7636 syntax: `/authorize` answers `invalid_request` to a
   `code_challenge` that is not 43–128 unreserved characters (`plain`) or

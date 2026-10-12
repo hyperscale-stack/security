@@ -181,6 +181,7 @@ The `oauth2` module is an authorization server, not just a provider:
   The profile gates which grants and PKCE methods are allowed, and is
   enforced at runtime on the grants — PKCE is required, the `plain`
   transformation refused, and refresh-token rotation forced under BCP / 2.1.
+  Every client that is not confidential needs PKCE under every profile.
 - **Grants** — `authorization_code` (PKCE), `client_credentials`,
   `refresh_token` (rotation + reuse detection), plus the opt-in legacy
   `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
