@@ -120,7 +120,9 @@ func TestProviderTextInErrorsIsBounded(t *testing.T) {
 			run: func(t *testing.T) error {
 				op := newFakeOP(t)
 				name := strings.Repeat("n", 900)
-				op.set(func(op *fakeOP) { op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + name + "=1&" + name + "=2" })
+				op.set(func(op *fakeOP) {
+					op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + name + "=1&" + name + "=2"
+				})
 
 				return newWithOP(t, op)
 			},
@@ -131,7 +133,9 @@ func TestProviderTextInErrorsIsBounded(t *testing.T) {
 			run: func(t *testing.T) error {
 				op := newFakeOP(t)
 				name := strings.Repeat("%FF", 300)
-				op.set(func(op *fakeOP) { op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + name + "=1&" + name + "=2" })
+				op.set(func(op *fakeOP) {
+					op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + name + "=1&" + name + "=2"
+				})
 
 				return newWithOP(t, op)
 			},
@@ -186,6 +190,39 @@ func TestProviderTextInErrorsIsBounded(t *testing.T) {
 			},
 			want: []error{oidcclient.ErrUserInfo, outbound.ErrRedirectNotAllowed},
 		},
+		"discovery body read": {
+			run: func(t *testing.T) error {
+				op := newFakeOP(t)
+				issuer := goAwayServer(t, []byte(strings.Repeat("\xff", 16_000)))
+
+				return newWithOP(t, op, func(c *oidcclient.Config) { c.Issuer = issuer })
+			},
+			want: []error{oidcclient.ErrDiscovery},
+			head: "read body: ",
+		},
+		"token body read": {
+			run: func(t *testing.T) error {
+				op := newFakeOP(t)
+				endpoint := goAwayServer(t, []byte(strings.Repeat("\xff", 16_000)))
+				op.set(func(op *fakeOP) { op.metadata["token_endpoint"] = endpoint + "/token" })
+				_, err := op.login(t, op.client(t))
+
+				return err
+			},
+			want: []error{oidcclient.ErrTokenEndpoint},
+		},
+		"UserInfo body read": {
+			run: func(t *testing.T) error {
+				op := newFakeOP(t)
+				endpoint := goAwayServer(t, []byte(strings.Repeat("\xff", 16_000)))
+				op.set(func(op *fakeOP) { op.metadata["userinfo_endpoint"] = endpoint + "/userinfo" })
+				c, id := loggedIn(t, op)
+				_, err := c.UserInfo(context.Background(), id)
+
+				return err
+			},
+			want: []error{oidcclient.ErrUserInfo},
+		},
 		"ExtraParams name": {
 			run: func(t *testing.T) error {
 				_, err := newFakeOP(t).client(t).Begin(context.Background(),
@@ -237,6 +274,8 @@ func TestConfigTextInErrorsIsBounded(t *testing.T) {
 		"auth method":   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethod(long) },
 		"response mode": func(c *oidcclient.Config) { c.ResponseMode = oidcclient.ResponseMode(long) },
 		"algorithm":     func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.Algorithm(long)} },
+		"issuer URL":    func(c *oidcclient.Config) { c.Issuer = "https://[::1/" + strings.Repeat(`\"`, 1_000) },
+		"redirect URL":  func(c *oidcclient.Config) { c.RedirectURL = "https://[::1/" + strings.Repeat(`\"`, 1_000) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

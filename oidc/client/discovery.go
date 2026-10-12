@@ -301,7 +301,7 @@ func fetchJSON(ctx context.Context, client *http.Client, rawURL string, mediaTyp
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return nil, fmt.Errorf("read body: %w", clipped(err)) // an HTTP/2 GOAWAY quotes its debug data
 	}
 
 	return body, nil

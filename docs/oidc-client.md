@@ -157,7 +157,8 @@ at several issuers defeats the distinct redirect URIs).
   `TokenError` carry the provider's untrusted text, and errors of `New` may
   name an allowed destination's address. Provider-controlled text an error
   echoes — an issuer, a media type, a redirect target, a JOSE header
-  member — is quoted and cut to 256 bytes, so it cannot flood a log.
+  member, an HTTP/2 GOAWAY's debug data — is quoted and cut to about 256
+  bytes, so it cannot flood a log.
 
 ### Several instances
 

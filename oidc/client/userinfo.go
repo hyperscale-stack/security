@@ -92,7 +92,7 @@ func (c *Client) UserInfo(ctx context.Context, id *Identity) (*UserInfo, error) 
 
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("%w: read response: %w", ErrUserInfo, err)
+		return nil, fmt.Errorf("%w: read response: %w", ErrUserInfo, clipped(err)) // a GOAWAY quotes its debug data
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("%w: unexpected status %d", ErrUserInfo, resp.StatusCode)
 	case hasMediaType(resp.Header.Get("Content-Type"), mediaJWT):

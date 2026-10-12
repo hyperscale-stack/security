@@ -872,8 +872,9 @@ are attacker-influenced.
   allowed destination: when tenants configure issuers, log them and show a
   generic message. The provider-controlled text an error echoes (an issuer,
   a media type, a redirect target, a JOSE header member, a query parameter
-  name) is Go-quoted — control characters and invalid UTF-8 escaped — then
-  cut to 256 bytes.
+  name, the debug data of an HTTP/2 GOAWAY ending a response) is Go-quoted
+  — control characters and invalid UTF-8 escaped — then cut to about 256
+  bytes.
 - **Tokens** — token and UserInfo requests never follow redirects
   (discovery and JWK Set requests only within the origin requested);
   `UserInfo` sends an identity's access token only to the UserInfo

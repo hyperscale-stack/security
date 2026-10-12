@@ -411,7 +411,7 @@ func validateIssuer(raw string, allowHTTP bool) error {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: Issuer: %w", ErrInvalidConfig, err)
+		return fmt.Errorf("%w: Issuer: %w", ErrInvalidConfig, clipped(err))
 	}
 
 	switch {
@@ -436,7 +436,7 @@ func parseRedirectURL(raw string) (*url.URL, error) {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: RedirectURL: %w", ErrInvalidConfig, err)
+		return nil, fmt.Errorf("%w: RedirectURL: %w", ErrInvalidConfig, clipped(err))
 	}
 
 	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"

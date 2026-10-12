@@ -88,7 +88,7 @@ func (c *Client) exchange(ctx context.Context, code, verifier string) (Tokens, e
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: read response: %w", ErrTokenEndpoint, err)
+		return Tokens{}, fmt.Errorf("%w: read response: %w", ErrTokenEndpoint, clipped(err)) // a GOAWAY quotes its debug data
 	}
 
 	if resp.StatusCode != http.StatusOK {
