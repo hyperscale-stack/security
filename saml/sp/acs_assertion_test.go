@@ -104,9 +104,22 @@ func TestCompleteLogin_InResponseTo(t *testing.T) {
 	reject(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("InResponseTo", "_other") }), samlsp.ErrInResponseToMismatch)
 	reject(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("InResponseTo") }), samlsp.ErrUnsolicitedResponse)
 
-	// The Response-level InResponseTo is optional.
-	_, err := flow(t, newEnv(t), onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
-	require.NoError(t, err)
+	// Core §3.2.2: a response to a request whose ID is known MUST carry
+	// InResponseTo; a Success without it is unsolicited, refused before any
+	// signature work (audit SAML-I11).
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+	_, err := complete(e, lr, respond(t, lr.requestID, onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") })))
+	requireRejected(t, e, lr, err, samlsp.ErrUnsolicitedResponse)
+	assert.Equal(t, samlsp.ErrUnsolicitedResponse.Error()+" (no InResponseTo on the Response)", err.Error())
+
+	// An error status may lack it (a malformed request has no ID to answer).
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	r.RemoveAttr("InResponseTo")
+	path(r, "Status", "StatusCode").CreateAttr("Value", "urn:oasis:names:tc:SAML:2.0:status:Requester")
+
+	_, err = complete(e, lr, encodeElement(t, r))
+	requireRejected(t, e, lr, err, samlsp.ErrResponseStatus)
 }
 
 func TestCompleteLogin_SubjectConfirmation(t *testing.T) {

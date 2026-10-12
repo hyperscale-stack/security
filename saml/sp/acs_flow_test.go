@@ -853,3 +853,93 @@ func encodeElement(t testing.TB, el *etree.Element) string {
 
 	return encodeString(s)
 }
+
+// TestCompleteLogin_ACSLocation: a response is accepted only where the
+// connection's ACS URL says it is delivered — same path (escaped form), same
+// host (r.Host, case-insensitively, the scheme's default port filled in) and
+// no query string (Core §3.2.2 Destination: "the actual recipient MUST
+// check that the URI reference identifies the location at which the message
+// was received"; Bindings §3.5.5.2; Profiles §4.1.4.3; audit SAML-I9).
+// Each refusal comes before any signature work and consumes nothing.
+func TestCompleteLogin_ACSLocation(t *testing.T) {
+	t.Parallel()
+
+	request := func(target string, lr loginResult, body string) *http.Request {
+		form := url.Values{"SAMLResponse": {body}, "RelayState": {lr.relayState}}
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: samlsp.DefaultCookieName, Value: lr.cookie.Value})
+
+		return req
+	}
+
+	const (
+		hostDetail  = "request received at another host than the connection's ACS URL"
+		queryDetail = "request received with a query string"
+		pathDetail  = "request received outside the connection's ACS path"
+	)
+
+	refused := []struct {
+		name, target, host, detail string
+	}{
+		{"another host", "https://other.example.com/saml/acme/acs", "", hostDetail},
+		{"another port", "https://sp.example.com:8443/saml/acme/acs", "", hostDetail},
+		{"a sibling host", "https://evil.sp.example.com/saml/acme/acs", "", hostDetail},
+		{"a trailing dot", acsURL, "sp.example.com.", hostDetail},
+		{"no Host", acsURL, "-", hostDetail},
+		{"a query string", acsURL + "?x=1", "", queryDetail},
+		{"an empty query string", acsURL + "?", "", queryDetail},
+		{"an escaped slash in the path", "https://sp.example.com/saml/acme%2Facs", "", pathDetail},
+		{"another path", "https://sp.example.com/saml/acme/acs2", "", pathDetail},
+	}
+
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			req := request(tc.target, lr, respond(t, lr.requestID, respOpts{}))
+
+			switch tc.host {
+			case "-":
+				req.Host = ""
+			case "":
+			default:
+				req.Host = tc.host
+			}
+
+			res, err := e.sp.CompleteLogin(context.Background(), req, connID)
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrDestinationMismatch)
+			assert.Equal(t, samlsp.ErrDestinationMismatch.Error()+" ("+tc.detail+")", err.Error())
+		})
+	}
+
+	accepted := []struct {
+		name, target, host string
+	}{
+		{"the ACS URL", acsURL, ""},
+		{"the default port spelled out", "https://sp.example.com:443/saml/acme/acs", ""},
+		{"an upper-case Host", acsURL, "SP.Example.COM"},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			req := request(tc.target, lr, respond(t, lr.requestID, respOpts{}))
+			if tc.host != "" {
+				req.Host = tc.host
+			}
+
+			res, err := e.sp.CompleteLogin(context.Background(), req, connID)
+			require.NoError(t, err)
+			assert.Equal(t, nameIDValue, res.Identity.NameID.Value)
+		})
+	}
+}

@@ -51,6 +51,7 @@ func TestConnection_Validate(t *testing.T) {
 		{"ACS empty", func(c *samlsp.Connection) { c.ACSURL = "" }},
 		{"ACS too long", func(c *samlsp.Connection) { c.ACSURL = "https://sp.example.com/" + strings.Repeat("a", 2048) }},
 		{"ACS unparsable", func(c *samlsp.Connection) { c.ACSURL = "https://[::1/acs" }},
+		{"ACS host not in ASCII (browsers send its punycode form)", func(c *samlsp.Connection) { c.ACSURL = "https://b\u00fccher.example/acs" }},
 		{"bad NameID format", func(c *samlsp.Connection) { c.NameIDFormat = "persistent" }},
 		{"empty IdP entity ID", func(c *samlsp.Connection) { c.IdentityProvider.EntityID = "" }},
 		{"SSO over plain http", func(c *samlsp.Connection) { c.IdentityProvider.SSOURL = "http://idp.example.com/sso" }},

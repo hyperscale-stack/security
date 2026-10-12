@@ -112,9 +112,10 @@ var (
 	ErrResponseTooLarge = newRejection("response exceeds a resource limit")
 
 	// ErrUnsolicitedResponse reports a response not correlated to an
-	// SP-initiated request: no RelayState handle, or no InResponseTo in the
-	// bearer SubjectConfirmationData. IdP-initiated SSO is not supported
-	// (Profiles §4.1.5, errata E90).
+	// SP-initiated request: no RelayState handle, a Success Response without
+	// InResponseTo (Core §3.2.2), or no InResponseTo in the bearer
+	// SubjectConfirmationData. IdP-initiated SSO is not supported (Profiles
+	// §4.1.5, errata E90).
 	ErrUnsolicitedResponse = newRejection("unsolicited response")
 
 	// ErrMissingBrowserBinding reports an ACS request without the
@@ -161,7 +162,9 @@ var (
 
 	// ErrDestinationMismatch reports a Destination other than the
 	// connection's ACS URL, a signed Response without Destination, or an ACS
-	// request received at another path (Bindings §3.5.5.2).
+	// request received elsewhere than at that URL: another path, another
+	// host (the request's Host), or with a query string (Core §3.2.2,
+	// Bindings §3.5.5.2).
 	ErrDestinationMismatch = newRejection("destination mismatch")
 
 	// ErrRecipientMismatch reports a bearer SubjectConfirmationData

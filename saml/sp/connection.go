@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Key size policy (OWASP SAML cheat sheet: RSA ≥ 2048 bits).
@@ -152,6 +153,7 @@ var (
 	errBadURL         = errors.New("not an absolute https URL (http only on a loopback host)")
 	errACSQuery       = errors.New("ACS URL must not carry a query string")
 	errACSPath        = errors.New("ACS URL must have a path")
+	errACSHost        = errors.New("ACS URL host must be ASCII (the IDNA A-label browsers send in Host)")
 )
 
 // validateEntityID checks an entity ID: an absolute URI of at most 1024
@@ -251,7 +253,24 @@ func validateACSURL(raw string) error {
 		return errACSPath
 	}
 
+	// CompleteLogin compares the request's Host with this host: browsers
+	// send an internationalized host name in its ASCII (punycode) form.
+	if !isASCII(u.Host) {
+		return errACSHost
+	}
+
 	return nil
+}
+
+// isASCII reports whether s holds ASCII characters only.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Connection is one application-defined trust relationship between the SP
@@ -276,8 +295,12 @@ type Connection struct {
 	// ACSURL is the AssertionConsumerService URL (HTTP-POST binding) of this
 	// connection: the exact Destination and Recipient the responses must
 	// carry. Required; https (http on loopback for development), a path, no
-	// query string. The application MUST mount
-	// [ServiceProvider.CompleteLogin] at exactly this path.
+	// query string, an ASCII host (the punycode form of an
+	// internationalized name). The application MUST mount
+	// [ServiceProvider.CompleteLogin] at exactly this URL: CompleteLogin
+	// refuses a request received at another path or host (r.Host), or with
+	// a query string. Behind a reverse proxy that rewrites Host, restore
+	// r.Host from the trusted proxy's forwarding header first.
 	ACSURL string
 
 	// IdentityProvider is the trusted IdP configuration.

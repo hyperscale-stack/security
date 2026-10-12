@@ -93,6 +93,11 @@ type corpusKnobs struct {
 	PostTo string `json:"postTo,omitempty"`
 	// Path is "acs" (default) or "other": a request received elsewhere.
 	Path string `json:"path,omitempty"`
+	// Host is "" (the ACS URL's host) or "other": a request received at
+	// another host.
+	Host string `json:"host,omitempty"`
+	// Query, when set, is appended to the ACS URL as its query string.
+	Query string `json:"query,omitempty"`
 	// Trust overrides the trusted keys of the posted connection.
 	Trust []string `json:"trust,omitempty"`
 	// AllowSHA1 sets Connection.InsecureAllowSHA1.
@@ -337,6 +342,7 @@ const (
 	otherHandle  = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
 	attackerURL  = "https://attacker.example/landing"
 	otherACSPath = "/elsewhere"
+	otherACSHost = "other.sp.example.com"
 )
 
 // runCorpusEntry replays one entry through CompleteLogin, the form either
@@ -451,6 +457,12 @@ func corpusRequest(t testing.TB, m *corpusManifest, f corpusEntry, tx corpusTx, 
 	if f.Knobs.Path == "other" {
 		acs.Path = otherACSPath
 	}
+
+	if f.Knobs.Host == "other" {
+		acs.Host = otherACSHost
+	}
+
+	acs.RawQuery = f.Knobs.Query
 
 	form := url.Values{"SAMLResponse": {encodeCorpusValue(t, f.Knobs.Encoding, data)}}
 

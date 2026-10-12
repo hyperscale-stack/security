@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -45,7 +47,9 @@ type LoginResult struct {
 //  3. the SAMLResponse is base64-decoded (line breaks tolerated), never
 //     inflated (DEFLATE is a Redirect binding encoding);
 //  4. the connection (from the application's route) is resolved and
-//     validated; the request path must be its ACS path (Bindings §3.5.5.2);
+//     validated; the request must have been received at its ACS URL — same
+//     path, same host (r.Host, never a forwarding header), no query string
+//     (Core §3.2.2, Bindings §3.5.5.2);
 //  5. the lexical gate (no DTD or processing instruction, bounded elements,
 //     tokens, depth, attributes, namespace declarations and prefixes,
 //     attribute value lengths, unique attributes, declared prefixes), then
@@ -60,6 +64,8 @@ type LoginResult struct {
 //     cookie digest), be unexpired, and its connection, IdP entity ID, SP
 //     entity ID and ACS must still match;
 //  7. a non-Success status yields a [*StatusError] carrying the AppState;
+//     a Success Response must answer the transaction's request in its own
+//     InResponseTo (Core §3.2.2);
 //  8. the signatures are verified by gosaml2/goxmldsig with the
 //     connection's certificates: the Response or the Assertion must be
 //     signed (Profiles §4.1.3.5/§4.1.4.5 as amended by errata E93/E26) and
@@ -99,7 +105,7 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 
 	annotateConnection(span, conn)
 
-	if err := checkACSPath(r, conn); err != nil {
+	if err := checkACSLocation(r, conn); err != nil {
 		return nil, err
 	}
 
@@ -115,6 +121,10 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 
 	if !raw.status.success() {
 		return nil, statusError(raw, tx, conn)
+	}
+
+	if err := checkResponseInResponseTo(raw, tx); err != nil {
+		return nil, err
 	}
 
 	return sp.finish(ctx, raw, conn, rec, tx, now)
@@ -225,15 +235,81 @@ func (sp *ServiceProvider) resolveForACS(ctx context.Context, connectionID strin
 	return conn, nil
 }
 
-// checkACSPath requires the request to arrive at the path of the
-// connection's ACS URL (Bindings §3.5.5.2).
-func checkACSPath(r *http.Request, conn *Connection) error {
+// checkACSLocation requires the request to have been received at the
+// connection's ACS URL, which the Destination and the Recipient must name:
+// Core §3.2.2 ("the actual recipient MUST check that the URI reference
+// identifies the location at which the message was received"), Bindings
+// §3.5.5.2, Profiles §4.1.4.3. It compares the path in its escaped form
+// (an encoded slash is not a slash), refuses any query string (the ACS URL
+// has none), and compares r.Host with the URL's host, case-insensitively,
+// the scheme's default port standing for an absent one. No forwarding
+// header is ever read: behind a proxy that rewrites Host, the application
+// restores r.Host from its trusted proxy before calling CompleteLogin. The
+// scheme is not visible behind a TLS-terminating proxy; the Secure,
+// __Host- binding cookie, which browsers send over https only (loopback
+// aside), binds it instead.
+func checkACSLocation(r *http.Request, conn *Connection) error {
 	acs, err := url.Parse(conn.ACSURL)
-	if err != nil || r.URL == nil || r.URL.Path != acs.Path {
+
+	switch {
+	case err != nil || r.URL == nil || r.URL.EscapedPath() != acs.EscapedPath():
 		return reject(ErrDestinationMismatch, "request received outside the connection's ACS path", nil)
+	case r.URL.RawQuery != "" || r.URL.ForceQuery:
+		return reject(ErrDestinationMismatch, "request received with a query string", nil)
+	case !sameAuthority(r.Host, acs):
+		return reject(ErrDestinationMismatch, "request received at another host than the connection's ACS URL", nil)
 	}
 
 	return nil
+}
+
+// sameAuthority reports whether a request's Host names the host and port
+// of u: hosts compared case-insensitively, an absent port meaning the
+// default port of u's scheme. An empty or malformed Host never matches.
+func sameAuthority(host string, u *url.URL) bool {
+	h, port, ok := splitAuthority(host)
+	if !ok {
+		return false
+	}
+
+	want := u.Port()
+	if want == "" {
+		want = defaultPort(u.Scheme)
+	}
+
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+
+	return strings.EqualFold(h, u.Hostname()) && port == want
+}
+
+// splitAuthority splits a Host value into its host (IPv6 brackets removed)
+// and its port ("" when absent).
+func splitAuthority(host string) (string, string, bool) {
+	switch {
+	case host == "":
+		return "", "", false
+	case strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]"):
+		return host[1 : len(host)-1], "", true
+	case strings.HasPrefix(host, "[") || strings.Count(host, ":") == 1:
+		h, port, err := net.SplitHostPort(host)
+
+		return h, port, err == nil
+	case strings.Contains(host, ":"):
+		return "", "", false // an unbracketed IPv6 literal or a repeated port
+	default:
+		return host, "", true
+	}
+}
+
+// defaultPort is the default port of an http(s) scheme.
+func defaultPort(scheme string) string {
+	if scheme == schemeHTTP {
+		return "80"
+	}
+
+	return "443"
 }
 
 // loadTransaction looks up the transaction of (connection, handle) without
@@ -271,6 +347,22 @@ func (sp *ServiceProvider) loadTransaction(ctx context.Context, conn *Connection
 	}
 
 	return rec, tx, nil
+}
+
+// checkResponseInResponseTo requires a Success response to name the request
+// it answers on the Response itself: Core §3.2.2 makes InResponseTo
+// mandatory in a response to a request whose ID is known, and its value
+// must be that ID. It reads the value before verification, which can only
+// add a refusal; checkEnvelope compares the verified value again.
+func checkResponseInResponseTo(raw *rawResponse, tx *transaction) error {
+	switch raw.inResponseTo {
+	case tx.RequestID:
+		return nil
+	case "":
+		return reject(ErrUnsolicitedResponse, "no InResponseTo on the Response", nil)
+	default:
+		return reject(ErrInResponseToMismatch, "Response InResponseTo is not the request ID", nil)
+	}
 }
 
 // statusError reports a non-Success response bound to the transaction.

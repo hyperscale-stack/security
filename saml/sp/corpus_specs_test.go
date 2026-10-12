@@ -376,13 +376,6 @@ func (g *corpusGen) baselineSpecs() []corpusSpec {
 			expect: accepted(base),
 		},
 		{
-			id: "baseline/without-response-inresponseto", attack: "Response InResponseTo absent (optional); the signed bearer confirmation correlates",
-			build: func() []byte {
-				return g.xml("acme", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
-			},
-			expect: accepted(base),
-		},
-		{
 			id: "baseline/proxy-restriction-count-zero", attack: "OneTimeUse and ProxyRestriction Count=0 are surfaced (Core §2.5.1.5/§2.5.1.6)",
 			build: func() []byte {
 				return g.xml("acme", onAssertion(func(a *etree.Element) {
@@ -573,19 +566,21 @@ func (g *corpusGen) correlationSpecs() []corpusSpec {
 			expect: rejected("ErrInResponseToMismatch", "Response InResponseTo is not the request ID"),
 		},
 		{
-			id: "correlation/scd-inresponseto-other-transaction", attack: "signed bearer confirmation answering another transaction, Response InResponseTo removed",
-			refs: []string{refProfiles, "SAML Bindings §3.5.5.2"},
+			id:     "correlation/scd-inresponseto-other-transaction",
+			attack: "signed bearer confirmation answering another transaction, unsigned Response InResponseTo rewritten to this one",
+			refs:   []string{refProfiles, "SAML Bindings §3.5.5.2"},
 			build: func() []byte {
-				return g.xml("acme-2", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
+				return g.xml("acme-2", onResponse(func(r *etree.Element) { r.CreateAttr("InResponseTo", g.txs["acme"].RequestID) }))
 			},
 			expect: rejected("ErrInResponseToMismatch", "InResponseTo is not the request ID"),
 		},
 		{
-			id: "correlation/rewrapped-assertion", attack: "assertion signed for another transaction rewrapped in a new Response (new ID, no InResponseTo)",
-			refs: []string{"SAML Profiles §4.1.4.5"},
+			id:     "correlation/rewrapped-assertion",
+			attack: "assertion signed for another transaction rewrapped in a new Response (new ID, InResponseTo of this transaction)",
+			refs:   []string{"SAML Profiles §4.1.4.5"},
 			build: func() []byte {
 				return g.xml("acme-2", onResponse(func(r *etree.Element) {
-					r.RemoveAttr("InResponseTo")
+					r.CreateAttr("InResponseTo", g.txs["acme"].RequestID)
 					r.CreateAttr("ID", "_evil-rewrapped-response")
 				}))
 			},
@@ -617,6 +612,28 @@ func (g *corpusGen) correlationSpecs() []corpusSpec {
 			refs: []string{"SAML Bindings §3.5.5.2"}, knobs: corpusKnobs{Path: "other"},
 			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrDestinationMismatch", "request received outside the connection's ACS path"),
+		},
+		{
+			id: "correlation/received-at-another-host", attack: "response received at another host than the connection's ACS URL",
+			refs:  []string{"SAML Core §3.2.2 (Destination)", "SAML Bindings §3.5.5.2", "SAML Profiles §4.1.4.3"},
+			knobs: corpusKnobs{Host: "other"},
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrDestinationMismatch", "request received at another host than the connection's ACS URL"),
+		},
+		{
+			id: "correlation/received-with-a-query", attack: "response received at the ACS URL with a query string appended",
+			refs:  []string{"SAML Core §3.2.2 (Destination)", "SAML Bindings §3.5.5.2"},
+			knobs: corpusKnobs{Query: "next=https://attacker.example/"},
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrDestinationMismatch", "request received with a query string"),
+		},
+		{
+			id: "correlation/response-without-inresponseto", attack: "Success Response without InResponseTo (solicited: it MUST answer the request)",
+			refs: []string{"SAML Core §3.2.2 (InResponseTo)"},
+			build: func() []byte {
+				return g.xml("acme", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
+			},
+			expect: rejected("ErrUnsolicitedResponse", "no InResponseTo on the Response"),
 		},
 		{
 			id: "correlation/globex-response-at-acme", attack: "globex's response (its IdP key) delivered to acme",
