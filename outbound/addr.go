@@ -6,7 +6,9 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"syscall"
@@ -133,8 +135,10 @@ func (g *guard) checkAddress(ctx context.Context, ap netip.AddrPort) error {
 
 	addr = addr.Unmap()
 
+	// The address is not named: the URL's host may be a tenant's, the
+	// address it resolves to is the operator's business.
 	if !g.exempted(addr) && blocked(addr) {
-		return fmt.Errorf("%w: %s is not publicly routable", ErrDestinationNotAllowed, addr)
+		return fmt.Errorf("%w: not publicly routable", ErrDestinationNotAllowed)
 	}
 
 	if g.checkAddr == nil {
@@ -158,4 +162,26 @@ func (g *guard) control(ctx context.Context, _, address string, _ syscall.RawCon
 	}
 
 	return g.checkAddress(ctx, ap)
+}
+
+// dialContext dials with d. When the guard refuses the address, the error
+// keeps its cause but drops the resolved address net.Dialer puts in its
+// *net.OpError, so that the error of a request to a tenant-supplied URL
+// does not disclose the internal address the name resolved to.
+func dialContext(d *net.Dialer) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := d.DialContext(ctx, network, address)
+		if err == nil || !errors.Is(err, ErrDestinationNotAllowed) {
+			return conn, err //nolint:wrapcheck // the round tripper wraps transport errors
+		}
+
+		cause := ErrDestinationNotAllowed
+
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			cause = opErr.Err
+		}
+
+		return nil, &net.OpError{Op: "dial", Net: network, Err: cause}
+	}
 }

@@ -49,12 +49,13 @@ var (
 	ErrInvalidPolicy = errors.New("outbound: invalid policy")
 	// ErrURLNotAllowed reports a request URL refused before any connection:
 	// a scheme other than https (or http with AllowHTTP), userinfo, a
-	// missing, non-ASCII, malformed or trailing-dot host, an invalid port,
-	// or a refusal by Policy.CheckURL.
+	// missing, non-ASCII, malformed or trailing-dot host, a host name
+	// ending in a number (127.1, 0x7f.1: only the dotted-quad form is an
+	// IPv4 literal), an invalid port, or a refusal by Policy.CheckURL.
 	ErrURLNotAllowed = errors.New("outbound: URL not allowed")
 	// ErrDestinationNotAllowed reports an address refused at connect time:
 	// zoned, outside the publicly routable space and not exempted, or
-	// refused by Policy.CheckAddr.
+	// refused by Policy.CheckAddr. Its error does not name the address.
 	ErrDestinationNotAllowed = errors.New("outbound: destination address not allowed")
 	// ErrRedirectNotAllowed reports a redirect beyond Policy.MaxRedirects or
 	// from https to http.
@@ -81,6 +82,12 @@ type Policy struct {
 	// exempted when it, or the IPv4 address embedded in a 64:ff9b::/96
 	// NAT64 address, lies in a prefix. NewClient refuses IPv4-mapped,
 	// non-masked and /0 prefixes; a zoned address is never exempted.
+	//
+	// Only the well-known NAT64 prefix is decoded. A network-specific
+	// NAT64 prefix (RFC 6052 §2.2) is carved from global unicast space, so
+	// its addresses are judged as ordinary global IPv6 and reach whatever
+	// IPv4 address they embed: a network translating one must refuse it in
+	// CheckAddr.
 	AllowedPrefixes []netip.Prefix
 
 	// CheckURL, when set, is called before any connection with a clone of
@@ -121,6 +128,12 @@ type Policy struct {
 // the address check would otherwise judge the proxy, not the destination.
 // NewClient fails with [ErrInvalidPolicy] when p is unusable. The client is
 // safe for concurrent use; build one per policy and reuse it.
+//
+// A refused destination is never named in an error, but the errors of
+// allowed destinations (a refused connection, a timeout, a TLS failure)
+// are the standard library's and may name the resolved address and port.
+// When the URL comes from a tenant, log the error and show the tenant a
+// generic message.
 func NewClient(p Policy) (*http.Client, error) {
 	return newClient(p, nil)
 }
@@ -157,7 +170,7 @@ func newClient(p Policy, resolver *net.Resolver) (*http.Client, error) {
 
 	transport := &http.Transport{
 		Proxy:                  nil,
-		DialContext:            dialer.DialContext,
+		DialContext:            dialContext(dialer),
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.RootCAs},
 		TLSHandshakeTimeout:    min(timeout, handshakeTimeout),
 		ResponseHeaderTimeout:  min(timeout, headerTimeout),

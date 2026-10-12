@@ -118,9 +118,10 @@ func (g *guard) checkRequestURL(ctx context.Context, u *url.URL) error {
 // literal without a zone, or a lower-cased ASCII host name made of
 // letter-digit-hyphen labels (RFC 1123 §2.1). Non-ASCII names (U-labels,
 // which net/http would map to another name before dialing),
-// percent-encoded or underscore characters, empty labels and a trailing
-// dot are refused: the name the application vets in CheckURL must be the
-// name dialed.
+// percent-encoded or underscore characters, empty labels, a trailing dot
+// and a name ending in a number (which a resolver reads as an IPv4
+// address) are refused: the name the application vets in CheckURL must be
+// the name dialed.
 func canonicalHost(host string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("%w: missing host", ErrURLNotAllowed)
@@ -144,7 +145,34 @@ func canonicalHost(host string) (string, error) {
 		}
 	}
 
+	if endsInNumber(host) {
+		return "", fmt.Errorf("%w: numeric host name", ErrURLNotAllowed)
+	}
+
 	return strings.ToLower(host), nil
+}
+
+// endsInNumber reports whether the last label of a host name is a number:
+// decimal digits, or "0x" or "0X" followed by hexadecimal digits. The
+// WHATWG URL parser then reads the whole name as an IPv4 address, and so
+// do libc resolvers (127.1, 2130706433, 0x7f.1 and 0177.0.0.1 all reach
+// 127.0.0.1); no top-level domain is numeric. A canonical dotted-quad
+// address never gets here: it is an IP literal.
+func endsInNumber(host string) bool {
+	last := host[strings.LastIndexByte(host, '.')+1:]
+
+	digits := "0123456789"
+	if len(last) >= 2 && last[0] == '0' && (last[1] == 'x' || last[1] == 'X') {
+		last, digits = last[2:], "0123456789abcdefABCDEF"
+	}
+
+	for i := range len(last) {
+		if !strings.ContainsRune(digits, rune(last[i])) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // validLabel reports whether label is an RFC 1123 host-name label: 1 to 63

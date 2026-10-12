@@ -168,6 +168,36 @@ func TestResolvedNameIsChecked(t *testing.T) {
 	assert.Zero(t, s.hits.Load())
 }
 
+// TestRefusalHidesResolvedAddress checks that a refused connection does
+// not name the address the host resolved to: a tenant typing an internal
+// name must not learn its internal address from the error.
+func TestRefusalHidesResolvedAddress(t *testing.T) {
+	t.Parallel()
+
+	s := newServer(t, true, okHandler)
+	port := strconv.Itoa(s.Listener.Addr().(*net.TCPAddr).Port)
+
+	_, err := get(t, mustClient(t, outbound.Policy{RootCAs: pool(s)}), "https://localhost:"+port+"/")
+	require.ErrorIs(t, err, outbound.ErrDestinationNotAllowed)
+	assert.NotContains(t, err.Error(), "127.0.0.1")
+	assert.NotContains(t, err.Error(), "::1")
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		assert.Nil(t, opErr.Addr, "the dial error carries no resolved address")
+	}
+
+	errHook := errors.New("denied by the application")
+	p := loopbackPolicy(s)
+	p.CheckAddr = func(context.Context, netip.AddrPort) error { return errHook }
+
+	_, err = get(t, mustClient(t, p), "https://localhost:"+port+"/")
+	require.ErrorIs(t, err, outbound.ErrDestinationNotAllowed)
+	require.ErrorIs(t, err, errHook)
+	assert.NotContains(t, err.Error(), "127.0.0.1")
+	assert.NotContains(t, err.Error(), "::1")
+}
+
 func TestExemptedLoopbackIsReachable(t *testing.T) {
 	t.Parallel()
 
@@ -239,6 +269,50 @@ func TestURLFormsRefusedBeforeDialing(t *testing.T) {
 	}
 
 	assert.Zero(t, s.hits.Load())
+}
+
+// TestNumericHostNamesRefused checks the host names a resolver parses as
+// IPv4 addresses (WHATWG URL "ends in a number"): libc maps 127.1,
+// 2130706433, 0x7f.1 or 0177.0.0.1 to 127.0.0.1, so CheckURL would vet a
+// name other than the address dialed. Only the canonical dotted-quad form
+// is an IPv4 literal.
+func TestNumericHostNamesRefused(t *testing.T) {
+	t.Parallel()
+
+	refused := []string{
+		"127.1", "2130706433", "0x7f.1", "0x7F.0.0.1", "0177.0.0.1", "0x7f000001",
+		"127.0.0.01", "1.2.3.4.5", "example.0x", "example.123", "example.0X1f",
+	}
+
+	for _, host := range refused {
+		t.Run(host, func(t *testing.T) {
+			t.Parallel()
+
+			called := false
+			client := mustClient(t, outbound.Policy{CheckURL: func(context.Context, *url.URL) error {
+				called = true
+
+				return nil
+			}})
+
+			_, err := get(t, client, "https://"+host+"/x")
+			require.ErrorIs(t, err, outbound.ErrURLNotAllowed)
+			assert.False(t, called, "refused before CheckURL")
+		})
+	}
+
+	errStop := errors.New("stop")
+
+	for _, host := range []string{"127.0.0.1", "123.example", "a1.example", "0x.example", "example.0xg"} {
+		t.Run("accepted "+host, func(t *testing.T) {
+			t.Parallel()
+
+			client := mustClient(t, outbound.Policy{CheckURL: func(context.Context, *url.URL) error { return errStop }})
+
+			_, err := get(t, client, "https://"+host+"/x")
+			require.ErrorIs(t, err, errStop, "reaches CheckURL")
+		})
+	}
 }
 
 func TestCheckURLSeesCanonicalClone(t *testing.T) {
@@ -453,6 +527,26 @@ func TestRedirects(t *testing.T) {
 		assert.Zero(t, plain.hits.Load())
 	})
 
+	t.Run("http to https to http refused", func(t *testing.T) {
+		t.Parallel()
+
+		target := newServer(t, false, okHandler)
+		secure := newServer(t, true, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+"/x", http.StatusFound)
+		})
+		plain := newServer(t, false, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, secure.URL+"/x", http.StatusFound)
+		})
+		p := loopbackPolicy(secure)
+		p.AllowHTTP = true
+		p.MaxRedirects = 3
+
+		_, err := get(t, mustClient(t, p), plain.URL)
+		require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed, "the downgrade is judged on the previous hop")
+		assert.Equal(t, int64(1), secure.hits.Load())
+		assert.Zero(t, target.hits.Load())
+	})
+
 	t.Run("http to https allowed with AllowHTTP", func(t *testing.T) {
 		t.Parallel()
 
@@ -567,6 +661,24 @@ func TestResponseSizeLimit(t *testing.T) {
 		_, err = readBody(t, resp)
 		require.ErrorIs(t, err, outbound.ErrResponseTooLarge)
 	})
+}
+
+// TestResponseHeaderLimit checks the 64 KiB cap on the response header
+// block.
+func TestResponseHeaderLimit(t *testing.T) {
+	t.Parallel()
+
+	s := newServer(t, true, func(w http.ResponseWriter, _ *http.Request) {
+		for i := range 2000 {
+			w.Header().Set("X-Filler-"+strconv.Itoa(i), strings.Repeat("h", 64))
+		}
+
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	_, err := get(t, mustClient(t, loopbackPolicy(s)), s.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeded")
 }
 
 func TestTimeout(t *testing.T) {
