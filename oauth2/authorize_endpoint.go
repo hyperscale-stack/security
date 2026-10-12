@@ -109,8 +109,9 @@ type AuthorizeRequest struct {
 	Client Client
 	// ResponseType is the requested response type ("code" or "token").
 	ResponseType string
-	// RedirectURI is the validated redirect URI (exact-matched against the
-	// client registration).
+	// RedirectURI is the validated redirect URI: a registered one
+	// ([ValidateRedirectURI]) matched exactly, or a registered loopback IP
+	// redirect URI with the port the request set (RFC 8252 §7.3).
 	RedirectURI string
 	// Scope is the requested scope, already checked against the client's
 	// allowed scopes, in canonical form: its RFC 6749 §3.3 tokens joined by
@@ -276,9 +277,14 @@ type AuthorizeConfig struct {
 // the value is compared with anything. The scope the request carries on is
 // canonical: single-SP joined, duplicates dropped.
 //
+// The redirect URI is a registered one, exactly matched (RFC 6749
+// §3.1.2.3) but for the port of a loopback IP redirect URI (RFC 8252 §7.3),
+// and valid for [ValidateRedirectURI]. Responses keep its query as
+// registered, byte for byte (RFC 6749 §3.1.2).
+//
 // Errors that occur before the redirect URI is trusted (a client unknown
-// at the issuer, an unregistered redirect URI) are returned directly with a
-// 400 status and are NOT redirected, per RFC 6749 §4.1.2.1
+// at the issuer, an unregistered or invalid redirect URI) are returned
+// directly with a 400 status and are NOT redirected, per RFC 6749 §4.1.2.1
 // (open-redirector protection).
 // So is a response_mode other than the one the handler answers in —
 // fragment for an enabled implicit flow, query otherwise (OAuth 2.0
@@ -374,10 +380,9 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	redirectURI, ok := resolveRedirectURI(client, params.Get(paramRedirectURI))
-	if !ok {
-		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri"))
-		http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
+	redirectURI, err := resolveRedirectURI(client, params.Get(paramRedirectURI))
+	if err != nil {
+		s.refuseRedirectURI(w, r, err)
 
 		return
 	}
@@ -401,6 +406,22 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	s.authorize(cfg, consent, w, r, st)
+}
+
+// refuseRedirectURI answers, with a bare 400 that is never redirected (RFC
+// 6749 §3.1.2.4), a request whose redirect URI is missing, unregistered, or
+// registered but refused by [ValidateRedirectURI]; the cause reaches the
+// [ErrorHook] only.
+func (s *Server) refuseRedirectURI(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, ErrInvalidRedirectURI) {
+		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("invalid registered redirect_uri").WithCause(err))
+		http.Error(w, "oauth2: invalid redirect_uri", http.StatusBadRequest)
+
+		return
+	}
+
+	s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri").WithCause(err))
+	http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
 }
 
 // refuseUnparsable answers an authorization request parseRequestForm
@@ -461,7 +482,7 @@ type authorizeTarget struct {
 func (t authorizeTarget) responseParams() url.Values {
 	params := url.Values{}
 	if t.state != "" {
-		params.Set("state", t.state)
+		params.Set(paramState, t.state)
 	}
 
 	if t.issuer != "" {
@@ -573,7 +594,7 @@ func (s *Server) validateAuthorize(
 	// An unsupported — or repeated — response type is answered in the query
 	// string, and a repeated or invalid state is not echoed.
 	flow, flowErr := resolveFlow(cfg, in.params.Get("response_type"))
-	state := in.params.Get("state")
+	state := in.params.Get(paramState)
 	stateValid := validState(state)
 	target := authorizeTarget{
 		redirectURI: in.redirectURI,
@@ -882,7 +903,7 @@ func (s *Server) parseAuthorizeRequest(in authorizeInput, flow authorizeFlow) (*
 		ResponseType:        in.params.Get("response_type"),
 		RedirectURI:         in.redirectURI,
 		Scope:               scope,
-		State:               in.params.Get("state"),
+		State:               in.params.Get(paramState),
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: method,
 		Nonce:               nonce,
@@ -996,7 +1017,7 @@ func (s *Server) issueAuthorizationCode(
 
 	target := st.target()
 	params := target.responseParams()
-	params.Set("code", raw)
+	params.Set(paramCode, raw)
 
 	target.redirect(w, r, params)
 }
@@ -1073,28 +1094,6 @@ func grantedScope(ar *AuthorizeRequest, decision *Consent) (string, error) {
 	return scopes.Join(tokens), nil
 }
 
-// resolveRedirectURI returns the redirect URI to use: the requested one
-// when it exactly matches a registered URI, or the sole registered URI
-// when the request omitted the parameter. RFC 6749 §3.1.2.3 mandates the
-// exact match.
-func resolveRedirectURI(client Client, requested string) (string, bool) {
-	registered := client.RedirectURIs()
-
-	if requested == "" {
-		if len(registered) == 1 {
-			return registered[0], true
-		}
-
-		return "", false
-	}
-
-	if slices.Contains(registered, requested) {
-		return requested, true
-	}
-
-	return "", false
-}
-
 // Why a requested scope is refused. Their text is the error_description: it
 // never echoes the request.
 var (
@@ -1155,29 +1154,21 @@ func (s *Server) redirectAuthorizeError(w http.ResponseWriter, r *http.Request, 
 
 // authorizeRedirectTarget builds the redirect URL: params land in the
 // fragment for the implicit flow (RFC 6749 §4.2.2) and in the query string
-// otherwise. A registered redirect URI never carries a fragment, so the
-// implicit case appends one safely.
+// otherwise, appended to the redirect URI as registered — its query "MUST
+// be retained" (RFC 6749 §3.1.2), byte for byte. A validated redirect URI
+// has no fragment and no query parameter named like a response one
+// ([ValidateRedirectURI]).
 func authorizeRedirectTarget(redirectURI string, params url.Values, useFragment bool) string {
-	if useFragment {
+	switch {
+	case useFragment:
 		return redirectURI + "#" + params.Encode()
+	case !strings.Contains(redirectURI, "?"):
+		return redirectURI + "?" + params.Encode()
+	case strings.HasSuffix(redirectURI, "?"), strings.HasSuffix(redirectURI, "&"):
+		return redirectURI + params.Encode()
+	default:
+		return redirectURI + "&" + params.Encode()
 	}
-
-	u, err := url.Parse(redirectURI)
-	if err != nil {
-		return redirectURI
-	}
-
-	q := u.Query()
-
-	for k, vs := range params {
-		for _, v := range vs {
-			q.Set(k, v)
-		}
-	}
-
-	u.RawQuery = q.Encode()
-
-	return u.String()
 }
 
 // randomCode returns a 256-bit base64url authorization code.

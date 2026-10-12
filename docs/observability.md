@@ -67,7 +67,10 @@ The hook fires for:
 - every error serialized as an RFC 6749 §5.2 body (`/token`, `/revoke`,
   `/introspect`, metadata) and every error redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
-  400 (unknown client, unregistered `redirect_uri`);
+  400 (unknown client, unregistered `redirect_uri`, a registered
+  `redirect_uri` `oauth2.ValidateRedirectURI` refuses — `invalid registered
+  redirect_uri`, the `ErrInvalidRedirectURI` refusal as cause — and a
+  request too large or malformed);
 - every storage failure at `/revoke`: a token lookup that failed for another
   reason than an unknown token (`revoke: token lookup failed`), and a failed
   family or access-token revocation (`revoke refresh family failed`,

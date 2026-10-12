@@ -353,6 +353,21 @@ keys by `kid` against a JWKS provider (static or remote).
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Redirect URIs** — a request's `redirect_uri` must equal a registered
+  one, byte for byte (RFC 6749 §3.1.2.3, RFC 9700 §2.1: simple string
+  comparison, no pattern), with one exception RFC 8252 §7.3 makes
+  mandatory: a registered loopback IP redirect URI (`http://127.0.0.1` or
+  `http://[::1]`) accepts any port, the rest of the URI unchanged — native
+  apps listen on an ephemeral port — and the code is bound to the URI
+  requested. `http://localhost` gets no such variance (RFC 8252 §8.3
+  recommends the IP literal). The registered URI a request resolves to must
+  pass `oauth2.ValidateRedirectURI` — absolute, no fragment, a host and no
+  userinfo for http(s), a private-use scheme holding a "." (RFC 8252 §8.4,
+  which also rules out `javascript:` and `data:`), a query naming no
+  response parameter — or the request gets a bare 400, never a redirect
+  (RFC 6749 §3.1.2.4); run the same function when registering clients.
+  Responses keep the registered query byte for byte (RFC 6749 §3.1.2),
+  and the implicit flow appends its fragment to a URI that has none.
 - **Authorization endpoint pages** — the `ConsentFunc` renders the login
   and consent pages, but every response of `/authorize` carries
   `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`
@@ -1391,6 +1406,10 @@ span catalog.
       `ScopeValues` — an empty list allows nothing — and watch `OnError`
       for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
       upgrade.
+- [ ] Validate every redirect URI at registration with
+      `oauth2.ValidateRedirectURI`; register native apps with a reverse
+      domain name scheme (`com.example.app:/cb`) or a loopback IP literal
+      (`http://127.0.0.1/cb`).
 - [ ] Protect the request carrying the consent decision against CSRF (a
       session-bound token, or `net/http.CrossOriginProtection`); replace
       the anti-framing headers of `/authorize` only for origins you trust.

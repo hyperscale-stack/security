@@ -474,6 +474,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   every endpoint; `oauth2.MaxNonceLength` (512), `oauth2.MaxStateLength`
   (4096) and `oauth2.MaxClientIDLength` (255) document the bounds of the
   values the server keeps, echoes or looks up.
+- **`oauth2.ValidateRedirectURI`** (and `oauth2.ErrInvalidRedirectURI`)
+  checks a redirect URI at registration — absolute, no fragment, host and no
+  userinfo for http(s), "." in a private-use scheme (RFC 8252 §8.4), no
+  response parameter in its query; `/authorize` applies it to the URI a
+  request resolves to.
 
 ### Changed
 
@@ -777,6 +782,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **OAuth2 `/authorize` answers a POST with 303 (breaking for clients
   asserting 302)** and lists `Allow: GET, POST` on its 405. See
   [MIGRATION.md](MIGRATION.md).
+- **OAuth2 registered redirect URIs are validated (breaking)**: one that
+  `oauth2.ValidateRedirectURI` refuses — relative, with a fragment, a
+  private-use scheme without a period such as `myapp:` or `javascript:`, a
+  query naming a response parameter — is answered with a bare 400, never
+  redirected to. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -939,6 +949,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `invalid_request` or, for `client_id`, `redirect_uri` and
   `response_mode`, a bare `400`; it is now served like `nonce=n-1`. Two
   occurrences with a value are still refused.
+- OAuth2 redirects keep the query of the registered redirect URI byte for
+  byte (RFC 6749 §3.1.2: it "MUST be retained"): it was re-encoded —
+  reordered, `;`-separated pairs dropped, `flag` turned into `flag=`. The
+  implicit flow no longer appends a second fragment.
+- OAuth2 accepts any port for a registered loopback IP redirect URI
+  (`http://127.0.0.1`, `http://[::1]`), as RFC 8252 §7.3 requires for native
+  apps: the request is otherwise matched exactly, and the code bound to the
+  URI requested.
 
 ### Removed
 
@@ -1518,3 +1536,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   godoc states the CSRF contract (RFC 6749 §10.12), and `examples/oauth2`
   refuses a cross-origin decision. A redirect answering a POST is a 303
   (RFC 9700 §4.12).
+- OAuth2 no longer redirects to registered redirect URIs that cannot be
+  safe ones: a relative URI, one with a fragment, a `javascript:` or `data:`
+  URI, or a query naming a response parameter (which then traveled twice)
+  were used as registered.

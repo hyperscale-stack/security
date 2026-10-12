@@ -57,9 +57,13 @@ type Client interface {
 	ID() string
 	// Type reports whether the client is confidential or public.
 	Type() ClientType
-	// RedirectURIs lists the redirect URIs registered by the client.
-	// Authorization code requests MUST match one of these exactly per
-	// RFC 6749 §3.1.2.3 / OAuth 2.0 BCP §2.1.4.
+	// RedirectURIs lists the redirect URIs registered by the client — each
+	// one valid for [ValidateRedirectURI], which the authorization endpoint
+	// applies to the URI a request resolves to (an invalid one is answered
+	// with a bare 400, never redirected to). A request's redirect_uri MUST
+	// match one exactly (RFC 6749 §3.1.2.3, RFC 9700 §2.1), but for the port
+	// of a loopback IP redirect URI (http://127.0.0.1 or http://[::1], RFC
+	// 8252 §7.3), which the request may set freely.
 	RedirectURIs() []string
 	// GrantTypes lists the grant types the client may use, compared exactly
 	// with RFC 7591 §2 values — the GrantType constants
