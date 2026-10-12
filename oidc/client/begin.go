@@ -83,10 +83,11 @@ type AuthRequest struct {
 	// that started the login MUST keep it — the net/http helpers put it in
 	// an HttpOnly __Host- cookie — and present it at the callback. It never
 	// leaves the Relying Party and the user agent: never log it. fmt,
-	// log/slog and encoding/json leave it out, but other reflection-based
-	// encoders (encoding/gob, encoding/xml, YAML) write it: persist it
-	// explicitly, only where a secret belongs.
-	Binding string
+	// log/slog and encoding/json leave it out — it is tagged json:"-" for
+	// the encodings that do not go through MarshalJSON — but other
+	// reflection-based encoders (encoding/gob, encoding/xml, YAML) write
+	// it: persist it explicitly, only where a secret belongs.
+	Binding string `json:"-"`
 	// ExpiresAt is when the login expires.
 	ExpiresAt time.Time
 }
@@ -109,7 +110,10 @@ func (r AuthRequest) LogValue() slog.Value {
 // a value nested in another one (a struct field, a map) with
 // encoding/json, LogValue applying to attribute values only. A struct
 // embedding AuthRequest is promoted this method and encodes as the
-// AuthRequest alone: name the field instead of embedding it.
+// AuthRequest alone — or, when another type embedded at the same depth
+// also has a MarshalJSON, neither is promoted and encoding/json writes the
+// exported fields, the binding excluded (json:"-"). Name the field instead
+// of embedding it.
 func (r AuthRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct { //nolint:wrapcheck // strings only: never fails
 		URL       string

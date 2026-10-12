@@ -37,13 +37,14 @@ type Callback struct {
 	// missing port being the scheme's default — same path, and the
 	// RedirectURL's query parameters with their values. Build it from the
 	// request, never from the response; behind a reverse proxy, it is the
-	// public URL.
-	URL *url.URL
+	// public URL. Tagged json:"-", like Params and Binding: in query mode
+	// it carries the response, which only MarshalJSON leaves out.
+	URL *url.URL `json:"-"`
 	// Params are the response parameters (url.ParseQuery or r.PostForm).
-	Params url.Values
+	Params url.Values `json:"-"`
 	// Binding is the browser-binding secret the user agent presented (the
 	// AuthRequest.Binding of the login, read from its cookie).
-	Binding string
+	Binding string `json:"-"`
 }
 
 // String implements fmt.Stringer without the binding secret, the parameter
@@ -65,7 +66,10 @@ func (cb Callback) LogValue() slog.Value {
 // without its query, the number of parameters, never their values nor the
 // binding secret — log/slog's JSON handler encodes a nested Callback with
 // encoding/json. A struct embedding Callback is promoted this method and
-// encodes as the Callback alone: name the field instead of embedding it.
+// encodes as the Callback alone — or, when another type embedded at the
+// same depth also has a MarshalJSON, neither is promoted and encoding/json
+// writes the exported fields: Mode only, URL, Params and Binding being
+// tagged json:"-". Name the field instead of embedding it.
 func (cb Callback) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
 		Mode    ResponseMode

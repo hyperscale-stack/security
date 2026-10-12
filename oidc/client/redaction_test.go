@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -300,7 +301,56 @@ func TestEmbeddingPromotesTheRedactedEncoding(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(named), `"ReturnTo":"/account"`)
 	assert.NotContains(t, string(named), "secret-binding")
+
+	// Another type with a MarshalJSON embedded at the same depth makes the
+	// promotion ambiguous: neither method is promoted, and encoding/json
+	// writes the exported fields of both. The secrets stay out all the same.
+	type withStamp struct {
+		oidcclient.AuthRequest
+		stamp
+	}
+
+	flat, err := json.Marshal(withStamp{AuthRequest: ar, stamp: stamp{At: "now"}})
+	require.NoError(t, err)
+	assert.Contains(t, string(flat), `"State":"s"`, "flattened")
+	assert.NotContains(t, string(flat), "secret-binding")
+
+	received, err := url.Parse(testRedirectURL + "?code=code-xyz&state=state-xyz")
+	require.NoError(t, err)
+
+	cb := oidcclient.Callback{
+		Mode: oidcclient.ResponseModeQuery, URL: received, Binding: "callback-binding",
+		Params: url.Values{"code": {"code-xyz"}, "state": {"state-xyz"}},
+	}
+
+	type both struct {
+		oidcclient.AuthRequest
+		oidcclient.Callback
+	}
+
+	flat, err = json.Marshal(both{AuthRequest: ar, Callback: cb})
+	require.NoError(t, err)
+	assert.Contains(t, string(flat), `"Mode":"query"`, "flattened")
+
+	for _, secret := range []string{"secret-binding", "callback-binding", "code-xyz", "state-xyz"} {
+		assert.NotContains(t, string(flat), secret)
+	}
+
+	type callbackWithStamp struct {
+		oidcclient.Callback
+		stamp
+	}
+
+	flat, err = json.Marshal(callbackWithStamp{Callback: cb, stamp: stamp{At: "now"}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Mode":"query","At":"now"}`, string(flat), "the URL, its query included, stays out")
 }
+
+// stamp has a value-receiver MarshalJSON, like many types an application
+// embeds (time.Time has a MarshalText, which wins over both).
+type stamp struct{ At string }
+
+func (s stamp) MarshalJSON() ([]byte, error) { return json.Marshal(s.At) }
 
 // TestIdentityAndTokensStayJSONSerialisable pins the documented exception:
 // an Identity — its Tokens included — encodes and decodes in full, so that

@@ -897,7 +897,8 @@ like `Config`:
 | `AuthRequest` | `{"URL":…,"State":…,"Binding":"<secret>","ExpiresAt":…}` | `{"URL":…,"State":…,"ExpiresAt":…,"Binding":"REDACTED"}` |
 | `Callback` | `{"Mode":…,"URL":{…"RawQuery":"code=…&state=…"},"Params":{…},"Binding":"<secret>"}` | `{"Mode":…,"URL":"<URL without query>","Params":<count>,"Binding":"REDACTED"}` |
 | `Config` | an error (`json: unsupported type: func…`) | `{"ConnectionID":…,"Issuer":…,"ClientID":…,"ClientSecret":"REDACTED","AuthMethod":…,"RedirectURL":…,"ResponseMode":…,"TransactionKeys":<count>}` |
-| a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written |
+| a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written; when another type embedded at the same depth also has a `MarshalJSON`, neither is promoted and the exported fields are written, the secrets excluded |
+| `json.Unmarshal` into `AuthRequest`, `Callback` | every field read | `AuthRequest.Binding` and `Callback`'s `URL`, `Params` and `Binding` are tagged `json:"-"`: never read nor written by a reflective encoding |
 | `Identity`, `Tokens` | tokens and claims | unchanged, deliberately: JSON is how applications persist them |
 | `UserInfo` | its claims | unchanged; `fmt` now prints its subject only |
 | `*Client` | `{}` | unchanged |
@@ -910,8 +911,10 @@ To migrate:
    HttpOnly cookie, a server-side session): read back from the new JSON, it
    is `REDACTED` and the callback fails with `ErrBindingMismatch`.
 3. A struct that embeds `AuthRequest` or `Callback` and is encoded with
-   `encoding/json` now encodes as the embedded value alone: name the field
-   (`Login oidcclient.AuthRequest`) instead of embedding it.
+   `encoding/json` now encodes as the embedded value alone — or, next to
+   another embedded type with a `MarshalJSON`, as flattened fields without
+   the secrets: name the field (`Login oidcclient.AuthRequest`) instead of
+   embedding it.
 4. Other reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML)
    still write the binding secret: do not use them on these types.
 5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
