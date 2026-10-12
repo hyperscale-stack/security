@@ -208,11 +208,17 @@ travels to the client, and must not tell it what sessions the browser holds.
   one; without it, `offline_access` is dropped from the grant, and an
   approval left without any scope answers `access_denied`.
 - The login and consent pages are the application's: a CSRF token on every
-  form, no framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), no
-  caching, a return address limited to the authorization endpoint (never
-  an open redirect), no `307` redirects, no page at all under
-  `prompt=none`. The example's pages do all of it, and the `app-hardening`
-  scenarios of `e2e/oidc` check it through HTTP and a browser.
+  form that carries a decision — not on the authorization endpoint, to
+  which relying parties may POST their requests — no framing
+  (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), no caching, a
+  return address limited to the authorization endpoint (never an open
+  redirect), no `307` redirects, no page at all under `prompt=none`. The
+  oauth2 core sets those headers, and `Referrer-Policy: same-origin`, on
+  every response of the authorization endpoint — pages rendered behind it
+  included; `same-origin` rather than `no-referrer`, under which browsers
+  send `Origin: null` on the page's own POST. The example's pages do all of
+  it, and the `app-hardening` scenarios of `e2e/oidc` check it through HTTP
+  and a browser.
 
 ### Claims
 

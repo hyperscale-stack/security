@@ -774,6 +774,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the state not echoed; a `client_id` over 255 bytes is an unknown client;
   the PKCE parameters of an implicit request, and a `code_challenge_method`
   without `code_challenge`, are ignored. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `/authorize` answers a POST with 303 (breaking for clients
+  asserting 302)** and lists `Allow: GET, POST` on its 405. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1504,3 +1507,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   — then fail). `oidc/provider` bounded the nonce of OpenID requests only.
   Requests are now bounded to 64 KiB, and the state and the nonce of every
   authorization request to 4096 and 512 bytes.
+- OAuth2 `/authorize` responses can no longer be framed, cached or leak
+  their URL in `Referer`. The endpoint set no header while the
+  `ConsentFunc` rendered the login and consent pages behind it, and the
+  canonical example approved any POST carrying `decision=approve` — a
+  cross-site form could approve on the user's behalf. Every response now
+  carries `X-Frame-Options: DENY`, `Content-Security-Policy:
+  frame-ancestors 'none'`, `Cache-Control: no-store` and `Referrer-Policy:
+  same-origin` (RFC 6749 §10.13, RFC 9700 §4.16, §4.2.4); the `ConsentFunc`
+  godoc states the CSRF contract (RFC 6749 §10.12), and `examples/oauth2`
+  refuses a cross-origin decision. A redirect answering a POST is a 303
+  (RFC 9700 §4.12).

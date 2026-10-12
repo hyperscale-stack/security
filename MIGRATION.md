@@ -1834,3 +1834,24 @@ To migrate:
 3. Extensions relying on the core's `nonce` (`AuthorizeRequest.Nonce`,
    `TokenIssuance.Nonce`) may drop their own bound: the core applies the one
    `oidc/provider` applies.
+
+### `oauth2`: `/authorize` responses carry protective headers; POST redirects are 303
+
+| | Before | After |
+| --- | --- | --- |
+| headers of every `/authorize` response (pages, redirects, errors) | none | `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` (added to an existing policy), `Cache-Control: no-store`, `Referrer-Policy: same-origin` |
+| a redirect answering a POST | `302 Found` | `303 See Other` (RFC 9700 §4.12) |
+| another method than GET and POST | `405` | `405` with `Allow: GET, POST` |
+
+To migrate:
+
+1. A `ConsentFunc` whose page must be framed by a trusted origin replaces
+   `X-Frame-Options` and `Content-Security-Policy` on `w.Header()` before
+   writing it; one setting its own `Content-Security-Policy` with `Set`
+   keeps `frame-ancestors` in it.
+2. Protect the request carrying the decision against CSRF if your
+   `ConsentFunc` does not (RFC 6749 §10.12): a session-bound token, or
+   `net/http.CrossOriginProtection.Check` on that request — not on the
+   endpoint, which clients may POST authorization requests to.
+3. Clients and tests expecting `302` after a POST to `/authorize` accept
+   `303`; user agents follow both with a GET.

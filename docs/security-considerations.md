@@ -353,6 +353,26 @@ keys by `kid` against a JWKS provider (static or remote).
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Authorization endpoint pages** — the `ConsentFunc` renders the login
+  and consent pages, but every response of `/authorize` carries
+  `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`
+  (added to a policy an outer handler set), `Cache-Control: no-store` and
+  `Referrer-Policy: same-origin`: the authorization server MUST prevent
+  clickjacking (RFC 6749 §10.13, RFC 9700 §4.16), its pages and redirects
+  carry codes and states, and no `Referer` leaks the request URL to another
+  origin (RFC 9700 §4.2.4). `same-origin`, not `no-referrer`: under
+  `no-referrer` browsers send `Origin: null` on the consent page's own
+  POST, which Origin-based CSRF checks then refuse. A `ConsentFunc` that
+  must let a trusted origin frame its page replaces them on
+  `w.Header()`. Browsers check framing on the final response only, so
+  `prompt=none` in an iframe still follows the redirect. The authorization
+  endpoint MUST be protected against CSRF (RFC 6749 §10.12): protect the
+  request carrying the resource owner's decision — a token bound to their
+  session, or `net/http.CrossOriginProtection` as `examples/oauth2` does —
+  not the endpoint, to which clients may POST authorization requests. A
+  redirect answering a POST is a `303` (RFC 9700 §4.12: only 303
+  unambiguously turns the POST, and the credentials it may carry, into a
+  GET), never a `307`.
 - **Request bounds** — RFC 6749 bounds no parameter, and `net/http` alone
   reads 10 MB of form. Every endpoint bounds the query and the body it
   parses to `ServerConfig.MaxRequestBytes` (64 KiB by default) —
@@ -1371,6 +1391,9 @@ span catalog.
       `ScopeValues` — an empty list allows nothing — and watch `OnError`
       for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
       upgrade.
+- [ ] Protect the request carrying the consent decision against CSRF (a
+      session-bound token, or `net/http.CrossOriginProtection`); replace
+      the anti-framing headers of `/authorize` only for origins you trust.
 - [ ] Register the resource servers calling `/introspect` as confidential
       clients, and set `ServerConfig.IntrospectionPolicy` when several
       resource servers or tenants share the authorization server.

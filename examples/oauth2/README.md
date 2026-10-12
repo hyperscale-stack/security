@@ -83,6 +83,27 @@ curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym
 A code is single-use: running the same exchange again is refused with
 `invalid_grant` and revokes the tokens the first exchange issued.
 
+## Consent page protections
+
+- Every `/oauth2/authorize` response carries `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`, `Cache-Control:
+  no-store` and `Referrer-Policy: same-origin`: the authorization server
+  sets them, so the consent page cannot be framed (clickjacking) nor cached.
+- The POST carrying the decision is refused when it comes from another site
+  (`http.CrossOriginProtection`, RFC 6749 §10.12): a page elsewhere cannot
+  approve on the user's behalf. An authorization request POSTed from
+  another site still shows the consent page. A real application also binds
+  the decision to the user's login session with a CSRF token — see
+  `examples/oidc-provider`.
+- The approval is answered with `303 See Other`, the redirect that turns a
+  POST into a GET (RFC 9700 §4.12).
+
+```sh
+curl -i -X POST -H 'Sec-Fetch-Site: cross-site' -d 'decision=approve' \
+    'http://localhost:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://localhost:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
+# → 403 Forbidden
+```
+
 ## What this example does NOT cover
 
 - JWT-formatted access tokens (`jwt.OAuth2AccessTokenSigner` adapter wires

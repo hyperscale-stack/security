@@ -177,7 +177,7 @@ func TestAuthorizeParameterInQueryAndBody(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	env.srv.AuthorizeHandler(oauth2.AuthorizeConfig{}, approve).ServeHTTP(rec, req)
-	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, http.StatusSeeOther, rec.Code, "a redirect answering a POST (RFC 9700 §4.12)")
 	assert.Equal(t, oauth2.CodeInvalidRequest, mustLocation(t, rec).Query().Get("error"))
 	assert.Zero(t, env.store.writes.Load())
 }

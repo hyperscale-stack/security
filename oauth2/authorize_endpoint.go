@@ -203,6 +203,18 @@ type Consent struct {
 // Consent.Scope instead. Render the request from ar, never from r.FormValue:
 // r is the request as received, and an empty occurrence of a parameter —
 // omitted per RFC 6749 §3.1 — can precede the value the server used.
+//
+// The authorization endpoint MUST be protected against CSRF (RFC 6749
+// §10.12): protect the request carrying the resource owner's decision —
+// bind it to their session with a CSRF token (session.CSRFToken /
+// VerifyCSRF), or refuse cross-origin browser requests
+// (net/http.CrossOriginProtection.Check, as examples/oauth2 does) — not the
+// endpoint, to which a client may POST an authorization request from its
+// own site (RFC 6749 §3.1). The handler has set X-Frame-Options: DENY,
+// Content-Security-Policy: frame-ancestors 'none', Cache-Control: no-store
+// and Referrer-Policy: same-origin on w before calling the ConsentFunc: the
+// pages it renders cannot be framed (RFC 6749 §10.13, RFC 9700 §4.16).
+// Replace them on w.Header() only to let origins you trust frame the page.
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -276,6 +288,15 @@ type AuthorizeConfig struct {
 // fragment for the implicit flow — and only with an error code the
 // authorization endpoint defines.
 //
+// Every response carries X-Frame-Options: DENY, Content-Security-Policy:
+// frame-ancestors 'none' (added to any policy already set), Cache-Control:
+// no-store and Referrer-Policy: same-origin (RFC 6749 §10.13, RFC 9700
+// §4.16, §4.2.4): the pages the ConsentFunc renders cannot be framed nor
+// cached, and no Referer carries the request to another origin. A
+// redirect answering a POST is a 303 See Other (RFC 9700 §4.12), one
+// answering a GET a 302 Found; a method other than GET and POST gets a 405
+// listing them in Allow.
+//
 // AuthorizeHandler panics on a nil consent, and on an implicit-flow
 // misconfiguration (AllowImplicit on a non-Profile20 server, or without an
 // ImplicitTokens generator).
@@ -308,8 +329,11 @@ func (s *Server) AuthorizeHandler(cfg AuthorizeConfig, consent ConsentFunc) http
 }
 
 func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http.ResponseWriter, r *http.Request) {
+	setAuthorizeHeaders(w.Header())
+
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("/authorize requires GET or POST"))
+		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "oauth2: /authorize requires GET or POST", http.StatusMethodNotAllowed)
 
 		return
@@ -447,10 +471,11 @@ func (t authorizeTarget) responseParams() url.Values {
 	return params
 }
 
-// redirect sends the authorization response params to t.
+// redirect sends the authorization response params to t: 303 for a POST,
+// 302 for a GET (redirectStatus).
 func (t authorizeTarget) redirect(w http.ResponseWriter, r *http.Request, params url.Values) {
 	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(t.redirectURI, params, t.fragment), http.StatusFound)
+	http.Redirect(w, r, authorizeRedirectTarget(t.redirectURI, params, t.fragment), redirectStatus(r))
 }
 
 // target returns the authorization-response target of the validated
