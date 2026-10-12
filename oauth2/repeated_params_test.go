@@ -113,6 +113,58 @@ func TestAuthorizeRefusesRepeatedParameters(t *testing.T) {
 	}
 }
 
+// TestAuthorizeRepeatedUnredirectableParameterWins: a repeated client_id,
+// redirect_uri or response_mode is a bare 400 even when the request repeats
+// another parameter too — whichever comes first in the request: the
+// redirect is never taken to a target, or in an encoding, the request left
+// ambiguous (RFC 6749 §4.1.2.1).
+func TestAuthorizeRepeatedUnredirectableParameterWins(t *testing.T) {
+	t.Parallel()
+
+	unredirectable := map[string]string{
+		"client_id":     "&client_id=spa",
+		"redirect_uri":  "&redirect_uri=" + url.QueryEscape("https://evil.example/cb"),
+		"response_mode": "&response_mode=query&response_mode=fragment",
+	}
+	redirectable := map[string]string{
+		"response_type":         "&response_type=token",
+		"scope":                 "&scope=write",
+		"state":                 "&state=other",
+		"code_challenge":        "&code_challenge=" + pkceChallenge,
+		"code_challenge_method": "&code_challenge_method=S256",
+		"nonce":                 "&nonce=a&nonce=b",
+	}
+
+	for u, uRaw := range unredirectable {
+		for r, rRaw := range redirectable {
+			for _, order := range []string{"before", "after"} {
+				t.Run(u+"/"+r+"/"+order, func(t *testing.T) {
+					t.Parallel()
+
+					raw := machineQuery().Encode() + rRaw + uRaw
+					if order == "before" {
+						raw = machineQuery().Encode() + uRaw + rRaw
+					}
+
+					env := repeatedParamsEnv(t)
+					rec, consented := authorizeRaw(env, raw)
+					require.Equal(t, http.StatusBadRequest, rec.Code, rec.Header().Get("Location"))
+					assert.Empty(t, rec.Header().Get("Location"), "never redirected")
+					assert.False(t, consented)
+					assert.Zero(t, env.store.writes.Load())
+
+					errs := env.sink.collected()
+					require.Len(t, errs, 1)
+
+					var oe *oauth2.Error
+					require.ErrorAs(t, errs[0], &oe)
+					assert.Equal(t, "repeated "+u, oe.Description)
+				})
+			}
+		}
+	}
+}
+
 // TestAuthorizeParameterInQueryAndBody: on a POST, the query and the body
 // form one request — a parameter in both is included twice.
 func TestAuthorizeParameterInQueryAndBody(t *testing.T) {

@@ -1082,7 +1082,7 @@ were not refused. The parameters each endpoint reads are now single-valued:
 
 | Request | Before | After |
 | ------- | ------ | ----- |
-| `/authorize` repeating `client_id`, `redirect_uri` or `response_mode` | the first value used | bare `400`, never redirected (the client, the target or the encoding of the answer are ambiguous); `OnError` gets `invalid_request` |
+| `/authorize` repeating `client_id`, `redirect_uri` or `response_mode` | the first value used | bare `400`, never redirected, whatever else the request repeats (the client, the target or the encoding of the answer are ambiguous); `OnError` gets `invalid_request` |
 | `/authorize` repeating `response_type`, `scope`, `state`, `code_challenge`, `code_challenge_method` or `nonce` — a POST carrying one in the query and in the body included | the first value used | redirected `invalid_request` (`repeated <name>`); a repeated `state` is not echoed |
 | `/token` repeating `grant_type`, `code`, `redirect_uri`, `code_verifier`, `refresh_token`, `scope`, `username`, `password`, `client_id` or `client_secret` | the first value used | `400 invalid_request` before the grant runs: a code presented stays redeemable |
 | `/revoke`, `/introspect` repeating `token`, `token_type_hint`, `client_id` or `client_secret` | the first value used | `400 invalid_request` |

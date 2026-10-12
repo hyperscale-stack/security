@@ -242,9 +242,10 @@ type AuthorizeConfig struct {
 // empty occurrence is omitted, and one included more than once with a value
 // is refused — client_id, redirect_uri and response_mode with a bare 400
 // that is never redirected (the client, the target or the encoding of the
-// answer are ambiguous), any other with a redirected invalid_request; a
-// repeated state is not echoed. Other parameters are left to the extension
-// and the ConsentFunc.
+// answer are ambiguous), whatever else the request repeats; any other with
+// a redirected invalid_request, answered in the query when response_type is
+// the one repeated (the flow is ambiguous). A repeated state is not echoed.
+// Other parameters are left to the extension and the ConsentFunc.
 //
 // The scope is parsed strictly (RFC 6749 §3.3): tokens of printable ASCII
 // but the double quote and the backslash, separated by SP — runs of SP are

@@ -21,10 +21,13 @@ var (
 	// authorizeParameters are the parameters of an authorization request
 	// (RFC 6749 §4.1.1, §4.2.1; RFC 7636 §4.3; the response_mode of the
 	// OAuth 2.0 Multiple Response Type Encoding Practices; the OpenID
-	// Connect nonce the core records).
+	// Connect nonce the core records). The unredirectableParameters come
+	// first: param.SingleValued reports the first repeated name in this
+	// order, so a request repeating one of them is refused with a bare 400
+	// whatever else it repeats.
 	authorizeParameters = []string{
-		"response_type", paramClientID, paramRedirectURI, paramScope, "state",
-		"code_challenge", "code_challenge_method", paramResponseMode, "nonce",
+		paramClientID, paramRedirectURI, paramResponseMode, "response_type", paramScope, "state",
+		"code_challenge", "code_challenge_method", "nonce",
 	}
 	// unredirectableParameters, repeated, leave the client, the redirection
 	// target or the encoding of the answer ambiguous: such a request is
