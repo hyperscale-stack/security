@@ -275,9 +275,11 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - **Invariants**: the issuer comes from configuration only; every fetch goes
   through `outbound`; token and UserInfo requests follow no redirect; a
   login is bound to the user agent by a binding secret from which the nonce
-  and PKCE verifier are derived (the store holds no secret) and which keys
-  the transaction's integrity MAC (`integrityFor`, verified in `Complete`
-  before any stored field is used; every store persists `Integrity`); a
+  and PKCE verifier are derived (the store holds no secret) and which, with
+  a REQUIRED server-held key (`Config.TransactionKeys`: the first MACs, all
+  verify), keys the transaction's integrity MAC (`integrityFor`, verified
+  in `Complete` before any stored field is used; every store persists
+  `Integrity`); a
   transaction is consumed once, in the pinned order of
   `TransactionStore.Consume`;
   `Callback.URL` must be the connection's redirect URI — scheme, host,

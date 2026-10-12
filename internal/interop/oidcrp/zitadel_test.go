@@ -89,6 +89,10 @@ func startProvider(t *testing.T, clients ...*storage.Client) *provider {
 	return p
 }
 
+// transactionKey is the server-held transaction key of the relying
+// parties (oidcclient.Config.TransactionKeys).
+var transactionKey = []byte("zitadel interop transaction key 32b")
+
 func redirectURL(connection string) string { return rpOrigin + "/oidc/" + connection + "/callback" }
 
 // relyingParty returns the Client of one connection to p.
@@ -96,15 +100,16 @@ func (p *provider) relyingParty(t *testing.T, connection string, mutators ...fun
 	t.Helper()
 
 	cfg := oidcclient.Config{
-		ConnectionID: connection,
-		Issuer:       p.issuer,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		AuthMethod:   oidcclient.AuthMethodClientSecretBasic,
-		RedirectURL:  redirectURL(connection),
-		Scopes:       []string{"openid", "profile", "email"},
-		Store:        memory.New(),
-		Outbound:     outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: p.pool},
+		ConnectionID:    connection,
+		Issuer:          p.issuer,
+		ClientID:        clientID,
+		ClientSecret:    clientSecret,
+		AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
+		RedirectURL:     redirectURL(connection),
+		Scopes:          []string{"openid", "profile", "email"},
+		Store:           memory.New(),
+		TransactionKeys: [][]byte{transactionKey},
+		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: p.pool},
 	}
 
 	for _, m := range mutators {

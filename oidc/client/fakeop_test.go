@@ -38,6 +38,10 @@ import (
 // testNow is the instant every test clock starts at.
 var testNow = time.Unix(1_800_000_000, 0).UTC()
 
+// testTransactionKey is the server-held transaction key of the test
+// Clients (Config.TransactionKeys).
+var testTransactionKey = []byte("0123456789abcdef0123456789abcdef")
+
 const (
 	testClientID     = "client-1"
 	testClientSecret = "s3cr3t-with-enough-entropy-for-hs256"
@@ -674,16 +678,17 @@ func (op *fakeOP) idToken(g *grant) string {
 // config returns a working Config for op, modified by the mutators.
 func (op *fakeOP) config(mutators ...func(*oidcclient.Config)) oidcclient.Config {
 	cfg := oidcclient.Config{
-		ConnectionID: testConnection,
-		Issuer:       op.issuer,
-		ClientID:     testClientID,
-		ClientSecret: testClientSecret,
-		AuthMethod:   oidcclient.AuthMethodClientSecretBasic,
-		RedirectURL:  testRedirectURL,
-		Scopes:       []string{"openid", "profile"},
-		Store:        memory.New(),
-		Outbound:     outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: op.pool()},
-		Now:          op.clock.Now,
+		ConnectionID:    testConnection,
+		Issuer:          op.issuer,
+		ClientID:        testClientID,
+		ClientSecret:    testClientSecret,
+		AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
+		RedirectURL:     testRedirectURL,
+		Scopes:          []string{"openid", "profile"},
+		Store:           memory.New(),
+		TransactionKeys: [][]byte{testTransactionKey},
+		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: op.pool()},
+		Now:             op.clock.Now,
 	}
 
 	for _, m := range mutators {

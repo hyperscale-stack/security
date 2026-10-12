@@ -83,3 +83,24 @@ func TestDecodeClaimsError(t *testing.T) {
 
 	require.Error(t, id.DecodeClaims(&wrong))
 }
+
+// TestConfigRedactsSecrets checks that a Config — which holds the client
+// secret and the transaction keys — never prints or logs them.
+func TestConfigRedactsSecrets(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	cfg := op.config()
+
+	for _, rendered := range []string{logged(cfg), logged(&cfg)} {
+		assert.NotContains(t, rendered, testClientSecret)
+		assert.NotContains(t, rendered, string(testTransactionKey))
+		assert.NotContains(t, rendered, fmt.Sprint(testTransactionKey), "the key bytes as fmt prints them")
+		assert.NotContains(t, rendered, fmt.Sprintf("%x", testTransactionKey))
+		assert.Contains(t, rendered, "REDACTED")
+		assert.Contains(t, rendered, testConnection, "the identifying fields stay readable")
+	}
+
+	public := op.config(func(c *oidcclient.Config) { c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, "" })
+	assert.Contains(t, public.String(), `ClientSecret: ""`, "a public client has no secret to redact")
+}

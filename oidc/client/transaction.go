@@ -48,14 +48,14 @@ const (
 // binding secret the user agent presents, so reading the store yields
 // nothing that completes a login.
 //
-// Integrity, a MAC keyed by the binding secret, makes every field
+// Integrity, a MAC keyed by the binding secret and a server-held
+// transaction key (Config.TransactionKeys), makes every field
 // tamper-evident: Complete refuses a transaction altered in the store
-// (ErrTransactionIntegrity). It protects a login against whoever does not
-// hold its binding secret. The user agent that started the login holds
-// it, though: an attacker who can write to the store can still relax the
-// max_age and acr_values checks of logins it runs itself, with its own
-// browser. When step-up authentication matters, protect the store's
-// integrity (authentication, network isolation), as its availability.
+// (ErrTransactionIntegrity). Whoever can write to the store lacks the
+// transaction key — even an attacker running the login in its own
+// browser, which holds the binding secret — so it can neither relax the
+// max_age and acr_values checks nor rewrite AppState. The store is trusted
+// for availability and single consumption only.
 //
 // CreatedAt and ExpiresAt are whole seconds; stores return them in UTC.
 type Transaction struct {
@@ -83,8 +83,8 @@ type Transaction struct {
 	// ExpiresAt is when the transaction stops being usable.
 	ExpiresAt time.Time
 	// Integrity is hex(HMAC-SHA256(k, every other field, length-prefixed)),
-	// k an HMAC-SHA256 of the binding secret under its own label: 64
-	// lowercase hex digits.
+	// k = HMAC-SHA256(transaction key, "oidcclient/integrity/v2" ‖ binding
+	// secret): 64 lowercase hex digits.
 	Integrity string
 }
 

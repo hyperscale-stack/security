@@ -693,3 +693,37 @@ To migrate:
    every client the issuers it is registered at: implement `AllowsIssuer` on
    your client type (issuers compared exactly), or fill
    `DefaultClient.IssuerValues` — or scope your `ClientStore` by issuer.
+
+### `oidc/client`: a server-held key protects the login transactions (#86)
+
+The integrity MAC of a `Transaction` (#85) was keyed by the login's binding
+secret only. The user agent that starts a login holds that secret, so an
+attacker with write access to the transaction store could start a login in
+its own browser, strip its `max_age` or `acr_values` requirement — a step-up
+or MFA bypass — or rewrite its `AppState`, recompute the MAC and complete the
+login. The MAC key now also requires a server-held transaction key the store
+never sees:
+
+| | Before | After |
+| --- | --- | --- |
+| `Config.TransactionKeys` | — | REQUIRED: 1 to 4 keys of at least 32 bytes; `New` fails with `ErrInvalidConfig` otherwise, before any network access |
+| MAC key of a transaction | HMAC-SHA256(binding secret, `"oidcclient/integrity/v1"`) | HMAC-SHA256(transaction key, `"oidcclient/integrity/v2"` ‖ binding secret): `TransactionKeys[0]` for new transactions, any key accepted |
+| a store writer relaxing a login it runs itself | login completed | `ErrTransactionIntegrity`, the code is never redeemed |
+| transactions stored before the upgrade | — | fail once with `ErrTransactionIntegrity` (the user signs in again) |
+| SQL and Redis stores | — | unchanged: `Integrity` is still 64 hex digits |
+| `fmt` / `log/slog` of a `Config` | every field, client secret included | identifying fields only; client secret and keys redacted |
+
+To migrate:
+
+1. Generate a transaction key: 32 bytes or more from a cryptographic source
+   (`openssl rand -hex 32`). It is a secret like a session key: keep it in
+   your secret store, never in code or logs.
+2. Give the same keys to every instance that may serve a callback, and set
+   `Config.TransactionKeys: [][]byte{key}` on every `oidcclient.Client`
+   (`examples/oidc-client` reads `OIDC_TRANSACTION_KEYS`, hex keys separated
+   by commas).
+3. Deploy knowing that the logins in progress at that moment fail once with
+   `ErrTransactionIntegrity`; the users start over.
+4. To rotate a key later without failing a login: add the new key last on
+   every instance; once all of them run with it, move it first; remove the
+   old key once `TransactionTTL` (10 minutes by default) has elapsed.

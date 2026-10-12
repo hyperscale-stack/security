@@ -191,7 +191,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   started it: a 256-bit binding secret kept in an HttpOnly `__Host-` cookie
   (SameSite=Lax for `query`, None for `form_post`), from which the nonce and
   the PKCE verifier are derived, so the transaction store holds no secret,
-  and which keys an integrity MAC over every field of the transaction
+  and which, with a server-held transaction key (`Config.TransactionKeys`,
+  required), keys an integrity MAC over every field of the transaction
   (`Transaction.Integrity`, verified before any field is used: a
   transaction altered in the store fails with `ErrTransactionIntegrity`).
   The transaction is also bound to its connection, issuer, client, redirect
@@ -432,6 +433,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   answered `server_error` and issues nothing (breaking for `ConsentFunc`s
   approving without one). A `ConsentFunc` error still answers `server_error`,
   whatever the error, and its cause now reaches `OnError`.
+- **`oidcclient.Config.TransactionKeys` is required** (#86, breaking): 1 to
+  4 server-held keys of at least 32 bytes, shared by every instance serving
+  callbacks; the first protects new login transactions, all are accepted
+  (rotation). `New` fails with `ErrInvalidConfig` without them, and the
+  logins in flight during the upgrade fail once with
+  `ErrTransactionIntegrity`. `Config` now prints and logs without its
+  client secret and keys (`String`, `GoString`, `LogValue`). The example
+  reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -512,6 +521,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- The integrity MAC of an `oidc/client` login transaction is keyed by a
+  server-held transaction key as well as by the login's binding secret
+  (#86). Keyed by the binding secret alone, it could be recomputed by an
+  attacker with write access to the transaction store for a login it ran
+  in its own browser — which holds that secret — to strip the login's
+  `max_age` or `acr_values` requirement (a step-up or MFA bypass) or to
+  rewrite its `AppState`. Such a transaction now fails with
+  `ErrTransactionIntegrity` before the code is redeemed; the store is
+  trusted for availability and single consumption only.
 - Multi-issuer deployments can keep each client in its realm: with the
   `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
   can no longer send another issuer's end-users to that issuer's login page

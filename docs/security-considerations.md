@@ -768,15 +768,22 @@ are attacker-influenced.
   nothing that completes a login, and a stolen state alone cannot be
   replayed from another browser (login CSRF, RFC 9700 §4.7).
 - **Store integrity** — every transaction carries an integrity MAC over all
-  its fields, keyed by a value derived from the binding secret, which
-  `Complete` verifies before using any stored field: a transaction altered
-  in the store — a stripped `max_age` or `acr_values`, a rewritten
-  `AppState` or redirect URI — fails its login
-  (`ErrTransactionIntegrity`). The user agent of a login holds its binding
-  secret, though: an attacker who can write to the store can still relax
-  the `max_age` and `acr_values` checks of logins it runs with its own
-  browser. When step-up authentication matters, protect the store's
-  integrity (authentication, network isolation), not only its availability.
+  its fields, which `Complete` verifies before using any stored field: a
+  transaction altered in the store — a stripped `max_age` or `acr_values`,
+  a rewritten `AppState` or redirect URI — fails its login
+  (`ErrTransactionIntegrity`). The MAC key is
+  HMAC-SHA256(transaction key, `"oidcclient/integrity/v2"` ‖ binding
+  secret): it needs both the binding secret — which the user agent of the
+  login holds — and a server-held transaction key
+  (`Config.TransactionKeys`) the store never sees, so an attacker who can
+  write to the store cannot forge it even for a login it runs with its own
+  browser. The store is trusted for availability and single consumption
+  only. The transaction keys are secrets like a session key: 32 bytes or
+  more from a cryptographic source, shared by every instance serving
+  callbacks, never logged (`Config`'s `String`, `GoString` and `LogValue`
+  redact them). Rotate them in three steps — add the new key last on every
+  instance, move it first, remove the old one once `TransactionTTL` has
+  elapsed: the first key protects new transactions, every key is accepted.
 - **Single use** — `TransactionStore.Consume` removes the transaction
   atomically, unknown first, then expired whatever the binding, then a
   binding mismatch, which keeps the transaction so that a leaked state
@@ -992,8 +999,11 @@ span catalog.
       (`/oidc/{connection}/callback`), registered exactly at its provider.
 - [ ] Use a shared `TransactionStore` (`oidc/client/store/sql` or
       `store/redis`) when several instances serve callbacks, and schedule
-      `PurgeExpired` with the SQL store; restrict write access to it when
-      you rely on `max_age` or `acr_values`.
+      `PurgeExpired` with the SQL store.
+- [ ] Load `oidcclient.Config.TransactionKeys` from your secret store — the
+      same keys on every instance — and rotate them by adding the new key
+      last, then moving it first, then removing the old one after
+      `TransactionTTL`.
 - [ ] Link accounts on (connection, issuer, subject), never on email;
       create a fresh session after each login.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only

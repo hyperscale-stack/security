@@ -12,18 +12,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// byteRange returns the bytes from, from+1, …, from+n-1.
+func byteRange(from byte, n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = from + byte(i)
+	}
+
+	return b
+}
+
 // TestIntegrityKnownAnswer pins the construction of Transaction.Integrity
-// — HMAC-SHA256 keyed by HMAC-SHA256(binding secret,
-// "oidcclient/integrity/v1"), over the netstrings of every other field in
-// declaration order — against a value computed independently (Python
-// hmac). Changing it breaks the logins in flight during a rolling upgrade.
+// — HMAC-SHA256 keyed by HMAC-SHA256(server key, "oidcclient/integrity/v2"
+// ‖ binding secret), over the netstrings of every other field in
+// declaration order — against values computed independently (Python
+// hmac). Changing it fails the logins in flight during a rolling upgrade.
 func TestIntegrityKnownAnswer(t *testing.T) {
 	t.Parallel()
 
-	secret := make([]byte, secretSize)
-	for i := range secret {
-		secret[i] = byte(i + 1)
-	}
+	secret := byteRange(1, secretSize)
+	serverKey := byteRange(0x40, MinTransactionKeySize)
 
 	created := time.Unix(1_800_000_000, 0).UTC()
 	tx := &Transaction{
@@ -41,12 +49,14 @@ func TestIntegrityKnownAnswer(t *testing.T) {
 		ExpiresAt:    created.Add(10 * time.Minute),
 	}
 
-	assert.Equal(t, "0a844561159c48e2c84945b9ecf665fe14468f21c87b6dc8a695cf56b9599299", integrityFor(secret, tx))
+	assert.Equal(t, "d2d062cf6729d3221a024c755a114a32f3a35b23f12b38e09357cf178ae52934", integrityFor(serverKey, secret, tx))
+	assert.Equal(t, "ed450b7be24c46bef974f064bbc9aa5e9b15db52ea57e22a0b068399dfec677a",
+		integrityFor(byteRange(0x60, MinTransactionKeySize), secret, tx), "another server key, another MAC")
 
 	tx.ACRValues, tx.AppState = tx.AppState, tx.ACRValues
-	assert.Equal(t, "7f374773acb8413151a4cc590cff1c15377d0b636460b79df81dbedaff6841ef", integrityFor(secret, tx))
+	assert.Equal(t, "745d4a2df21eb698212cf6db6658ce0398839a3dbff679b224598a1a2ef2baae", integrityFor(serverKey, secret, tx))
 
 	tx.Integrity = "ignored"
-	assert.Equal(t, "7f374773acb8413151a4cc590cff1c15377d0b636460b79df81dbedaff6841ef", integrityFor(secret, tx),
+	assert.Equal(t, "745d4a2df21eb698212cf6db6658ce0398839a3dbff679b224598a1a2ef2baae", integrityFor(serverKey, secret, tx),
 		"the MAC never covers itself")
 }

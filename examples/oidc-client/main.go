@@ -26,6 +26,15 @@
 // the mix-up defense (RFC 9700 §4.4.2.2). An empty client secret makes a
 // public client; OIDC_{ID}_RESPONSE_MODE=form_post needs https (BASE_URL).
 //
+// Pending logins are protected by a server-held transaction key
+// (oidcclient.Config.TransactionKeys): OIDC_TRANSACTION_KEYS, hex-encoded
+// keys of at least 32 bytes separated by commas — the first protects new
+// logins, all are accepted, which is how a key is rotated (generate one with
+// openssl rand -hex 32). Every instance serving callbacks needs the same
+// keys, like a session key. Without the variable the demo draws a random
+// key at startup: logins in progress then fail on a restart and cannot
+// span instances.
+//
 // Plain http on localhost is for development only: it drops the Secure
 // attribute of the cookies (oidcclient.Config.InsecureCookies and
 // session.WithSecure(false)). Serve https in production.
@@ -34,6 +43,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"html"
 	"log"
@@ -69,6 +79,9 @@ type config struct {
 	// Outbound is the policy of the requests to the providers; the zero
 	// value reaches public https destinations only.
 	Outbound outbound.Policy
+	// TransactionKeys protect the pending logins
+	// (oidcclient.Config.TransactionKeys): secret, shared by every instance.
+	TransactionKeys [][]byte
 }
 
 func envOr(name, fallback string) string {
@@ -80,8 +93,15 @@ func envOr(name, fallback string) string {
 }
 
 // loadConfig reads the configuration from the environment.
-func loadConfig() config {
+func loadConfig() (config, error) {
 	cfg := config{BaseURL: envOr("BASE_URL", "http://localhost:8083")}
+
+	keys, err := transactionKeys(os.Getenv("OIDC_TRANSACTION_KEYS"))
+	if err != nil {
+		return config{}, err
+	}
+
+	cfg.TransactionKeys = keys
 
 	for id := range strings.SplitSeq(envOr("OIDC_CONNECTIONS", "default"), ",") {
 		id = strings.TrimSpace(id)
@@ -95,7 +115,35 @@ func loadConfig() config {
 		})
 	}
 
-	return cfg
+	return cfg, nil
+}
+
+// transactionKeys decodes OIDC_TRANSACTION_KEYS: hex-encoded keys separated
+// by commas. Unset, it draws one random key — for a single development
+// instance only: the logins in progress do not survive a restart.
+func transactionKeys(raw string) ([][]byte, error) {
+	if strings.TrimSpace(raw) == "" {
+		key := make([]byte, oidcclient.MinTransactionKeySize)
+		_, _ = rand.Read(key) // crypto/rand.Read never fails
+
+		log.Print("oidc-client: OIDC_TRANSACTION_KEYS is not set: using a random per-process transaction key " +
+			"(logins in progress fail on a restart and cannot span instances)")
+
+		return [][]byte{key}, nil
+	}
+
+	var keys [][]byte
+
+	for part := range strings.SplitSeq(raw, ",") {
+		key, err := hex.DecodeString(strings.TrimSpace(part))
+		if err != nil {
+			return nil, fmt.Errorf("OIDC_TRANSACTION_KEYS: a key is not hex-encoded: %w", err)
+		}
+
+		keys = append(keys, key)
+	}
+
+	return keys, nil
 }
 
 // principal is the local account a session belongs to.
@@ -194,6 +242,7 @@ func newServer(ctx context.Context, cfg config) (http.Handler, error) {
 			Scopes:          []string{"openid", "profile", "email"},
 			ResponseMode:    oidcclient.ResponseMode(c.ResponseMode),
 			Store:           store,
+			TransactionKeys: cfg.TransactionKeys,
 			Outbound:        cfg.Outbound,
 			InsecureCookies: insecure,
 		})
@@ -331,7 +380,10 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("oidc-client: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	handler, err := newServer(ctx, cfg) // discovers every provider

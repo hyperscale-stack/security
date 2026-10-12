@@ -273,10 +273,11 @@ StartLogin / Begin                          HandleCallback / Complete
   discovery; the metadata issuer must equal the configured one.
 - **Browser binding** — `Begin` draws a 256-bit binding secret that the
   user agent keeps (an HttpOnly `__Host-` cookie with the net/http helpers);
-  the nonce, the PKCE verifier and the key of the transaction's integrity
-  MAC are HMACs of it, and the store keeps only a hash of it and of the
-  state. Reading the store gives nothing that completes a login; altering a
-  transaction fails it.
+  the nonce and the PKCE verifier are HMACs of it, the key of the
+  transaction's integrity MAC an HMAC of it under a server-held
+  transaction key (`Config.TransactionKeys`), and the store keeps only a
+  hash of it and of the state. Reading the store gives nothing that
+  completes a login; altering a transaction fails it, whoever runs it.
 - **`TransactionStore`** — `Save` never overwrites, `Consume` removes a
   transaction atomically in a pinned decision order (unknown, expired,
   binding mismatch — which keeps it). In-memory, SQL and Redis

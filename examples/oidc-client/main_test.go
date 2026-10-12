@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -25,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	oidcclient "github.com/hyperscale-stack/security/oidc/client"
 	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -239,7 +241,8 @@ func TestOIDCClientExample(t *testing.T) {
 			{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: "acme-secret"},
 			{ID: "globex", Issuer: globex.issuer(), ClientID: "rp-globex", ClientSecret: "globex-secret"},
 		},
-		Outbound: outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
+		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
+		TransactionKeys: [][]byte{[]byte("an example transaction key of 32+ bytes")},
 	})
 	require.NoError(t, err)
 
@@ -363,10 +366,42 @@ func TestLoadConfig(t *testing.T) {
 	t.Setenv("OIDC_GLOBEX_CLIENT_ID", "rp-public")
 	t.Setenv("OIDC_GLOBEX_RESPONSE_MODE", "form_post")
 
-	cfg := loadConfig()
+	t.Setenv("OIDC_TRANSACTION_KEYS", "")
+
+	cfg, err := loadConfig()
+	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:8083", cfg.BaseURL)
 	assert.Equal(t, []connectionConfig{
 		{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"},
 		{ID: "globex", Issuer: "https://globex.example.com", ClientID: "rp-public", ResponseMode: "form_post"},
 	}, cfg.Connections)
+	require.Len(t, cfg.TransactionKeys, 1, "a random development key when none is configured")
+	assert.Len(t, cfg.TransactionKeys[0], 32)
+
+	other, err := loadConfig()
+	require.NoError(t, err)
+	assert.NotEqual(t, cfg.TransactionKeys, other.TransactionKeys, "drawn at random")
+
+	k1, k2 := strings.Repeat("ab", 32), strings.Repeat("cd", 48)
+	t.Setenv("OIDC_TRANSACTION_KEYS", k1+", "+k2)
+
+	cfg, err = loadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, cfg.TransactionKeys)
+
+	t.Setenv("OIDC_TRANSACTION_KEYS", k1+",not-hex")
+
+	_, err = loadConfig()
+	require.ErrorContains(t, err, "OIDC_TRANSACTION_KEYS")
+}
+
+func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
+	t.Parallel()
+
+	_, err := newServer(t.Context(), config{
+		BaseURL:         "http://localhost:8083",
+		Connections:     []connectionConfig{{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"}},
+		TransactionKeys: [][]byte{[]byte("too short")},
+	})
+	require.ErrorIs(t, err, oidcclient.ErrInvalidConfig)
 }

@@ -173,13 +173,13 @@ PKCE. Not supported, and refused where a provider could select them:
   `Complete` with the public URL. Forwarded headers (`X-Forwarded-Host`,
   RFC 7239) are never read: only the application knows which proxy to
   trust.
-- **Transaction stores** — the integrity MAC of a transaction is keyed by
-  its binding secret, which the user agent of the login holds: an attacker
-  with write access to the store can still relax the `max_age` and
-  `acr_values` checks of logins it runs itself (a server-held key would
-  close this; not implemented). Protect the store's integrity when relying
-  on step-up authentication. `oidc/client/storage/memory` keeps transactions
-  in the process: use the SQL or Redis store when several instances serve
+- **Transaction stores** — the store is trusted for availability and single
+  consumption: its integrity is not needed (the transaction MAC is keyed by
+  the binding secret and a server-held transaction key the store never
+  sees), but a store that loses or resurrects transactions fails or replays
+  logins. Removing a transaction key before `TransactionTTL` has elapsed
+  fails the logins it protected. `oidc/client/storage/memory` keeps
+  transactions in the process: use the SQL or Redis store when several instances serve
   callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
   package documentation), and its PostgreSQL and MySQL guarantees are not
