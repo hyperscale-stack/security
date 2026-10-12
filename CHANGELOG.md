@@ -262,7 +262,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`TestDependencyPolicy`).
 - **Example** `examples/oidc-client`: sign-in through several connections
   with distinct callback routes, account linking on (connection, issuer,
-  subject), and a local session.
+  subject), and a local session. `OIDC_DEV_ALLOW_LOOPBACK=1` (development
+  only) lets it reach a provider on the loopback interface over plain http
+  — `examples/oidc-provider`, which it runs against out of the box (#86).
 
 - **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
   takes an `oauth2.Extension` — the contract an OpenID Provider (the
@@ -375,7 +377,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   code replay and refresh-token reuse revoking the tokens.
 - **Example** `examples/oidc-provider`: a runnable OpenID Provider with its
   own login and consent pages (CSRF tokens, anti-framing headers),
-  cookie sessions, `prompt` handling and offline access.
+  cookie sessions, `prompt` handling and offline access. Its issuer,
+  listen address and clients' redirect URI come from
+  `OIDC_PROVIDER_ISSUER`, `OIDC_PROVIDER_ADDR` and
+  `OIDC_PROVIDER_REDIRECT_URI`; the default redirect URI is the callback of
+  the `demo` connection of `examples/oidc-client` (#86).
 
 ### Changed
 

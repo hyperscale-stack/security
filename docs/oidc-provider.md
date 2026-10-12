@@ -18,7 +18,9 @@ The provider owns the protocol; the application owns the end-user:
 | serves UserInfo, Discovery and the JWK Set                                             | issuers (`oauth2.IssuerResolver`), static clients (`oauth2.ClientStore`)    |
 
 `examples/oidc-provider` is a complete, runnable demo: login and consent
-pages with CSRF tokens, sessions, `prompt` handling, offline access.
+pages with CSRF tokens, sessions, `prompt` handling, offline access. It
+runs together with the relying party of `examples/oidc-client` (see its
+package documentation).
 
 ## Conformance status
 

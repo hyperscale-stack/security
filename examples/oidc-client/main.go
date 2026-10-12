@@ -37,20 +37,27 @@
 //
 // Plain http on localhost is for development only: it drops the Secure
 // attribute of the cookies (oidcclient.Config.InsecureCookies and
-// session.WithSecure(false)). Serve https in production.
+// session.WithSecure(false)). Serve https in production. Likewise,
+// OIDC_DEV_ALLOW_LOOPBACK=1 lets the demo reach a provider on the loopback
+// interface, over plain http — examples/oidc-provider, see its package
+// documentation for running both: by default the requests to the providers
+// reach public https destinations only.
 package main
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +110,17 @@ func loadConfig() (config, error) {
 
 	cfg.TransactionKeys = keys
 
+	if raw := os.Getenv("OIDC_DEV_ALLOW_LOOPBACK"); raw != "" {
+		allow, err := strconv.ParseBool(raw)
+		if err != nil {
+			return config{}, fmt.Errorf("OIDC_DEV_ALLOW_LOOPBACK: %w", err)
+		}
+
+		if allow {
+			cfg.Outbound = devLoopbackPolicy()
+		}
+	}
+
 	for id := range strings.SplitSeq(envOr("OIDC_CONNECTIONS", "default"), ",") {
 		id = strings.TrimSpace(id)
 		prefix := "OIDC_" + strings.ToUpper(id) + "_"
@@ -116,6 +134,41 @@ func loadConfig() (config, error) {
 	}
 
 	return cfg, nil
+}
+
+// schemeHTTP is plain http: development on the loopback interface only.
+const schemeHTTP = "http"
+
+// errHTTPBeyondLoopback refuses plain http to a host off the loopback
+// interface.
+var errHTTPBeyondLoopback = errors.New("plain http is allowed to the loopback interface only")
+
+// devLoopbackPolicy is the outbound policy of OIDC_DEV_ALLOW_LOOPBACK, for
+// development only: the loopback interface becomes reachable, over https
+// or plain http; any other destination stays public and https-only.
+func devLoopbackPolicy() outbound.Policy {
+	return outbound.Policy{
+		AllowHTTP:       true,
+		AllowedPrefixes: outbound.LoopbackPrefixes(),
+		CheckURL: func(_ context.Context, u *url.URL) error {
+			if u.Scheme == schemeHTTP && !loopbackHost(u.Hostname()) {
+				return errHTTPBeyondLoopback
+			}
+
+			return nil
+		},
+	}
+}
+
+// loopbackHost reports whether host is localhost or a loopback IP address.
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	addr, err := netip.ParseAddr(host)
+
+	return err == nil && addr.IsLoopback()
 }
 
 // transactionKeys decodes OIDC_TRANSACTION_KEYS: hex-encoded keys separated
@@ -205,7 +258,7 @@ func newServer(ctx context.Context, cfg config) (http.Handler, error) {
 		return nil, fmt.Errorf("BASE_URL: %w", err)
 	}
 
-	insecure := base.Scheme == "http" // local development only
+	insecure := base.Scheme == schemeHTTP // local development only
 
 	key := make([]byte, 32)
 	_, _ = rand.Read(key) // crypto/rand.Read never fails

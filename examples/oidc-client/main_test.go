@@ -405,3 +405,73 @@ func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
 	})
 	require.ErrorIs(t, err, oidcclient.ErrInvalidConfig)
 }
+
+// TestDevLoopbackPolicy: OIDC_DEV_ALLOW_LOOPBACK=1 lets the demo reach a
+// provider on the loopback interface over plain http — and nothing more:
+// plain http elsewhere stays refused. Unset or false, the default policy
+// (public https only) applies; another value is a configuration error.
+func TestDevLoopbackPolicy(t *testing.T) {
+	t.Setenv("OIDC_CONNECTIONS", "")
+	t.Setenv("OIDC_TRANSACTION_KEYS", strings.Repeat("ab", 32))
+
+	for _, off := range []string{"", "0", "false"} {
+		t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", off)
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.False(t, cfg.Outbound.AllowHTTP, off)
+		assert.Empty(t, cfg.Outbound.AllowedPrefixes, off)
+	}
+
+	t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", "maybe")
+
+	_, err := loadConfig()
+	require.ErrorContains(t, err, "OIDC_DEV_ALLOW_LOOPBACK")
+
+	t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", "1")
+
+	cfg, err := loadConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.Outbound.AllowHTTP)
+	assert.Equal(t, outbound.LoopbackPrefixes(), cfg.Outbound.AllowedPrefixes)
+
+	for target, allowed := range map[string]bool{
+		"http://localhost:8083/.well-known/openid-configuration": true,
+		"http://127.0.0.1:8083/.well-known/openid-configuration": true,
+		"http://[::1]:8083/.well-known/openid-configuration":     true,
+		"http://op.example.com/.well-known/openid-configuration": false,
+		"https://op.example.com/":                                true,
+	} {
+		u, err := url.Parse(target)
+		require.NoError(t, err)
+
+		err = cfg.Outbound.CheckURL(t.Context(), u)
+		if allowed {
+			require.NoError(t, err, target)
+		} else {
+			require.ErrorIs(t, err, errHTTPBeyondLoopback, target)
+		}
+	}
+
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	t.Cleanup(provider.Close)
+
+	for name, policy := range map[string]outbound.Policy{"dev": cfg.Outbound, "default": {}} {
+		client, err := outbound.NewClient(policy)
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, provider.URL, nil)
+		require.NoError(t, err)
+
+		resp, err := client.Do(req)
+		if name == "default" {
+			require.Error(t, err, "the default policy refuses http and loopback")
+
+			continue
+		}
+
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+}
