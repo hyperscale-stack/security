@@ -30,7 +30,7 @@ replace github.com/hyperscale-stack/security/oidc/provider => ../oidc/provider
 replace github.com/hyperscale-stack/security/saml/sp => ../saml/sp
 
 require (
-	connectrpc.com/connect v1.20.0
+	connectrpc.com/connect v1.21.0
 	connectrpc.com/grpchealth v1.5.0
 	github.com/beevik/etree v1.8.1
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
