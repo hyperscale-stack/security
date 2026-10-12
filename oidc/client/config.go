@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -367,13 +368,38 @@ func (c Config) LogValue() slog.Value {
 	)
 }
 
+// MarshalJSON implements json.Marshaler like String: the identifying
+// fields, the client secret redacted and the transaction keys counted.
+// Without it, encoding/json would write the secret and the keys of a
+// Config that held no func.
+func (c Config) MarshalJSON() ([]byte, error) {
+	clientSecret := ""
+	if c.ClientSecret != "" {
+		clientSecret = redactedMark
+	}
+
+	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
+		ConnectionID    string
+		Issuer          string
+		ClientID        string
+		ClientSecret    string
+		AuthMethod      AuthMethod
+		RedirectURL     string
+		ResponseMode    ResponseMode
+		TransactionKeys int
+	}{
+		c.ConnectionID, c.Issuer, c.ClientID, clientSecret, c.AuthMethod, c.RedirectURL, c.ResponseMode,
+		len(c.TransactionKeys),
+	})
+}
+
 // redacted renders a secret as REDACTED, or as "" when it is empty.
 func redacted(secret string) string {
 	if secret == "" {
 		return `""`
 	}
 
-	return "REDACTED"
+	return redactedMark
 }
 
 // validateIssuer checks an issuer identifier (OpenID Connect Core §2:

@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// redactedMark replaces a secret in the renderings and encodings of the
+// types that hold one.
+const redactedMark = "REDACTED"
+
 // redactedValue is a type that holds a secret and prints without it.
 type redactedValue interface {
 	fmt.Stringer
@@ -43,6 +47,10 @@ func (cb Callback) Format(f fmt.State, verb rune) { formatRedacted(f, verb, cb) 
 
 // Format implements fmt.Formatter like String, for every verb.
 func (t Tokens) Format(f fmt.State, verb rune) { formatRedacted(f, verb, t) }
+
+// Format implements fmt.Formatter like String, for every verb: without it,
+// %s and %q print the claims.
+func (u UserInfo) Format(f fmt.State, verb rune) { formatRedacted(f, verb, u) }
 
 // String implements fmt.Stringer with the identifiers of the login: its
 // tokens are redacted and its claims left out.

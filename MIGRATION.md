@@ -881,3 +881,38 @@ To migrate:
    server is no longer used.
 3. A provider whose `jwks_uri` redirects to another origin (a CDN, say) must
    publish the final URL as its `jwks_uri`; there is no opt-out.
+
+### `oidc/client`: `AuthRequest`, `Callback` and `Config` encode without their secrets
+
+`fmt` and `log/slog` already printed these types redacted, but
+`encoding/json` wrote every exported field: the binding secret of an
+`AuthRequest`, the binding secret, authorization code and state of a
+`Callback`. `slog`'s JSON handler calls `LogValue` for attribute values only
+and encodes a value nested in another one with `encoding/json`, so a login
+logged inside a struct revealed them. They now implement `json.Marshaler`,
+like `Config`:
+
+| `json.Marshal` of | Before | After |
+| --- | --- | --- |
+| `AuthRequest` | `{"URL":…,"State":…,"Binding":"<secret>","ExpiresAt":…}` | `{"URL":…,"State":…,"ExpiresAt":…,"Binding":"REDACTED"}` |
+| `Callback` | `{"Mode":…,"URL":{…"RawQuery":"code=…&state=…"},"Params":{…},"Binding":"<secret>"}` | `{"Mode":…,"URL":"<URL without query>","Params":<count>,"Binding":"REDACTED"}` |
+| `Config` | an error (`json: unsupported type: func…`) | `{"ConnectionID":…,"Issuer":…,"ClientID":…,"ClientSecret":"REDACTED","AuthMethod":…,"RedirectURL":…,"ResponseMode":…,"TransactionKeys":<count>}` |
+| a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written |
+| `Identity`, `Tokens` | tokens and claims | unchanged, deliberately: JSON is how applications persist them |
+| `UserInfo` | its claims | unchanged; `fmt` now prints its subject only |
+| `*Client` | `{}` | unchanged |
+
+To migrate:
+
+1. Nothing for code that does not encode these types with `encoding/json`.
+2. Code that persisted an `AuthRequest` as JSON (a server-side login state)
+   must store `AuthRequest.Binding` explicitly, where a secret belongs (an
+   HttpOnly cookie, a server-side session): read back from the new JSON, it
+   is `REDACTED` and the callback fails with `ErrBindingMismatch`.
+3. A struct that embeds `AuthRequest` or `Callback` and is encoded with
+   `encoding/json` now encodes as the embedded value alone: name the field
+   (`Login oidcclient.AuthRequest`) instead of embedding it.
+4. Other reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML)
+   still write the binding secret: do not use them on these types.
+5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
+   in another logged value, `slog`'s JSON handler writes their tokens.

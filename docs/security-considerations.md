@@ -865,8 +865,11 @@ are attacker-influenced.
   endpoint of the connection that issued it, and returns claims only when
   their `sub` is the identity's. Every `fmt` verb and `slog` redact
   secrets (`%p` of a non-pointer value excepted: fmt prints the fields
-  before any method), but `json.Marshal` of an `Identity` serializes its
-  tokens.
+  before any method), and so does `encoding/json` for `Config`,
+  `AuthRequest` and `Callback` — which matters to `slog`'s JSON handler,
+  which encodes a nested value with `encoding/json`. `Identity` and
+  `Tokens` deliberately encode their tokens (applications persist them),
+  `UserInfo` its claims: never log them nested in another value.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:

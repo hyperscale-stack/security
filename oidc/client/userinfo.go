@@ -19,7 +19,9 @@ import (
 const mediaJWT = "application/jwt"
 
 // UserInfo are UserInfo claims whose subject was verified to be the
-// identity's (OpenID Connect Core §5.3.2).
+// identity's (OpenID Connect Core §5.3.2). fmt and log/slog print the
+// subject only; encoding/json writes the claims, which are personal data,
+// not secrets.
 type UserInfo struct {
 	// Subject is the sub claim, equal to Identity.Subject.
 	Subject string
@@ -39,6 +41,15 @@ func (u *UserInfo) Decode(v any) error {
 
 	return nil
 }
+
+// String implements fmt.Stringer with the subject only: the claims —
+// personal data — are left out, as from LogValue.
+func (u UserInfo) String() string {
+	return fmt.Sprintf("oidcclient.UserInfo{Subject: %q}", u.Subject)
+}
+
+// GoString implements fmt.GoStringer like String.
+func (u UserInfo) GoString() string { return u.String() }
 
 // LogValue implements slog.LogValuer without the claims.
 func (u UserInfo) LogValue() slog.Value {

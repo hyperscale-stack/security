@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -22,7 +23,9 @@ const (
 )
 
 // Callback is an authorization response as the callback endpoint received
-// it.
+// it. It prints, logs and encodes to JSON without its secrets (String,
+// LogValue, MarshalJSON): the binding secret, the parameter values (code,
+// state) and the query of URL.
 type Callback struct {
 	// Mode is how Params arrived: ResponseModeQuery for the query string
 	// of a GET, ResponseModeFormPost for the form body of a POST.
@@ -55,7 +58,21 @@ func (cb Callback) GoString() string { return cb.String() }
 // LogValue implements slog.LogValuer like String.
 func (cb Callback) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("mode", string(cb.Mode)), slog.String("url", withoutQuery(cb.URL)),
-		slog.String("binding", "REDACTED"))
+		slog.String("binding", redactedMark))
+}
+
+// MarshalJSON implements json.Marshaler like String: the mode, the URL
+// without its query, the number of parameters, never their values nor the
+// binding secret — log/slog's JSON handler encodes a nested Callback with
+// encoding/json. A struct embedding Callback is promoted this method and
+// encodes as the Callback alone: name the field instead of embedding it.
+func (cb Callback) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
+		Mode    ResponseMode
+		URL     string
+		Params  int
+		Binding string
+	}{cb.Mode, withoutQuery(cb.URL), len(cb.Params), redactedMark})
 }
 
 // withoutQuery renders u without its query and fragment.

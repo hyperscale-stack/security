@@ -687,6 +687,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the issuer's for discovery, the `jwks_uri`'s for the keys; another hop
   fails with `outbound.ErrRedirectNotAllowed`. Token and UserInfo requests
   still never follow redirects, and the default policy follows none.
+- `encoding/json` wrote the binding secret of an `oidcclient.AuthRequest`
+  and the binding secret, authorization code and state of a `Callback` —
+  and so did `slog`'s JSON handler for one nested in another logged value,
+  `LogValue` applying to attribute values only. Both now encode without
+  them (`MarshalJSON`: the binding `REDACTED`, a callback's URL without its
+  query and its parameters counted), and so does `Config` (client secret
+  redacted, transaction keys counted), whose encoding used to fail on its
+  `func` fields only by accident. `UserInfo` printed its claims (personal
+  data) with `%s` and `%q`; it now prints and logs its subject only.
+  `Identity` and `Tokens` still encode their tokens, deliberately, so that
+  applications can persist them (see MIGRATION.md).
 - `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
   or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
   `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key

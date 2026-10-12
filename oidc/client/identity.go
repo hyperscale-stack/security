@@ -26,7 +26,11 @@ import (
 // person has a different Subject for every client.
 //
 // Tokens holds credentials. fmt and log/slog print Identity without them,
-// but json.Marshal(Identity) serializes them.
+// but encoding/json writes them — deliberately, so that an application can
+// persist an Identity (the golang.org/x/oauth2 convention for tokens). An
+// Identity nested in a value that log/slog's JSON handler logs (a struct
+// field, a map) is therefore written in full, tokens and claims included:
+// log it as an attribute of its own, which LogValue redacts.
 type Identity struct {
 	// ConnectionID is the Config.ConnectionID of the Client.
 	ConnectionID string
@@ -76,8 +80,10 @@ func (id *Identity) DecodeClaims(v any) error {
 	return nil
 }
 
-// Tokens are the tokens of a login. They are credentials: String, GoString
-// and LogValue redact them, but json.Marshal does not.
+// Tokens are the tokens of a login. They are credentials: String, GoString,
+// Format and LogValue redact them, but encoding/json writes them —
+// deliberately, for persistence — including when log/slog's JSON handler
+// encodes Tokens nested in another value.
 type Tokens struct {
 	// AccessToken authorizes calls to the provider's APIs and UserInfo.
 	AccessToken string

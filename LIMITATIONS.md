@@ -320,6 +320,14 @@ PKCE. Not supported, and refused where a provider could select them:
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
   Log these types directly or through exported fields, with `%v`.
+- **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
+  only: a value nested in another one (a struct field, a map) is encoded
+  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`
+  encode without their secrets, but `oidcclient.Identity` and `Tokens`
+  encode their tokens — deliberately, so that applications can persist them
+  — and `UserInfo` its claims: log these as attributes of their own. Other
+  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
+  every exported field, an `AuthRequest`'s binding secret included.
 - **Credentials and tokens in flight are not redacted yet** — `basic` and
   `bearer` authentications print the password (before authentication) and
   the bearer token they carry, and the `oauth2` records

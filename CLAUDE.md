@@ -320,7 +320,10 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
   before the ID Token is fully validated; every JSON document goes through
   the strict decoder (`strictjson.go`); errors and every `fmt`/`slog`
   rendering (`format.go`: `Format`, `String`, `GoString`, `LogValue`) never
-  carry secrets.
+  carry secrets, nor does `encoding/json` of `Config`, `AuthRequest`,
+  `Callback` (`MarshalJSON`) — except `Identity`/`Tokens`, JSON-serialisable
+  by design (persistence), which slog's JSON handler writes in full when
+  nested in another value.
 - Every `TransactionStore` (`storage/memory`, `store/sql`, `store/redis`)
   must pass `oidc/client/storetest.RunConformance`.
 - Tests use the scriptable fake provider of `fakeop_test.go`;

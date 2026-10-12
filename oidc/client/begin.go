@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -65,7 +66,8 @@ type AuthOptions struct {
 	AppState string
 }
 
-// AuthRequest is a started login.
+// AuthRequest is a started login. It prints, logs and encodes to JSON
+// without its binding secret (String, LogValue, MarshalJSON).
 type AuthRequest struct {
 	// URL is the authorization request: send the user agent to it.
 	URL string
@@ -74,7 +76,10 @@ type AuthRequest struct {
 	// Binding is the browser-binding secret of the login. The user agent
 	// that started the login MUST keep it — the net/http helpers put it in
 	// an HttpOnly __Host- cookie — and present it at the callback. It never
-	// leaves the Relying Party and the user agent: never log it.
+	// leaves the Relying Party and the user agent: never log it. fmt,
+	// log/slog and encoding/json leave it out, but other reflection-based
+	// encoders (encoding/gob, encoding/xml, YAML) write it: persist it
+	// explicitly, only where a secret belongs.
 	Binding string
 	// ExpiresAt is when the login expires.
 	ExpiresAt time.Time
@@ -90,7 +95,22 @@ func (r AuthRequest) GoString() string { return r.String() }
 
 // LogValue implements slog.LogValuer without the binding secret.
 func (r AuthRequest) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", "REDACTED"))
+	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
+}
+
+// MarshalJSON implements json.Marshaler without the binding secret, which
+// the default encoding would write — and log/slog's JSON handler encodes
+// a value nested in another one (a struct field, a map) with
+// encoding/json, LogValue applying to attribute values only. A struct
+// embedding AuthRequest is promoted this method and encodes as the
+// AuthRequest alone: name the field instead of embedding it.
+func (r AuthRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct { //nolint:wrapcheck // strings only: never fails
+		URL       string
+		State     string
+		ExpiresAt string
+		Binding   string
+	}{r.URL, r.State, r.ExpiresAt.Format(time.RFC3339Nano), redactedMark})
 }
 
 // Begin starts a login: it stores a Transaction and returns the
