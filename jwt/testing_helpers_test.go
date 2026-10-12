@@ -19,7 +19,7 @@ import (
 
 // genRSA generates a fresh 2048-bit RSA key pair for tests. RSA is the
 // slowest of the supported algorithms; use sparingly.
-func genRSA(t *testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey) {
+func genRSA(t testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 	t.Helper()
 
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -30,7 +30,7 @@ func genRSA(t *testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 }
 
 // genECDSA generates a fresh P-256 key pair.
-func genECDSA(t *testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey) {
+func genECDSA(t testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 	t.Helper()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -41,7 +41,7 @@ func genECDSA(t *testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 }
 
 // genEd25519 generates a fresh Ed25519 key pair.
-func genEd25519(t *testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey) {
+func genEd25519(t testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

@@ -7,6 +7,7 @@ package jwtsec
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -21,13 +22,13 @@ func validateStandardClaims(c *config, claims *StandardClaims) error {
 	now := c.clock.Now()
 
 	if c.issuer != "" && claims.Issuer != c.issuer {
-		return fmt.Errorf("%w: have %q, want %q", ErrInvalidIssuer, claims.Issuer, c.issuer)
+		return fmt.Errorf("%w: have %q, want %q", ErrInvalidIssuer, clip(claims.Issuer), c.issuer)
 	}
 
 	if len(c.audiences) > 0 {
 		if !audienceMatches(c.audiences, claims.Audience) {
-			return fmt.Errorf("%w: have %v, want one of %v",
-				ErrInvalidAudience, []string(claims.Audience), c.audiences)
+			return fmt.Errorf("%w: have %q, want one of %q",
+				ErrInvalidAudience, clip(strings.Join(claims.Audience, " ")), c.audiences)
 		}
 	}
 

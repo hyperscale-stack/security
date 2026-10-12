@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Verifier parses and validates a compact-serialized JWT, returning the
@@ -48,64 +49,51 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "jwtsec.Verifier.Verify")
 	defer span.End()
 
-	parsed, err := jose.ParseSignedCompact(token, joseAllowed(v.cfg.allowed))
+	std, err := v.verify(ctx, span, token, claimsOut)
 	if err != nil {
-		span.SetStatus(codes.Error, "parse")
+		// Every error is bounded: token-supplied values are clipped.
 		span.RecordError(err)
-
-		return nil, fmt.Errorf("%w: %w", ErrMalformedToken, err)
-	}
-
-	if len(parsed.Signatures) != 1 {
-		err := fmt.Errorf("%w: expected exactly one signature", ErrMalformedToken)
-
-		span.SetStatus(codes.Error, "multi-sig")
 
 		return nil, err
 	}
 
-	header := parsed.Signatures[0].Header
+	span.SetAttributes(attribute.String("jwt.iss", clip(std.Issuer)))
+
+	return std, nil
+}
+
+// verify runs the checks of Verify in order — parse, type, key, signature,
+// claims — setting the span's attributes and its status on failure.
+func (v *verifier) verify(ctx context.Context, span trace.Span, token string, claimsOut any) (*StandardClaims, error) {
+	parsed, header, err := parseCompact(token, v.cfg.allowed, v.cfg.maxTokenSize)
+	if err != nil {
+		if alg, ok := AsAlgorithmName(err); ok {
+			span.SetAttributes(attribute.String("jwt.alg", alg))
+		}
+
+		span.SetStatus(codes.Error, "parse")
+
+		return nil, err
+	}
+
 	alg := Algorithm(header.Algorithm)
 	span.SetAttributes(
 		attribute.String("jwt.alg", string(alg)),
-		attribute.String("jwt.kid", header.KeyID),
+		attribute.String("jwt.kid", clip(header.KeyID)),
 	)
-
-	if !v.cfg.algorithmAllowed(alg) {
-		// errAlgorithmDisallowed wraps ErrAlgorithmNotAllowed and keeps the
-		// offending alg reachable via AsAlgorithmName for telemetry.
-		err := &errAlgorithmDisallowed{alg: string(alg)}
-
-		span.SetStatus(codes.Error, "alg")
-		span.RecordError(err)
-
-		return nil, err
-	}
 
 	// An explicitly typed token is refused under another type (RFC 8725
 	// §3.11, RFC 9068 §4); the header is protected by the signature checked
 	// below, so a forged type cannot pass either.
-	if v.cfg.typ != "" {
-		typ, _ := header.ExtraHeaders[jose.HeaderType].(string)
-		if !typeMatches(v.cfg.typ, typ) {
-			span.SetStatus(codes.Error, "typ")
-			span.RecordError(ErrInvalidType)
+	if v.cfg.typ != "" && !typeMatches(v.cfg.typ, headerType(header)) {
+		span.SetStatus(codes.Error, "typ")
 
-			return nil, ErrInvalidType
-		}
+		return nil, ErrInvalidType
 	}
 
-	keys, err := v.provider.KeySet(ctx)
+	pub, err := v.key(ctx, header.KeyID)
 	if err != nil {
-		return nil, fmt.Errorf("jwt: load JWKS: %w", err)
-	}
-
-	pub, ok := keys.ByKeyID(header.KeyID)
-	if !ok {
-		err := fmt.Errorf("%w: unknown kid %q", ErrInvalidSignature, header.KeyID)
-
 		span.SetStatus(codes.Error, "kid")
-		span.RecordError(err)
 
 		return nil, err
 	}
@@ -113,11 +101,31 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 	payload, err := parsed.Verify(pub.toJOSE())
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
-		span.RecordError(err)
 
-		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clippedError{err: err})
 	}
 
+	return v.claims(span, payload, claimsOut)
+}
+
+// key returns the verification key the token's kid designates.
+func (v *verifier) key(ctx context.Context, kid string) (PublicKey, error) {
+	keys, err := v.provider.KeySet(ctx)
+	if err != nil {
+		return PublicKey{}, fmt.Errorf("jwt: load JWKS: %w", err)
+	}
+
+	pub, ok := keys.ByKeyID(kid)
+	if !ok {
+		return PublicKey{}, fmt.Errorf("%w: unknown kid %q", ErrInvalidSignature, clip(kid))
+	}
+
+	return pub, nil
+}
+
+// claims decodes the verified payload — strictly, see decodeClaims — runs
+// the standard claim checks and decodes claimsOut.
+func (v *verifier) claims(span trace.Span, payload []byte, claimsOut any) (*StandardClaims, error) {
 	std, err := decodeClaims(payload)
 	if err != nil {
 		span.SetStatus(codes.Error, "unmarshal")
@@ -126,8 +134,7 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 	}
 
 	if err := validateStandardClaims(v.cfg, std); err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+		span.SetStatus(codes.Error, "claims")
 
 		return nil, err
 	}
@@ -142,9 +149,15 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 		}
 	}
 
-	span.SetAttributes(attribute.String("jwt.iss", std.Issuer))
-
 	return std, nil
+}
+
+// headerType returns the "typ" header parameter, "" when absent or not a
+// string.
+func headerType(h jose.Header) string {
+	typ, _ := h.ExtraHeaders[jose.HeaderType].(string)
+
+	return typ
 }
 
 // joseAllowed converts the typed allowlist to go-jose's SignatureAlgorithm

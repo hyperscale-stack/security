@@ -25,6 +25,7 @@ type config struct {
 	skew          time.Duration
 	clock         security.Clock
 	requireExpiry bool
+	maxTokenSize  int
 }
 
 // defaults seeds the verifier configuration with the strict baseline:
@@ -35,6 +36,7 @@ func defaults() *config {
 		allowed:       slices.Clone(defaultAllowedAlgorithms),
 		clock:         security.DefaultClock,
 		requireExpiry: true,
+		maxTokenSize:  DefaultMaxTokenSize,
 	}
 }
 
@@ -76,6 +78,32 @@ func WithClockSkew(d time.Duration) Option {
 	}
 }
 
+// DefaultMaxTokenSize is the largest token, in bytes of its compact
+// serialization, a [Verifier] and [VerifySignature] accept by default:
+// 16 KiB. A token over the bound is refused with [ErrMalformedToken]
+// before anything is decoded — without it, a header of small members made
+// go-jose allocate about 100 times the token's size before any check.
+//
+// The bound holds the largest tokens in common use — an Entra ID token
+// carrying its maximum of 200 group IDs is 11–13 KB, Keycloak tokens with
+// many roles 6–12 KB — and matches the single-header limit of common front
+// ends (Node.js, AWS ALB, IIS: 16 KiB; nginx and Apache: 8 KiB by
+// default). Lower it with [WithMaxTokenSize]; cap the transports too
+// (http.Server.MaxHeaderBytes, grpc.MaxHeaderListSize).
+const DefaultMaxTokenSize = 16 << 10
+
+// WithMaxTokenSize sets the largest token, in bytes of its compact
+// serialization, a [Verifier] parses (default [DefaultMaxTokenSize]); a
+// longer token is refused with [ErrMalformedToken] before any decoding.
+// Signers ignore it. n < 1 panics.
+func WithMaxTokenSize(n int) Option {
+	if n < 1 {
+		panic("jwtsec.WithMaxTokenSize: the bound must be positive")
+	}
+
+	return func(c *config) { c.maxTokenSize = n }
+}
+
 // WithClock injects a clock for deterministic tests. Defaults to
 // [security.DefaultClock] (wall clock).
 func WithClock(c security.Clock) Option {
@@ -95,11 +123,6 @@ func WithClock(c security.Clock) Option {
 // assertions are an expected, deliberate part of the design.
 func WithOptionalExpiry() Option {
 	return func(c *config) { c.requireExpiry = false }
-}
-
-// algorithmAllowed reports whether alg appears in the allowlist.
-func (c *config) algorithmAllowed(alg Algorithm) bool {
-	return slices.Contains(c.allowed, alg)
 }
 
 // The "typ" header values this package knows (RFC 7515 §4.1.9).

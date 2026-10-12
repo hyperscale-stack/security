@@ -128,7 +128,7 @@ func TestMarshalJWKSOfNoKeysIsAnEmptySet(t *testing.T) {
 func TestPrivateKeyValidateAndPublic(t *testing.T) {
 	t.Parallel()
 
-	for _, gen := range []func(*testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey){genRSA, genECDSA, genEd25519} {
+	for _, gen := range []func(testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey){genRSA, genECDSA, genEd25519} {
 		priv, pub := gen(t)
 
 		require.NoError(t, priv.Validate())

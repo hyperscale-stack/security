@@ -23,7 +23,7 @@ func TestSignVerifyRoundTripPerAlgorithm(t *testing.T) {
 
 	cases := []struct {
 		name string
-		gen  func(*testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey)
+		gen  func(testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey)
 	}{
 		{"RS256", genRSA},
 		{"ES256", genECDSA},
@@ -76,11 +76,13 @@ func TestVerifyRejectsAlgNone(t *testing.T) {
 	none := "eyJhbGciOiJub25lIn0.e30."
 
 	_, err := verifier.Verify(context.Background(), none, nil)
-	require.Error(t, err)
-	// go-jose's ParseSignedCompact already refuses unknown algs, so any error
-	// from this path is a valid defense (either ErrAlgorithmNotAllowed or
-	// ErrMalformedToken). The key fact is that it is REFUSED.
-	assert.NotEqual(t, "", err.Error())
+	// "none" is never in an allow-list (RFC 8725 §3.1): refused before key
+	// resolution, as an algorithm the verifier does not allow.
+	require.ErrorIs(t, err, jwtsec.ErrAlgorithmNotAllowed)
+
+	alg, ok := jwtsec.AsAlgorithmName(err)
+	require.True(t, ok)
+	assert.Equal(t, "none", alg)
 }
 
 func TestVerifyRejectsKeyConfusion(t *testing.T) {

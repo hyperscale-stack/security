@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	jose "github.com/go-jose/go-jose/v4"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -34,17 +33,21 @@ type VerifiedToken struct {
 // of keys whose KeyID equals the token's "kid" — a token without kid only
 // against a single-key set — and whose Algorithm, which every key MUST
 // set, equals the token's alg (RFC 8725 §3.1: one key, one algorithm).
+// The token is parsed under the rules of [Verifier]: at most
+// [DefaultMaxTokenSize] bytes of canonical base64url, a strict JSON header
+// without the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797).
 //
-// IT VALIDATES NO CLAIM — not exp, nbf, iat, iss nor aud. It is the
-// building block of a caller that validates the claims itself because it
-// needs a rule [Verifier] does not apply, e.g. an OpenID Provider accepting
-// its own expired ID Token as an id_token_hint (OIDC Core §3.1.2.2). Use
-// [Verifier] everywhere else.
+// IT VALIDATES NO CLAIM — not exp, nbf, iat, iss nor aud — and returns the
+// payload undecoded. It is the building block of a caller that validates
+// the claims itself because it needs a rule [Verifier] does not apply, e.g.
+// an OpenID Provider accepting its own expired ID Token as an
+// id_token_hint (OIDC Core §3.1.2.2). Use [Verifier] everywhere else.
 //
-// Failures wrap [ErrMalformedToken] (not a compact JWS, more than one
-// signature, an algorithm outside allowed) or [ErrInvalidSignature] (no
-// single key for the kid, a key bound to another algorithm, a bad
-// signature); the token never appears in them.
+// Failures wrap [ErrMalformedToken] (oversized, not a canonical compact
+// JWS, a refused header), [ErrAlgorithmNotAllowed] (an algorithm outside
+// allowed) or [ErrInvalidSignature] (no single key for the kid, a key
+// bound to another algorithm, a bad signature); token-supplied values in
+// them are clipped.
 func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowed ...Algorithm) (*VerifiedToken, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "jwtsec.VerifySignature")
 	defer span.End()
@@ -54,22 +57,16 @@ func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowe
 	}
 
 	// The allowlist is enforced here, before any key is consulted.
-	parsed, err := jose.ParseSignedCompact(token, joseAllowed(allowed))
+	parsed, header, err := parseCompact(token, allowed, DefaultMaxTokenSize)
 	if err != nil {
 		span.SetStatus(codes.Error, "parse")
+		span.RecordError(err)
 
-		return nil, fmt.Errorf("%w: %w", ErrMalformedToken, err)
+		return nil, err
 	}
 
-	if len(parsed.Signatures) != 1 {
-		span.SetStatus(codes.Error, "multi-sig")
-
-		return nil, fmt.Errorf("%w: expected exactly one signature", ErrMalformedToken)
-	}
-
-	header := parsed.Signatures[0].Header
 	alg := Algorithm(header.Algorithm)
-	span.SetAttributes(attribute.String("jwt.alg", string(alg)), attribute.String("jwt.kid", header.KeyID))
+	span.SetAttributes(attribute.String("jwt.alg", string(alg)), attribute.String("jwt.kid", clip(header.KeyID)))
 
 	key, err := signatureKey(keys, header.KeyID, alg)
 	if err != nil {
@@ -82,12 +79,10 @@ func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowe
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
 
-		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clippedError{err: err})
 	}
 
-	typ, _ := header.ExtraHeaders[jose.HeaderType].(string)
-
-	return &VerifiedToken{Algorithm: alg, KeyID: header.KeyID, Type: typ, Payload: payload}, nil
+	return &VerifiedToken{Algorithm: alg, KeyID: header.KeyID, Type: headerType(header), Payload: payload}, nil
 }
 
 // signatureKey returns the one key of keys that may verify a signature by

@@ -71,8 +71,9 @@ func newJWTError(msg string, parent error) error {
 }
 
 // errAlgorithmDisallowed augments [ErrAlgorithmNotAllowed] with the offending
-// algorithm so server-side telemetry can pinpoint suspicious clients without
-// surfacing the value to the response.
+// algorithm — clipped, it comes from the token — so server-side telemetry
+// can pinpoint suspicious clients without surfacing the value to the
+// response.
 type errAlgorithmDisallowed struct {
 	alg string
 }
@@ -84,8 +85,10 @@ func (e *errAlgorithmDisallowed) Error() string {
 // Unwrap exposes the sentinel chain for errors.Is.
 func (e *errAlgorithmDisallowed) Unwrap() error { return ErrAlgorithmNotAllowed }
 
-// AsAlgorithmName extracts the disallowed algorithm name from err, returning
-// (name, true) when err is a [errAlgorithmDisallowed] instance.
+// AsAlgorithmName extracts the disallowed algorithm name — at most 128
+// bytes of it — from an [ErrAlgorithmNotAllowed] error returned by a
+// [Verifier] or [VerifySignature]: (name, true), or ("", false) for any
+// other error.
 func AsAlgorithmName(err error) (string, bool) {
 	var e *errAlgorithmDisallowed
 	if errors.As(err, &e) {
