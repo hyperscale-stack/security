@@ -25,6 +25,8 @@ replace github.com/hyperscale-stack/security/oauth2 => ../oauth2
 
 replace github.com/hyperscale-stack/security/oidc/client => ../oidc/client
 
+replace github.com/hyperscale-stack/security/oidc/provider => ../oidc/provider
+
 require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/grpchealth v1.5.0
@@ -37,6 +39,7 @@ require (
 	github.com/hyperscale-stack/security/jwt v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/password v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/session v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.12.1
