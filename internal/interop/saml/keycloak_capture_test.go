@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"html"
 	"io"
@@ -62,6 +63,12 @@ func (r *recordingStore) SaveTransaction(ctx context.Context, rec *samlsp.Transa
 	return r.Store.SaveTransaction(ctx, rec)
 }
 
+// regenerateKeycloakFixture asks TestCaptureKeycloakFixture to rewrite the
+// pinned fixture: the environment of the opt-in Keycloak suite alone never
+// does.
+var regenerateKeycloakFixture = flag.Bool("keycloak.fixture", false,
+	"regenerate "+keycloakDir+" from a disposable Keycloak 26.0.7 (TestCaptureKeycloakFixture)")
+
 // TestCaptureKeycloakFixture regenerates the pinned fixture from a
 // disposable Keycloak 26.0.7: it deletes and recreates the realm "samlsp",
 // with a user and a SAML client, so never point it at a shared instance.
@@ -72,14 +79,17 @@ func (r *recordingStore) SaveTransaction(ctx context.Context, rec *samlsp.Transa
 //	  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
 //	  -e KC_BOOTSTRAP_ADMIN_PASSWORD="$SAMLSP_KEYCLOAK_ADMIN_PASSWORD" \
 //	  quay.io/keycloak/keycloak:26.0.7 start-dev
-//	SAMLSP_KEYCLOAK_URL=http://127.0.0.1:18080 go test -run TestCaptureKeycloakFixture ./...
+//	SAMLSP_KEYCLOAK_URL=http://127.0.0.1:18080 go test -run TestCaptureKeycloakFixture . -args -keycloak.fixture
 //
 // SAMLSP_KEYCLOAK_ADMIN_USER defaults to "admin". The test is skipped
-// unless SAMLSP_KEYCLOAK_URL and SAMLSP_KEYCLOAK_ADMIN_PASSWORD are set.
+// unless -keycloak.fixture, SAMLSP_KEYCLOAK_URL and
+// SAMLSP_KEYCLOAK_ADMIN_PASSWORD are all given, and it refuses any other
+// Keycloak version than the fixture's.
 func TestCaptureKeycloakFixture(t *testing.T) {
 	base, password := os.Getenv("SAMLSP_KEYCLOAK_URL"), os.Getenv("SAMLSP_KEYCLOAK_ADMIN_PASSWORD")
-	if base == "" || password == "" {
-		t.Skip("set SAMLSP_KEYCLOAK_URL and SAMLSP_KEYCLOAK_ADMIN_PASSWORD (a disposable Keycloak 26.0.7) to regenerate " + keycloakDir)
+	if !*regenerateKeycloakFixture || base == "" || password == "" {
+		t.Skip("regenerate " + keycloakDir + " with -args -keycloak.fixture, SAMLSP_KEYCLOAK_URL and " +
+			"SAMLSP_KEYCLOAK_ADMIN_PASSWORD (a disposable Keycloak 26.0.7)")
 	}
 
 	user := os.Getenv("SAMLSP_KEYCLOAK_ADMIN_USER")
@@ -92,6 +102,7 @@ func TestCaptureKeycloakFixture(t *testing.T) {
 	spKey := newKey(t, "sp")
 
 	kc := keycloakAdmin{t: t, base: base, token: keycloakToken(t, base, user, password)}
+	require.Equal(t, "26.0.7", kc.serverVersion(), "the fixture is Keycloak 26.0.7's")
 	kc.deleteRealm()
 	kc.post("/admin/realms", map[string]any{"realm": keycloakRealm, "enabled": true})
 	kc.post("/admin/realms/"+keycloakRealm+"/users", map[string]any{
@@ -232,6 +243,32 @@ func keycloakToken(t *testing.T, base, user, password string) string {
 }
 
 // deleteRealm removes the fixture realm left by a previous capture.
+// serverVersion returns the version of the Keycloak server.
+func (k keycloakAdmin) serverVersion() string {
+	k.t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, k.base+"/admin/serverinfo", nil)
+	require.NoError(k.t, err)
+	req.Header.Set("Authorization", "Bearer "+k.token)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(k.t, err)
+
+	defer resp.Body.Close()
+
+	require.Equal(k.t, http.StatusOK, resp.StatusCode)
+
+	var info struct {
+		SystemInfo struct {
+			Version string `json:"version"`
+		} `json:"systemInfo"`
+	}
+
+	require.NoError(k.t, json.NewDecoder(resp.Body).Decode(&info))
+
+	return info.SystemInfo.Version
+}
+
 func (k keycloakAdmin) deleteRealm() {
 	k.t.Helper()
 

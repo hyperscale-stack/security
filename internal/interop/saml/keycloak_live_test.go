@@ -738,7 +738,7 @@ func TestKeycloakLive(t *testing.T) {
 	// K5: SP signing-key rollover with a client that pins one certificate.
 	t.Run("K5 SP key rollover", func(t *testing.T) {
 		s, id := newCase("sp-rollover", nil)
-		next := newKey(t, "sp-next")
+		previous, next := s.key, newKey(t, "sp-next")
 
 		// Switch the SP before the IdP learnt the new key: refused.
 		s.key = next
@@ -750,6 +750,13 @@ func TestKeycloakLive(t *testing.T) {
 		// Runbook step: re-import the SP metadata (one certificate per client).
 		k.setClientAttributes(id, map[string]string{"saml.signing.certificate": base64.StdEncoding.EncodeToString(next.cert.Raw)})
 		accepted(t, s, s.login(newKCBrowser(t), samlsp.LoginOptions{}, "alice", password))
+
+		// Retired: a request signed by the previous key is refused now.
+		s.key = previous
+		s.rebuild(descriptor)
+
+		a = s.login(newKCBrowser(t), samlsp.LoginOptions{}, "alice", password)
+		require.Empty(t, a.response, "the client no longer accepts the previous key")
 	})
 
 	// K4: IdP key rollover, last (it changes the realm keys).
