@@ -189,6 +189,16 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Mix-up defense (RFC 9207)** — every authorization response, code and
+  implicit, success and redirected error, carries `iss`, the issuer the
+  request resolved to, and the RFC 8414 metadata sets
+  `authorization_response_iss_parameter_supported`: a client talking to
+  several authorization servers — or to several realms of one
+  `IssuerResolver` — compares it with the issuer it sent the request to and
+  aborts on a mismatch (RFC 9700 §4.4.2.1), the defense RFC 9700 prefers to
+  distinct redirect URIs. The issuer must therefore be a stable https URL
+  without query or fragment (RFC 9207 §2). The one response without `iss` is
+  the `server_error` answering an `IssuerResolver` failure.
 
 ### Protocol extensions
 

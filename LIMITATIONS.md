@@ -44,12 +44,11 @@ than future refactor phases.
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`) are added with the
   statements MIGRATION.md lists, through your migration tool.
-- **No RFC 9207 `iss` authorization-response parameter** — `/authorize` does
-  not tell the client which issuer answered. A client talking to several
-  authorization servers (or to several realms of one `IssuerResolver`) must
-  defend against mix-up attacks with a distinct redirect URI per issuer
-  (RFC 9700 §4.4.2.2) until it is added; the issuer is already resolved
-  before any redirected answer, so adding it is local to `/authorize`.
+- **RFC 9207 `iss` needs a resolved issuer** — every authorization response
+  names its issuer, except the `server_error` redirected when the
+  `IssuerResolver` itself fails: no issuer is known then, so it travels
+  without `iss`, and an RFC 9207 client rejects it (RFC 9207 §2.4) — the
+  outcome a failed request has anyway.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
 - **Duplicated request parameters are not refused** — `/authorize` and

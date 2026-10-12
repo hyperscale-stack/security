@@ -166,7 +166,8 @@ The `oauth2` module is an authorization server, not just a provider:
   `none` (public clients, PKCE required). `/introspect` answers
   confidential clients only.
 - **Endpoints** — `/authorize` (RFC 6749 §3.1, `authorization_code` and the
-  opt-in legacy `implicit` flow, with an application-supplied consent hook),
+  opt-in legacy `implicit` flow, with an application-supplied consent hook;
+  every authorization response names its issuer, RFC 9207),
   `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662, with an optional
   `IntrospectionPolicy` deciding which tokens each caller may see),
   `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path

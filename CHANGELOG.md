@@ -230,6 +230,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
   `offline_access` (OIDC Core §11). Opt-in; rotation is unaffected.
+- **OAuth2 issuer identification in authorization responses** (RFC 9207):
+  every authorization response — code and implicit, success and redirected
+  error — carries `iss`, the issuer the request resolved to, and the RFC 8414
+  metadata publishes `authorization_response_iss_parameter_supported: true`,
+  so a client talking to several authorization servers or realms can detect
+  a mix-up (RFC 9700 §4.4.2.1). The `server_error` answering an
+  `IssuerResolver` failure is the one response without it.
 
 ### Changed
 

@@ -50,6 +50,8 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 		ResponseModesSupported:            []string{responseModeQuery},
 		TokenEndpointAuthMethodsSupported: s.clientAuthMethods(),
 		CodeChallengeMethodsSupported:     s.pkceMethods(),
+		// Every authorization response names the issuer (RFC 9207 §2.3, §3).
+		AuthorizationResponseISSParameterSupported: true,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -75,6 +77,9 @@ type metadataDoc struct {
 	ResponseModesSupported            []string `json:"response_modes_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported,omitempty"`
+	// AuthorizationResponseISSParameterSupported is RFC 9207 §3; omitted, it
+	// would mean false.
+	AuthorizationResponseISSParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
 }
 
 func (s *Server) grantTypes() []string {

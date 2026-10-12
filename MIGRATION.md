@@ -566,3 +566,29 @@ To migrate:
 2. A client that sends a secret holding `%` or `+` unencoded now fails:
    encode it, switch it to `client_secret_post`, or rotate it to unreserved
    characters.
+
+### `oauth2`: authorization responses name the issuer (RFC 9207, #84)
+
+A client talking to several authorization servers — or to several realms of
+one `IssuerResolver` — could not tell which one answered its authorization
+request, the precondition of a mix-up attack (RFC 9700 §4.4). Every
+authorization response now carries `iss`, the issuer identifier the request
+resolved to (RFC 9207 §2), and the RFC 8414 metadata publishes
+`authorization_response_iss_parameter_supported: true` (§3):
+
+| Response                                              | Before                  | After                                   |
+| ----------------------------------------------------- | ----------------------- | --------------------------------------- |
+| code (query)                                          | `code`, `state`         | `code`, `state`, `iss`                  |
+| implicit (fragment)                                   | token members, `state`  | token members, `state`, `iss`           |
+| redirected error (consent, extension, core checks)    | `error`…, `state`       | `error`…, `state`, `iss`                |
+| `server_error` when the `IssuerResolver` fails        | `error`, `state`        | unchanged (no issuer is known)          |
+| bare 400 answers (client, redirect URI, response mode) | not redirected          | unchanged                               |
+
+To migrate:
+
+1. Nothing for clients that do not know RFC 9207: RFC 6749 §4.1.2 requires
+   them to ignore unrecognized response parameters.
+2. RFC 9207 clients compare `iss` with the issuer of the authorization server
+   they sent the request to (simple string comparison) and reject a mismatch
+   — the issuer the `IssuerResolver` returns must be exactly the one the
+   metadata publishes, an https URL without query or fragment.
