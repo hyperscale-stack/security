@@ -553,6 +553,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   delete the application's own `oidc-session`. Only names of the binding
   cookie's shape (the prefix and 16 lowercase hex digits) are now counted
   and expired.
+- The `oidc/client` documentation said that, the JSON being parsed
+  strictly, an application decoding claims itself never reads another
+  member than the one validated. Only two names differing by case are
+  refused: a lone `EMAIL_VERIFIED` is another claim, kept as OpenID Connect
+  Core §2 requires, which `encoding/json` reads as `email_verified`. The
+  documentation now says so and points to `DecodeClaims` /
+  `UserInfo.Decode` and the `Identity` fields.
 - The v0 authentication `Handler` no longer iterates past a successful
   authentication and no longer swallows provider errors — the `Manager`
   short-circuits on first success and aggregates failures.

@@ -193,7 +193,14 @@ unknown `kid`; generic HTTP caches honor the JWK Set's `Cache-Control`);
 
 The verified identity is the issuer and subject pair (Core §5.7): link
 accounts on (connection, issuer, subject), never on email, phone or
-username. To link an identity to an account already signed in, start the
+username. Read the validated values from the `Identity` fields and decode
+other claims with `Identity.DecodeClaims` (`UserInfo.Decode` for UserInfo)
+or into a map, never with `encoding/json` into a struct: it matches names
+case-insensitively, so a lone `EMAIL_VERIFIED` — another claim, which a
+provider letting users name attributes may release — would read as
+`email_verified` (`TestLoneCaseVariantClaimIsIgnored`).
+
+To link an identity to an account already signed in, start the
 login with a CSRF-protected POST after a recent re-authentication, put a
 random value bound to the local session in `AuthOptions.AppState`, and link
 only when `Identity.AppState` matches it.

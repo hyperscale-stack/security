@@ -25,15 +25,18 @@ const mediaJWT = "application/jwt"
 type UserInfo struct {
 	// Subject is the sub claim, equal to Identity.Subject.
 	Subject string
-	// Claims is the UserInfo response: one JSON object without duplicate
-	// or case-variant member names at any level. Like ID Token claims other
-	// than iss and sub, its values are not stable identifiers (Core §5.7):
-	// never link accounts on them.
+	// Claims is the UserInfo response: one JSON object in which no two
+	// member names, at any level, are equal or differ only by case. Decode
+	// it with Decode, or into a map — encoding/json would read a lone
+	// EMAIL_VERIFIED as email_verified (see Identity.Claims). Like ID Token
+	// claims other than iss and sub, its values are not stable identifiers
+	// (Core §5.7): never link accounts on them.
 	Claims json.RawMessage
 }
 
 // Decode decodes the claims into v, matching member names exactly (Core
-// §14).
+// §14): use it rather than encoding/json, which matches names
+// case-insensitively.
 func (u *UserInfo) Decode(v any) error {
 	if err := josejson.Unmarshal(u.Claims, v); err != nil {
 		return fmt.Errorf("oidcclient: decode UserInfo claims: %w", err)

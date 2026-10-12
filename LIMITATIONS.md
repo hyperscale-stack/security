@@ -167,7 +167,11 @@ PKCE. Not supported, and refused where a provider could select them:
   returned to the application, which redeems them itself), no logout
   (RP-initiated, front- or back-channel), no dynamic client registration.
 - **Claims** — aggregated and distributed claims are left unresolved in
-  `Identity.Claims`.
+  `Identity.Claims`. A lone member named like a known claim but for case
+  (`EMAIL_VERIFIED`) is kept, as OpenID Connect Core §2 requires for claims
+  not understood; only two names differing by case are refused. Decode
+  claims with `DecodeClaims` / `UserInfo.Decode`, not `encoding/json`
+  into a struct, which reads such a member as the known claim.
 - **Provider metadata** — discovery is required: no static metadata. The
   metadata issuer must equal the configured issuer byte for byte, so
   templated multi-tenant issuers (Microsoft Entra `common` /

@@ -818,10 +818,17 @@ are attacker-influenced.
   `aud` (further audiences only when trusted), `azp`, `exp`/`iat`/`nbf`
   within a bounded skew, `nonce`, `auth_time` against `max_age`, `acr`
   against the requested `acr_values`, and `at_hash` when present. Every
-  JSON document is decoded strictly: duplicate member names, names that
-  differ only by case, invalid UTF-8 and unpaired surrogates are refused,
-  so an application decoding claims itself never reads another member than
-  the one validated.
+  JSON document is decoded strictly: duplicate member names, two names
+  that differ only by case, invalid UTF-8 and unpaired surrogates are
+  refused, so no decoder can pick between two members. A lone member whose
+  name differs from a known claim only by case (`EMAIL_VERIFIED`) is
+  another claim, which OpenID Connect Core §2 and RFC 7519 §4 require
+  ignoring — yet `encoding/json`, matching struct fields
+  case-insensitively, reads it as `email_verified`. An honest provider
+  releasing attribute names its users choose can emit one. Decode claims with
+  `Identity.DecodeClaims` / `UserInfo.Decode` or into a map, and read the
+  validated values (`Subject`, `Audience`, `AuthTime`, `ACR`, `AMR`) from
+  the `Identity` fields, never again from `Claims`.
 - **Identity** — the verified identity is the issuer and subject pair
   (Core §5.7). Link accounts on (connection or tenant, issuer, subject);
   never on email, phone or username, which another subject or provider can

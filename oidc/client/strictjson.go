@@ -45,9 +45,12 @@ func decodeStrict(data []byte, v any) error {
 // §3.7) without unpaired surrogate escapes, nested at most maxJSONDepth
 // levels, in which no object — at any level — holds two member names that
 // are equal under Unicode simple case folding (strings.EqualFold), exact
-// duplicates included (RFC 7519 §4, RFC 7517 §5). A member name an
-// application decodes with encoding/json can therefore never resolve to
-// another member than the one the package validated.
+// duplicates included (RFC 7519 §4, RFC 7517 §5): encoding/json, which
+// matches struct fields case-insensitively, can never pick between two
+// members. A lone member whose name differs from a known one only by case
+// (EMAIL_VERIFIED) is another claim (OpenID Connect Core §14), which Core §2
+// and RFC 7519 §4 require ignoring: it is kept, and encoding/json would read
+// it as the known one — hence DecodeClaims and UserInfo.Decode.
 func validateJSON(data []byte) error {
 	if !utf8.Valid(data) {
 		return fmt.Errorf("%w: invalid UTF-8", errJSON)
