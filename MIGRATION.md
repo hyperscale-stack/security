@@ -1001,3 +1001,19 @@ To migrate:
    space.
 4. Nothing to do for stored codes and tokens: the server never refuses a
    scope it stored itself.
+
+### `oauth2`: a client gets only what it declares and what it asked for
+
+The authorization server granted more than a client declared or a request
+asked for. It now enforces a fail-closed client policy:
+
+| | Before | After |
+| --- | --- | --- |
+| `Consent.Scope` adding scopes to a request without `scope` | granted — even scopes outside the client's `ScopeValues` | `invalid_scope`, nothing issued: a consent only narrows the request (RFC 6749 §3.3) |
+| `Consent.Scope` made of spaces only | an empty grant | exactly what was requested, like an empty `Consent.Scope` |
+
+To migrate:
+
+1. A `ConsentFunc` that granted scopes to a request without `scope` — a
+   default scope of its own — has the client request that scope instead:
+   `Consent.Scope` can only narrow the request.

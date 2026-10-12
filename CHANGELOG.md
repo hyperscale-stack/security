@@ -955,3 +955,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   no request bounded them — tens of thousands of unique scope tokens in one
   `/authorize` URL cost seconds of CPU. Scope values are now parsed once,
   refused beyond 100 tokens or 4096 bytes, and compared with set lookups.
+- The OAuth2 consent step can no longer broaden a request without scope. A
+  non-empty `Consent.Scope` had to be a subset of the requested scope, but an
+  empty request admitted any scope — even scopes the client is not registered
+  for — so a `ConsentFunc` taking `Consent.Scope` from request-influenced
+  input (the checkboxes of a consent form) could grant `admin` to a client
+  allowed `read`. A consent now only narrows the request (RFC 6749 §3.3), and
+  a blank one (spaces only) grants exactly what was requested.

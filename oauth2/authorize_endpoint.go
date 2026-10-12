@@ -116,9 +116,12 @@ type Consent struct {
 	// empty or longer one fails the request with server_error, nothing
 	// issued.
 	Subject string
-	// Scope is the granted scope. Empty means "exactly what was requested";
-	// a non-empty value MUST be a subset of [AuthorizeRequest.Scope] — the
-	// consent step may narrow the grant but never broaden it.
+	// Scope is the granted scope. Empty — or SPs only — means "exactly what
+	// was requested"; otherwise its RFC 6749 §3.3 tokens (SP-separated, at
+	// most 100 and 4096 bytes) MUST be a subset of [AuthorizeRequest.Scope]:
+	// the consent step may narrow the grant but never broaden it — nothing
+	// can be added to a request without scope. Anything else fails the
+	// request with invalid_scope, nothing issued.
 	Scope string
 	// Refusal, on a decision that does not approve the request, is the
 	// error redirected to the client instead of access_denied — e.g.
@@ -867,21 +870,23 @@ func (s *Server) issueImplicitToken(
 	target.redirect(w, r, params)
 }
 
-// grantedScope resolves the scope to grant: the consent value when it
-// narrows the request — parsed like a request's (RFC 6749 §3.3) and
-// returned canonical — the request scope otherwise. Broadening is refused.
+// grantedScope resolves the scope an approval grants: the request's when
+// the consent names none — an empty or all-SP Consent.Scope — otherwise the
+// consent's tokens, parsed like a request's (RFC 6749 §3.3) and returned
+// canonical, each of which MUST be requested: an empty request admits none.
+// The request is a subset of the client's registration already, so a grant
+// never exceeds request ∩ registration.
 func grantedScope(ar *AuthorizeRequest, decision *Consent) (string, error) {
-	if decision.Scope == "" {
-		return ar.Scope, nil
-	}
-
 	tokens, err := scopes.Parse(decision.Scope)
 	if err != nil {
 		return "", err //nolint:wrapcheck // a scopes sentinel, the cause the ErrorHook gets
 	}
 
-	requested := strings.Fields(ar.Scope)
-	if len(requested) > 0 && !scopes.NewSet(requested).Admits(tokens) {
+	if len(tokens) == 0 {
+		return ar.Scope, nil
+	}
+
+	if !scopes.NewSet(strings.Fields(ar.Scope)).Admits(tokens) {
 		return "", errScopeNotAllowed
 	}
 
