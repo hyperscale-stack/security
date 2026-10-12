@@ -44,6 +44,14 @@ The verifier also validates `iss`, `aud`, `exp`, `nbf`, and `iat` with a
 configurable clock skew, and resolves keys by `kid` against a JWKS provider
 (static or cached-remote).
 
+- **Token confusion** (RFC 8725 §3.11–§3.12) — the OAuth2 access tokens
+  `NewOAuth2AccessTokenSigner` signs are typed `at+jwt` and carry a `jti`
+  (RFC 9068 §2.1, §2.2); OpenID Connect ID Tokens are typed `JWT`. A resource
+  server verifies with `WithType(TypeAccessToken)` — RFC 9068 §4 requires it
+  to refuse any other `typ` — so an ID Token signed by the same keys is not
+  accepted as an access token. The check is opt-in: verifiers of other JWTs
+  keep accepting any `typ`.
+
 ## OAuth2
 
 - **PKCE** — `authorization_code` requires PKCE under `Profile20BCP` and
@@ -332,8 +340,8 @@ signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
 until its `exp`, whatever happened to its family — including the tokens
 revoked after an authorization-code replay: deleting or flagging store
 records never invalidates a signature. The RFC 9068 payload the
-`jwtsec` signer emits carries no family or token identifier (`jti`), so it
-cannot be deny-listed today either. RFC 7009 §2.1 acknowledges such a
+`jwtsec` signer emits carries a token identifier (`jti`) but no family, and
+no deny-list is shipped. RFC 7009 §2.1 acknowledges such a
 propagation delay and asks implementations to minimize it; its §3 leaves
 immediate revocation of self-contained tokens to non-standardized backend
 interaction, and suggests short-lived access tokens instead. To bound the

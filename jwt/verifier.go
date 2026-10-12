@@ -83,6 +83,19 @@ func (v *verifier) Verify(ctx context.Context, token string, claimsOut any) (*St
 		return nil, err
 	}
 
+	// An explicitly typed token is refused under another type (RFC 8725
+	// §3.11, RFC 9068 §4); the header is protected by the signature checked
+	// below, so a forged type cannot pass either.
+	if v.cfg.typ != "" {
+		typ, _ := header.ExtraHeaders[jose.HeaderType].(string)
+		if !typeMatches(v.cfg.typ, typ) {
+			span.SetStatus(codes.Error, "typ")
+			span.RecordError(ErrInvalidType)
+
+			return nil, ErrInvalidType
+		}
+	}
+
 	keys, err := v.provider.KeySet(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("jwt: load JWKS: %w", err)

@@ -12,6 +12,9 @@
 //     (RSA, RSA-PSS, ECDSA, EdDSA); HMAC algorithms are accepted only on
 //     explicit opt-in via WithAllowedAlgorithms, to avoid key confusion.
 //   - Issuer and audience checks are opt-in via WithIssuer / WithAudience.
+//   - Explicit typing (RFC 8725 §3.11): signers write a "typ" header —
+//     "JWT" by default, "at+jwt" for the RFC 9068 access tokens of
+//     NewOAuth2AccessTokenSigner — and WithType makes a verifier require one.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

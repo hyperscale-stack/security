@@ -230,6 +230,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
   `offline_access` (OIDC Core §11). Opt-in; rotation is unaffected.
+- **JWT explicit typing** (`jwtsec`): `WithType` sets the `typ` header a
+  `Signer` writes (`TypeJWT` by default) and makes a `Verifier` require it,
+  compared as RFC 7515 §4.1.9 prescribes (case-insensitive, `application/`
+  implied) — `ErrInvalidType` otherwise; opt-in on verifiers.
 - **OAuth2 issuer identification in authorization responses** (RFC 9207):
   every authorization response — code and implicit, success and redirected
   error — carries `iss`, the issuer the request resolved to, and the RFC 8414
@@ -301,6 +305,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   [MIGRATION.md](MIGRATION.md) (an optional single-issuer backfill keeps users
   signed in); `store/redis` adds optional payload fields. Every instance must
   be upgraded at once.
+- **JWT access tokens follow RFC 9068 (breaking)**:
+  `jwtsec.NewOAuth2AccessTokenSigner` takes the `PrivateKey` and builds its own
+  signer, so every access token is typed `at+jwt` (RFC 9068 §2.1) — a resource
+  server verifying with `WithType(TypeAccessToken)` refuses an OpenID Connect
+  ID Token signed by the same keys — and carries a random 128-bit `jti`
+  (§2.2). It used to wrap any `Signer` and emit `typ: JWT` without `jti`. See
+  [MIGRATION.md](MIGRATION.md).
 - **OAuth2 `GrantResponse.ExtraParams` removed (breaking)**: it was never
   serialized. `GrantResponse.IDToken` is the typed member a token response
   may add (`id_token`).

@@ -592,3 +592,28 @@ To migrate:
    they sent the request to (simple string comparison) and reject a mismatch
    — the issuer the `IssuerResolver` returns must be exactly the one the
    metadata publishes, an https URL without query or fragment.
+
+### `jwt`: RFC 9068 access tokens are typed `at+jwt` and carry a `jti` (#84)
+
+`jwtsec.NewOAuth2AccessTokenSigner` claimed RFC 9068 but signed with
+`typ: JWT` and without `jti`, although RFC 9068 §2.1 requires `typ: at+jwt` —
+the explicit type that keeps an OpenID Connect ID Token from being accepted
+as an access token (RFC 9068 §4, RFC 8725 §3.11) — and §2.2 makes `jti`
+REQUIRED. It also wrapped any `Signer`, so nothing guaranteed the header.
+
+| Before | After |
+| ------ | ----- |
+| `NewOAuth2AccessTokenSigner(signer Signer)` | `NewOAuth2AccessTokenSigner(key PrivateKey)`: builds its own signer, typed `at+jwt`; panics on a key without `Algorithm` or `Key`, like `NewSigner` |
+| access tokens `typ: JWT`, no `jti` | `typ: at+jwt`, a random 128-bit base64url `jti` per token |
+| `NewSigner(key, opts...)` ignored every option | honours `WithType` (the `typ` it writes, `JWT` by default); still ignores verifier options |
+| no `typ` check | `WithType(t)` on a verifier requires `typ` ≡ `t` (RFC 7515 §4.1.9: case-insensitive, `application/` implied) — `ErrInvalidType` otherwise; opt-in |
+
+To migrate:
+
+1. Pass the `jwtsec.PrivateKey` to `NewOAuth2AccessTokenSigner` instead of a
+   `Signer` built from it. A custom `Signer` (e.g. KMS-backed) implements
+   `token.AccessTokenSigner` itself, typing its tokens `at+jwt` and adding a
+   `jti`.
+2. Resource servers verifying these access tokens add
+   `jwtsec.WithType(jwtsec.TypeAccessToken)` to their verifier (RFC 9068 §4).
+   A verifier that compared `typ` with `JWT` must accept `at+jwt` now.

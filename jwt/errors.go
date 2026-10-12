@@ -50,6 +50,11 @@ var (
 	// ErrMalformedToken signals that the input string is not a parseable
 	// JWS structure (wrong dot count, bad base64, ...).
 	ErrMalformedToken = newJWTError("malformed token", security.ErrInvalidCredentials)
+
+	// ErrInvalidType signals a token whose "typ" header is absent or not the
+	// type the verifier requires (see [WithType]) — e.g. an OpenID Connect
+	// ID Token presented as an RFC 9068 access token (RFC 9068 §4).
+	ErrInvalidType = newJWTError("invalid token type", security.ErrInvalidCredentials)
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via

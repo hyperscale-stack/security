@@ -22,6 +22,11 @@ type AuthorityResolver func(claims *StandardClaims) []string
 // [bearer.Authentication] whose principal is the JWT `sub` claim and whose
 // authorities are the values returned by the resolver.
 //
+// For RFC 9068 access tokens, build v with [WithType]([TypeAccessToken]),
+// [WithIssuer] and [WithAudience]: RFC 9068 §4 requires the resource server
+// to refuse any other typ — an OpenID Connect ID Token signed by the same
+// keys included.
+//
 // When resolver is nil, [DefaultAuthorityResolver] is used.
 func BearerVerifier(v Verifier, resolver AuthorityResolver) bearer.TokenVerifier {
 	if resolver == nil {
