@@ -58,9 +58,19 @@ func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
 		return nil, gateRejection(err)
 	}
 
+	return precheckTree(data, allowSHA1)
+}
+
+// precheckTree applies the structural rules to a document the lexical gate
+// accepted.
+func precheckTree(data []byte, allowSHA1 bool) (*rawResponse, error) {
 	doc := etree.NewDocument()
 	if err := doc.ReadFromBytes(data); err != nil {
 		return nil, reject(ErrMalformedResponse, "not well-formed XML", nil)
+	}
+
+	if err := checkTokens(doc); err != nil {
+		return nil, err
 	}
 
 	root := doc.Root()
@@ -108,6 +118,52 @@ func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
 	}
 
 	return raw, nil
+}
+
+// errDirective is the detail of checkTokens.
+const errDirective = "DTD or processing instruction in the parsed document"
+
+// checkTokens refuses, in the parsed tree, a DTD or any other directive and
+// any processing instruction but a leading XML declaration (XML 1.0 §2.8).
+// The lexical gate refuses them first: this second check, on another
+// parser's view of the document, keeps the refusal from resting on one
+// tokenizer — etree, gosaml2, goxmldsig and the round-trip validator all
+// ignore a DTD (audit SAML-I10).
+func checkTokens(doc *etree.Document) error {
+	for i, tok := range doc.Child {
+		if pi, ok := tok.(*etree.ProcInst); ok && i == 0 && pi.Target == prefixXML {
+			continue
+		}
+
+		if isDirective(tok) {
+			return reject(ErrMalformedResponse, errDirective, nil)
+		}
+	}
+
+	if doc.Root() == nil {
+		return nil // refused by checkEnvelope
+	}
+
+	return walk(doc.Root(), func(el *etree.Element) error {
+		for _, tok := range el.Child {
+			if isDirective(tok) {
+				return reject(ErrMalformedResponse, errDirective, nil)
+			}
+		}
+
+		return nil
+	})
+}
+
+// isDirective reports a directive (DTD, entity declaration) or a
+// processing instruction.
+func isDirective(tok etree.Token) bool {
+	switch tok.(type) {
+	case *etree.Directive, *etree.ProcInst:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkEnvelope checks the root, the identifiers, the absence of encrypted
