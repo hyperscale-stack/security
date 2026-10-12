@@ -6,6 +6,7 @@
 // end to end — the relying party of oidc/client against the provider of
 // oidc/provider — and runs the client's transaction stores on real
 // PostgreSQL, MySQL and Redis servers (opt-in). The module holds tests
-// only; it depends on no third-party OpenID Connect or JOSE library, so
-// that its evidence is not mediated by one.
+// only; they import no third-party OpenID Connect, OAuth 2.0 or JOSE
+// library, so that their evidence is not mediated by one — the client's
+// own go-jose is part of the code under test.
 package oidcstack_test

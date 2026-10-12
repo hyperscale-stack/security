@@ -258,7 +258,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   callback and code replay, refresh-token reuse, key rotation and
   withdrawal windows, concurrent callbacks across replicas (on real
   PostgreSQL, MySQL and Redis too), and provider, store or network
-  failures. No third-party OpenID Connect or JOSE library is involved
+  failures. The tests import no third-party OpenID Connect, OAuth 2.0 or
+  JOSE library — the client's own go-jose is part of the code under test
   (`TestDependencyPolicy`).
 - **OpenID Foundation conformance-suite harness**
   (`internal/interop/oidcstack/conformance`, `make conformance`, opt-in and

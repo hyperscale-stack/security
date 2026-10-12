@@ -88,7 +88,9 @@ internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
                            + oidc/provider + oauth2 + jwt
                            + opt-in drivers github.com/jackc/pgx/v5,
                            github.com/go-sql-driver/mysql, go-redis;
-                           no third-party OpenID Connect or JOSE library
+                           imports no third-party OpenID Connect, OAuth 2.0
+                           or JOSE library (go-jose comes with oidc/client,
+                           under test)
 internal/interop/saml/  ← (tests only) saml/sp + saml/sp/store/{sql,redis}
                            + github.com/crewjam/saml + github.com/beevik/etree
                            + modernc.org/sqlite + github.com/jackc/pgx/v5

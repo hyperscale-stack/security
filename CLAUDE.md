@@ -303,8 +303,9 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
   its live discovery check with `OIDC_LIVE_DISCOVERY=1` (Internet, no
   credentials).
 - `internal/interop/oidcstack` runs the client against the provider over
-  HTTP — flows, attacks, failures, concurrency — with no third-party OIDC or
-  JOSE library (`TestDependencyPolicy`); its real-backend store runs are
+  HTTP — flows, attacks, failures, concurrency — importing no third-party
+  OIDC, OAuth 2.0 or JOSE library (`TestDependencyPolicy`; the client's own
+  go-jose is part of the code under test); its real-backend store runs are
   opt-in (`OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`,
   `OIDCCLIENT_REDIS_ADDR`, `compose.yaml`). `TestDocumentedTestsExist`
   fails when `docs/oidc-{conformance,client,provider}.md` cite a test that

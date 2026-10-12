@@ -113,10 +113,10 @@ each that a module exercises.
 | OpenID Foundation conformance suite              | 5.3.2 (`11999aa`)             | OP and RP | `internal/interop/oidcstack/conformance`  | see [the runs](#openid-foundation-conformance-suite)                                                                            |
 | Tales and Chrome                                 | v0.1.0-rc.23 (`d50dd8b`), Chrome 154 | browser, HTTP client | `e2e/oidc`                  | see [the end-to-end suites](#end-to-end-suites)                                                                                 |
 
-None of them is a dependency of a production module (`stack:
-TestDependencyPolicy` keeps go-oidc, zitadel, x/oauth2 and go-jose out of
-`internal/interop/oidcstack` too, so that its evidence is not mediated by
-one).
+None of them is a dependency of a production module, and the tests of
+`internal/interop/oidcstack` import no third-party OpenID Connect, OAuth 2.0
+or JOSE library (`stack: TestDependencyPolicy`), so that its evidence is not
+mediated by one; the client's own go-jose is part of the code under test.
 
 ## Attacks and failures
 
@@ -198,17 +198,26 @@ prebuilt images (`OIDF_SUITE_DIR`, see the script's header).
   headless `Interaction`: no page; the end-user authenticates whenever
   `Request.Check` requires it and consents to what is requested (offline
   access with `prompt=consent` only). Plans run through the suite's
-  `scripts/run-test-plan.py` (httpx 0.28.1, pyparsing 3.2.3) with
+  `scripts/run-test-plan.py` (httpx 0.28.1, pyparsing 3.2.3 and their
+  dependencies, pinned by hash in `testdata/requirements.txt`) with
   `testdata/op-config.json.tmpl` and the expectation files.
 - RP side: `TestConformanceRPPlans` drives the suite's REST API and, for
   every module, logs in with `oidc/client` (discovery, authorization
   request, callback, UserInfo; two logins with the client's clock moved
   11 s for the key-rotation module), records the suite's result and the
   client's outcome, and compares both with `testdata/rp-expected.json`.
+  Without the clock move, the second login fails closed
+  (`ErrUnknownSigningKey`): Core §10.1.1 lets a provider sign with a new key
+  at once, and the client refetches the key set on an unknown `kid`, but at
+  most once per 10 s (see
+  [oidc-client.md](oidc-client.md#provider-keys-and-rotation)). CI covers
+  that variant with `TestAbruptRotationWithinTheRefreshInterval` rather
+  than the suite.
 
 ### Results
 
-Run of 2026-10-12 (repository `6cd1b6d` with the harness, macOS 26 arm64,
+Run of 2026-10-12 (branch of #86 with the harness, reproduced by its review
+at `ce1c2fa`; macOS 26 arm64,
 Docker 29.8.1, Go 1.26.5): every module ran to completion as expected.
 
 OP plans:
@@ -301,8 +310,11 @@ Before tagging `oidc/provider` or `oidc/client`:
 1. CI is green (`make sync build test lint`): every test cited above.
 2. `make e2e-oidc` passes: 21 scenarios.
 3. `make conformance` exits 0: every OP module ends as listed above (one
-   expected warning, one expected skip, four reviews whose images show the
-   expected page), every RP module as `testdata/rp-expected.json` pins.
+   expected warning, one expected skip, four reviews whose images are those
+   described under Results — the suite's callback page for
+   `oidcc-prompt-login` and `oidcc-max-age-1`, which have no login page to
+   show, the provider's error page for the two `redirect_uri` modules),
+   every RP module as `testdata/rp-expected.json` pins.
 4. When the stores or the provider's key handling changed, the opt-in
    runs too: the real backends (`internal/interop/oidcstack/compose.yaml`),
    `OIDC_BROWSER_TESTS=1`, `OIDC_LIVE_DISCOVERY=1`.
@@ -313,4 +325,4 @@ outcome is a change to review like code: it carries its rationale.
 
 | Date       | Commit    | Suite          | `make e2e-oidc` | `make conformance` |
 | ---------- | --------- | -------------- | --------------- | ------------------ |
-| 2026-10-12 | `6cd1b6d` | 5.3.2 `11999aa` | 21/21 passed    | as expected        |
+| 2026-10-12 | `ce1c2fa` | 5.3.2 `11999aa` | 21/21 passed    | as expected        |
