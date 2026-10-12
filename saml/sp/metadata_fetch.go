@@ -6,11 +6,16 @@ package samlsp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,7 +57,10 @@ const (
 // FetchOptions configures [FetchIdentityProviderMetadata].
 type FetchOptions struct {
 	// EntityID, when set, pins the entity ID the document must describe;
-	// it also selects the entity of an aggregate.
+	// it also selects the entity of an aggregate. Without it, any entity
+	// served at the URL is imported: pin it whenever the result replaces
+	// keys already configured (a refresh); leave it empty only to discover
+	// a new IdP's entity ID, then pin that.
 	EntityID string
 
 	// Outbound is the network policy of the request. Its zero value is
@@ -78,9 +86,11 @@ type FetchOptions struct {
 // administrator's — never a value taken from a SAML message or a request.
 // The request is a GET, through an [outbound.NewClient] client enforcing
 // opts.Outbound, with no credentials and no cookies; only a 200 answer is
-// read. Fetching is the act of trust: it rests on TLS to the configured
-// host and on the pinned entity ID, an embedded signature being ignored as
-// for imported metadata.
+// read. A redirect, when opts.Outbound.MaxRedirects allows one, may not
+// leave the URL's origin (scheme, host and port), whatever the policy says.
+// Fetching is the act of trust: it rests on TLS to the configured origin
+// and, when opts.EntityID is set, on the pinned entity ID, an embedded
+// signature being ignored as for imported metadata.
 //
 // Errors: an unusable URL or options match [ErrInvalidConfig]; a refused
 // request (the outbound errors stay matchable), a network failure or
@@ -99,7 +109,9 @@ func FetchIdentityProviderMetadata(ctx context.Context, metadataURL string, opts
 		now = time.Now
 	}
 
-	return f.fetch(ctx, opts.EntityID, now)
+	idp, _, err := f.fetch(ctx, opts.EntityID, now)
+
+	return idp, err
 }
 
 // metadataFetcher downloads the metadata of one URL with one client.
@@ -110,7 +122,8 @@ type metadataFetcher struct {
 }
 
 func newMetadataFetcher(rawURL string, policy outbound.Policy, maxSize int64) (*metadataFetcher, error) {
-	if err := validateMetadataURL(rawURL, policy.AllowHTTP); err != nil {
+	u, err := validateMetadataURL(rawURL, policy.AllowHTTP)
+	if err != nil {
 		return nil, err
 	}
 
@@ -127,6 +140,7 @@ func newMetadataFetcher(rawURL string, policy outbound.Policy, maxSize int64) (*
 	}
 
 	policy.MaxResponseBytes = min(limit, maxSize) // NewClient copies AllowedPrefixes
+	policy.CheckURL = sameOrigin(u, policy.CheckURL)
 
 	client, err := outbound.NewClient(policy)
 	if err != nil {
@@ -137,35 +151,153 @@ func newMetadataFetcher(rawURL string, policy outbound.Policy, maxSize int64) (*
 }
 
 // validateMetadataURL requires an absolute https URL (http with AllowHTTP)
-// without credentials or fragment.
-func validateMetadataURL(raw string, allowHTTP bool) error {
+// without credentials or fragment, whose host and port outbound accepts.
+func validateMetadataURL(raw string, allowHTTP bool) (*url.URL, error) {
 	u, err := url.Parse(raw)
 
 	switch {
 	case err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "":
-		return fmt.Errorf("%w: the metadata URL must be an absolute URL", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: the metadata URL must be an absolute URL", ErrInvalidConfig)
 	case u.Scheme != schemeHTTPS && (u.Scheme != schemeHTTP || !allowHTTP):
-		return fmt.Errorf("%w: the metadata URL must be https", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: the metadata URL must be https", ErrInvalidConfig)
 	case u.User != nil:
-		return fmt.Errorf("%w: the metadata URL must not carry credentials", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: the metadata URL must not carry credentials", ErrInvalidConfig)
 	case u.Fragment != "" || u.RawFragment != "":
-		return fmt.Errorf("%w: the metadata URL must not carry a fragment", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: the metadata URL must not carry a fragment", ErrInvalidConfig)
+	case !outboundHost(u.Hostname()) || !outboundPort(u.Port()):
+		return nil, fmt.Errorf("%w: the metadata URL host or port is not one outbound allows", ErrInvalidConfig)
 	}
 
-	return nil
+	return u, nil
 }
 
-// fetch downloads and imports the document.
-func (f *metadataFetcher) fetch(ctx context.Context, entityID string, now func() time.Time) (_ *IdentityProvider, err error) {
+// Host-name limits of outbound (RFC 1035 §2.3.4).
+const (
+	maxHostLength  = 253
+	maxLabelLength = 63
+)
+
+// outboundHost applies the host rules outbound enforces on every request,
+// so that a URL it would always refuse fails at construction: an IP
+// literal without zone, or an ASCII name of RFC 1123 labels, without a
+// trailing dot, whose last label is not a number (127.1 and 0x7f.1 reach
+// 127.0.0.1).
+func outboundHost(host string) bool {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Zone() == ""
+	}
+
+	if host == "" || len(host) > maxHostLength {
+		return false
+	}
+
+	for label := range strings.SplitSeq(host, ".") {
+		if !hostLabel(label) {
+			return false
+		}
+	}
+
+	return !numericLabel(host[strings.LastIndexByte(host, '.')+1:])
+}
+
+// hostLabel reports an RFC 1123 label: 1 to 63 ASCII letters, digits or
+// hyphens, neither starting nor ending with a hyphen.
+func hostLabel(label string) bool {
+	if label == "" || len(label) > maxLabelLength || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for i := range len(label) {
+		c := label[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// numericLabel reports decimal digits, or "0x"/"0X" and hexadecimal digits.
+func numericLabel(label string) bool {
+	digits := "0123456789"
+	if len(label) >= 2 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X') {
+		label, digits = label[2:], "0123456789abcdefABCDEF"
+	}
+
+	for i := range len(label) {
+		if !strings.ContainsRune(digits, rune(label[i])) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// outboundPort reports a port outbound accepts: absent (the scheme's
+// default) or 1 to 65535.
+func outboundPort(port string) bool {
+	if port == "" {
+		return true
+	}
+
+	n, err := strconv.Atoi(port)
+
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// errOtherOrigin refuses a metadata request outside the configured origin.
+var errOtherOrigin = errors.New("samlsp: metadata redirect to another origin")
+
+// sameOrigin wraps the application's CheckURL hook: outbound calls it for
+// the request and every redirect hop, and a hop to another scheme, host or
+// port than the configured URL's is refused, so that keys can only come
+// from the configured origin, whatever MaxRedirects allows.
+func sameOrigin(configured *url.URL, next func(context.Context, *url.URL) error) func(context.Context, *url.URL) error {
+	origin := originOf(configured)
+
+	return func(ctx context.Context, u *url.URL) error {
+		if originOf(u) != origin {
+			return errOtherOrigin
+		}
+
+		if next != nil {
+			return next(ctx, u)
+		}
+
+		return nil
+	}
+}
+
+// originOf renders the scheme, canonical host and port of u.
+func originOf(u *url.URL) string {
+	host := strings.ToLower(u.Hostname())
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+	}
+
+	port := u.Port()
+	if port == "" {
+		port = "443"
+		if u.Scheme == schemeHTTP {
+			port = "80"
+		}
+	}
+
+	return u.Scheme + "://" + net.JoinHostPort(host, port)
+}
+
+// fetch downloads and imports the document; it also reports whether the
+// document set a cacheDuration.
+func (f *metadataFetcher) fetch(ctx context.Context, entityID string, now func() time.Time) (_ *IdentityProvider, _ bool, err error) {
 	ctx, span := startSpan(ctx, "samlsp.FetchMetadata")
 	defer func() { endSpan(span, err) }()
 
 	body, err := f.download(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return ParseIdentityProviderMetadata(body, MetadataOptions{EntityID: entityID, Now: now, MaxSize: f.maxSize})
+	return parseIdentityProviderMetadata(body, MetadataOptions{EntityID: entityID, Now: now, MaxSize: f.maxSize})
 }
 
 // download GETs the document; the outbound client bounds the exchange.
@@ -216,10 +348,11 @@ type MetadataSourceConfig struct {
 	MaxSize int64
 
 	// MinRefresh and MaxRefresh clamp the refresh interval, which is the
-	// document's cacheDuration (DefaultMetadataRefresh when absent),
-	// shortened to its validUntil: DefaultMetadataMinRefresh and
-	// DefaultMetadataMaxRefresh when zero; MinRefresh at least a minute,
-	// MaxRefresh at most 30 days.
+	// document's cacheDuration (DefaultMetadataRefresh when absent):
+	// DefaultMetadataMinRefresh and DefaultMetadataMaxRefresh when zero;
+	// MinRefresh at least a minute, MaxRefresh at most 30 days. A document
+	// expiring (validUntil) before its refresh is refreshed when it expires,
+	// at most once per RetryInterval.
 	MinRefresh time.Duration
 	MaxRefresh time.Duration
 
@@ -343,65 +476,68 @@ func NewMetadataSource(cfg MetadataSourceConfig) (*MetadataSource, error) {
 	return &MetadataSource{fetcher: f, entityID: cfg.EntityID, cfg: cfg, lastErr: errNotFetched}, nil
 }
 
-// IdentityProvider returns a copy of the current IdP configuration,
-// fetching the metadata first when none was fetched yet or the refresh is
-// due (unless a failure occurred less than RetryInterval ago). The error
-// of a refresh is returned only when no usable document remains: then it
-// matches [ErrMetadataUnavailable], [ErrInvalidMetadata] or
-// [ErrMetadataExpired]. When ctx ends before the fetch, its error is
-// returned, and the fetch completes for the next callers.
+// IdentityProvider returns a copy of the current IdP configuration. When
+// the refresh is due (and no failure occurred less than RetryInterval ago),
+// it starts a fetch, or joins the one in flight, without waiting while the
+// cached document is usable: a slow or hung metadata endpoint never delays
+// a login then (stale-while-revalidate). It waits only when no usable
+// document is cached — none fetched yet, expired, or not refreshed for
+// MaxStale — and returns ctx's error if ctx ends first, the fetch
+// completing for the next callers. Errors match [ErrMetadataUnavailable],
+// [ErrInvalidMetadata] or [ErrMetadataExpired].
 func (s *MetadataSource) IdentityProvider(ctx context.Context) (*IdentityProvider, error) {
-	if s.due() {
-		if err := s.refresh(ctx); err != nil && ctx.Err() != nil {
-			return nil, err
-		}
+	s.mu.Lock()
+	now := s.cfg.Now()
+	call := s.startLocked(ctx, now)
+	idp, err := s.usableLocked(now)
+	s.mu.Unlock()
+
+	if err == nil || call == nil {
+		return idp, err
+	}
+
+	select {
+	case <-call.done:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("samlsp: waiting for the identity provider metadata: %w", ctx.Err())
 	}
 
 	return s.current()
 }
 
-// due reports whether the metadata needs a fetch that the rate limit
-// allows. A fetch in flight started under the same conditions, which hold
-// until it completes: callers then join it.
-func (s *MetadataSource) due() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// startLocked returns the fetch in flight, starting one when the metadata
+// is due; nil when none runs. The caller holds the mutex.
+func (s *MetadataSource) startLocked(ctx context.Context, now time.Time) *metadataFetch {
+	if s.inflight == nil && s.dueLocked(now) {
+		s.inflight = &metadataFetch{done: make(chan struct{})}
 
-	now := s.cfg.Now()
+		go s.fetch(context.WithoutCancel(ctx), s.inflight)
+	}
 
+	return s.inflight
+}
+
+// dueLocked reports whether the metadata needs a fetch that the rate limit
+// allows: none fetched yet, the scheduled refresh reached, or the cached
+// document expired before its schedule (then at most once per
+// RetryInterval after it was fetched, so that a document expiring at once
+// cannot make the source fetch continuously). The caller holds the mutex.
+func (s *MetadataSource) dueLocked(now time.Time) bool {
 	if !s.failedAt.IsZero() && now.Before(s.failedAt.Add(s.cfg.RetryInterval)) {
 		return false
 	}
 
-	return s.idp == nil || !now.Before(s.refreshAt)
-}
-
-// refresh starts a fetch, or joins the one in flight, and waits for it or
-// for ctx.
-func (s *MetadataSource) refresh(ctx context.Context) error {
-	s.mu.Lock()
-
-	call := s.inflight
-	if call == nil {
-		call = &metadataFetch{done: make(chan struct{})}
-		s.inflight = call
-
-		go s.fetch(context.WithoutCancel(ctx), call)
-	}
-
-	s.mu.Unlock()
-
-	select {
-	case <-call.done:
-		return call.err
-	case <-ctx.Done():
-		return fmt.Errorf("samlsp: waiting for the identity provider metadata: %w", ctx.Err())
+	switch {
+	case s.idp == nil, !now.Before(s.refreshAt):
+		return true
+	default:
+		return s.idp.expired(now) && !now.Before(s.fetchedAt.Add(s.cfg.RetryInterval))
 	}
 }
 
 // fetch downloads the metadata and publishes the outcome to call.
 func (s *MetadataSource) fetch(ctx context.Context, call *metadataFetch) {
-	idp, err := s.fetcher.fetch(ctx, s.entityID, s.cfg.Now)
+	idp, cacheSet, err := s.fetcher.fetch(ctx, s.entityID, s.cfg.Now)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -409,7 +545,7 @@ func (s *MetadataSource) fetch(ctx context.Context, call *metadataFetch) {
 	now := s.cfg.Now()
 
 	if err == nil {
-		s.idp, s.fetchedAt, s.refreshAt = idp, now, now.Add(s.interval(idp, now))
+		s.idp, s.fetchedAt, s.refreshAt = idp, now, now.Add(s.interval(idp, cacheSet))
 	} else {
 		s.failedAt, s.lastErr = now, err
 	}
@@ -419,17 +555,14 @@ func (s *MetadataSource) fetch(ctx context.Context, call *metadataFetch) {
 	close(call.done)
 }
 
-// interval is the refresh interval of idp fetched at fetchedAt: its
-// cacheDuration (DefaultMetadataRefresh when absent), shortened to its
-// validUntil, clamped to [MinRefresh, MaxRefresh].
-func (s *MetadataSource) interval(idp *IdentityProvider, fetchedAt time.Time) time.Duration {
+// interval is the refresh interval of idp: its cacheDuration
+// (DefaultMetadataRefresh when absent; an explicit PT0S asks for the
+// shortest interval), clamped to [MinRefresh, MaxRefresh]. A document
+// expiring earlier is refreshed by the expiry rule of dueLocked.
+func (s *MetadataSource) interval(idp *IdentityProvider, cacheSet bool) time.Duration {
 	d := idp.CacheDuration
-	if d == 0 {
+	if !cacheSet {
 		d = DefaultMetadataRefresh
-	}
-
-	if !idp.ValidUntil.IsZero() {
-		d = min(d, idp.ValidUntil.Sub(fetchedAt))
 	}
 
 	return min(max(d, s.cfg.MinRefresh), s.cfg.MaxRefresh)
@@ -440,8 +573,12 @@ func (s *MetadataSource) current() (*IdentityProvider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := s.cfg.Now()
+	return s.usableLocked(s.cfg.Now())
+}
 
+// usableLocked returns a copy of the last good document while it is usable
+// at now. The caller holds the mutex.
+func (s *MetadataSource) usableLocked(now time.Time) (*IdentityProvider, error) {
 	switch {
 	case s.idp == nil:
 		return nil, s.lastErr

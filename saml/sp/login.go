@@ -87,7 +87,12 @@ func (o LoginOptions) validate() error {
 // It returns the IdP URL; the caller MUST redirect the browser to it with a
 // 302 or 303 response. On error nothing is stored and no cookie is set.
 // BeginLogin needs no authentication and writes to the transaction store:
-// applications SHOULD rate-limit it.
+// applications SHOULD rate-limit it. They MUST also gate login initiation:
+// a page of another site can otherwise start a login in the user's browser
+// (forced login initiation, a form of login CSRF); accept same-origin
+// navigations only (Fetch Metadata: Sec-Fetch-Site same-origin or none) or
+// start logins from a CSRF-protected POST — see "Browser binding, CSRF and
+// replay" in docs/security-considerations.md, and examples/saml-sp.
 func (sp *ServiceProvider) BeginLogin(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	connectionID string, opts LoginOptions,
 ) (_ string, err error) {

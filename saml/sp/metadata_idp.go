@@ -60,6 +60,15 @@ type MetadataOptions struct {
 //
 // Other failures match [ErrInvalidMetadata].
 func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*IdentityProvider, error) {
+	idp, _, err := parseIdentityProviderMetadata(data, opts)
+
+	return idp, err
+}
+
+// parseIdentityProviderMetadata is ParseIdentityProviderMetadata, also
+// reporting whether the document set a cacheDuration: an explicit PT0S
+// differs from an absent one for a MetadataSource.
+func parseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*IdentityProvider, bool, error) {
 	if opts.MaxSize == 0 {
 		opts.MaxSize = DefaultMetadataMaxSize
 	}
@@ -69,7 +78,7 @@ func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*Identity
 	}
 
 	if opts.MaxSize < 0 || int64(len(data)) > opts.MaxSize {
-		return nil, fmt.Errorf("%w: document larger than %d bytes", ErrInvalidMetadata, opts.MaxSize)
+		return nil, false, fmt.Errorf("%w: document larger than %d bytes", ErrInvalidMetadata, opts.MaxSize)
 	}
 
 	data = stripBOM(data)
@@ -78,35 +87,35 @@ func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*Identity
 	lim.maxBytes = opts.MaxSize
 
 	if err := checkXML(data, lim); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
 	}
 
 	doc := etree.NewDocument()
 	if err := doc.ReadFromBytes(data); err != nil {
-		return nil, fmt.Errorf("%w: not well-formed XML", ErrInvalidMetadata)
+		return nil, false, fmt.Errorf("%w: not well-formed XML", ErrInvalidMetadata)
 	}
 
 	m := &metadataReader{}
 
 	entity, err := m.selectEntity(doc.Root(), opts.EntityID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	idp, err := m.readEntity(entity)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if err := idp.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
 	}
 
 	if idp.expired(opts.Now()) {
-		return nil, ErrMetadataExpired
+		return nil, false, ErrMetadataExpired
 	}
 
-	return idp, nil
+	return idp, m.cacheSet, nil
 }
 
 // metadataReader accumulates the effective validUntil/cacheDuration while
@@ -114,6 +123,7 @@ func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*Identity
 type metadataReader struct {
 	validUntil    time.Time
 	cacheDuration time.Duration
+	cacheSet      bool // a cacheDuration was found (PT0S included)
 }
 
 // inNS reports whether el is the element {ns}local.
@@ -189,8 +199,8 @@ func (m *metadataReader) applyValidity(el *etree.Element) error {
 			return fmt.Errorf("%w: cacheDuration: %w", ErrInvalidMetadata, err)
 		}
 
-		if m.cacheDuration == 0 || d < m.cacheDuration {
-			m.cacheDuration = d
+		if !m.cacheSet || d < m.cacheDuration {
+			m.cacheDuration, m.cacheSet = d, true
 		}
 	}
 

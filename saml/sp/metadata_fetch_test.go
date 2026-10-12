@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -167,6 +168,62 @@ func TestFetchIdentityProviderMetadata_NetworkPolicy(t *testing.T) {
 		require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed)
 	})
 
+	t.Run("a redirect to another origin is refused whatever MaxRedirects says", func(t *testing.T) {
+		t.Parallel()
+
+		// The other origin serves a document of the pinned entity with the
+		// attacker's key (second review S2).
+		other := newMetadataServer(t, serveMetadata(idpMetadataSpec{keyDescriptors: keyDescriptor("signing", keys(t).attacker.cert)}.render(t)))
+		m := newMetadataServer(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.url(), http.StatusFound)
+		})
+
+		policy := m.policy()
+		policy.MaxRedirects = 3
+		policy.RootCAs.AddCert(other.srv.Certificate())
+
+		_, err := fetchAt(t, m, samlsp.FetchOptions{EntityID: idpEntity, Outbound: policy})
+		require.ErrorIs(t, err, samlsp.ErrMetadataUnavailable)
+		require.ErrorIs(t, err, outbound.ErrURLNotAllowed)
+		assert.Zero(t, other.hits.Load(), "the other origin is never contacted")
+	})
+
+	t.Run("a redirect within the origin follows MaxRedirects and the application's CheckURL", func(t *testing.T) {
+		t.Parallel()
+
+		m := newMetadataServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/metadata" {
+				http.Redirect(w, r, "/metadata/v2", http.StatusMovedPermanently)
+
+				return
+			}
+
+			serveMetadata(doc)(w, r)
+		})
+
+		policy := m.policy()
+		policy.MaxRedirects = 1
+
+		idp, err := fetchAt(t, m, samlsp.FetchOptions{EntityID: idpEntity, Outbound: policy})
+		require.NoError(t, err)
+		assert.Equal(t, idpEntity, idp.EntityID)
+
+		var checked []string
+
+		policy.CheckURL = func(_ context.Context, u *url.URL) error {
+			checked = append(checked, u.Path)
+			if u.Path == "/metadata/v2" {
+				return errors.New("not this path")
+			}
+
+			return nil
+		}
+
+		_, err = fetchAt(t, m, samlsp.FetchOptions{EntityID: idpEntity, Outbound: policy})
+		require.ErrorIs(t, err, outbound.ErrURLNotAllowed)
+		assert.Equal(t, []string{"/metadata", "/metadata/v2"}, checked, "the application's hook still sees every hop")
+	})
+
 	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusNotModified, http.StatusNoContent} {
 		t.Run("status "+http.StatusText(status), func(t *testing.T) {
 			t.Parallel()
@@ -289,15 +346,27 @@ func TestFetchIdentityProviderMetadata_InvalidOptions(t *testing.T) {
 		url  string
 		opts samlsp.FetchOptions
 	}{
-		"empty URL":               {"", samlsp.FetchOptions{}},
-		"relative URL":            {"/metadata", samlsp.FetchOptions{}},
-		"ftp":                     {strings.Replace(m.url(), "https:", "ftp:", 1), samlsp.FetchOptions{Outbound: m.policy()}},
-		"http without AllowHTTP":  {strings.Replace(m.url(), "https:", "http:", 1), samlsp.FetchOptions{Outbound: m.policy()}},
-		"credentials in the URL":  {strings.Replace(m.url(), "https://", "https://user:secret@", 1), samlsp.FetchOptions{Outbound: m.policy()}},
-		"fragment":                {m.url() + "#x", samlsp.FetchOptions{Outbound: m.policy()}},
-		"no host":                 {"https:///metadata", samlsp.FetchOptions{Outbound: m.policy()}},
-		"negative MaxSize":        {m.url(), samlsp.FetchOptions{Outbound: m.policy(), MaxSize: -1}},
-		"invalid outbound policy": {m.url(), samlsp.FetchOptions{Outbound: outbound.Policy{Timeout: -time.Second}}},
+		"empty URL":              {"", samlsp.FetchOptions{}},
+		"relative URL":           {"/metadata", samlsp.FetchOptions{}},
+		"ftp":                    {strings.Replace(m.url(), "https:", "ftp:", 1), samlsp.FetchOptions{Outbound: m.policy()}},
+		"http without AllowHTTP": {strings.Replace(m.url(), "https:", "http:", 1), samlsp.FetchOptions{Outbound: m.policy()}},
+		"credentials in the URL": {strings.Replace(m.url(), "https://", "https://user:secret@", 1), samlsp.FetchOptions{Outbound: m.policy()}},
+		"fragment":               {m.url() + "#x", samlsp.FetchOptions{Outbound: m.policy()}},
+		"no host":                {"https:///metadata", samlsp.FetchOptions{Outbound: m.policy()}},
+		"negative MaxSize":       {m.url(), samlsp.FetchOptions{Outbound: m.policy(), MaxSize: -1}},
+		// Hosts and ports outbound refuses on every request fail at once
+		// (second review S4).
+		"numeric host name":              {"https://127.1/metadata", samlsp.FetchOptions{}},
+		"hexadecimal host":               {"https://0x7f.1/metadata", samlsp.FetchOptions{}},
+		"trailing dot":                   {"https://idp.example.com./metadata", samlsp.FetchOptions{}},
+		"underscore in host":             {"https://idp_x.example.com/metadata", samlsp.FetchOptions{}},
+		"non-ASCII host":                 {"https://idp.exämple.com/metadata", samlsp.FetchOptions{}},
+		"zoned address":                  {"https://[fe80::1%25en0]/metadata", samlsp.FetchOptions{}},
+		"port out of range":              {"https://idp.example.com:99999/metadata", samlsp.FetchOptions{}},
+		"port zero":                      {"https://idp.example.com:0/metadata", samlsp.FetchOptions{}},
+		"empty label":                    {"https://idp..example.com/metadata", samlsp.FetchOptions{}},
+		"label with a hyphen at its end": {"https://idp-.example.com/metadata", samlsp.FetchOptions{}},
+		"invalid outbound policy":        {m.url(), samlsp.FetchOptions{Outbound: outbound.Policy{Timeout: -time.Second}}},
 	}
 
 	for name, tc := range cases {
@@ -353,6 +422,7 @@ func TestNewMetadataSource_Validation(t *testing.T) {
 		"invalid outbound policy":         func(c *samlsp.MetadataSourceConfig) { c.Outbound.MaxRedirects = -1 },
 		"invalid outbound prefix":         func(c *samlsp.MetadataSourceConfig) { c.Outbound.AllowedPrefixes = []netip.Prefix{{}} },
 		"credentials in the metadata URL": func(c *samlsp.MetadataSourceConfig) { c.URL = "https://u:p@idp.example.com/metadata" },
+		"numeric metadata host":           func(c *samlsp.MetadataSourceConfig) { c.URL = "https://127.1/metadata" },
 	}
 
 	for name, tune := range cases {
@@ -445,9 +515,120 @@ func TestMetadataSource_RefreshInterval(t *testing.T) {
 
 			advance(clk, time.Second)
 			_, _ = src.IdentityProvider(context.Background())
+			samlsp.WaitMetadataFetch(src)
 			assert.Equal(t, int32(2), m.hits.Load(), "refreshed once the interval elapsed")
 		})
 	}
+}
+
+func TestMetadataSource_ZeroCacheDuration(t *testing.T) {
+	t.Parallel()
+
+	// An explicit PT0S asks for the shortest interval allowed, unlike an
+	// absent cacheDuration (second review S3).
+	m := newMetadataServer(t, serveMetadata(idpMetadataSpec{entityExtra: ` cacheDuration="PT0S"`}.render(t)))
+	clk := newClock()
+	src := sourceAt(t, m, clk, nil)
+
+	_, err := src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+
+	advance(clk, samlsp.DefaultMetadataMinRefresh)
+	_, err = src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+	samlsp.WaitMetadataFetch(src)
+	assert.Equal(t, int32(2), m.hits.Load())
+}
+
+func TestMetadataSource_ExpiredDocumentRefreshedAtOnce(t *testing.T) {
+	t.Parallel()
+
+	// A document whose validUntil comes before the next scheduled refresh
+	// is refreshed once it expires, spaced by RetryInterval, instead of
+	// failing closed until then (second review S5).
+	m := newMetadataServer(t, serveMetadata(idpMetadataSpec{entityExtra: ` validUntil="2026-10-12T10:02:00Z"`}.render(t)))
+	clk := newClock()
+	src := sourceAt(t, m, clk, nil)
+
+	_, err := src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+
+	m.set(serveMetadata(idpMetadataSpec{entityExtra: ` validUntil="2026-10-20T00:00:00Z"`}.render(t)))
+	clk.set(time.Date(2026, 10, 12, 10, 2, 0, 0, time.UTC))
+
+	idp, err := src.IdentityProvider(context.Background())
+	require.NoError(t, err, "the expired document is replaced without waiting for MinRefresh")
+	assert.True(t, idp.ValidUntil.Equal(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)))
+	assert.Equal(t, int32(2), m.hits.Load())
+
+	// A hostile IdP serving documents that expire seconds after each fetch
+	// makes the source fetch at most once per RetryInterval.
+	m.set(func(w http.ResponseWriter, r *http.Request) {
+		until := clk.Now().Add(10 * time.Second).UTC().Format(time.RFC3339)
+		serveMetadata(idpMetadataSpec{entityExtra: ` validUntil="` + until + `"`}.render(t))(w, r)
+	})
+	clk.set(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC))
+
+	_, err = src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+
+	hits := m.hits.Load()
+
+	advance(clk, 20*time.Second)
+	_, err = src.IdentityProvider(context.Background())
+	require.ErrorIs(t, err, samlsp.ErrMetadataExpired)
+	assert.Equal(t, hits, m.hits.Load(), "no fetch within RetryInterval of the last one")
+
+	advance(clk, samlsp.DefaultMetadataRetryInterval)
+	_, err = src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, hits+1, m.hits.Load())
+}
+
+func TestMetadataSource_RefreshDoesNotBlockLogins(t *testing.T) {
+	t.Parallel()
+
+	// A due refresh of a hung endpoint never delays a caller while a valid
+	// document is cached: it runs in the background (second review S1).
+	release := make(chan struct{})
+	doc := idpMetadataSpec{entityExtra: ` cacheDuration="PT1H"`}.render(t)
+	m := newMetadataServer(t, serveMetadata(doc))
+	t.Cleanup(func() { close(release) })
+
+	clk := newClock()
+	src := sourceAt(t, m, clk, nil)
+
+	_, err := src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+
+	m.set(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		serveMetadata(doc)(w, r)
+	})
+	advance(clk, time.Hour)
+
+	var wg sync.WaitGroup
+
+	for range 20 {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			start := time.Now()
+			idp, err := src.IdentityProvider(ctx)
+
+			if assert.NoError(t, err) {
+				assert.Equal(t, idpEntity, idp.EntityID)
+			}
+
+			assert.Less(t, time.Since(start), 500*time.Millisecond, "served from the cache")
+		})
+	}
+
+	wg.Wait()
+
+	require.Eventually(t, func() bool { return m.hits.Load() == 2 }, 5*time.Second, 10*time.Millisecond,
+		"one background refresh for every caller")
 }
 
 func TestMetadataSource_StaleOnError(t *testing.T) {
@@ -469,21 +650,29 @@ func TestMetadataSource_StaleOnError(t *testing.T) {
 	idp, err := src.IdentityProvider(context.Background())
 	require.NoError(t, err)
 	assert.True(t, idp.SigningCertificates[0].Equal(k.idpA.cert))
+	samlsp.WaitMetadataFetch(src)
 	assert.Equal(t, int32(2), m.hits.Load())
 
 	advance(clk, samlsp.DefaultMetadataRetryInterval-time.Second)
 	_, err = src.IdentityProvider(context.Background())
 	require.NoError(t, err)
+	samlsp.WaitMetadataFetch(src)
 	assert.Equal(t, int32(2), m.hits.Load(), "no attempt within the retry interval")
 
 	advance(clk, time.Second)
 	_, err = src.IdentityProvider(context.Background())
 	require.NoError(t, err)
+	samlsp.WaitMetadataFetch(src)
 	assert.Equal(t, int32(3), m.hits.Load())
 
 	// A document of another entity is a failure too: the pinned one stays.
 	m.set(serveMetadata(idpMetadataSpec{entityID: "https://evil.example.com", keyDescriptors: keyDescriptor("signing", k.attacker.cert)}.render(t)))
 	advance(clk, samlsp.DefaultMetadataRetryInterval)
+
+	_, err = src.IdentityProvider(context.Background())
+	require.NoError(t, err)
+	samlsp.WaitMetadataFetch(src)
+	assert.Equal(t, int32(4), m.hits.Load())
 
 	idp, err = src.IdentityProvider(context.Background())
 	require.NoError(t, err)
@@ -512,6 +701,7 @@ func TestMetadataSource_ValidUntilIsAHardStop(t *testing.T) {
 	advance(clk, time.Hour+30*time.Minute)
 	_, err = src.IdentityProvider(context.Background())
 	require.NoError(t, err, "served while refreshes fail, before validUntil")
+	samlsp.WaitMetadataFetch(src)
 
 	clk.set(time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
 
@@ -560,7 +750,13 @@ func TestMetadataSource_KeyRollover(t *testing.T) {
 	clk := newClock()
 	src := sourceAt(t, m, clk, nil)
 
+	// certsNow returns the certificates once any refresh the call started
+	// completed: a due refresh runs in the background.
 	certsNow := func() []*x509.Certificate {
+		_, err := src.IdentityProvider(context.Background())
+		require.NoError(t, err)
+		samlsp.WaitMetadataFetch(src)
+
 		idp, err := src.IdentityProvider(context.Background())
 		require.NoError(t, err)
 
@@ -662,6 +858,7 @@ func TestMetadataSource_Concurrency(t *testing.T) {
 	}
 
 	wg.Wait()
+	samlsp.WaitMetadataFetch(src)
 
 	// 50 minutes elapsed: at most one fetch per 5 minutes, plus the first.
 	assert.LessOrEqual(t, m.hits.Load(), int32(11))

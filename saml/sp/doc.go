@@ -147,9 +147,11 @@
 // value read from a SAML message or a request, and no response content
 // ever triggers a fetch. Trust rests on TLS to the configured host and on
 // the pinned entity ID: keys and endpoints change only through a valid
-// document of that entity fetched from that URL. A MetadataSource
-// refreshes at the document's cacheDuration, clamped to [MinRefresh,
-// MaxRefresh], single-flight and rate-limited; while refreshes fail it
+// document of that entity fetched from that URL, and a redirect never
+// leaves that URL's origin. A MetadataSource refreshes at the document's
+// cacheDuration, clamped to [MinRefresh, MaxRefresh], and when the
+// document expires; single-flight and rate-limited, a refresh never delays
+// a login while a usable document is cached. While refreshes fail it
 // serves the last good document for at most MaxStale, never past its
 // validUntil, then fails closed with [ErrMetadataExpired]. The
 // samlsp.FetchMetadata span records each fetch.
