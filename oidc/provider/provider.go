@@ -244,7 +244,9 @@ func (p *Provider) Server() *oauth2.Server { return p.server }
 // mounts the handlers: exactly the paths of the URLs the discovery document
 // of that issuer advertises (Discovery §3), so that advertised and mounted
 // routes cannot drift apart. Mount them as returned — behind a proxy that
-// rewrites paths, at their public form.
+// rewrites paths, at their public form — and only there: the handlers do
+// not check the request path, and a catch-all mounting would serve an
+// issuer's discovery document or JWK Set at any path (Discovery §4.3).
 type Paths struct {
 	// Discovery is the OpenID Provider Configuration document: the issuer's
 	// path, one terminating "/" removed, followed by

@@ -117,7 +117,9 @@ type Request struct {
 	Claims ClaimsRequest
 	// LoginHint, Display, UILocales and ClaimsLocales are passed through
 	// (Core §3.1.2.1, §5.2, §15.1): use them or ignore them, they never
-	// fail a request. Oversized or invalid UTF-8 values are ignored: a
+	// fail a request. ClaimsLocales reaches the Interaction only — the
+	// ClaimsSource is not told: it returns the language-tagged claims
+	// (Core §5.2) it has, and the provider releases those requested. Oversized or invalid UTF-8 values are ignored: a
 	// login_hint over 1024 bytes, a display over 255 bytes, ui_locales or
 	// claims_locales over 2048 bytes — of which the first 32 values are
 	// kept.

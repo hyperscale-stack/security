@@ -111,8 +111,10 @@ func refuse(oe *oauth2.Error, cause error) error {
 // otherwise, each reported to the ErrorHook. A storage, claims source or
 // issuer failure answers 500 without a challenge (Core §5.3.3).
 //
-// Mount it at [Paths].UserInfo for GET and POST; CORS, when browsers call
-// it, is the application's middleware.
+// Mount it at [Paths].UserInfo for GET and POST. CORS — which UserInfo
+// SHOULD support for browser-based clients (Core §5.3) — is the
+// application's middleware: allow the clients' origins deliberately; the
+// bearer token needs no credentialed requests.
 func (p *Provider) UserInfoHandler() http.Handler {
 	return http.HandlerFunc(p.serveUserInfo)
 }

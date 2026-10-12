@@ -568,11 +568,13 @@ is, never for the protocol rules:
   oidcprovider.ScopeOfflineAccess`: only the scope is gated, and a plain
   OAuth 2.0 grant gets refresh tokens per that setting.
 - **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
-  is the client ID, and an access token whose audience equals a client ID is
-  refused at issuance; JWT access tokens are typed `at+jwt`. Resource
-  servers require that type — `jwtsec.BearerVerifier` refuses a verifier
-  without `WithType(TypeAccessToken)` — so an ID Token is never accepted as
-  an access token.
+  is the client ID, and an access token whose audience equals the requesting
+  client's ID is refused at issuance — another client's ID is not compared,
+  so keep every `IssuerResolver` audience apart from all client IDs; JWT
+  access tokens are typed `at+jwt`. Resource servers require that type —
+  `jwtsec.BearerVerifier` refuses a verifier without
+  `WithType(TypeAccessToken)` — so an ID Token is never accepted as an
+  access token.
 - **Keys.** Key rings are validated on every use (RS256 required, one key
   per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
   bound to algorithms) and fail closed; private and symmetric keys are never

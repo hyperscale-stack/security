@@ -133,7 +133,9 @@ func (p *Provider) signIDToken(ctx context.Context, iss oauth2.TokenIssuance, gc
 	clientID := iss.Client.ID()
 
 	// RFC 9068 §5, RFC 8725 §3.12: an access token never shares the ID
-	// Token's audience.
+	// Token's audience. Only the requesting client's ID is compared: an
+	// audience naming another client is the configuration's to prevent
+	// (IssuerResolver audiences are never client IDs).
 	if iss.Access.Audience == clientID {
 		return "", errAudienceCollision
 	}
