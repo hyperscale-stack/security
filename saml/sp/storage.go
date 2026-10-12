@@ -127,7 +127,9 @@ func ValidateExpiry(t time.Time) error {
 // The conformance suite in package storetest checks this contract.
 type TransactionStore interface {
 	// SaveTransaction stores a new record. It never overwrites: an existing
-	// ID yields ErrTransactionExists.
+	// ID — even saved with identical content, consumed or not — yields
+	// ErrTransactionExists. Only a resend of the very same call (a retry
+	// after a lost reply) may be recognized as its own success.
 	SaveTransaction(ctx context.Context, rec *TransactionRecord) error
 
 	// LookupTransaction returns the record, every field unchanged, without

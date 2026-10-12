@@ -59,19 +59,18 @@ const (
 	replyReplay   = "replay"
 )
 
-// saveScript stores a transaction unless its key exists; a resent call
-// (same binding and payload) is recognized.
+// saveScript stores a transaction unless its key exists. The saving call's
+// nonce is recorded so that a resent call still sees its own success; any
+// other call, even with identical content, finds the key taken.
 //
 //	KEYS[1] tx; ARGV[1] binding; ARGV[2] payload; ARGV[3] expiry (Unix s);
-//	ARGV[4] expiry (Unix ms); ARGV[5] integrity
+//	ARGV[4] expiry (Unix ms); ARGV[5] integrity; ARGV[6] nonce
 var saveScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 1 then
-  if redis.call('HGET', KEYS[1], 'b') == ARGV[1] and redis.call('HGET', KEYS[1], 'p') == ARGV[2] then
-    return 'ok'
-  end
+  if redis.call('HGET', KEYS[1], 'n') == ARGV[6] then return 'ok' end
   return 'exists'
 end
-redis.call('HSET', KEYS[1], 'b', ARGV[1], 'p', ARGV[2], 'e', ARGV[3], 'i', ARGV[5])
+redis.call('HSET', KEYS[1], 'b', ARGV[1], 'p', ARGV[2], 'e', ARGV[3], 'i', ARGV[5], 'n', ARGV[6])
 redis.call('PEXPIREAT', KEYS[1], ARGV[4])
 return 'ok'
 `)
@@ -121,7 +120,7 @@ func (s *Store) SaveTransaction(ctx context.Context, rec *samlsp.TransactionReco
 	}
 
 	reply, err := saveScript.Run(ctx, s.rdb, []string{s.txKey(rec.ID)},
-		rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix(), rec.ExpiresAt.UnixMilli(), rec.Integrity).Text()
+		rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix(), rec.ExpiresAt.UnixMilli(), rec.Integrity, nonce()).Text()
 	if err != nil {
 		return fmt.Errorf("redisstore: save transaction: %w", err)
 	}

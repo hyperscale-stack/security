@@ -14,9 +14,10 @@
 // default):
 //
 //   - tx:{id}: a transaction, as a hash with the fields b (binding digest),
-//     p (opaque payload), e (expiry, Unix seconds), i (integrity MAC) and,
-//     once consumed, c (the nonce of the consuming call). The key expires
-//     at the transaction expiry (PEXPIREAT: the Redis clock decides).
+//     p (opaque payload), e (expiry, Unix seconds), i (integrity MAC), n
+//     (the nonce of the saving call) and, once consumed, c (the nonce of the
+//     consuming call). The key expires at the transaction expiry
+//     (PEXPIREAT: the Redis clock decides).
 //   - as:{key}: a consumed assertion, holding the nonce of the recording
 //     call, until its retention expiry.
 //
@@ -25,7 +26,9 @@
 //
 // go-redis may resend a command whose reply was lost: each script records
 // the calling nonce, so a resent save, consumption or replay mark is
-// recognized as its own success rather than reported as a duplicate.
+// recognized as its own success rather than reported as a duplicate. Any
+// other call is: a second save of an existing transaction, even with
+// identical content, returns samlsp.ErrTransactionExists.
 //
 // # Deployment requirements
 //

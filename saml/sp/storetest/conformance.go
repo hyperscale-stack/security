@@ -51,6 +51,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"TransactionBindingMismatchDoesNotConsume", testBindingMismatch},
 		{"TransactionConsumedPrecedesBindingMismatch", testConsumedPrecedence},
 		{"TransactionDuplicateSave", testDuplicateSave},
+		{"TransactionIdenticalDuplicateSave", testIdenticalDuplicateSave},
 		{"TransactionRejectsInvalidRecord", testRejectsInvalidRecord},
 		{"TransactionRejectsInvalidKeys", testRejectsInvalidKeys},
 		{"TransactionLookupNeverConsumes", testLookupNeverConsumes},
@@ -287,6 +288,25 @@ func testDuplicateSave(t *testing.T, s samlsp.Storage) {
 	got, err := s.LookupTransaction(ctx(), rec.ID)
 	mustNoError(t, err, "lookup after duplicate save")
 	mustEqualRecord(t, got, rec, "the original record must be intact")
+}
+
+// testIdenticalDuplicateSave: an existing ID is never saved again, even by
+// a call with identical content, consumed or not; only a resend of the very
+// same call may be recognized as its own success.
+func testIdenticalDuplicateSave(t *testing.T, s samlsp.Storage) {
+	rec := record("identical")
+	save(t, s, rec)
+
+	again := *rec
+	mustErrorIs(t, s.SaveTransaction(ctx(), &again), samlsp.ErrTransactionExists, "identical second save")
+
+	mustNoError(t, s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash), "consume")
+
+	again = *rec
+	mustErrorIs(t, s.SaveTransaction(ctx(), &again), samlsp.ErrTransactionExists, "identical save of a consumed record")
+
+	_, err := s.LookupTransaction(ctx(), rec.ID)
+	mustErrorIs(t, err, samlsp.ErrTransactionConsumed, "the consumed record stays consumed")
 }
 
 func testRejectsInvalidRecord(t *testing.T, s samlsp.Storage) {
