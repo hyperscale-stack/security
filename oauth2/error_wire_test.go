@@ -94,6 +94,31 @@ func TestTokenErrorsStayWithinTheRFC6749Charset(t *testing.T) {
 			name: "error_uri that is no URI", err: &oauth2.Error{Code: oauth2.CodeInvalidGrant, URI: "https://docs.example/%zz"},
 			wantCode: oauth2.CodeInvalidGrant, wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
 		},
+		{
+			name: "code with a backslash", err: &oauth2.Error{Code: `in\valid`},
+			wantCode: oauth2.CodeServerError, wantDesc: "internal server error", wantStatus: http.StatusInternalServerError,
+			wantHookCode: oauth2.CodeServerError, wantHookReachesOrigin: true,
+		},
+	}
+
+	// The charset boundaries: a backslash (%x5C), DEL (%x7F) and the control
+	// characters below %x20 are outside %x20-21 / %x23-5B / %x5D-7E.
+	for name, desc := range map[string]string{
+		"backslash": `a\b`, "DEL": "a\x7fb", "line feed": "a\nb", "carriage return": "a\rb",
+		"tab": "a\tb", "control": "a\x01b", "NUL": "a\x00b",
+	} {
+		cases = append(cases, struct {
+			name                  string
+			err                   *oauth2.Error
+			wantCode, wantDesc    string
+			wantURI               string
+			wantStatus            int
+			wantHookCode          string
+			wantHookReachesOrigin bool
+		}{
+			name: "description with a " + name, err: &oauth2.Error{Code: oauth2.CodeInvalidGrant, Description: desc},
+			wantCode: oauth2.CodeInvalidGrant, wantStatus: http.StatusBadRequest, wantHookCode: oauth2.CodeInvalidGrant,
+		})
 	}
 
 	for _, tc := range cases {

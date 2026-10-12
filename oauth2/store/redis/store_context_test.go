@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/hyperscale-stack/security/oauth2"
 	redisstore "github.com/hyperscale-stack/security/oauth2/store/redis"
 	"github.com/hyperscale-stack/security/oauth2/storetest"
@@ -36,43 +37,103 @@ const (
 		`"consumed":false,"issued_at":0,"expires_at":0,"issuer":null,"extension_data":null}`
 )
 
+// contextBackend is a Redis server the legacy-payload tests write raw
+// payloads to: miniredis always, and the real server
+// OAUTH2_TEST_REDIS_ADDR names when it is set — cjson decodes a JSON null
+// as nil on miniredis, as a truthy userdata on a real Redis.
+type contextBackend struct {
+	name   string
+	client *redis.Client
+	store  *redisstore.Store
+	prefix string
+}
+
+// contextBackends returns the servers to run a legacy-payload test on.
+func contextBackends(t *testing.T) []contextBackend {
+	t.Helper()
+
+	mr := miniredis.RunT(t)
+	local := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = local.Close() })
+
+	localStore, err := redisstore.New(local)
+	require.NoError(t, err)
+
+	backends := []contextBackend{{name: "miniredis", client: local, store: localStore, prefix: "oauth2:"}}
+
+	addr := os.Getenv("OAUTH2_TEST_REDIS_ADDR")
+	if addr == "" {
+		return backends
+	}
+
+	remote := redis.NewClient(&redis.Options{Addr: addr})
+	t.Cleanup(func() { _ = remote.Close() })
+
+	prefix := fmt.Sprintf("oauth2-legacy-%d-%s:", time.Now().UnixNano(), t.Name())
+	t.Cleanup(func() { deleteKeys(remote, prefix) })
+
+	remoteStore, err := redisstore.New(remote, redisstore.WithKeyPrefix(prefix))
+	require.NoError(t, err)
+
+	return append(backends, contextBackend{name: "redis", client: remote, store: remoteStore, prefix: prefix})
+}
+
+// set writes the raw payload of key, under the backend's prefix, for a minute.
+func (b contextBackend) set(t *testing.T, key, payload string) {
+	t.Helper()
+
+	require.NoError(t, b.client.Set(t.Context(), b.prefix+key, payload, time.Minute).Err())
+}
+
+// exists reports whether key, under the backend's prefix, exists.
+func (b contextBackend) exists(t *testing.T, key string) bool {
+	t.Helper()
+
+	n, err := b.client.Exists(t.Context(), b.prefix+key).Result()
+	require.NoError(t, err)
+
+	return n == 1
+}
+
 // TestRedisLegacyPayloadsReadEmptyContext reads records written before #83:
 // the code — consumed, then replayed through the script that re-encodes
 // it — and both tokens come back with an empty issuer and extension data.
 func TestRedisLegacyPayloadsReadEmptyContext(t *testing.T) {
 	t.Parallel()
 
-	store, _, mr := hookedStores(t, &scriptHook{})
-	ctx := t.Context()
+	for _, b := range contextBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			ctx := t.Context()
 
-	require.NoError(t, mr.Set(codeKey("legacy"), legacyCodePayload))
-	mr.SetTTL(codeKey("legacy"), time.Minute)
-	require.NoError(t, mr.Set("oauth2:fam:fam-legacy", "active"))
-	require.NoError(t, mr.Set("oauth2:at:at-legacy", legacyAccessPayload))
-	require.NoError(t, mr.Set("oauth2:rt:rt-legacy", legacyRefreshPayload))
+			b.set(t, "code:legacy", legacyCodePayload)
+			b.set(t, "fam:fam-legacy", "active")
+			b.set(t, "at:at-legacy", legacyAccessPayload)
+			b.set(t, "rt:rt-legacy", legacyRefreshPayload)
 
-	code, err := store.ConsumeAuthorizationCode(ctx, "legacy")
-	require.NoError(t, err)
-	assert.Empty(t, code.Issuer)
-	assert.Empty(t, code.ExtensionData)
+			code, err := b.store.ConsumeAuthorizationCode(ctx, "legacy")
+			require.NoError(t, err)
+			assert.Empty(t, code.Issuer)
+			assert.Empty(t, code.ExtensionData)
 
-	_, err = store.ConsumeAuthorizationCode(ctx, "legacy")
+			_, err = b.store.ConsumeAuthorizationCode(ctx, "legacy")
 
-	var replay *oauth2.CodeReplayError
+			var replay *oauth2.CodeReplayError
 
-	require.ErrorAs(t, err, &replay)
-	assert.Empty(t, replay.Record.Issuer)
-	assert.Empty(t, replay.Record.ExtensionData)
+			require.ErrorAs(t, err, &replay)
+			assert.Empty(t, replay.Record.Issuer)
+			assert.Empty(t, replay.Record.ExtensionData)
 
-	at, err := store.LookupAccessToken(ctx, "at-legacy")
-	require.NoError(t, err)
-	assert.Empty(t, at.Issuer)
-	assert.Empty(t, at.ExtensionData)
+			at, err := b.store.LookupAccessToken(ctx, "at-legacy")
+			require.NoError(t, err)
+			assert.Empty(t, at.Issuer)
+			assert.Empty(t, at.ExtensionData)
 
-	rt, err := store.LookupRefreshToken(ctx, "rt-legacy")
-	require.NoError(t, err)
-	assert.Empty(t, rt.Issuer)
-	assert.Empty(t, rt.ExtensionData)
+			rt, err := b.store.LookupRefreshToken(ctx, "rt-legacy")
+			require.NoError(t, err)
+			assert.Empty(t, rt.Issuer)
+			assert.Empty(t, rt.ExtensionData)
+		})
+	}
 }
 
 // legacyRotation is the pair a rotation of the legacy refresh token issues.
@@ -94,31 +155,34 @@ func legacyRotation(name, data string) *oauth2.TokenPair {
 // TestRedisRotationReadsMissingContextAsEmpty rotates a refresh token
 // whose payload has no grant context — absent or null fields: the script
 // takes it for an empty one, refusing a replacement that carries another
-// context and accepting one that carries none.
+// context and accepting one that carries none. Run against a real Redis
+// (OAUTH2_TEST_REDIS_ADDR), the null case exercises cjson's userdata null.
 func TestRedisRotationReadsMissingContextAsEmpty(t *testing.T) {
 	t.Parallel()
 
-	for name, payload := range map[string]string{"absent": legacyRefreshPayload, "null": nullContextRefreshPayload} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	for _, b := range contextBackends(t) {
+		for name, payload := range map[string]string{"absent": legacyRefreshPayload, "null": nullContextRefreshPayload} {
+			t.Run(b.name+"/"+name, func(t *testing.T) {
+				ctx := t.Context()
+				key := "rt-legacy-" + name
 
-			store, _, mr := hookedStores(t, &scriptHook{})
-			ctx := t.Context()
+				b.set(t, "fam:fam-legacy", "active")
+				b.set(t, "rt:"+key, payload)
 
-			require.NoError(t, mr.Set("oauth2:fam:fam-legacy", "active"))
-			require.NoError(t, mr.Set("oauth2:rt:rt-legacy", payload))
+				rewritten := legacyRotation("rewritten-"+name, "rewritten")
+				err := b.store.RotateRefreshToken(ctx, key, rewritten)
+				assert.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err))
+				assert.False(t, b.exists(t, "rt:"+rewritten.Refresh.TokenHash), "nothing written")
+				assert.False(t, b.exists(t, "at:"+rewritten.Access.TokenHash), "nothing written")
 
-			err := store.RotateRefreshToken(ctx, "rt-legacy", legacyRotation("rewritten", "rewritten"))
-			assert.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err))
-			assert.False(t, mr.Exists("oauth2:rt:rt-rewritten"), "nothing written")
-			assert.False(t, mr.Exists("oauth2:at:at-rewritten"), "nothing written")
+				next := legacyRotation("next-"+name, "")
+				require.NoError(t, b.store.RotateRefreshToken(ctx, key, next), "rotation keeping the empty context")
 
-			require.NoError(t, store.RotateRefreshToken(ctx, "rt-legacy", legacyRotation("next", "")))
-
-			next, err := store.LookupRefreshToken(ctx, "rt-next")
-			require.NoError(t, err)
-			assert.False(t, next.Consumed)
-		})
+				stored, err := b.store.LookupRefreshToken(ctx, next.Refresh.TokenHash)
+				require.NoError(t, err)
+				assert.False(t, stored.Consumed)
+			})
+		}
 	}
 }
 

@@ -123,4 +123,28 @@ func testRotationKeepsGrantContext(t *testing.T, s oauth2.Storage) {
 	same := newPair("keep-1", "fam-keep")
 	mustRotate(t, s, first, same)
 	requireContext(t, s, same)
+
+	// The context check comes right after the family check, before the
+	// revoked and the consumed ones (oauth2.RefreshTokenStore): a consumed
+	// token rotated into another context is refused as such — not as a
+	// reuse that would revoke its family — and so is a token of a revoked
+	// family.
+	rewrittenAgain := newPair("keep-consumed", "fam-keep")
+	rewrittenAgain.Access.ExtensionData, rewrittenAgain.Refresh.ExtensionData = rewrittenData, rewrittenData
+
+	err := s.RotateRefreshToken(ctx(), first.Refresh.TokenHash, rewrittenAgain)
+	mustCode(t, err, oauth2.CodeInvalidRequest, "rotate a consumed token into another grant context")
+	requireAbsent(t, s, rewrittenAgain)
+	requireUsable(t, s, same) // the family was not revoked
+
+	revoked := newPair("keep-revoked-0", "fam-keep-revoked")
+	mustSave(t, s, revoked)
+	mustNoError(t, s.RevokeRefreshFamily(ctx(), "fam-keep-revoked"), "revoke family")
+
+	reboundRevoked := newPair("keep-revoked-1", "fam-keep-revoked")
+	reboundRevoked.Access.Issuer, reboundRevoked.Refresh.Issuer = otherIssuer, otherIssuer
+
+	err = s.RotateRefreshToken(ctx(), revoked.Refresh.TokenHash, reboundRevoked)
+	mustCode(t, err, oauth2.CodeInvalidRequest, "rotate a token of a revoked family into another grant context")
+	requireAbsent(t, s, reboundRevoked)
 }

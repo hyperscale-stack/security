@@ -140,6 +140,10 @@ func TestConsentRefusalDescriptionIsSanitized(t *testing.T) {
 	cases := []*oauth2.Error{
 		oauth2.ErrLoginRequired.WithDescription("connexion requise, réessayez"),
 		oauth2.ErrLoginRequired.WithDescription(`a "quoted" reason`),
+		oauth2.ErrLoginRequired.WithDescription(`a \ backslash`),
+		oauth2.ErrLoginRequired.WithDescription("a \x7f DEL"),
+		oauth2.ErrLoginRequired.WithDescription("a\r\nheader: injected"),
+		oauth2.ErrLoginRequired.WithDescription("a \x01 control"),
 		{Code: oauth2.CodeLoginRequired, URI: "https://docs.example/a b"},
 		{Code: oauth2.CodeLoginRequired, URI: "https://docs.example/\"x\""},
 	}
