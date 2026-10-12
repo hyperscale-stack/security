@@ -1,0 +1,254 @@
+// Copyright 2026 Hyperscale. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
+package oidcclient
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"slices"
+	"time"
+)
+
+// Authorization response bounds.
+const (
+	maxCodeLength             = 8192
+	maxErrorCodeLength        = 256
+	maxErrorDescriptionLength = 1024
+)
+
+// Callback is an authorization response as the callback endpoint received
+// it.
+type Callback struct {
+	// Mode is how Params arrived: ResponseModeQuery for the query string
+	// of a GET, ResponseModeFormPost for the form body of a POST.
+	Mode ResponseMode
+	// Path is the URL path the response was received on. It MUST be the
+	// path actually requested (r.URL.Path), not a value derived from the
+	// response: Complete refuses a response received on another path than
+	// the connection's RedirectURL (RFC 9700 §4.4.2.2 mix-up defense).
+	Path string
+	// Params are the response parameters (url.ParseQuery or r.PostForm).
+	Params url.Values
+	// Binding is the browser-binding secret the user agent presented (the
+	// AuthRequest.Binding of the login, read from its cookie).
+	Binding string
+}
+
+// String implements fmt.Stringer without the binding secret nor the
+// parameter values.
+func (cb Callback) String() string {
+	return fmt.Sprintf("oidcclient.Callback{Mode: %s, Path: %q, Params: %d, Binding: REDACTED}", cb.Mode, cb.Path, len(cb.Params))
+}
+
+// GoString implements fmt.GoStringer like String.
+func (cb Callback) GoString() string { return cb.String() }
+
+// LogValue implements slog.LogValuer like String.
+func (cb Callback) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("mode", string(cb.Mode)), slog.String("path", cb.Path), slog.String("binding", "REDACTED"))
+}
+
+// authorizationResponse is a well-formed authorization response.
+type authorizationResponse struct {
+	state    string
+	code     string
+	errCode  string
+	errDesc  string
+	errURI   string
+	iss      string
+	hasIss   bool
+	hasError bool
+}
+
+// Complete finishes a login. In order, and without touching the store
+// before step 3:
+//
+//  1. the response is checked: mode and path of the connection, every
+//     parameter at most once (RFC 6749 §3.1), well-formed state, code or
+//     error, iss — else ErrInvalidCallback;
+//  2. the binding secret is checked for form — else ErrBindingMismatch;
+//  3. the transaction is consumed atomically with the binding's hash (a
+//     wrong binding leaves it stored);
+//  4. it must belong to this connection, issuer, client, redirect URI and
+//     response mode — else ErrTransactionMismatch — and be unexpired;
+//  5. the RFC 9207 iss parameter must be the issuer when present, and is
+//     required when the provider advertises it — else ErrIssuerParameter;
+//  6. an error response becomes an *AuthorizationError;
+//  7. the code is redeemed with the PKCE verifier (RFC 7636 §4.5), the
+//     token response parsed strictly, the ID Token validated (OpenID Connect
+//     Core §3.1.3.7) against the nonce, with at_hash when present.
+//
+// Any failure returns a nil Identity: no token of a failed login is ever
+// exposed (RFC 9700 §4.5.3.2). A consumed transaction is never restored;
+// the user starts over.
+func (c *Client) Complete(ctx context.Context, cb Callback) (*Identity, error) {
+	resp, err := c.parseCallback(cb)
+	if err != nil {
+		return nil, err
+	}
+
+	secret, ok := decodeSecret(cb.Binding)
+	if !ok {
+		return nil, fmt.Errorf("%w: missing or malformed binding", ErrBindingMismatch)
+	}
+
+	now := c.now()
+
+	tx, err := c.cfg.Store.Consume(ctx, stateHashFor(resp.state), bindingHashFor(secret), now)
+	if err != nil {
+		return nil, fmt.Errorf("oidcclient: consume login transaction: %w", err)
+	}
+
+	if err := c.checkTransaction(tx, now); err != nil {
+		return nil, err
+	}
+
+	if err := c.checkIssuerParameter(resp); err != nil {
+		return nil, err
+	}
+
+	if resp.hasError {
+		return nil, &AuthorizationError{Code: resp.errCode, Description: resp.errDesc, URI: resp.errURI}
+	}
+
+	tokens, err := c.exchange(ctx, resp.code, verifierFor(secret))
+	if err != nil {
+		return nil, err
+	}
+
+	return c.verifyLogin(ctx, tokens, tx, nonceFor(secret))
+}
+
+// parseCallback checks the shape of the response.
+func (c *Client) parseCallback(cb Callback) (authorizationResponse, error) {
+	if cb.Mode != c.cfg.ResponseMode {
+		return authorizationResponse{}, fmt.Errorf("%w: response mode %q, connection uses %s", ErrInvalidCallback, cb.Mode, c.cfg.ResponseMode)
+	}
+
+	if cb.Path != c.callbackPath {
+		return authorizationResponse{}, fmt.Errorf("%w: received on another path than the connection's redirect URI", ErrInvalidCallback)
+	}
+
+	values := make(map[string]string, len(responseParams))
+
+	for _, name := range responseParams {
+		switch v := cb.Params[name]; len(v) {
+		case 0:
+		case 1:
+			values[name] = v[0]
+		default:
+			return authorizationResponse{}, fmt.Errorf("%w: parameter %s repeated", ErrInvalidCallback, name)
+		}
+	}
+
+	resp := authorizationResponse{
+		state:    values[paramState],
+		code:     values[paramCode],
+		iss:      values[paramIssuer],
+		hasIss:   values[paramIssuer] != "", // a parameter without value is omitted (RFC 6749 §3.1)
+		hasError: values[paramError] != "",
+	}
+
+	if _, ok := decodeSecret(resp.state); !ok {
+		return authorizationResponse{}, fmt.Errorf("%w: missing or malformed state", ErrInvalidCallback)
+	}
+
+	if resp.hasIss && !isASCII(resp.iss, visibleASCII, maxURILength) {
+		return authorizationResponse{}, fmt.Errorf("%w: malformed iss", ErrInvalidCallback)
+	}
+
+	if err := resp.parseOutcome(values); err != nil {
+		return authorizationResponse{}, err
+	}
+
+	return resp, nil
+}
+
+// parseOutcome checks the code, or the error, of the response (RFC 6749
+// §4.1.2, §4.1.2.1, Appendix A).
+func (r *authorizationResponse) parseOutcome(values map[string]string) error {
+	if !r.hasError {
+		if !isASCII(r.code, printableASCII, maxCodeLength) {
+			return fmt.Errorf("%w: missing or malformed code", ErrInvalidCallback)
+		}
+
+		return nil
+	}
+
+	if r.code != "" {
+		return fmt.Errorf("%w: both code and error", ErrInvalidCallback)
+	}
+
+	r.errCode = values[paramError]
+	if !isErrorText(r.errCode, maxErrorCodeLength) {
+		return fmt.Errorf("%w: malformed error code", ErrInvalidCallback)
+	}
+
+	if isErrorText(values[paramErrorDescription], maxErrorDescriptionLength) {
+		r.errDesc = values[paramErrorDescription]
+	}
+
+	if isErrorURI(values[paramErrorURI]) {
+		r.errURI = values[paramErrorURI]
+	}
+
+	return nil
+}
+
+// checkTransaction refuses a transaction of another connection, issuer,
+// client, redirect URI or response mode (RFC 9700 §4.4.2: the stored
+// issuer and the distinct redirect URI tie the response to its provider),
+// or an expired one.
+func (c *Client) checkTransaction(tx *Transaction, now time.Time) error {
+	if tx.ConnectionID != c.cfg.ConnectionID || tx.Issuer != c.md.Issuer || tx.ClientID != c.cfg.ClientID ||
+		tx.RedirectURI != c.cfg.RedirectURL || tx.ResponseMode != c.cfg.ResponseMode {
+		return ErrTransactionMismatch
+	}
+
+	if !now.Before(tx.ExpiresAt) {
+		return ErrTransactionExpired
+	}
+
+	return nil
+}
+
+// checkIssuerParameter applies RFC 9207 §2.4: when present, iss must be
+// the issuer (simple string comparison), errors included; it is required
+// when the provider advertises authorization_response_iss_parameter_supported.
+// A matching iss from a provider that does not advertise it is accepted —
+// the local policy §2.4 leaves open.
+func (c *Client) checkIssuerParameter(resp authorizationResponse) error {
+	if resp.hasIss {
+		if resp.iss != c.md.Issuer {
+			return fmt.Errorf("%w: iss of another issuer", ErrIssuerParameter)
+		}
+
+		return nil
+	}
+
+	if c.md.AuthorizationResponseIssParameterSupported {
+		return fmt.Errorf("%w: iss missing although the provider sends it", ErrIssuerParameter)
+	}
+
+	return nil
+}
+
+// isErrorText reports whether s is 1 to maxLen characters of the RFC 6749
+// error and error_description charset: %x20-21 / %x23-5B / %x5D-7E.
+func isErrorText(s string, maxLen int) bool {
+	if !isASCII(s, printableASCII, maxLen) {
+		return false
+	}
+
+	return !slices.ContainsFunc([]byte(s), func(b byte) bool { return b == '"' || b == '\\' })
+}
+
+// isErrorURI reports whether s fits the RFC 6749 error_uri charset:
+// %x21 / %x23-5B / %x5D-7E.
+func isErrorURI(s string) bool {
+	return isErrorText(s, maxURILength) && !slices.Contains([]byte(s), ' ')
+}

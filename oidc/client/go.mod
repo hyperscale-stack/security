@@ -5,6 +5,7 @@ go 1.26.5
 replace github.com/hyperscale-stack/security => ../../
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.12.1
 )
