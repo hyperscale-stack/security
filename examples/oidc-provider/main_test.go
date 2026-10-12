@@ -381,6 +381,34 @@ func TestOpenIDProviderPromptLogin(t *testing.T) {
 	assert.NotEmpty(t, redirected(t, resp).Get("code"), page)
 }
 
+// TestOpenIDProviderPendingLoginIsBoundToTheBrowser (code review F10): the
+// start of a pending login is bound to the browser — whoever knows the
+// parameters of an authorization request cannot backdate its start for
+// another browser, to have a session older than the request pass
+// prompt=login.
+func TestOpenIDProviderPendingLoginIsBoundToTheBrowser(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	_, challenge := pkce()
+	target := h.authorizeURL(challenge, "n-target", "prompt", "login")
+
+	// Another browser opens the login page of the target request first.
+	resp, _ := h.do(newBrowser(t), http.MethodGet, target, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// The end-user then signs in for another request, and consents.
+	_, other := pkce()
+	_, page := h.signIn(h.authorizeURL(other, "n-other"))
+	require.NotEmpty(t, redirected(t, h.consent(page, "allow", false)).Get("code"))
+
+	// Their session predates the target request: prompt=login shows the
+	// login page instead of issuing a code.
+	resp, page = h.do(h.browser, http.MethodGet, target, nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "the login page, not a redirect")
+	assert.Contains(t, page, `action="/login"`)
+}
+
 // TestAdvertisedURLsAreServed: every URL of the discovery document is
 // mounted.
 func TestAdvertisedURLsAreServed(t *testing.T) {

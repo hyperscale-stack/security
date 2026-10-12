@@ -102,7 +102,9 @@ func refuse(oe *oauth2.Error, cause error) error {
 //
 // The access token MUST be unexpired, issued under the request's issuer to
 // an OpenID grant — a client_credentials or plain OAuth 2.0 token is not —
-// and outside any revoked family; its scope MUST hold openid. Refusals
+// of a client still registered at that issuer (removed, or bound to other
+// issuers through oauth2.IssuerBoundClient, it holds no valid token), and
+// outside any revoked family; its scope MUST hold openid. Refusals
 // follow RFC 6750 §3: a Bearer challenge whose realm is the issuer, without
 // error information when the request carries no bearer token,
 // invalid_request (400), invalid_token (401) or insufficient_scope (403)
@@ -235,11 +237,31 @@ func (p *Provider) userInfoGrant(ctx context.Context, issuer, token string) (*oa
 		return nil, grantContext{}, refuse(errBearerToken, cause)
 	}
 
+	if err := p.checkTokenClient(ctx, at.ClientID, issuer); err != nil {
+		return nil, grantContext{}, err
+	}
+
 	if !hasScope(at.Scope, ScopeOpenID) {
 		return nil, grantContext{}, refuse(errBearerScope, nil)
 	}
 
 	return at, gc, nil
+}
+
+// checkTokenClient refuses a token whose client is no longer registered at
+// issuer — removed, or bound to other issuers (oauth2.IssuerBoundClient):
+// it holds no valid token here.
+func (p *Provider) checkTokenClient(ctx context.Context, clientID, issuer string) error {
+	client, err := p.clients.LoadClient(ctx, clientID)
+	if err != nil {
+		return fmt.Errorf("oidcprovider: load the access token's client: %w", err)
+	}
+
+	if client == nil || !oauth2.ClientAllowsIssuer(client, issuer) {
+		return refuse(errBearerToken, oauth2.ErrClientNotAtIssuer)
+	}
+
+	return nil
 }
 
 // bearerToken returns the bearer token of r — "" when r carries none — or

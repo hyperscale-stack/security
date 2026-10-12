@@ -474,6 +474,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - RFC 9068 access tokens are typed `at+jwt` (see Changed), so a verifier
   requiring that type never accepts an OpenID Connect ID Token signed by the
   same keys as an access token (RFC 8725 §3.11).
+- The OpenID Provider (see Added) enforces the protocol itself rather than
+  trusting the application: `prompt=login`, `max_age` and essential `acr`
+  are re-checked on every approval, an authentication counts in its realm
+  only, `prompt=none` refusals read the same whatever sessions the browser
+  holds, private and symmetric keys are never published, an access-token
+  audience equal to a client ID is refused (RFC 9068 §5), and UserInfo only
+  serves tokens of clients still registered at the issuer.
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

@@ -196,7 +196,11 @@ func value(form url.Values, name string) string {
 // could not be redirected safely: a repeated client_id, redirect_uri or
 // response_mode, or no redirect_uri — REQUIRED for OpenID requests (Core
 // §3.1.2.1), even when the client registered a single one (RFC 6749
-// §4.1.2.1, Core §3.1.2.6).
+// §4.1.2.1, Core §3.1.2.6). It applies to the requests the oauth2 core
+// accepts: the core's own checks — response type, scope, PKCE — run first
+// and redirect their errors to the redirect URI it trusted, the client's
+// sole registered one when the request names none, or the first,
+// registered, occurrence of a repeated one.
 func checkRedirection(form url.Values) error {
 	for _, name := range unredirectableParameters {
 		if repeated(form, name) {

@@ -24,7 +24,7 @@ import (
 var (
 	errRefreshWithoutOffline = errors.New("oidcprovider: the grants issue a refresh token the end-user did not consent to (offline_access, Core §11)")
 	errAudienceCollision     = errors.New("oidcprovider: the access token audience is the client ID, the ID Token audience")
-	errClientMismatch        = errors.New("oidcprovider: the access token belongs to another client")
+	errClientMismatch        = errors.New("oidcprovider: the access token belongs to another client, or one not registered at its issuer")
 )
 
 // invalidGrant is the refusal of a grant the provider cannot honor any more.
@@ -59,7 +59,7 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 		return oauth2.TokenResponseExtension{}, err
 	}
 
-	if iss.Client == nil || iss.Client.ID() != iss.Access.ClientID {
+	if iss.Client == nil || iss.Client.ID() != iss.Access.ClientID || !oauth2.ClientAllowsIssuer(iss.Client, iss.Access.Issuer) {
 		return oauth2.TokenResponseExtension{}, errClientMismatch
 	}
 

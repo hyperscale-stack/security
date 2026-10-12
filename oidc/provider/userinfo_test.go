@@ -516,6 +516,82 @@ func (*switchIssuer) Resolve(_ context.Context, r *http.Request) (string, string
 	}
 }
 
+// TestUserInfoRefusesTokensOfClientsNotAtTheIssuer: a token whose client
+// is gone, or no longer registered at the issuer (oauth2.IssuerBoundClient),
+// is an invalid token.
+func TestUserInfoRefusesTokensOfClientsNotAtTheIssuer(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		change func(staticClients)
+		want   int
+	}{
+		"client removed": {func(c staticClients) { delete(c, webClientID) }, http.StatusUnauthorized},
+		"client moved to another issuer": {func(c staticClients) { c[webClientID] = boundTo(c[webClientID], "https://other.example") },
+			http.StatusUnauthorized},
+		"client bound to the issuer": {func(c staticClients) { c[webClientID] = boundTo(c[webClientID], testIssuer) }, http.StatusOK},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			at := e.flow(authorizeQuery()).AccessToken
+			tc.change(e.clients())
+
+			rec := e.userinfo(bearerGET(at))
+			require.Equal(t, tc.want, rec.Code)
+
+			if tc.want != http.StatusOK {
+				assert.Equal(t, "invalid_token", challenge(t, rec)["error"])
+				assert.True(t, e.sink.contains(oauth2.ErrClientNotAtIssuer))
+			}
+		})
+	}
+}
+
+// TestUserInfoFailsClosedOnClientStoreErrors: a client store that cannot
+// answer is a server error, not a valid token.
+func TestUserInfoFailsClosedOnClientStoreErrors(t *testing.T) {
+	t.Parallel()
+
+	clients := &flakyClients{}
+	e := newEnv(t, func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) {
+		clients.store = s.ClientStore
+		s.ClientStore = clients
+	})
+	at := e.flow(authorizeQuery()).AccessToken
+
+	clients.failing.Store(true)
+
+	rec := e.userinfo(bearerGET(at))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Values("WWW-Authenticate"))
+}
+
+// flakyClients is a client store that can be made to fail.
+type flakyClients struct {
+	store   oauth2.ClientStore
+	failing atomic.Bool
+}
+
+func (c *flakyClients) LoadClient(ctx context.Context, id string) (oauth2.Client, error) {
+	if c.failing.Load() {
+		return nil, errors.New("client directory down")
+	}
+
+	return c.store.LoadClient(ctx, id) //nolint:wrapcheck // test double
+}
+
+// boundTo returns a copy of c registered at issuer only.
+func boundTo(c oauth2.Client, issuer string) oauth2.Client {
+	bound := *c.(*oauth2.DefaultClient) //nolint:forcetypeassert // the env's clients
+	bound.IssuerValues = []string{issuer}
+
+	return &bound
+}
+
 // TestUserInfoErrorsReachTheHook: every RFC 6750 error reaches the
 // ErrorHook as an *oauth2.Error carrying its code, never the token.
 func TestUserInfoErrorsReachTheHook(t *testing.T) {

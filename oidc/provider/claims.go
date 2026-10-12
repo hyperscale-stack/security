@@ -28,7 +28,9 @@ const (
 	// ScopeOfflineAccess requests a refresh token enabling access while the
 	// end-user is absent (Core §11): wire grant.Config.RefreshTokenScope to
 	// it, and grant it only with the end-user's consent
-	// ([Decision].OfflineAccess).
+	// ([Decision].OfflineAccess). The provider's §11 rules apply to OpenID
+	// requests only: a plain OAuth 2.0 request keeps OAuth 2.0 semantics —
+	// narrow its scope through Decision.Scope when it must not get one.
 	ScopeOfflineAccess = "offline_access"
 )
 

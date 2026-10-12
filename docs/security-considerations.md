@@ -400,8 +400,19 @@ is, never for the protocol rules:
 - **Realm-bound authentications.** An authentication counts in the realm
   (issuer) it was established in only. The realm is the issuer: where
   tenancy is finer — one issuer, several organizations — the `Interaction`
-  must also check the session's tenant against `Request.Client`, or each
-  tenant must get its own issuer.
+  must also check the session's tenant against `Request.Client`. Separate
+  issuers isolate sessions, not clients: with one `ClientStore`, bind every
+  client to its issuers (`oauth2.IssuerBoundClient`, see "Clients and
+  realms" above) — a tenant-A client could otherwise send tenant B's
+  end-users to B's genuine login page and obtain their identity and B's
+  tokens once they consent. UserInfo refuses a token whose client is no
+  longer registered at the issuer.
+- **`prompt=none` reveals no session.** The provider's refusals — a
+  session of another realm, of another end-user, a stale one, an unmet
+  essential `acr` — carry the sentinels' fixed descriptions: on the wire
+  they read as no session at all, so a client cannot probe the browser.
+  The reason reaches the `ErrorHook` only; an `Interaction` refusing with
+  its own description must not describe the session either.
 - **`InteractionStartedAt`** must come from server-side state bound to the
   authorization request, never from the session or the request parameters:
   a forged value makes a stale session look fresh. The provider bounds it to
@@ -676,7 +687,8 @@ span catalog.
       rotated through `KeyRing.Published` (publish, sign, retire once the ID
       Tokens it signed have expired); access-token audiences that are never
       client IDs; `RefreshTokenScope = offline_access`; sessions scoped to
-      their realm (and tenant); CSRF tokens and anti-framing headers on the
+      their realm (and tenant), and clients to their issuers
+      (`IssuerBoundClient`); CSRF tokens and anti-framing headers on the
       login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
       for disabled end-users, whose token families you also revoke.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.

@@ -230,6 +230,7 @@ func TestCodeExchangeFailures(t *testing.T) {
 		opts  []envOption
 		want  string
 	}{
+		{"claim value the signer cannot encode", func(e *env) { e.claims.users["alice"]["groups"] = math.Inf(1) }, nil, oauth2.CodeServerError},
 		{"unknown subject", func(e *env) { e.claims.removeUser("alice") }, nil, oauth2.CodeInvalidGrant},
 		{"claims source failure", func(e *env) { e.claims.fail(errors.New("directory down")) }, nil, oauth2.CodeServerError},
 		{"key source failure", func(e *env) { e.keys.fail(errors.New("kms down")) }, nil, oauth2.CodeServerError},
@@ -243,7 +244,7 @@ func TestCodeExchangeFailures(t *testing.T) {
 
 			spy := &spyStore{}
 			e := newEnv(t, append([]envOption{withSpy(spy)}, tc.opts...)...)
-			code := e.code(authorizeQuery())
+			code := e.code(with(authorizeQuery(), "claims", `{"id_token": {"groups": null}}`))
 
 			if tc.setup != nil {
 				tc.setup(e)

@@ -250,8 +250,11 @@ func (c *ClaimRequest) addValue(value json.RawMessage) error {
 	return nil
 }
 
-// validate checks what the request means: string sub and acr values, and
-// the stored form within its budget.
+// validate checks what the request means: sub and acr values that are
+// non-empty strings — a null or empty one designates no end-user and names
+// no authentication context (Core §5.5.1.1: an essential acr requirement
+// cannot be met by an authentication without acr) —, and the stored form
+// within its budget.
 func (r ClaimsRequest) validate() error {
 	for _, list := range [][]ClaimRequest{r.IDToken, r.UserInfo} {
 		for _, c := range list {
@@ -269,13 +272,15 @@ func (r ClaimsRequest) validate() error {
 	return nil
 }
 
-// stringValues decodes values that are all JSON strings, or returns nil.
+// stringValues decodes values that are all non-empty JSON strings, or
+// returns nil. JSON null decodes without an error, as an empty string:
+// refused with the empty strings.
 func stringValues(values []json.RawMessage) []string {
 	out := make([]string, 0, len(values))
 
 	for _, v := range values {
 		var s string
-		if err := json.Unmarshal(v, &s); err != nil {
+		if json.Unmarshal(v, &s) != nil || s == "" {
 			return nil
 		}
 

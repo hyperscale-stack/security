@@ -54,7 +54,9 @@ type Config struct {
 	// code exchange minting such a refresh token answers server_error, and
 	// such a grant cannot be refreshed. The recommended wiring issues refresh
 	// tokens on consented offline_access only:
-	// grant.Config.RefreshTokenScope = [ScopeOfflineAccess].
+	// grant.Config.RefreshTokenScope = [ScopeOfflineAccess]. The policy
+	// concerns OpenID grants only: a plain OAuth 2.0 request keeps OAuth 2.0
+	// semantics (see [ScopeOfflineAccess]).
 	AllowRefreshWithoutOfflineAccess bool
 	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
 	// localhost or a loopback IP address — for development only: OpenID
@@ -124,6 +126,9 @@ type Provider struct {
 	ttl  time.Duration
 	// tokens is the server's storage, where UserInfo looks bearer tokens up.
 	tokens oauth2.AccessTokenStore
+	// clients is the server's client store: UserInfo serves the tokens of
+	// clients still registered at the issuer only.
+	clients oauth2.ClientStore
 	// refresh reports that a refresh_token grant is registered.
 	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
@@ -165,7 +170,7 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	}
 
 	sc := srv.Config()
-	p.server, p.now, p.hook, p.tokens = srv, sc.Now, sc.OnError, sc.Storage
+	p.server, p.now, p.hook, p.tokens, p.clients = srv, sc.Now, sc.OnError, sc.Storage, sc.ClientStore
 	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
 

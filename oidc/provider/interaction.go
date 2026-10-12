@@ -172,7 +172,9 @@ type Decision struct {
 	// Refusal refuses the request with this protocol error — an
 	// authorization-endpoint code (RFC 6749 §4.1.2.1, Core §3.1.2.6), e.g.
 	// oauth2.ErrLoginRequired, or what Request.Check returned. Any other
-	// error answers server_error.
+	// error answers server_error. Its description travels to the client:
+	// it must not describe the browser's sessions (keep the sentinels'
+	// own).
 	Refusal error
 	// Scope is the granted scope; empty grants the requested one. It may
 	// narrow the request, never broaden it, and keeps openid for an OpenID
@@ -188,9 +190,12 @@ type Decision struct {
 	OfflineAccess OfflineAccessConsent
 	// InteractionStartedAt is, when the login of this request spanned
 	// several HTTP requests, when the application started it — taken from
-	// server-side state bound to this authorization request (e.g. keyed by
-	// client_id, state and nonce), never from the session or from request
-	// parameters. It becomes the reference of the freshness checks instead
+	// server-side state bound to this browser and this authorization
+	// request (e.g. keyed by the browser's session and by client_id,
+	// state, nonce and code_challenge), never from the session's own
+	// values or from request parameters: whoever knows a request's
+	// parameters must not be able to backdate its start for another
+	// browser. It becomes the reference of the freshness checks instead
 	// of Request.ReceivedAt (see Request.Check), within
 	// [ReceivedAt − MaxInteractionDuration, ReceivedAt + 5s]. Zero when the
 	// end-user authenticated during this HTTP request.
@@ -209,6 +214,18 @@ var (
 	errContradictoryDecision = errors.New("oidcprovider: a decision both approves and refuses")
 	errRefusalNotProtocol    = errors.New("oidcprovider: a refusal is not an OAuth 2.0 protocol error")
 	errInteractionStart      = errors.New("oidcprovider: InteractionStartedAt outside its window")
+)
+
+// Why Request.Check refuses an authentication: causes for the ErrorHook.
+// The client only ever gets the sentinel's fixed description — under
+// prompt=none, a reason would tell a client what sessions the browser
+// holds (another realm, another end-user, a stale one).
+var (
+	errOtherRealm      = errors.New("oidcprovider: the authentication belongs to another realm")
+	errReauthenticate  = errors.New("oidcprovider: the end-user must authenticate again (prompt=login, max_age=0)")
+	errAuthTooOld      = errors.New("oidcprovider: the authentication is older than max_age")
+	errOtherEndUser    = errors.New("oidcprovider: the request designates another end-user")
+	errACRNotSatisfied = errors.New("oidcprovider: the authentication does not satisfy the essential acr")
 )
 
 // authResult is the trusted outcome of an approval, carried from the
@@ -314,9 +331,17 @@ func consentOf(d *Decision, silent bool) (*oauth2.Consent, error) {
 //     max_age=N: ev.AuthTime more than N seconds before it — both
 //     oauth2.ErrLoginRequired, in whole seconds (auth_time is a NumericDate);
 //   - Subjects set and ev.Subject not among them: oauth2.ErrLoginRequired;
-//   - EssentialACR set and ev.ACR not among them: oauth2.ErrAccessDenied, a
-//     failed authentication — oauth2.ErrLoginRequired under prompt=none,
-//     where a step-up needs an interaction.
+//   - EssentialACR set and ev.ACR not among them — an empty ev.ACR never
+//     satisfies it: oauth2.ErrAccessDenied, a failed authentication —
+//     oauth2.ErrLoginRequired under prompt=none, where a step-up needs an
+//     interaction.
+//
+// Each refusal carries the sentinel's own description — the reason is its
+// cause, for the ErrorHook only: on the wire, a session of another realm,
+// of another end-user or a stale one reads as no session at all. An
+// Interaction refusing with what Check returns, or with the sentinels,
+// keeps that property; its own descriptions must not describe the
+// session either.
 //
 // The reference time is ReceivedAt, or interactionStartedAt when the login
 // spanned several HTTP requests (see Decision.InteractionStartedAt); outside
@@ -326,10 +351,10 @@ func consentOf(d *Decision, silent bool) (*oauth2.Consent, error) {
 func (r *Request) Check(ev AuthenticationEvent, interactionStartedAt time.Time) error {
 	if ev.Issuer != r.Issuer {
 		if r.OpenID {
-			return oauth2.ErrLoginRequired.WithDescription("the end-user is not authenticated in this realm")
+			return oauth2.ErrLoginRequired.WithCause(errOtherRealm)
 		}
 
-		return oauth2.ErrAccessDenied.WithDescription("the end-user is not authenticated in this realm")
+		return oauth2.ErrAccessDenied.WithCause(errOtherRealm)
 	}
 
 	if !r.OpenID {
@@ -352,15 +377,15 @@ func (r *Request) Check(ev AuthenticationEvent, interactionStartedAt time.Time) 
 	}
 
 	if len(r.Subjects) > 0 && !slices.Contains(r.Subjects, ev.Subject) {
-		return oauth2.ErrLoginRequired.WithDescription("the request designates another end-user")
+		return oauth2.ErrLoginRequired.WithCause(errOtherEndUser)
 	}
 
-	if len(r.EssentialACR) > 0 && !slices.Contains(r.EssentialACR, ev.ACR) {
+	if len(r.EssentialACR) > 0 && (ev.ACR == "" || !slices.Contains(r.EssentialACR, ev.ACR)) {
 		if r.Prompt.None {
-			return oauth2.ErrLoginRequired.WithDescription("the requested authentication context needs an interaction")
+			return oauth2.ErrLoginRequired.WithCause(errACRNotSatisfied)
 		}
 
-		return oauth2.ErrAccessDenied.WithDescription("the authentication does not satisfy the requested context")
+		return oauth2.ErrAccessDenied.WithCause(errACRNotSatisfied)
 	}
 
 	return nil
@@ -375,11 +400,11 @@ func (r *Request) checkFreshness(ev AuthenticationEvent, reference time.Time) er
 	switch {
 	case r.Prompt.Login:
 		if authTime < ref {
-			return oauth2.ErrLoginRequired.WithDescription("the end-user must authenticate again")
+			return oauth2.ErrLoginRequired.WithCause(errReauthenticate)
 		}
 	case r.MaxAge != nil:
 		if ref-authTime > int64(*r.MaxAge/time.Second) {
-			return oauth2.ErrLoginRequired.WithDescription("the end-user authentication is too old")
+			return oauth2.ErrLoginRequired.WithCause(errAuthTooOld)
 		}
 	}
 

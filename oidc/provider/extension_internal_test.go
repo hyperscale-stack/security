@@ -22,7 +22,10 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 	p := &Provider{}
 	access := oauth2.AccessToken{ClientID: "web", Scope: ScopeOpenID, ExtensionData: `{"v":1,"auth_time":1760000000}`}
 
-	for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}} {
+	elsewhere := &oauth2.DefaultClient{IDValue: "web", IssuerValues: []string{"https://other.example"}}
+	access.Issuer = "https://op.example"
+
+	for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}, elsewhere} {
 		_, err := p.extendTokenResponse(context.Background(), oauth2.TokenIssuance{
 			GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
 		})

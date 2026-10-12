@@ -146,6 +146,10 @@ func TestApprovalContractViolations(t *testing.T) {
 		{"non-ASCII subject", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.Subject = "alicé" }, nil},
 		{"subject with a control character", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.Subject = "al\tice" }, nil},
 		{"zero authentication time", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.AuthTime = time.Time{} }, nil},
+		{"authentication at the Unix epoch", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.AuthTime = time.Unix(0, 0) }, nil},
+		{"authentication before the Unix epoch", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) {
+			ev.AuthTime = time.Date(1960, 1, 1, 0, 0, 0, 0, time.UTC)
+		}, nil},
 		{"authentication in the future", func(ev *oidcprovider.AuthenticationEvent, now time.Time) { ev.AuthTime = now.Add(6 * time.Second) }, nil},
 		{"acr over 255 bytes", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.ACR = strings.Repeat("a", 256) }, nil},
 		{"acr with a control character", func(ev *oidcprovider.AuthenticationEvent, _ time.Time) { ev.ACR = "urn:\n" }, nil},

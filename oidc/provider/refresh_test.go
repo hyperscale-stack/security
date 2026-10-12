@@ -90,9 +90,13 @@ func TestRefreshChecksTheAccountEvenWithoutOpenID(t *testing.T) {
 		e.consentOffline()
 
 		resp := e.flow(offlineQuery())
+		alice := e.claims.user("alice")
 		e.claims.removeUser("alice")
 
 		assert.Equal(t, oauth2.CodeInvalidGrant, oauthError(t, e.refresh(resp.RefreshToken, scope)), "scope %q", scope)
+
+		e.claims.setUser("alice", alice)
+		assert.NotEmpty(t, tokens(t, e.refresh(resp.RefreshToken, scope)).AccessToken, "the refresh token stayed usable")
 	}
 }
 

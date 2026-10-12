@@ -106,6 +106,12 @@ matrix. Not supported, and never advertised:
   client wanting them in the ID Token requests them through the `claims`
   parameter. Consumers that only read the ID Token (e.g. an API server's
   `--oidc-username-claim=email`) need that request until an opt-in lands.
+- **`redirect_uri` rules after the core's checks** — an OpenID request
+  without `redirect_uri`, or with a repeated one, is refused with a bare
+  400 (Core §3.1.2.1) once the oauth2 core accepted it; an error of the
+  core's own checks (response type, scope, PKCE) comes first and is
+  redirected, as for any OAuth 2.0 request, to the client's sole registered
+  redirect URI or to the first, registered, occurrence of a repeated one.
 - **Freshness to the second** — `prompt=login` and `max_age` are enforced
   at the second of `auth_time`: an authentication earlier in the same
   second as the request passes. An `Interaction` that must re-authenticate

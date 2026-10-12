@@ -25,7 +25,7 @@ const (
 var (
 	errForeignConsent        = errors.New("oidcprovider: OpenID request approved without the provider's ConsentFunc")
 	errEventSubject          = errors.New("oidcprovider: the authentication names another subject, or one that is not 1 to 255 printable ASCII characters")
-	errEventTime             = errors.New("oidcprovider: the authentication has no time, or one in the future")
+	errEventTime             = errors.New("oidcprovider: the authentication has no time, one at or before the Unix epoch, or one in the future")
 	errEventACR              = errors.New("oidcprovider: the acr is over 255 bytes or not visible ASCII")
 	errEventAMR              = errors.New("oidcprovider: the amr has more than 10 values, or one that is not 1 to 32 visible ASCII characters")
 	errScopeWithoutOpenID    = errors.New("oidcprovider: an OpenID approval granted a scope without openid")
@@ -93,13 +93,13 @@ func (p *Provider) completeAuthorization(ar *oauth2.AuthorizeRequest, consent oa
 
 // checkEvent checks the authentication event an application approved
 // with: the consent's subject, 1 to 255 printable ASCII characters (Core
-// §2); a time, not in the future beyond the clock skew; a bounded acr and
-// amr.
+// §2); a time after the Unix epoch — auth_time is a positive NumericDate —
+// not in the future beyond the clock skew; a bounded acr and amr.
 func checkEvent(ev AuthenticationEvent, subject string, now time.Time) error {
 	switch {
 	case ev.Subject != subject || ev.Subject == "" || len(ev.Subject) > maxSubjectLength || !printableASCII(ev.Subject):
 		return errEventSubject
-	case ev.AuthTime.IsZero() || ev.AuthTime.After(now.Add(authTimeSkew)):
+	case ev.AuthTime.Unix() <= 0 || ev.AuthTime.After(now.Add(authTimeSkew)):
 		return errEventTime
 	case len(ev.ACR) > maxACRLength || !visibleASCII(ev.ACR):
 		return errEventACR

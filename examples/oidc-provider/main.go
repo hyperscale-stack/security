@@ -92,9 +92,11 @@ type app struct {
 	mu sync.Mutex
 	// consents remembers, by subject and client, a consent given.
 	consents map[string]bool
-	// started records, by authorization request, when its login began:
-	// server-side state bound to the request (Decision.InteractionStartedAt).
-	started map[string]time.Time
+	// started records when the login of an authorization request began,
+	// by browser session and request: server-side state bound to this
+	// browser and this request (Decision.InteractionStartedAt), carried over
+	// to the session a login opens.
+	started map[string]map[string]time.Time
 	// answers holds consent page answers, by session and authorization
 	// request.
 	answers map[string]consentAnswer
@@ -195,7 +197,7 @@ func newApp(issuer string) (*app, error) {
 			"email": "alice@example.com", "email_verified": true,
 		}}},
 		consents: map[string]bool{},
-		started:  map[string]time.Time{},
+		started:  map[string]map[string]time.Time{},
 		answers:  map[string]consentAnswer{},
 	}, nil
 }
@@ -253,7 +255,7 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 	resume := a.paths.Authorize + "?" + r.Form.Encode()
 	s, ev := a.signedIn(r.Context(), carrier)
 
-	if ev != nil && reauthenticate(req) && !a.signedInSince(*ev, key) {
+	if ev != nil && reauthenticate(req) && !a.signedInSince(*ev, s, key) {
 		// prompt=login, max_age=0: sign in again during this request —
 		// Request.Check only refuses an authentication older than the
 		// request, to the second of auth_time.
@@ -263,7 +265,7 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 	if ev != nil {
 		// prompt=login, max_age, a designated end-user, an essential acr:
 		// the request's rules, checked against the session.
-		err := req.Check(*ev, a.startedAt(key))
+		err := req.Check(*ev, a.startedAt(s, key))
 
 		switch {
 		case oauth2.IsCode(err) == oauth2.CodeLoginRequired:
@@ -276,9 +278,14 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 	}
 
 	if ev == nil {
-		a.begin(key, req.ReceivedAt)
+		login, err := a.loginSession(r.Context(), carrier, s)
+		if err != nil {
+			return nil, err
+		}
 
-		return nil, a.renderLogin(w, r, carrier, resume, http.StatusOK, "")
+		a.begin(login.ID, key, req.ReceivedAt)
+
+		return nil, renderLogin(w, login, resume, http.StatusOK, "")
 	}
 
 	answer, answered := a.answerOf(s, key)
@@ -292,7 +299,7 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 		return nil, a.renderConsent(w, s, req, resume)
 	}
 
-	d := a.decision(*ev, req, a.startedAt(key))
+	d := a.decision(*ev, req, a.startedAt(s, key))
 	if answered && answer.offline && req.OfflineAccess && req.Prompt.Consent {
 		d.OfflineAccess = oidcprovider.OfflineAccessPrompted
 	}
@@ -364,9 +371,9 @@ func reauthenticate(req *oidcprovider.Request) bool {
 }
 
 // signedInSince reports whether ev happened during the authorization
-// request of key: after its login page was first shown.
-func (a *app) signedInSince(ev oidcprovider.AuthenticationEvent, key string) bool {
-	started := a.startedAt(key)
+// request of key in this browser: after its login page was first shown.
+func (a *app) signedInSince(ev oidcprovider.AuthenticationEvent, s *session.Session, key string) bool {
+	started := a.startedAt(s, key)
 
 	return !started.IsZero() && !ev.AuthTime.Before(started)
 }
@@ -404,7 +411,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 
 	username := r.PostFormValue("username")
 	if !a.verifyPassword(r.Context(), username, r.PostFormValue("password")) {
-		if err := a.renderLogin(w, r, carrier, resume, http.StatusUnauthorized, "Invalid username or password."); err != nil {
+		if err := renderLogin(w, s, resume, http.StatusUnauthorized, "Invalid username or password."); err != nil {
 			http.Error(w, "session error", http.StatusInternalServerError)
 		}
 
@@ -412,11 +419,14 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A new session: a fresh ID (no fixation), a fresh authentication time.
-	if _, err := a.sessions.Login(r.Context(), carrier, principal{subject: username}); err != nil {
+	signedIn, err := a.sessions.Login(r.Context(), carrier, principal{subject: username})
+	if err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 
 		return
 	}
+
+	a.carryOver(s.ID, signedIn.ID)
 
 	//nolint:gosec // G710: resume is a relative URL of the authorization endpoint (authorizationRequest)
 	http.Redirect(w, r, resume, http.StatusSeeOther)
@@ -486,29 +496,52 @@ func requestKey(form url.Values) string {
 	}, "\x00")
 }
 
-// begin records when the login of an authorization request began, unless
-// it already did.
-func (a *app) begin(key string, at time.Time) {
+// begin records when the login of an authorization request began in the
+// browser of session sessionID, unless it already did.
+func (a *app) begin(sessionID, key string, at time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if started, ok := a.started[key]; !ok || at.Sub(started) > oidcprovider.MaxInteractionDuration {
-		a.started[key] = at
+	requests := a.started[sessionID]
+	if requests == nil {
+		requests = map[string]time.Time{}
+		a.started[sessionID] = requests
+	}
+
+	if started, ok := requests[key]; !ok || at.Sub(started) > oidcprovider.MaxInteractionDuration {
+		requests[key] = at
 	}
 }
 
-// startedAt returns when the login of an authorization request began —
-// zero when it took no other HTTP request, or began too long ago.
-func (a *app) startedAt(key string) time.Time {
+// startedAt returns when the login of an authorization request began in
+// the browser of s — zero when it took no other HTTP request, or began too
+// long ago.
+func (a *app) startedAt(s *session.Session, key string) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	started, ok := a.started[key]
+	started, ok := a.started[s.ID][key]
 	if !ok || time.Since(started) > oidcprovider.MaxInteractionDuration {
 		return time.Time{}
 	}
 
 	return started
+}
+
+// carryOver moves the pending logins of a session to the session its login
+// opened: the browser is the same.
+func (a *app) carryOver(from, to string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if requests, ok := a.started[from]; ok {
+		a.started[to] = requests
+		delete(a.started, from)
+	}
 }
 
 // answerOf returns the consent page answer of an authorization request.
@@ -531,14 +564,15 @@ func (a *app) consented(subject, clientID string) bool {
 
 // done forgets the state of a completed authorization request.
 func (a *app) done(s *session.Session, key string) {
+	if s == nil {
+		return
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	delete(a.started, key)
-
-	if s != nil {
-		delete(a.answers, s.ID+"\x00"+key)
-	}
+	delete(a.started[s.ID], key)
+	delete(a.answers, s.ID+"\x00"+key)
 }
 
 // pageData is what the login and consent pages show.
@@ -577,16 +611,23 @@ var consentPage = template.Must(template.New("consent").Parse(`<!doctype html>
 </form>
 `))
 
-// renderLogin renders the login form, opening a session for its CSRF token
-// when there is none.
-func (a *app) renderLogin(w http.ResponseWriter, r *http.Request, c *httpsec.Carrier, resume string, status int, problem string) error {
-	s, err := a.sessions.Get(r.Context(), c)
-	if err != nil {
-		if s, err = a.sessions.Login(r.Context(), c, nil); err != nil {
-			return fmt.Errorf("login session: %w", err)
-		}
+// loginSession returns s, or a new session — for the login form's CSRF
+// token and the pending logins of this browser — when there is none.
+func (a *app) loginSession(ctx context.Context, c *httpsec.Carrier, s *session.Session) (*session.Session, error) {
+	if s != nil {
+		return s, nil
 	}
 
+	s, err := a.sessions.Login(ctx, c, nil)
+	if err != nil {
+		return nil, fmt.Errorf("login session: %w", err)
+	}
+
+	return s, nil
+}
+
+// renderLogin renders the login form of session s.
+func renderLogin(w http.ResponseWriter, s *session.Session, resume string, status int, problem string) error {
 	return render(w, status, loginPage, pageData{CSRF: session.CSRFToken(s), Resume: resume, Problem: problem})
 }
 

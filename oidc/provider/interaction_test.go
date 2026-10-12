@@ -7,6 +7,7 @@ package oidcprovider_test
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -53,6 +54,50 @@ func TestPromptNoneRefusals(t *testing.T) {
 			assert.Equal(t, "st-1", params.Get("state"))
 			assert.Equal(t, testIssuer, params.Get("iss"))
 			assert.Zero(t, spy.codes.Load(), "nothing is issued")
+		})
+	}
+}
+
+// TestSilentRefusalsRevealNothing (code review F4): under prompt=none, no
+// session, a session of another realm, of another end-user or a stale one
+// read the same on the wire — login_required with the same description —
+// so a client cannot probe the browser's sessions; the reason reaches the
+// ErrorHook only.
+func TestSilentRefusalsRevealNothing(t *testing.T) {
+	t.Parallel()
+
+	silent := with(authorizeQuery(), "prompt", "none")
+	cases := map[string]struct {
+		mutate func(*oidcprovider.AuthenticationEvent)
+		query  url.Values
+	}{
+		"session of another realm": {func(ev *oidcprovider.AuthenticationEvent) { ev.Issuer = "https://tenant-a.example" }, silent},
+		"session of another end-user": {func(ev *oidcprovider.AuthenticationEvent) { ev.Subject = "bob" },
+			with(silent, "claims", `{"id_token": {"sub": {"value": "alice"}}}`)},
+		"stale session": {func(ev *oidcprovider.AuthenticationEvent) { ev.AuthTime = ev.AuthTime.Add(-time.Hour) },
+			with(silent, "max_age", "60")},
+		"essential acr unmet": {nil, with(silent, "claims", `{"id_token": {"acr": {"essential": true, "value": "urn:loa:3"}}}`)},
+	}
+
+	baseline := newEnv(t)
+	baseline.interaction.scriptSilent(func(*http.Request, *oidcprovider.Request) (*oidcprovider.Decision, error) {
+		return &oidcprovider.Decision{Refusal: oauth2.ErrLoginRequired}, nil
+	})
+
+	noSession := redirect(t, baseline.authorize(silent))
+	require.Equal(t, oauth2.CodeLoginRequired, noSession.Get("error"))
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			e.decide(tc.mutate, nil)
+
+			params := redirect(t, e.authorize(tc.query))
+			assert.Equal(t, noSession.Get("error"), params.Get("error"))
+			assert.Equal(t, noSession.Get("error_description"), params.Get("error_description"))
+			assert.NotEmpty(t, e.sink.all(), "the reason reaches the hook")
 		})
 	}
 }
@@ -253,6 +298,10 @@ func TestRequestCheck(t *testing.T) {
 	acr.EssentialACR = []string{"urn:a"}
 	acrSilent := acr
 	acrSilent.Prompt.None = true
+	acrEmpty := base
+	acrEmpty.EssentialACR = []string{""}
+	noACR := ev(at(0))
+	noACR.ACR = ""
 	oauthOnly := oidcprovider.Request{Issuer: testIssuer, ReceivedAt: received}
 
 	otherRealm := ev(received)
@@ -284,6 +333,7 @@ func TestRequestCheck(t *testing.T) {
 		{"designated subject", designated, ev(at(0)), time.Time{}, oauth2.ErrLoginRequired},
 		{"essential acr unmet", acr, ev(at(0)), time.Time{}, oauth2.ErrAccessDenied},
 		{"essential acr unmet, prompt=none", acrSilent, ev(at(0)), time.Time{}, oauth2.ErrLoginRequired},
+		{"essential acr never met without acr", acrEmpty, noACR, time.Time{}, oauth2.ErrAccessDenied},
 		{"OAuth 2.0 request ignores OpenID rules", oauthOnly, ev(at(-24 * time.Hour)), time.Time{}, nil},
 	}
 
@@ -301,6 +351,7 @@ func TestRequestCheck(t *testing.T) {
 			var oe *oauth2.Error
 			require.ErrorAs(t, err, &oe)
 			assert.Equal(t, tc.want.Code, oe.Code)
+			assert.Equal(t, tc.want.Description, oe.Description, "a fixed description: the reason never reaches the wire")
 		})
 	}
 

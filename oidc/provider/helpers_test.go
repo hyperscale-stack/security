@@ -395,6 +395,11 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	return e
 }
 
+// clients returns the env's client store, to change after issuance.
+func (e *env) clients() staticClients {
+	return e.op.Server().Config().ClientStore.(staticClients) //nolint:forcetypeassert // the env's own store
+}
+
 // serve runs h on a request and returns the recorder.
 func serve(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
@@ -539,6 +544,22 @@ func (f *fakeClaims) fail(err error) {
 	defer f.mu.Unlock()
 
 	f.err = err
+}
+
+// user returns the claims of sub.
+func (f *fakeClaims) user(sub string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.users[sub]
+}
+
+// setUser registers the claims of sub.
+func (f *fakeClaims) setUser(sub string, claims map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.users[sub] = claims
 }
 
 func (f *fakeClaims) removeUser(sub string) {
