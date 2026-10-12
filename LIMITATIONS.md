@@ -198,7 +198,12 @@ PKCE. Not supported, and refused where a provider could select them:
   logins. Removing a transaction key before `TransactionTTL` has elapsed
   fails the logins it protected. `oidc/client/storage/memory` keeps
   transactions in the process: use the SQL or Redis store when several instances serve
-  callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
+  callbacks. It is unbounded unless built with `memory.WithCapacity(n)`:
+  login starts are unauthenticated, so size it — about 0.5 KB per pending
+  login plus its `AppState` (up to 4 KiB), kept for `TransactionTTL` — and
+  rate-limit login starts, since a full store refuses every new login
+  (`memory.ErrFull`) until transactions expire or are consumed.
+  `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
   package documentation), and its PostgreSQL and MySQL guarantees are not
   exercised in CI (SQLite only) — the opt-in runs of

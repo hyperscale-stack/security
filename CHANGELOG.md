@@ -229,6 +229,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`oidc/client/store/redis`, one Lua script per consumption, Redis Cluster
   compatible), all validated by the exported conformance suite
   `oidc/client/storetest`.
+- **Bounded in-memory OpenID Connect transaction store**:
+  `memory.WithCapacity(n)` (`oidc/client/storage/memory`) bounds the pending
+  logins the store keeps; at capacity it drops the expired ones, then
+  refuses with `memory.ErrFull` — in constant time, walking its
+  transactions at most once per expiry — and never evicts a pending login.
+  `n` must be at least 1 (`WithCapacity` panics otherwise).
 - **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
   tests only): the Relying Party against the example provider of
   `github.com/zitadel/oidc/v3` — every client authentication method and
@@ -421,6 +427,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Changed
 
+- `oidc/client/storage/memory.New` takes options: `New(opts ...Option)`.
+  Calls are unchanged; code using `memory.New` as a `func() *memory.Store`
+  value needs a closure. Its periodic sweep now walks the transactions only
+  once one may have expired.
 - The repository is now a Go workspace (`go.work`) of independent modules,
   so consumers import only the pieces they need and the core stays free of
   heavy transitive dependencies.

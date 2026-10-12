@@ -113,7 +113,11 @@ mux.HandleFunc("GET /oidc/acme/callback", func(w http.ResponseWriter, r *http.Re
   them: discovery is a network round trip.
 - Start logins on a user action from the application's own origin (a POST
   behind `http.CrossOriginProtection` or a CSRF token) and rate limit them:
-  each start writes a transaction.
+  each start writes a transaction, and non-browser clients pass
+  `CrossOriginProtection`. With `storage/memory`, bound what a flood can
+  hold with `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
+  `examples/oidc-client` maps it to 503 and rate-limits starts per client
+  address).
 - `Config.Outbound` is the request policy: the default reaches public https
   destinations only and follows no redirect. Exempt an on-premises
   provider's network with `AllowedPrefixes`; `AllowHTTP` is for local

@@ -19,3 +19,11 @@ func TestMemoryStoreConformance(t *testing.T) {
 
 	storetest.RunConformance(t, func() oidcclient.TransactionStore { return memory.New() })
 }
+
+// TestMemoryStoreConformanceWithCapacity runs the contract against a
+// bounded store: the bound changes none of its guarantees.
+func TestMemoryStoreConformanceWithCapacity(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunConformance(t, func() oidcclient.TransactionStore { return memory.New(memory.WithCapacity(1024)) })
+}
