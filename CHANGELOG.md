@@ -252,6 +252,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   so a client talking to several authorization servers or realms can detect
   a mix-up (RFC 9700 §4.4.2.1). The `server_error` answering an
   `IssuerResolver` failure is the one response without it.
+- **OAuth2 client ↔ issuer binding**: `oauth2.IssuerBoundClient`
+  (`AllowsIssuer`), an optional client capability — implemented by
+  `DefaultClient` through `IssuerValues` — for deployments whose
+  `IssuerResolver` serves several issuers from one `ClientStore`. At an
+  issuer it is not registered at, a client does not exist: `/authorize`
+  answers the bare 400 of an unknown client, never redirected, and `/token`,
+  `/revoke` and `/introspect` fail its authentication as an unknown
+  client's (`401 invalid_client`), whatever the secret — so another realm's
+  clients can be neither used nor enumerated. `oauth2.ClientAllowsIssuer`
+  applies the rule; `oauth2.ErrClientNotAtIssuer` is the cause `OnError`
+  gets. The server now resolves the issuer before it loads the client, at
+  every endpoint `/revoke` and `/introspect` included (see
+  [MIGRATION.md](MIGRATION.md)).
 - **OpenID Provider** (`oidc/provider`, package `oidcprovider`): OpenID
   Connect Core 1.0 (errata set 2) on the `oauth2` extension points — the
   Authorization Code flow with PKCE, signed ID Tokens at the code exchange
@@ -449,6 +462,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- Multi-issuer deployments can keep each client in its realm: with the
+  `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
+  can no longer send another issuer's end-users to that issuer's login page
+  and obtain their codes, tokens and ID Tokens, nor be told apart from an
+  unknown client there. Clients without the capability keep being known at
+  every issuer of a shared `ClientStore`.
+- Authorization responses name their issuer (RFC 9207, see Added): a client
+  of several authorization servers or realms can detect a mix-up attack
+  (RFC 9700 §4.4).
+- RFC 9068 access tokens are typed `at+jwt` (see Changed), so a verifier
+  requiring that type never accepts an OpenID Connect ID Token signed by the
+  same keys as an access token (RFC 8725 §3.11).
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

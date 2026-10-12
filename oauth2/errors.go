@@ -188,6 +188,12 @@ var (
 // triggers fails; match it with errors.Is.
 var ErrTokenFamilyRevocationFailed = errors.New("oauth2: token family revocation failed")
 
+// ErrClientNotAtIssuer is the cause the [ErrorHook] gets when a client
+// bound to other issuers ([IssuerBoundClient]) is refused at the issuer a
+// request resolved to. It is a plain sentinel that never reaches the
+// wire: the client reads as unknown there.
+var ErrClientNotAtIssuer = errors.New("oauth2: client not registered at the request's issuer")
+
 // CodeReplayError is the error an [AuthorizationCodeStore] returns for a
 // code it consumed before and still retains: a replay (RFC 6749 §4.1.2).
 // It reads and matches as [ErrCodeAlreadyUsed] — errors.Is, [IsCode] and

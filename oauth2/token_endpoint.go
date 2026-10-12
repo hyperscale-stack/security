@@ -16,7 +16,9 @@ import (
 // endpoint. The handler:
 //
 //  1. Enforces POST + application/x-www-form-urlencoded.
-//  2. Authenticates the client via the configured ClientAuthenticators.
+//  2. Resolves the issuer and authenticates the client at it via the
+//     configured ClientAuthenticators (a client bound to other issuers is
+//     unknown, see [IssuerBoundClient]).
 //  3. Looks up the grant_type and dispatches to the matching Grant.
 //  4. Serializes the response per RFC 6749 §5.1 (success) — plus the
 //     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
@@ -40,7 +42,9 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := s.authenticateClient(r.Context(), r)
+	// The client is authenticated at the issuer of the request: one bound
+	// to other issuers is unknown here (IssuerBoundClient).
+	client, issuer, audience, err := s.authenticateClientAt(r.Context(), r)
 	if err != nil {
 		s.writeOAuthError(r.Context(), w, err)
 
@@ -57,13 +61,6 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	handler, ok := s.dispatch[grantType]
 	if !ok {
 		s.writeOAuthError(r.Context(), w, ErrUnsupportedGrantType.WithDescription("grant_type "+grantType+" not supported"))
-
-		return
-	}
-
-	issuer, audience, err := s.resolveIssuer(r.Context(), r)
-	if err != nil {
-		s.writeOAuthError(r.Context(), w, err)
 
 		return
 	}

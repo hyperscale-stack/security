@@ -15,8 +15,10 @@ import (
 var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation temporarily unavailable", nil)
 
 // RevokeHandler returns the http.Handler for RFC 7009 token revocation.
-// Both access and refresh tokens are accepted; the server tries each
-// kind in turn. Revoking a refresh token revokes its whole family, and
+// The client authenticates at the issuer the request resolves to — one
+// bound to other issuers is unknown there ([IssuerBoundClient]). Both
+// access and refresh tokens are accepted; the server tries each kind in
+// turn. Revoking a refresh token revokes its whole family, and
 // revoking an access token revokes its family too (RFC 7009 §2.1).
 //
 // The answer is 200 OK whether or not the token existed or belonged to the
@@ -46,7 +48,7 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := s.authenticateClient(r.Context(), r)
+	client, _, _, err := s.authenticateClientAt(r.Context(), r)
 	if err != nil {
 		s.writeOAuthError(r.Context(), w, err)
 

@@ -627,3 +627,39 @@ To migrate:
 2. Resource servers verifying these access tokens add
    `jwtsec.WithType(jwtsec.TypeAccessToken)` to their verifier (RFC 9068 §4).
    A verifier that compared `typ` with `JWT` must accept `at+jwt` now.
+
+### `oauth2`: clients can be bound to the issuers they are registered at (#84)
+
+With one `ClientStore` behind an `IssuerResolver` that serves several
+issuers (realms, tenants), every client was known at every issuer: a client
+of realm A could send the end-users of realm B to B's login page and obtain
+their codes and tokens, and an ID Token of B for its own audience. A client
+can now be registered at some issuers only: `oauth2.IssuerBoundClient`
+(`AllowsIssuer(issuer string) bool`), implemented by `DefaultClient` through
+`IssuerValues` — an empty list keeps the client at every issuer. At any other
+issuer the client does not exist:
+
+| Request at an issuer the client is not registered at | Before | After |
+| ---------------------------------------------------- | ------ | ----- |
+| `/authorize` | served like at its own issuer | bare `400` "unknown or invalid client", never redirected — the same bytes as for a `client_id` that exists nowhere (RFC 6749 §4.1.2.1) |
+| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client` "unknown client", whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2) |
+| any of them | — | `OnError` gets the refusal with `oauth2.ErrClientNotAtIssuer` as its cause |
+
+The server now resolves the issuer of a request before it loads its client:
+
+| Endpoint | Before | After |
+| -------- | ------ | ----- |
+| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted |
+| `/token` | client authentication and `grant_type` checks before the resolver | the resolver first: when it fails, `server_error` wins over every other error |
+| `/revoke`, `/introspect` | no `IssuerResolver` call | the resolver runs before client authentication; a failure answers `500 server_error` |
+
+To migrate:
+
+1. Nothing for clients that do not implement `IssuerBoundClient`, nor for a
+   `DefaultClient` without `IssuerValues`: they keep working at every issuer.
+2. Make your `IssuerResolver` answer every endpoint of a realm — `/revoke`
+   and `/introspect` included — with the issuer of that realm.
+3. In a deployment serving several issuers from one `ClientStore`, give
+   every client the issuers it is registered at: implement `AllowsIssuer` on
+   your client type (issuers compared exactly), or fill
+   `DefaultClient.IssuerValues` — or scope your `ClientStore` by issuer.

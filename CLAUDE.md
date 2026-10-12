@@ -205,9 +205,11 @@ configurable via `ServerConfig.RoutePrefix`).
   `clientauth/` (`client_secret_basic` / `_post` / `none`), `token/` (opaque +
   JWT generators), `pkce/`.
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
-- Every authorization is **bound to its issuer**: `/authorize` resolves it
-  (the `IssuerResolver` is the realm), codes and tokens record it, and the
-  `authorization_code` / `refresh_token` grants refuse it elsewhere.
+- Every authorization is **bound to its issuer**: every endpoint resolves it
+  first (the `IssuerResolver` is the realm), codes and tokens record it, and
+  the `authorization_code` / `refresh_token` grants refuse it elsewhere. A
+  client implementing `IssuerBoundClient` (`DefaultClient.IssuerValues`) is
+  unknown at other issuers — same bytes as an unknown `client_id`.
 - **Extension points** (`ServerConfig.Extension`, `oauth2.Extension`): the
   contract `oidc/provider` builds on — `ValidateAuthorizeRequest` after the
   core checks, `CompleteAuthorization` turning `Consent.ExtensionResult` into

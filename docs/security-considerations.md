@@ -168,8 +168,8 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
 - **Issuer binding (realms)** — a subject is only meaningful within its
-  issuer (OIDC Core §16.15). `/authorize` resolves the issuer of the request
-  through the `IssuerResolver` right after the redirect URI is trusted;
+  issuer (OIDC Core §16.15). Every endpoint resolves the issuer of the
+  request through the `IssuerResolver` before it loads the client;
   the code and every token record it, and the `authorization_code` and
   `refresh_token` grants refuse, with `invalid_grant`, a code or refresh
   token issued under another issuer than the one resolved at `/token` — so a
@@ -184,6 +184,20 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `AuthorizeRequest.Issuer` — a session of another realm is no
   authentication. `IntrospectedToken.Issuer` lets an `IntrospectionPolicy`
   enforce the same boundary.
+- **Clients and realms** — one `ClientStore` behind several issuers makes
+  every client known at every issuer: a client of realm A could send realm
+  B's end-users to B's genuine login page and obtain their codes and
+  tokens once they consent. A client implementing `IssuerBoundClient`
+  (`DefaultClient.IssuerValues`) exists at its issuers only: elsewhere
+  `/authorize` answers the bare 400 of an unknown `client_id`, never
+  redirected (RFC 6749 §4.1.2.1), and `/token`, `/revoke` and `/introspect`
+  fail its authentication as an unknown client's (`401 invalid_client`,
+  "unknown client"), whatever the secret — the same bytes in both cases, so
+  realm B can neither be used by A's clients nor enumerate them or check
+  their secrets. The binding is checked before the client's secret and
+  redirect URI, and again on the client an authenticator returns. A
+  multi-issuer deployment binds every client, or scopes its `ClientStore`
+  by issuer.
 - **Authorization responses** — a `response_mode` other than the one the
   server answers in (`query` for the code flow, `fragment` for an enabled
   implicit flow) gets a bare 400, never redirected: the answer could not be
@@ -205,8 +219,16 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `IssuerResolver` — compares it with the issuer it sent the request to and
   aborts on a mismatch (RFC 9700 §4.4.2.1), the defense RFC 9700 prefers to
   distinct redirect URIs. The issuer must therefore be a stable https URL
-  without query or fragment (RFC 9207 §2). The one response without `iss` is
-  the `server_error` answering an `IssuerResolver` failure.
+  without query or fragment (RFC 9207 §2): the server sends it as the
+  resolver returns it. The one response without `iss` is the `server_error`
+  answering an `IssuerResolver` failure — no issuer is known then. RFC 9207
+  §2 asks for `iss` in error responses too, and §2.4 has RFC 9207 clients
+  reject a response without it, so the independent code review of #84
+  recommended a bare 500 instead; the redirect is kept so that RFC 6749
+  clients learn of the failure (RFC 6749 §4.1.2.1 `server_error`), and RFC
+  9207 clients discard it as they discard any response they cannot
+  attribute — a documented deviation on a server-failure path that issues
+  nothing.
 
 ### Protocol extensions
 
@@ -639,9 +661,12 @@ span catalog.
       revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
-- [ ] Make the `IssuerResolver` return the same issuer for `/authorize` and
-      `/token` of a realm, and authenticate users within
-      `AuthorizeRequest.Issuer` in the `ConsentFunc`.
+- [ ] Make the `IssuerResolver` return the same issuer for every endpoint
+      of a realm (`/authorize`, `/token`, `/revoke`, `/introspect`), and
+      authenticate users within `AuthorizeRequest.Issuer` in the
+      `ConsentFunc`. With several issuers and one `ClientStore`, register
+      every client at its issuers (`IssuerBoundClient`,
+      `DefaultClient.IssuerValues`) or scope the store by issuer.
 - [ ] With `store/sql`, apply the `ALTER TABLE` statements of each release
       (MIGRATION.md) before deploying it; keep PostgreSQL databases in
       `UTF8` and MySQL tables in `utf8mb4` with a strict `sql_mode` — a

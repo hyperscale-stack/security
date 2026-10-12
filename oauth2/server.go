@@ -153,25 +153,6 @@ func (s *Server) notifyError(ctx context.Context, err error) {
 	s.cfg.OnError(ctx, err)
 }
 
-// authenticateClient runs the configured client-authentication methods in
-// order and returns the first match.
-func (s *Server) authenticateClient(ctx context.Context, r *http.Request) (Client, error) {
-	for _, m := range s.cfg.ClientAuth {
-		if !m.Match(r) {
-			continue
-		}
-
-		c, err := m.Authenticate(ctx, r, s.cfg.ClientStore)
-		if err != nil {
-			return nil, fmt.Errorf("oauth2.Server: client auth: %w", err)
-		}
-
-		return c, nil
-	}
-
-	return nil, ErrInvalidClient.WithDescription("no client authentication method matched")
-}
-
 // resolveIssuer wraps IssuerResolver.Resolve, translating its error to the
 // canonical oauth2.Error envelope when present.
 func (s *Server) resolveIssuer(ctx context.Context, r *http.Request) (string, string, error) {

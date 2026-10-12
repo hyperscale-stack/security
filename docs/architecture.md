@@ -190,11 +190,12 @@ The `oauth2` module is an authorization server, not just a provider:
   row locks), Redis (Lua scripts). All three pass the shared
   `oauth2/storetest` conformance suite, which states the guarantees through
   the public API.
-- **Issuer binding** — `/authorize` resolves the issuer of the request
-  through the `IssuerResolver` (the application's realm) before any
-  redirected answer; the code and every token record it, and the
-  `authorization_code` and `refresh_token` grants refuse them at another
-  issuer.
+- **Issuer binding** — every endpoint resolves the issuer of the request
+  through the `IssuerResolver` (the application's realm) before it loads
+  the client and before any redirected answer; the code and every token
+  record it, and the `authorization_code` and `refresh_token` grants refuse
+  them at another issuer. A client implementing `IssuerBoundClient` is
+  unknown at the issuers it is not registered at.
 - **Extension points** — `ServerConfig.Extension` plugs an optional protocol
   extension, the `oidc/provider` OpenID Provider (below), into the authorization-code
   flow without a second `/token` endpoint and without `oauth2` depending on

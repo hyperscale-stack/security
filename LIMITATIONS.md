@@ -50,7 +50,18 @@ than future refactor phases.
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels
   without `iss`, and an RFC 9207 client rejects it (RFC 9207 §2.4) — the
-  outcome a failed request has anyway.
+  outcome a failed request has anyway. This deviates from RFC 9207 §2
+  ("including error responses") on purpose; a bare 500 was the reviewed
+  alternative (see
+  [docs/security-considerations.md](docs/security-considerations.md)).
+- **The issuer is not validated by the core** — `iss` carries what the
+  `IssuerResolver` returns; RFC 9207 §2 wants an https URL without query or
+  fragment. `oidc/provider` refuses any other issuer (`server_error`), but
+  that refusal still names it.
+- **Clients span every issuer by default** — with one `ClientStore` behind
+  several issuers, a client is known at every issuer unless it implements
+  `IssuerBoundClient` (`DefaultClient.IssuerValues`) or the store is scoped
+  by issuer.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
 - **Duplicated request parameters are not refused** — `/authorize` and

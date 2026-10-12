@@ -20,9 +20,17 @@ import (
 // token issued under another issuer than the one resolved for the /token
 // request (OIDC Core §16.15: a subject is only meaningful within its
 // issuer). A resolver MUST therefore return the same issuer for every
-// request of one realm — /authorize, /token — and issuers are compared
-// exactly. Changing an issuer invalidates the outstanding codes and
-// refresh tokens issued under the former one.
+// request of one realm — /authorize, /token, /revoke, /introspect — and
+// issuers are compared exactly. Changing an issuer invalidates the
+// outstanding codes and refresh tokens issued under the former one.
+//
+// The issuer is also the iss parameter of every authorization response
+// (RFC 9207 §2), sent as returned: it MUST be an https URL without query or
+// fragment — an http issuer is for loopback development only. A resolver
+// error answers server_error; at /authorize, a redirected one without iss,
+// since no issuer is known. Clients registered at some issuers only
+// ([IssuerBoundClient]) are checked against the issuer returned. A
+// resolver MUST NOT derive the issuer from an unvalidated Host header.
 type IssuerResolver interface {
 	Resolve(ctx context.Context, r *http.Request) (issuer, audience string, err error)
 }
