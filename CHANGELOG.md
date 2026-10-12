@@ -448,6 +448,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `voter.Anonymous()` vote on.
 - `security.RolePrefix` (`ROLE_`) and `security.ScopePrefix` (`scope:`): the
   authority namespaces the voter package matches roles and scopes in.
+- `httpsec.Carrier.CookiesNamed` and `session.CookieReader`: the explicit
+  accessor the session `Manager` reads its cookie through.
 
 ### Changed
 
@@ -645,6 +647,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   never match: none, an empty one, a role starting with `ROLE_`, a scope
   that is not an RFC 6749 §3.3 scope-token or starts with `scope:`. See
   [MIGRATION.md](MIGRATION.md).
+- `httpsec.Carrier.Get` and `Values` read the request's header fields only;
+  they no longer fall back to a cookie or to the query string named like
+  the key. `session.Manager` reads its cookie through the carrier's
+  `CookiesNamed` accessor (`session.CookieReader`) and finds no session with
+  a carrier that lacks it. See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1208,3 +1215,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `voter.Not()` turned the refusal of an unauthenticated principal into a
   grant (`Not(HasRole("BANNED"))` admitted anonymous callers); it no longer
   does.
+- `httpsec.Carrier` answered `Get`/`Values` from a cookie or from the query
+  string when the header was absent: Basic and Bearer credentials were
+  accepted from `?Authorization=…` and from a cookie named `Authorization`
+  (leaking through logs, `Referer` and history), and a session from
+  `?session=…` or from a `Session` request header — which even took
+  precedence over the victim's cookie — so a link or a cross-site form
+  logged the victim into the attacker's session. Credentials are now read
+  from header fields only, and the session from its cookie only.

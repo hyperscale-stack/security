@@ -1382,3 +1382,33 @@ To migrate:
 4. Pass the bare name to `HasRole`/`security.Role` (`"ADMIN"`, not
    `"ROLE_ADMIN"`), and valid RFC 6749 §3.3 scope-tokens to
    `HasScope`/`security.Scope`.
+
+### `http`, `session`: credentials from header fields only, the session from its cookie only
+
+`httpsec.Carrier.Get` and `Values` fell back to a cookie, then to the query
+string, named like the key. The Basic and Bearer extractors read
+`Get("Authorization")`, so credentials were accepted from `?Authorization=…`
+and from a cookie named `Authorization`; and `session.Manager` read
+`Get(cookieName)`, so a session was accepted from `?session=…` and from a
+`Session` request header, which even took precedence over the real cookie.
+Credentials in URLs leak through access logs, `Referer` and history (RFC
+6750 §5.3), and a link or a cross-site form carrying an attacker's session
+value logged the victim into the attacker's account.
+
+| Request | Before | After |
+| --- | --- | --- |
+| `Authorization` header (Basic, Bearer) | authenticated | unchanged |
+| `?Authorization=Basic …` / `?Authorization=Bearer …` | authenticated | no credential (401 without anonymous fallback) |
+| Cookie `Authorization="Bearer …"` | authenticated | no credential |
+| Session cookie | session | unchanged |
+| `?session=<value>` or `Session: <value>` header, no cookie | session | no session |
+| Session cookie and a `Session` header | the header's session | the cookie's session |
+| `session.Manager` used with a carrier without `CookiesNamed` | the carrier's `Get(cookieName)` | no session (`ErrNoSession`) |
+
+To migrate:
+
+1. Send credentials in the `Authorization` header and the session in its
+   cookie; nothing else is read.
+2. A custom `security.Carrier` used with `session.Manager` must implement
+   `session.CookieReader` (`CookiesNamed(name string) []*http.Cookie`, as
+   `httpsec.Carrier` does); its `Get`/`Values` must read header fields only.

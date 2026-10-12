@@ -869,6 +869,10 @@ session store to compromise or scale.
 - **Cookie attributes** — defaults are conservative: `Secure=true`,
   `HttpOnly=true`, `SameSite=Lax`. Disable `Secure` only for local plain-HTTP
   development.
+- **Cookie only** — the `Manager` reads the session from the request's
+  `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
+  the URL nor from a header named like the cookie: a link carrying a session
+  value cannot log a browser into another account.
 - **Session fixation** — `Manager.Rotate` mints a fresh session ID; call it
   immediately after a privilege change (login). The ID never appears raw in
   a span — only a SHA-256 fingerprint.
@@ -1090,6 +1094,15 @@ resolved address and port, and every error tells whether a name is
 refused: when tenants supply URLs ("test this connection"), log the error
 and show them a generic message, or the error text becomes an oracle on
 the internal network.
+
+## Credentials in header fields only
+
+`httpsec.Carrier.Get`/`Values` (and the gRPC and ConnectRPC carriers) read
+header fields only: the Basic and Bearer extractors accept credentials from
+the `Authorization` field alone, never from the URL query string (RFC 6750
+§5.3: tokens in URLs leak through logs, `Referer` and browser history) nor
+from a cookie named like the field (an ambient credential a cross-site
+request would carry).
 
 ## Authorization
 

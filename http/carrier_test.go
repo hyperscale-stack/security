@@ -14,28 +14,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCarrierLookupOrderIsHeaderThenCookieThenQuery(t *testing.T) {
+// Audit CORE-02 / decision 6: Get and Values fell back to a cookie and to
+// the query string named like the key, so Basic and Bearer credentials were
+// accepted from ?Authorization=… and from a cookie named Authorization.
+func TestCarrierReadsHeaderFieldsOnly(t *testing.T) {
 	t.Parallel()
 
-	req := httptest.NewRequest(http.MethodGet, "/?Authorization=q", nil)
-	req.Header.Set("Authorization", "h")
-	req.AddCookie(&http.Cookie{Name: "Authorization", Value: "c"})
+	outsideHeaders := httptest.NewRequest(http.MethodGet, "/?Authorization=q", nil)
+	outsideHeaders.AddCookie(&http.Cookie{Name: "Authorization", Value: "c"})
 
-	c := httpsec.NewCarrier(httptest.NewRecorder(), req)
-	assert.Equal(t, "h", c.Get("Authorization"), "header wins")
+	c := httpsec.NewCarrier(httptest.NewRecorder(), outsideHeaders)
+	assert.Empty(t, c.Get("Authorization"), "neither the query string nor a cookie is a header field")
+	assert.Nil(t, c.Values("Authorization"))
 
-	// Drop header -> cookie wins
-	req.Header.Del("Authorization")
-	c = httpsec.NewCarrier(httptest.NewRecorder(), req)
-	assert.Equal(t, "c", c.Get("Authorization"))
-
-	// Drop cookie too -> query wins
-	req2 := httptest.NewRequest(http.MethodGet, "/?Authorization=q", nil)
-	c = httpsec.NewCarrier(httptest.NewRecorder(), req2)
-	assert.Equal(t, "q", c.Get("Authorization"))
+	outsideHeaders.Header.Set("Authorization", "h")
+	assert.Equal(t, "h", c.Get("Authorization"))
+	assert.Equal(t, []string{"h"}, c.Values("Authorization"))
 }
 
-func TestCarrierValuesPrefersHeaderMultiValues(t *testing.T) {
+func TestCarrierValuesReturnsEveryHeaderValue(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodGet, "/?X-Foo=q1&X-Foo=q2", nil)
@@ -44,6 +41,39 @@ func TestCarrierValuesPrefersHeaderMultiValues(t *testing.T) {
 
 	c := httpsec.NewCarrier(httptest.NewRecorder(), req)
 	assert.Equal(t, []string{"h1", "h2"}, c.Values("X-Foo"))
+	assert.Nil(t, c.Values("X-Bar"))
+}
+
+// The session module reads its cookie through this explicit accessor, never
+// through Get or Values.
+func TestCarrierCookiesNamedReadsTheCookieHeaderOnly(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/?session=from-query", nil)
+	req.Header.Set("Session", "from-header")
+	req.AddCookie(&http.Cookie{Name: "session", Value: "from-cookie"})
+	req.AddCookie(&http.Cookie{Name: "other", Value: "x"})
+
+	c := httpsec.NewCarrier(httptest.NewRecorder(), req)
+
+	cookies := c.CookiesNamed("session")
+	require.Len(t, cookies, 1)
+	assert.Equal(t, "from-cookie", cookies[0].Value)
+	assert.Empty(t, c.CookiesNamed("absent"))
+}
+
+// HTTP/2 lets a client split the Cookie field into several field lines
+// (RFC 9113 §8.2.3): every line is read.
+func TestCarrierCookiesNamedReadsSplitCookieFields(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Add("Cookie", "a=1")
+	req.Header.Add("Cookie", "session=s; b=2")
+
+	cookies := httpsec.NewCarrier(nil, req).CookiesNamed("session")
+	require.Len(t, cookies, 1)
+	assert.Equal(t, "s", cookies[0].Value)
 }
 
 func TestCarrierSetWritesToResponseHeader(t *testing.T) {
@@ -65,8 +95,23 @@ func TestCarrierWithNilRequestAndWriterIsSafe(t *testing.T) {
 
 	assert.Equal(t, "", c.Get("anything"))
 	assert.Nil(t, c.Values("anything"))
+	assert.Empty(t, c.CookiesNamed("anything"))
 	c.Set("X", "Y") // must not panic
 	c.Add("X", "Y") // must not panic
+}
+
+// Audit CORE-I3: Get panicked on a request without URL (fatal for a server
+// without a recovery middleware).
+func TestCarrierWithoutURLOrHeaderIsSafe(t *testing.T) {
+	t.Parallel()
+
+	c := httpsec.NewCarrier(httptest.NewRecorder(), &http.Request{})
+
+	assert.NotPanics(t, func() {
+		assert.Empty(t, c.Get("Authorization"))
+		assert.Nil(t, c.Values("Authorization"))
+		assert.Empty(t, c.CookiesNamed("session"))
+	})
 }
 
 func TestCarrierExposesUnderlyingRequest(t *testing.T) {

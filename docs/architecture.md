@@ -118,9 +118,11 @@ Carrier ──▶ Extractor ──▶ Authentication (pending)
 ```
 
 - **`Carrier`** abstracts a transport message — read credentials, write
-  challenges. `httpsec.Carrier` wraps `*http.Request`/`http.ResponseWriter`;
-  `grpcsec.Carrier` wraps `metadata.MD`; `connectrpcsec.Carrier` wraps
-  `http.Header`.
+  challenges. Reads cover the header fields only, never the URL or cookies.
+  `httpsec.Carrier` wraps `*http.Request`/`http.ResponseWriter` and adds the
+  explicit `CookiesNamed` accessor the session module reads its cookie
+  through; `grpcsec.Carrier` wraps `metadata.MD`; `connectrpcsec.Carrier`
+  wraps `http.Header`.
 - **`Extractor`** pulls raw, unauthenticated credentials from a `Carrier`.
   Returns `(nil, nil)` when its scheme is absent.
 - **`Authenticator`** validates a pending `Authentication` and returns an

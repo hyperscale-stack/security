@@ -189,7 +189,10 @@ Carrier ──> Extractor ──> Authentication ──> Manager/Authenticator �
 ```
 
 - **`Carrier`** — abstracts a transport message (HTTP request, gRPC metadata)
-  with `http.Header`-like Get/Set/Add/Values. Adapters wrap it.
+  with `http.Header`-like Get/Set/Add/Values. Adapters wrap it. Get/Values
+  read header fields only — never the query string or cookies; the session
+  module reads its cookie through `httpsec.Carrier.CookiesNamed`
+  (`session.CookieReader`).
 - **`Extractor`** — pulls raw credentials from a `Carrier` into an
   *unauthenticated* `Authentication`. Returns `(nil, nil)` when its scheme is
   absent (engine tries the next); `(nil, err)` when present-but-malformed.

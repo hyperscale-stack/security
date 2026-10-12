@@ -351,6 +351,10 @@ PKCE. Not supported, and refused where a provider could select them:
   cookie, there is no server-side session store. This covers the common
   case without server state, but a session cannot be revoked server-side
   before its cookie expires. A server-side store (Redis/SQL) is not shipped.
+- The session cookie is read through `httpsec.Carrier` (its
+  `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
+  no cookies: a cookie session does not authenticate gRPC or ConnectRPC
+  calls (Connect-Web clients included).
 
 ## Logging
 
