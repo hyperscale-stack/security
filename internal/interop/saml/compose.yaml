@@ -1,7 +1,8 @@
-# Disposable services for the opt-in persistence tests of this module
-# (never used by routine CI). Images are pinned by digest; credentials come
-# from the environment and nothing is persisted.
+# Disposable services for the opt-in SAML interoperability and persistence
+# tests of this module (never used by routine CI). Images are pinned by
+# digest; credentials come from the environment and nothing is persisted.
 #
+#   export SAMLSP_KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 #   export SAMLSP_DB_PASSWORD="$(openssl rand -hex 16)"
 #   docker compose -f internal/interop/saml/compose.yaml up -d --wait
 #
@@ -14,6 +15,20 @@
 name: samlsp-interop
 
 services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    command: ["start-dev", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SAMLSP_KEYCLOAK_ADMIN_PASSWORD:?set SAMLSP_KEYCLOAK_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
   postgres:
     image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
     environment:
