@@ -70,6 +70,14 @@ var (
 	// empty (RFC 9068 §2.2). Nothing is signed. A server-side error, not a
 	// credential failure: it wraps no security sentinel.
 	ErrUnsignableClaims = errors.New("jwt: unsignable claims")
+
+	// ErrKeySetUnavailable signals that no usable verification key set
+	// could be obtained: a remote JWK Set never fetched, or older than
+	// [MaxKeySetStaleness] while refreshes fail, a [JWKSProvider] failing,
+	// the caller's context ending while it waits for a fetch. An
+	// infrastructure failure, not a credential one: it wraps no credential
+	// sentinel, so transports do not answer it as an invalid token.
+	ErrKeySetUnavailable = errors.New("jwt: key set unavailable")
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via

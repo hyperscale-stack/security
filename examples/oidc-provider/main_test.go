@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
+	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,12 +237,19 @@ func (h *harness) token(form url.Values) tokenResponse {
 func (h *harness) verifyIDToken(raw string) idClaims {
 	h.t.Helper()
 
-	verifier := jwtsec.NewVerifier(jwtsec.NewRemoteJWKS(h.doc.JWKSURI),
+	// The example runs on loopback over http: the JWK Set fetch needs an
+	// explicit outbound policy (the default refuses both).
+	keys, err := jwtsec.NewRemoteJWKS(h.doc.JWKSURI, jwtsec.WithOutboundPolicy(outbound.Policy{
+		AllowHTTP: true, AllowedPrefixes: outbound.LoopbackPrefixes(),
+	}))
+	require.NoError(h.t, err)
+
+	verifier := jwtsec.NewVerifier(keys,
 		jwtsec.WithIssuer(h.issuer), jwtsec.WithAudience(rpClientID), jwtsec.WithAllowedAlgorithms(jwtsec.RS256))
 
 	var claims idClaims
 
-	_, err := verifier.Verify(h.t.Context(), raw, &claims)
+	_, err = verifier.Verify(h.t.Context(), raw, &claims)
 	require.NoError(h.t, err)
 
 	return claims

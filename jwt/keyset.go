@@ -30,6 +30,11 @@ type PublicKey struct {
 	// HMAC algorithm, the []byte secret (at least the hash size, RFC 7518
 	// §3.2).
 	Key crypto.PublicKey
+
+	// impliedRSA marks an RSA key a remote JWK Set published without alg:
+	// a Verifier binds it to one algorithm of its own allow-list (see
+	// boundAlgorithm). Never set on keys built by callers.
+	impliedRSA bool
 }
 
 // PrivateKey is the signing-key counterpart to [PublicKey].
@@ -66,7 +71,9 @@ type KeySet interface {
 //     ([NewRemoteJWKS], in jwks.go).
 //
 // The KeySet contract gives implementations leeway to refresh in the
-// background without coordinating with callers.
+// background without coordinating with callers. A [Verifier] reports any
+// KeySet error — or a nil KeySet — as [ErrKeySetUnavailable], an
+// infrastructure failure, never as an invalid token.
 type JWKSProvider interface {
 	KeySet(ctx context.Context) (KeySet, error)
 }

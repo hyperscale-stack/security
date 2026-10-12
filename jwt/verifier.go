@@ -6,6 +6,7 @@ package jwtsec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -109,23 +110,50 @@ func (v *verifier) verify(ctx context.Context, span trace.Span, token string, cl
 }
 
 // key returns the verification key the token's kid designates, bound to
-// alg (see bindKey).
+// alg (see bindKey). An unknown kid makes a provider that can refresh
+// (the remote JWK Set) fetch its set again, at most once per
+// MinKeySetRefreshInterval (key rotation, OpenID Connect Core §10.1.1);
+// a known kid never does.
 func (v *verifier) key(ctx context.Context, kid string, alg Algorithm) (PublicKey, error) {
 	keys, err := v.provider.KeySet(ctx)
-	if err != nil {
-		return PublicKey{}, fmt.Errorf("jwt: load JWKS: %w", err)
+	if err != nil || keys == nil {
+		return PublicKey{}, keySetUnavailable(err)
 	}
 
 	pub, ok := keys.ByKeyID(kid)
+	if !ok && kid != "" {
+		if r, canRefresh := v.provider.(keyRefresher); canRefresh {
+			if keys, err = r.refreshKeySet(ctx); err != nil {
+				return PublicKey{}, keySetUnavailable(err)
+			}
+
+			pub, ok = keys.ByKeyID(kid)
+		}
+	}
+
 	if !ok {
 		return PublicKey{}, fmt.Errorf("%w: no single key for kid %q", ErrInvalidSignature, clip(kid))
 	}
+
+	pub.Algorithm = boundAlgorithm(pub, v.cfg.allowed)
 
 	if err := bindKey(pub, alg); err != nil {
 		return PublicKey{}, err
 	}
 
 	return pub, nil
+}
+
+// keySetUnavailable wraps a key set failure in ErrKeySetUnavailable.
+func keySetUnavailable(err error) error {
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: the provider returned no key set", ErrKeySetUnavailable)
+	case errors.Is(err, ErrKeySetUnavailable):
+		return err
+	default:
+		return fmt.Errorf("%w: %w", ErrKeySetUnavailable, err)
+	}
 }
 
 // claims decodes the verified payload — strictly, see decodeClaims — runs
