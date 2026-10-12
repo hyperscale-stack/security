@@ -61,11 +61,14 @@ func newServer() (http.Handler, error) {
 		return nil, fmt.Errorf("generate key: %w", err)
 	}
 
-	signer := jwtsec.NewSigner(jwtsec.PrivateKey{
+	signer, err := jwtsec.NewSigner(jwtsec.PrivateKey{
 		KeyID:     keyID,
 		Algorithm: jwtsec.EdDSA,
 		Key:       priv,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("signer: %w", err)
+	}
 
 	jwks := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{{
 		KeyID:     keyID,

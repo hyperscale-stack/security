@@ -20,7 +20,7 @@ func TestOAuth2AccessTokenSignerProducesRFC9068Token(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	adapter := jwtsec.NewOAuth2AccessTokenSigner(priv)
+	adapter := mustAccessTokenSigner(t, priv)
 
 	issued := time.Now().Truncate(time.Second)
 	expires := issued.Add(time.Hour)

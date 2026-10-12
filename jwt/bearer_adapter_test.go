@@ -18,7 +18,7 @@ func TestBearerVerifierDefaultResolverExposesScopesAsAuthorities(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{
@@ -42,7 +42,7 @@ func TestBearerVerifierCustomResolver(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{
@@ -63,7 +63,7 @@ func TestBearerVerifierPropagatesVerifierError(t *testing.T) {
 	t.Parallel()
 
 	priv, _ := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	// Verifier with no keys -> ErrInvalidSignature.
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS(nil))
 

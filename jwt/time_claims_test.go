@@ -191,7 +191,7 @@ func TestSignerRefusesOutOfRangeDates(t *testing.T) {
 	t.Parallel()
 
 	priv, _ := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 
 	for name, claims := range map[string]jwtsec.StandardClaims{
 		"zero exp":       {Subject: "a", ExpiresAt: jwtsec.NewNumericDate(time.Time{})},

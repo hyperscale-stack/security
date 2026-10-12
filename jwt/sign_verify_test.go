@@ -36,7 +36,7 @@ func TestSignVerifyRoundTripPerAlgorithm(t *testing.T) {
 
 			priv, pub := c.gen(t)
 
-			signer := jwtsec.NewSigner(priv)
+			signer := mustSigner(t, priv)
 			provider := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub})
 			verifier := jwtsec.NewVerifier(provider,
 				jwtsec.WithIssuer("https://issuer.example"),
@@ -91,7 +91,7 @@ func TestVerifyRejectsExpired(t *testing.T) {
 	clk := newFixedClock(time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC))
 	priv, pub := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithClock(clk),
@@ -113,7 +113,7 @@ func TestVerifyClockSkewToleratesNearMissExpiry(t *testing.T) {
 	clk := newFixedClock(time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC))
 	priv, pub := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithClock(clk),
@@ -134,7 +134,7 @@ func TestVerifyRejectsMissingExpiryByDefault(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	// A validly-signed token with no `exp` claim — a token that never
@@ -152,7 +152,7 @@ func TestVerifyOptionalExpiryAllowsMissingExp(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithOptionalExpiry(),
@@ -169,7 +169,7 @@ func TestVerifyRejectsBadIssuer(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithIssuer("https://issuer.example"),
@@ -189,7 +189,7 @@ func TestVerifyRejectsBadAudience(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithAudience("api-1", "api-2"),
@@ -209,7 +209,7 @@ func TestVerifyAcceptsAnyMatchingAudience(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithAudience("api-1", "api-2"),
@@ -232,7 +232,7 @@ func TestVerifyRejectsUnknownKid(t *testing.T) {
 	// Verifier has a different key set.
 	_, pub2 := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv1)
+	signer := mustSigner(t, priv1)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub2}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{Subject: "alice"})
@@ -246,7 +246,7 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	type custom struct {
@@ -267,12 +267,4 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "alice", got.Subject)
 	assert.Equal(t, "acme", got.Tenant)
-}
-
-func TestSignerPanicsOnInvalidKey(t *testing.T) {
-	t.Parallel()
-
-	assert.Panics(t, func() {
-		jwtsec.NewSigner(jwtsec.PrivateKey{}) // empty alg
-	})
 }

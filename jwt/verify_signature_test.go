@@ -28,7 +28,7 @@ func TestVerifySignatureReturnsTheVerifiedToken(t *testing.T) {
 
 	// Expired long ago: VerifySignature checks no claim, exp included.
 	claims := jwtsec.StandardClaims{Subject: "alice", ExpiresAt: jwtsec.NewNumericDate(time.Unix(1000, 0))}
-	jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), claims)
+	jws, err := mustSigner(t, priv).Sign(context.Background(), claims)
 	require.NoError(t, err)
 
 	got, err := jwtsec.VerifySignature(context.Background(), jws, []jwtsec.PublicKey{pub})
@@ -56,7 +56,7 @@ func TestVerifySignatureSelectsTheKeyByKid(t *testing.T) {
 	keys := []jwtsec.PublicKey{pub1, pub2}
 
 	for _, priv := range []jwtsec.PrivateKey{priv1, priv2} {
-		jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+		jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 		require.NoError(t, err)
 
 		got, err := jwtsec.VerifySignature(context.Background(), jws, keys)
@@ -73,7 +73,7 @@ func TestVerifySignatureRefusals(t *testing.T) {
 	other, _ := genECDSA(t) // same kid "ec-1", another key
 
 	signed := func(priv jwtsec.PrivateKey) string {
-		jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+		jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 		require.NoError(t, err)
 
 		return jws
@@ -126,7 +126,7 @@ func TestVerifySignatureAcceptsANoKidTokenWithOneKey(t *testing.T) {
 	priv, pub := genECDSA(t)
 	priv.KeyID = ""
 
-	jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+	jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 	require.NoError(t, err)
 
 	got, err := jwtsec.VerifySignature(context.Background(), jws, []jwtsec.PublicKey{pub})

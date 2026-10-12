@@ -29,18 +29,26 @@ type Signer interface {
 	KeyID() string
 }
 
-// NewSigner returns a Signer using the supplied PrivateKey. The key's
-// Algorithm and Key MUST be set; the function panics otherwise to refuse a
-// silently-misconfigured signer. Of the options, a signer honors
-// [WithType] only — the "typ" header it writes, [TypeJWT] by default; the
-// others configure verifiers and are ignored.
-func NewSigner(active PrivateKey, opts ...Option) Signer {
-	if active.Algorithm == "" {
-		panic("jwtsec.NewSigner: PrivateKey.Algorithm is required")
-	}
-
-	if active.Key == nil {
-		panic("jwtsec.NewSigner: PrivateKey.Key is required")
+// NewSigner returns a Signer using the supplied PrivateKey, or, wrapping
+// [ErrInvalidKey], why the key cannot sign with its Algorithm (RFC 7518
+// §3.2-§3.5, RFC 8725 §3.5). Accepted keys:
+//   - an *rsa.PrivateKey of at least 2048 bits for RS*/PS*, an
+//     *ecdsa.PrivateKey on the algorithm's curve for ES*, an
+//     ed25519.PrivateKey for EdDSA (see [PrivateKey.Validate]);
+//   - a jose.OpaqueSigner — a KMS or HSM key, e.g. through go-jose's
+//     cryptosigner.Opaque — that offers the algorithm and whose public half
+//     passes [PublicKey.Validate];
+//   - a jose.JSONWebKey, or a pointer to one, holding one of the above;
+//   - for HS256 / HS384 / HS512, a []byte secret of at least 32 / 48 / 64
+//     bytes.
+//
+// Of the options, a signer honors [WithType] only — the "typ" header it
+// writes, [TypeJWT] by default; the others configure verifiers and are
+// ignored. A Signer checks no claim: [OAuth2AccessTokenSigner] signs RFC
+// 9068 access tokens.
+func NewSigner(active PrivateKey, opts ...Option) (Signer, error) {
+	if err := validateSigningKey(active); err != nil {
+		return nil, err
 	}
 
 	cfg := &config{typ: TypeJWT}
@@ -48,7 +56,7 @@ func NewSigner(active PrivateKey, opts ...Option) Signer {
 		o(cfg)
 	}
 
-	return &signer{key: active, typ: cfg.typ}
+	return &signer{key: active, typ: cfg.typ}, nil
 }
 
 type signer struct {

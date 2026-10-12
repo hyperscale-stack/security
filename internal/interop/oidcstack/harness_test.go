@@ -453,7 +453,10 @@ func newOP(t *testing.T, opts ...func(*opConfig)) *op {
 	}
 
 	if cfg.jwtAccessTokens {
-		gcfg.AccessTokens = token.NewJWTAccessTokenGenerator(jwtsec.NewOAuth2AccessTokenSigner(rsaKey(9, jwtsec.RS256, "access-tokens")))
+		signer, err := jwtsec.NewOAuth2AccessTokenSigner(rsaKey(9, jwtsec.RS256, "access-tokens"))
+		require.NoError(t, err)
+
+		gcfg.AccessTokens = token.NewJWTAccessTokenGenerator(signer)
 	}
 
 	provider, err := oidcprovider.New(oauth2.ServerConfig{

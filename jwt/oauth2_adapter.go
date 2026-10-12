@@ -35,15 +35,31 @@ type OAuth2AccessTokenSigner struct {
 
 // NewOAuth2AccessTokenSigner returns the RFC 9068 access-token signer of
 // key: it builds its own [Signer], typed [TypeAccessToken], so no access
-// token it signs can go out untyped. Like [NewSigner], it panics on a key
-// without Algorithm or Key. Publish the key's public half where resource
-// servers fetch the authorization server's keys (RFC 9068 §4: its jwks_uri).
-func NewOAuth2AccessTokenSigner(key PrivateKey) *OAuth2AccessTokenSigner {
-	return &OAuth2AccessTokenSigner{signer: NewSigner(key, WithType(TypeAccessToken))}
+// token it signs can go out untyped. Like [NewSigner], it fails with
+// [ErrInvalidKey] on a key that cannot sign with its Algorithm. Publish
+// the key's public half where resource servers fetch the authorization
+// server's keys (RFC 9068 §4: its jwks_uri).
+func NewOAuth2AccessTokenSigner(key PrivateKey) (*OAuth2AccessTokenSigner, error) {
+	s, err := NewSigner(key, WithType(TypeAccessToken))
+	if err != nil {
+		return nil, err
+	}
+
+	return &OAuth2AccessTokenSigner{signer: s}, nil
 }
 
-// SignAccessToken implements [oauth2/token.AccessTokenSigner].
+// SignAccessToken implements [oauth2/token.AccessTokenSigner]. It refuses,
+// with [ErrUnsignableClaims] and without signing anything, claims lacking
+// a value RFC 9068 §2.2 makes REQUIRED — an empty Issuer, Subject,
+// Audience or ClientID, a zero IssuedAt or ExpiresAt — or whose ExpiresAt
+// is not after IssuedAt (jti is always generated). An [oauth2.IssuerResolver]
+// returning an empty audience therefore makes JWT access-token issuance
+// fail: give every realm its resource-server audience.
 func (s *OAuth2AccessTokenSigner) SignAccessToken(ctx context.Context, claims token.AccessTokenClaims) (string, error) {
+	if err := checkAccessTokenClaims(claims); err != nil {
+		return "", err
+	}
+
 	jti, err := newJTI()
 	if err != nil {
 		return "", err
@@ -68,6 +84,37 @@ func (s *OAuth2AccessTokenSigner) SignAccessToken(ctx context.Context, claims to
 	}
 
 	return out, nil
+}
+
+// checkAccessTokenClaims refuses claims lacking an RFC 9068 §2.2 REQUIRED
+// value, or expiring at or before their issuance.
+func checkAccessTokenClaims(c token.AccessTokenClaims) error {
+	missing := ""
+
+	switch {
+	case c.Issuer == "":
+		missing = claimIss
+	case c.Subject == "":
+		missing = claimSub
+	case c.Audience == "":
+		missing = claimAud
+	case c.ClientID == "":
+		missing = claimClientID
+	case c.IssuedAt.IsZero():
+		missing = claimIat
+	case c.ExpiresAt.IsZero():
+		missing = claimExp
+	}
+
+	if missing != "" {
+		return fmt.Errorf("%w: RFC 9068 requires %s", ErrUnsignableClaims, missing)
+	}
+
+	if !c.ExpiresAt.After(c.IssuedAt) {
+		return fmt.Errorf("%w: exp is not after iat", ErrUnsignableClaims)
+	}
+
+	return nil
 }
 
 // newJTI returns a fresh 128-bit, base64url-encoded JWT ID.

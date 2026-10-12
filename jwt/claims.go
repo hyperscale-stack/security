@@ -21,8 +21,21 @@ import (
 // is refused, never read as an absent claim: "nbf": null must not disable
 // the not-before check.
 var (
-	stringClaims = []string{"iss", "sub", "jti", "scope"}
-	dateClaims   = []string{"exp", "nbf", "iat"}
+	stringClaims = []string{claimIss, claimSub, claimJti, claimScope}
+	dateClaims   = []string{claimExp, claimNbf, claimIat}
+)
+
+// Claim names (RFC 7519 §4.1, RFC 8693 §4.2-§4.3, RFC 9068 §2.2).
+const (
+	claimIss      = "iss"
+	claimSub      = "sub"
+	claimAud      = "aud"
+	claimExp      = "exp"
+	claimNbf      = "nbf"
+	claimIat      = "iat"
+	claimJti      = "jti"
+	claimScope    = "scope"
+	claimClientID = "client_id"
 )
 
 // decodeClaims reads a verified JWS payload as a JWT Claims Set: one UTF-8
@@ -62,7 +75,7 @@ func checkClaimTypes(members map[string]josejson.RawMessage) error {
 		}
 	}
 
-	if raw, ok := members["aud"]; ok && !isAudience(raw) {
+	if raw, ok := members[claimAud]; ok && !isAudience(raw) {
 		return fmt.Errorf("%w: aud is neither a string nor an array of strings", errJSON)
 	}
 

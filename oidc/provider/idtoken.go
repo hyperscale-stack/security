@@ -175,7 +175,12 @@ func (p *Provider) signIDToken(ctx context.Context, iss oauth2.TokenIssuance, gc
 		claims[claimAMR] = gc.AMR
 	}
 
-	jws, err := jwtsec.NewSigner(key).Sign(ctx, claims)
+	signer, err := jwtsec.NewSigner(key)
+	if err != nil {
+		return "", fmt.Errorf("oidcprovider: sign ID Token: %w", err)
+	}
+
+	jws, err := signer.Sign(ctx, claims)
 	if err != nil {
 		return "", fmt.Errorf("oidcprovider: sign ID Token: %w", err)
 	}

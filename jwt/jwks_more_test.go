@@ -188,7 +188,7 @@ func TestSignerAccessors(t *testing.T) {
 	t.Parallel()
 
 	priv, _ := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 
 	assert.Equal(t, jwtsec.ES256, signer.Algorithm())
 	assert.Equal(t, "ec-1", signer.KeyID())

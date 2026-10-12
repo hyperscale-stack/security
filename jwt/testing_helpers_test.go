@@ -58,3 +58,24 @@ type fixedClock struct{ now time.Time }
 func newFixedClock(now time.Time) fixedClock { return fixedClock{now: now} }
 
 func (c fixedClock) Now() time.Time { return c.now }
+
+// mustSigner returns the Signer of key, failing the test on an invalid key.
+func mustSigner(t testing.TB, key jwtsec.PrivateKey, opts ...jwtsec.Option) jwtsec.Signer {
+	t.Helper()
+
+	s, err := jwtsec.NewSigner(key, opts...)
+	require.NoError(t, err)
+
+	return s
+}
+
+// mustAccessTokenSigner returns the RFC 9068 signer of key, failing the
+// test on an invalid key.
+func mustAccessTokenSigner(t testing.TB, key jwtsec.PrivateKey) *jwtsec.OAuth2AccessTokenSigner {
+	t.Helper()
+
+	s, err := jwtsec.NewOAuth2AccessTokenSigner(key)
+	require.NoError(t, err)
+
+	return s
+}

@@ -11,6 +11,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"fmt"
+	"slices"
+
+	jose "github.com/go-jose/go-jose/v4"
 )
 
 // minRSABits is the smallest RSA modulus the RS* and PS* algorithms accept
@@ -51,6 +54,54 @@ func familyOf(alg Algorithm) (keyFamily, elliptic.Curve) {
 	}
 }
 
+// validateSigningKey reports, wrapping ErrInvalidKey, why k cannot sign
+// with its Algorithm (see NewSigner for the accepted forms).
+func validateSigningKey(k PrivateKey) error {
+	switch key := k.Key.(type) {
+	case []byte:
+		if n := hmacKeySize(k.Algorithm); n == 0 || len(key) < n {
+			return fmt.Errorf("%w: not a %q secret of the required size", ErrInvalidKey, k.Algorithm)
+		}
+
+		return nil
+	case jose.OpaqueSigner:
+		return validateOpaqueSigner(k.Algorithm, key)
+	case jose.JSONWebKey:
+		return validateSigningKey(PrivateKey{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: key.Key})
+	case *jose.JSONWebKey:
+		if key == nil {
+			return fmt.Errorf("%w: nil JSON Web Key", ErrInvalidKey)
+		}
+
+		return validateSigningKey(PrivateKey{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: key.Key})
+	default:
+		return k.Validate()
+	}
+}
+
+// validateOpaqueSigner checks an opaque (KMS, HSM) signer through its
+// public half: it must offer alg, and its public key must fit alg.
+func validateOpaqueSigner(alg Algorithm, s jose.OpaqueSigner) error {
+	if !slices.Contains(s.Algs(), alg.joseAlg()) {
+		return fmt.Errorf("%w: the opaque signer does not offer %q", ErrInvalidKey, alg)
+	}
+
+	pub := s.Public()
+	if pub == nil {
+		return fmt.Errorf("%w: the opaque signer has no public key", ErrInvalidKey)
+	}
+
+	return PublicKey{Algorithm: alg, Key: pub.Key}.Validate()
+}
+
+// hmacKeySizes are the smallest secrets the HMAC algorithms accept: the
+// size of their hash output (RFC 7518 §3.2).
+var hmacKeySizes = map[Algorithm]int{HS256: 32, HS384: 48, HS512: 64}
+
+// hmacKeySize returns the smallest secret alg accepts, 0 when alg is not
+// an HMAC algorithm.
+func hmacKeySize(alg Algorithm) int { return hmacKeySizes[alg] }
+
 // bindKey checks that pub may verify a signature made with alg: the key is
 // bound to exactly that algorithm (RFC 8725 §3.1 — an empty Algorithm
 // verifies nothing) and, for an asymmetric algorithm, is a valid public key
@@ -76,9 +127,7 @@ func bindKey(pub PublicKey, alg Algorithm) error {
 }
 
 // isHMAC reports whether alg is a symmetric (HMAC) algorithm.
-func isHMAC(alg Algorithm) bool {
-	return alg == HS256 || alg == HS384 || alg == HS512
-}
+func isHMAC(alg Algorithm) bool { return hmacKeySize(alg) > 0 }
 
 // Validate reports, wrapping [ErrInvalidKey], why k cannot verify the
 // signatures of its algorithm: an Algorithm that is not an asymmetric

@@ -18,7 +18,7 @@ import (
 // and nothing over the size bound is ever accepted.
 func FuzzVerifyToken(f *testing.F) {
 	priv, pub := genECDSA(f)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(f, priv)
 
 	tok, err := signer.Sign(context.Background(), jwtsec.StandardClaims{Subject: "a", ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour))})
 	require.NoError(f, err)

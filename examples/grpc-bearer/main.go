@@ -62,11 +62,14 @@ func newServer() (*grpc.Server, minter, error) {
 		return nil, nil, fmt.Errorf("generate key: %w", err)
 	}
 
-	signer := jwtsec.NewSigner(jwtsec.PrivateKey{
+	signer, err := jwtsec.NewSigner(jwtsec.PrivateKey{
 		KeyID:     keyID,
 		Algorithm: jwtsec.EdDSA,
 		Key:       priv,
 	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("signer: %w", err)
+	}
 
 	jwks := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{{
 		KeyID:     keyID,
