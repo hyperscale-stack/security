@@ -821,6 +821,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   challenge. Headers staged on the `connectrpcsec.Carrier` reach the client
   on a refused call and on a handler error too, and a custom `Engine`
   returning no authentication no longer panics the interceptors.
+- Documentation drift: `AttrPrincipalSubject` no longer references a
+  non-existent `SetSubjectAttributeMode`, the HTTP middleware no longer
+  promises a route override it could not offer, and `LIMITATIONS.md` lists
+  the ConnectRPC adapter. `docs/security-considerations.md` documents the
+  extractor order (first extractor wins) and its CSRF implication.
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It

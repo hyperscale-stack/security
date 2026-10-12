@@ -1104,6 +1104,19 @@ the `Authorization` field alone, never from the URL query string (RFC 6750
 from a cookie named like the field (an ambient credential a cross-site
 request would carry).
 
+## Extractor order
+
+The `Engine` tries its extractors in order and the first one that finds a
+credential wins (as in Spring Security's filter chain): a deliberate design,
+not a fallback between schemes. Put the header-based extractors (bearer,
+basic) before the session extractor: a browser attaches cookies to
+cross-site requests by itself — `SameSite=Lax` still sends them on
+top-level GET navigations — but never an `Authorization` header, so an
+engine that accepts a cookie session authenticates requests an attacker's
+page can trigger. Protect every state-changing endpoint reached with a
+cookie session against CSRF, and prefer one engine per audience (browser
+pages, APIs) so that an API never authenticates an ambient cookie.
+
 ## Authorization
 
 Authorization follows Spring Security's voter model, and fails closed:
@@ -1308,6 +1321,18 @@ span catalog.
       Referrer-Policy header changed first); otherwise keep `TransactionTTL`
       short and never log full IdP redirect URLs.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
+- [ ] Give every route the attributes its voters check, and a voter for each
+      attribute (an unsupported one denies); require a logged-in caller
+      with `security.IsAuthenticated`, and store roles as `ROLE_<name>`
+      and scopes as one `scope:<name>` authority each.
+- [ ] Set the challenge scheme of each HTTP / ConnectRPC adapter to the
+      scheme its extractors accept, with a printable-ASCII realm.
+- [ ] On gRPC, install the authentication and authorization interceptors
+      for both RPC kinds (`grpcsec.ServerOptions`,
+      `grpcsec.AuthorizeServerOptions`).
+- [ ] In your authenticators, wrap `security.ErrUnavailable` for a
+      dependency that is temporarily down, a credential sentinel for a
+      refusal — never a plain error.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and
       restrict hosts and ports in `CheckURL` when tenants configure URLs.

@@ -1,8 +1,8 @@
 # Known limitations
 
-The library covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
-password hashing, JWT, OAuth2 (issuer + resource server), OpenID Connect
-(provider and relying party), a SAML 2.0 Service Provider, production
+The library covers HTTP, gRPC and ConnectRPC transports, HTTP Basic / Bearer
+schemes, password hashing, JWT, OAuth2 (issuer + resource server), OpenID
+Connect (provider and relying party), a SAML 2.0 Service Provider, production
 storage backends, and stateless cookie sessions. This document tracks what is
 **not** yet covered. Remaining items are tracked as GitHub issues rather than
 future refactor phases.
@@ -342,8 +342,10 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## Transports
 
-- Only `net/http` and gRPC adapters are shipped. Other transports can be
-  added downstream by implementing `security.Carrier`.
+- Only the `net/http` (`httpsec`), gRPC (`grpcsec`) and ConnectRPC
+  (`connectrpcsec`) adapters are shipped. Other transports can be added
+  downstream by implementing `security.Carrier` (header fields only — never
+  the URL or cookies) and mapping errors with `security.ErrorClass`.
 
 ## Sessions
 
