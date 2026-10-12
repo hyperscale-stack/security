@@ -171,6 +171,9 @@ func loopbackHost(host string) bool {
 	return err == nil && addr.IsLoopback()
 }
 
+// errKeyNotHex reports a malformed OIDC_TRANSACTION_KEYS entry.
+var errKeyNotHex = errors.New("not hex-encoded")
+
 // transactionKeys decodes OIDC_TRANSACTION_KEYS: hex-encoded keys separated
 // by commas. Unset, it draws one random key — for a single development
 // instance only: the logins in progress do not survive a restart.
@@ -190,7 +193,8 @@ func transactionKeys(raw string) ([][]byte, error) {
 	for part := range strings.SplitSeq(raw, ",") {
 		key, err := hex.DecodeString(strings.TrimSpace(part))
 		if err != nil {
-			return nil, fmt.Errorf("OIDC_TRANSACTION_KEYS: a key is not hex-encoded: %w", err)
+			// Not wrapped: the decoder's error would echo a character of the key.
+			return nil, fmt.Errorf("OIDC_TRANSACTION_KEYS: key %d: %w", len(keys)+1, errKeyNotHex)
 		}
 
 		keys = append(keys, key)

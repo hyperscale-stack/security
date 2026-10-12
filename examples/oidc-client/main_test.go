@@ -389,10 +389,15 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, cfg.TransactionKeys)
 
-	t.Setenv("OIDC_TRANSACTION_KEYS", k1+",not-hex")
+	// A malformed key is reported by its position: the decoder's error would
+	// echo one of its characters into the log.
+	t.Setenv("OIDC_TRANSACTION_KEYS", k1+","+strings.Repeat("ab", 31)+"zQ")
 
 	_, err = loadConfig()
-	require.ErrorContains(t, err, "OIDC_TRANSACTION_KEYS")
+	require.ErrorIs(t, err, errKeyNotHex)
+	require.ErrorContains(t, err, "OIDC_TRANSACTION_KEYS: key 2")
+	assert.NotContains(t, err.Error(), "z")
+	assert.NotContains(t, err.Error(), "U+007A")
 }
 
 func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
