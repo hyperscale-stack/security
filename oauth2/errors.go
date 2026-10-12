@@ -29,8 +29,13 @@ type Error struct {
 	Cause error
 }
 
-// Error implements the error interface.
+// Error implements the error interface. A nil *Error — returned as an
+// error by mistake — reads "oauth2: <nil>".
 func (e *Error) Error() string {
+	if e == nil {
+		return "oauth2: <nil>"
+	}
+
 	if e.Description != "" {
 		return fmt.Sprintf("oauth2: %s: %s", e.Code, e.Description)
 	}
@@ -38,8 +43,15 @@ func (e *Error) Error() string {
 	return "oauth2: " + e.Code
 }
 
-// Unwrap exposes the embedded cause to errors.Is / errors.As.
-func (e *Error) Unwrap() error { return e.Cause }
+// Unwrap exposes the embedded cause to errors.Is / errors.As; a nil *Error
+// wraps nothing.
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Cause
+}
 
 // HTTPStatus returns the canonical HTTP status code for this error per
 // RFC 6749 §5.2 / RFC 7009 / RFC 7662.
@@ -202,10 +214,10 @@ func newCoded(code, desc string, cause error) *Error {
 }
 
 // IsCode returns the OAuth2 error code embedded in err, or "" when err is
-// not an [*Error] in its chain.
+// not an [*Error] in its chain — a nil *Error included.
 func IsCode(err error) string {
 	var e *Error
-	if errors.As(err, &e) {
+	if errors.As(err, &e) && e != nil {
 		return e.Code
 	}
 

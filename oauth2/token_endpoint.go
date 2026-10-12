@@ -165,7 +165,7 @@ type errorResponse struct {
 // the code, the description and the URI.
 func (s *Server) writeOAuthError(ctx context.Context, w http.ResponseWriter, err error) {
 	var oe *Error
-	if !errors.As(err, &oe) {
+	if !errors.As(err, &oe) || oe == nil {
 		oe = ErrServerError.WithCause(err)
 	}
 

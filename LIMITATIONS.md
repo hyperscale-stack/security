@@ -62,7 +62,9 @@ than future refactor phases.
   `refresh_token` exchanges; the implicit flow runs its authorization hooks
   and records their context, but its fragment members are fixed (RFC 6749
   §4.2.2), and the `client_credentials` and `password` grants never call it.
-  Response modes are `query` and `fragment` only: `form_post` is refused.
+  Response modes: `query` for the code flow — the only one the metadata
+  advertises — and `fragment` only for an enabled implicit flow; `form_post`
+  is refused.
 
 ## Transports
 

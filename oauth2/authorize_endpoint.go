@@ -416,7 +416,7 @@ func (s *Server) extensionFailed(w http.ResponseWriter, r *http.Request, st *aut
 	}
 
 	var oe *Error
-	if !errors.As(err, &oe) {
+	if !errors.As(err, &oe) || oe == nil {
 		oe = ErrServerError.WithDescription("authorization extension failed").WithCause(err)
 	}
 

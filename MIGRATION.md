@@ -446,6 +446,7 @@ answer a protocol refusal such as OpenID Connect's `login_required`.
 | ------- | ------ | ----- |
 | `response_mode` absent or empty, `query` (code flow), `fragment` (enabled implicit flow) | served | unchanged |
 | any other `response_mode` — `fragment` for the code flow, `query` for the implicit one, `form_post`, a case variant, an unknown value | ignored, answered in the default mode | bare `400` (`text/plain`, never redirected), reported to `OnError` as `invalid_request`, before any other check that would redirect |
+| RFC 8414 metadata | no `response_modes_supported`, which means `["query", "fragment"]` (RFC 8414 §2) | `"response_modes_supported": ["query"]`, the mode of the advertised `code` response type |
 | approval with an empty `Subject`, or one longer than 255 bytes | code or token issued | redirected `server_error`, nothing issued |
 | `ConsentFunc` or extension hook modifying the `*AuthorizeRequest` it is handed (scope, redirect URI, state, PKCE, nonce, issuer, client identity) | the server read the rewritten request back: rewriting `ar.Scope` narrowed — or broadened — the grant | redirected `server_error` (`ErrAuthorizeRequestModified` at `OnError`), nothing issued; the request is read-only |
 | denial carrying `Consent.Refusal` | — (field new) | `Refusal` redirected instead of `access_denied`; only the RFC 6749 §4.1.2.1 and OIDC Core §3.1.2.6 authorization-endpoint codes travel, any other answers `server_error` |

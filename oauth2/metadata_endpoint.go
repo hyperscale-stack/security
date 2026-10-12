@@ -35,6 +35,9 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 	base := strings.TrimSuffix(issuer, "/")
 	routes := base + s.cfg.RoutePrefix
 
+	// response_modes_supported names the mode /authorize answers the code
+	// response type in: omitting it would mean ["query", "fragment"] (RFC
+	// 8414 §2), and the handler refuses fragment for the code flow.
 	doc := metadataDoc{
 		Issuer:                            issuer,
 		AuthorizationEndpoint:             routes + "/authorize",
@@ -44,6 +47,7 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 		JWKSURI:                           base + "/.well-known/jwks.json",
 		GrantTypesSupported:               s.grantTypes(),
 		ResponseTypesSupported:            []string{responseTypeCode},
+		ResponseModesSupported:            []string{responseModeQuery},
 		TokenEndpointAuthMethodsSupported: s.clientAuthMethods(),
 		CodeChallengeMethodsSupported:     s.pkceMethods(),
 	}
@@ -68,6 +72,7 @@ type metadataDoc struct {
 	JWKSURI                           string   `json:"jwks_uri,omitempty"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
+	ResponseModesSupported            []string `json:"response_modes_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported,omitempty"`
 }

@@ -428,12 +428,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   incorporating errata set 2, §3.1.2.6), before any other check that would
   redirect. It used to ignore the parameter and answer, code included, in a
   mode the client had not asked for. This breaks clients sending an
-  unsupported `response_mode` such as `form_post`.
+  unsupported `response_mode` such as `form_post`. The RFC 8414 metadata now
+  publishes `response_modes_supported: ["query"]` — its omission meant
+  `["query", "fragment"]` (RFC 8414 §2).
 - OAuth2 error responses keep to the RFC 6749 §4.1.2.1 / §5.2 syntax: a
   malformed error code from a grant, an extension or a `Consent.Refusal` is
   answered `server_error` (the original reaching `OnError`), a description or
   `error_uri` outside the charset is left out, and `/authorize` redirects only
-  the error codes the authorization endpoint defines. The `invalid_scope` and
+  the error codes the authorization endpoint defines. A nil `*oauth2.Error`
+  returned by a callback or a grant is answered `server_error` instead of
+  panicking (`Error`, `Unwrap` and `IsCode` tolerate a nil receiver). The
+  `invalid_scope` and
   `unsupported_response_type` descriptions no longer quote or echo the
   request: the former put a double quote, outside the charset, in every
   `invalid_scope` redirect.
