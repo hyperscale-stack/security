@@ -119,14 +119,13 @@ var (
 	// ErrIDTokenNonce reports a missing or foreign nonce.
 	ErrIDTokenNonce = idTokenError("nonce mismatch")
 	// ErrIDTokenMissingClaim reports a REQUIRED claim that is absent or
-	// malformed (sub, exp, iat, auth_time when max_age was sent, acr when
-	// acr_values were sent).
+	// malformed (sub, exp, iat, auth_time when max_age was sent).
 	ErrIDTokenMissingClaim = idTokenError("missing or malformed claim")
 	// ErrIDTokenAuthTime reports an authentication older than the max_age
 	// sent, or in the future.
 	ErrIDTokenAuthTime = idTokenError("authentication too old")
-	// ErrIDTokenACR reports an acr claim that is not one of the acr_values
-	// sent.
+	// ErrIDTokenACR reports an acr claim that is missing or not one of the
+	// acr_values sent.
 	ErrIDTokenACR = idTokenError("authentication context not satisfied")
 	// ErrAccessTokenHash reports an at_hash claim that does not match the
 	// access token (OpenID Connect Core §3.1.3.8): access-token

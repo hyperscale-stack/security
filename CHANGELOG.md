@@ -231,9 +231,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `oidc/client/storetest`.
 - **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
   tests only): the Relying Party against the example provider of
-  `github.com/zitadel/oidc/v3`, plus an opt-in browser test
+  `github.com/zitadel/oidc/v3` — every client authentication method and
+  response mode, UserInfo, callback replay, `prompt=none`, `max_age`, and
+  the `acr_values` caveat (#86) — plus an opt-in browser test
   (`OIDC_BROWSER_TESTS=1`, headless Chrome) of the binding cookie's
-  SameSite behavior.
+  SameSite behavior. A pinned corpus of six real providers' discovery
+  documents (Google, Microsoft Entra, Apple, GitLab, Salesforce, Auth0;
+  `testdata/metadata`) checks every client profile against them (#86), and
+  `OIDC_LIVE_DISCOVERY=1` reruns those checks against the live providers.
+- **Real-backend runs of the OIDC client stores** (`internal/interop/oidcstack`,
+  private and test-only, #86): the `oidc/client/storetest` conformance suite
+  and a race of 120 consumers spread over four store instances — 20 rounds,
+  a third with a wrong binding — on real PostgreSQL 16, MySQL 8.0 and
+  Redis 7.4 (digest-pinned `compose.yaml`), opt-in through
+  `OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`, `OIDCCLIENT_REDIS_ADDR`.
 - **Example** `examples/oidc-client`: sign-in through several connections
   with distinct callback routes, account linking on (connection, issuer,
   subject), and a local session.

@@ -122,16 +122,15 @@ func (p *provider) relyingParty(t *testing.T, connection string, mutators ...fun
 	return c
 }
 
-// signIn plays the user agent at the provider: it follows authURL to the
-// login page, signs the test user in, and returns the response sending the
-// user agent back to the relying party — a redirect, or a form_post page.
-func (p *provider) signIn(t *testing.T, authURL string) *http.Response {
+// agent is a user agent at the provider: it follows the provider's
+// redirects and stops at the first one back to the relying party.
+func (p *provider) agent(t *testing.T) *http.Client {
 	t.Helper()
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 
-	agent := &http.Client{
+	return &http.Client{
 		Jar:       jar,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: p.pool, MinVersion: tls.VersionTLS12}},
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
@@ -142,6 +141,15 @@ func (p *provider) signIn(t *testing.T, authURL string) *http.Response {
 			return nil
 		},
 	}
+}
+
+// signIn plays the user agent at the provider: it follows authURL to the
+// login page, signs the test user in, and returns the response sending the
+// user agent back to the relying party — a redirect, or a form_post page.
+func (p *provider) signIn(t *testing.T, authURL string) *http.Response {
+	t.Helper()
+
+	agent := p.agent(t)
 
 	resp, err := agent.Get(authURL)
 	require.NoError(t, err)
@@ -207,8 +215,15 @@ func callbackRequest(t *testing.T, resp *http.Response, cookies []*http.Cookie) 
 func (p *provider) login(t *testing.T, rp *oidcclient.Client) (*oidcclient.Identity, *http.Request, error) {
 	t.Helper()
 
+	return p.loginWith(t, rp, oidcclient.AuthOptions{})
+}
+
+// loginWith is login with the options of the authorization request.
+func (p *provider) loginWith(t *testing.T, rp *oidcclient.Client, opts oidcclient.AuthOptions) (*oidcclient.Identity, *http.Request, error) {
+	t.Helper()
+
 	start := httptest.NewRecorder()
-	require.NoError(t, rp.StartLogin(start, httptest.NewRequest(http.MethodGet, rpOrigin+"/login", nil), oidcclient.AuthOptions{}))
+	require.NoError(t, rp.StartLogin(start, httptest.NewRequest(http.MethodGet, rpOrigin+"/login", nil), opts))
 	require.Equal(t, http.StatusSeeOther, start.Code)
 
 	req := callbackRequest(t, p.signIn(t, start.Header().Get("Location")), start.Result().Cookies())

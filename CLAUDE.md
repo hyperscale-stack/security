@@ -111,6 +111,7 @@ is intentionally skipped in CI.
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
+| `./internal/interop/oidcstack` | (private, tests only)                 | the OIDC stack end to end; opt-in real-backend store runs |
 | `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
@@ -292,8 +293,11 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - Every `TransactionStore` (`storage/memory`, `store/sql`, `store/redis`)
   must pass `oidc/client/storetest.RunConformance`.
 - Tests use the scriptable fake provider of `fakeop_test.go`;
-  `internal/interop/oidcrp` runs the client against zitadel/oidc, and its
-  Chrome test runs with `OIDC_BROWSER_TESTS=1`.
+  `internal/interop/oidcrp` runs the client against zitadel/oidc and a
+  pinned corpus of real providers' discovery documents
+  (`testdata/metadata`); its Chrome test runs with `OIDC_BROWSER_TESTS=1`,
+  its live discovery check with `OIDC_LIVE_DISCOVERY=1` (Internet, no
+  credentials).
 
 ## SAML Service Provider (`saml/sp/`)
 

@@ -32,6 +32,7 @@ released on its own cadence.
 | `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
 | `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
+| `./internal/interop/oidcstack` | `github.com/hyperscale-stack/security/internal/interop/oidcstack` | The OIDC stack end to end; opt-in real-backend runs of the client stores (private, tests only) |
 | `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak, shared stores, e2e helper (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
@@ -83,6 +84,10 @@ internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/
                            + github.com/chromedp/chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
+                           + opt-in drivers github.com/jackc/pgx/v5,
+                           github.com/go-sql-driver/mysql, go-redis;
+                           no third-party OpenID Connect or JOSE library
 internal/interop/saml/  ← (tests only) saml/sp + saml/sp/store/{sql,redis}
                            + github.com/crewjam/saml + github.com/beevik/etree
                            + modernc.org/sqlite + github.com/jackc/pgx/v5

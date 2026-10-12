@@ -183,13 +183,22 @@ PKCE. Not supported, and refused where a provider could select them:
   callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
   package documentation), and its PostgreSQL and MySQL guarantees are not
-  exercised in CI (SQLite only). On Redis, a consumption acknowledged by a
+  exercised in CI (SQLite only) — the opt-in runs of
+  `internal/interop/oidcstack` (`TestRealBackend*`, `compose.yaml`) cover
+  them, with Redis, locally. On Redis, a consumption acknowledged by a
   primary that fails before replicating it can be lost in a failover,
   making the transaction consumable again: single use then rests on the
   provider's single-use authorization code and on the binding secret only
   the user agent holds. The browser test of the binding cookie
-  (`internal/interop/oidcrp`, headless Chrome) is opt-in
-  (`OIDC_BROWSER_TESTS=1`) and does not run in CI.
+  (`internal/interop/oidcrp`, headless Chrome, `OIDC_BROWSER_TESTS=1`) and
+  the live discovery check against six real providers
+  (`OIDC_LIVE_DISCOVERY=1`) are opt-in and do not run in CI.
+- **Provider metadata in the wild** — of the six providers of the pinned
+  corpus, only Auth0 lists `none` in `token_endpoint_auth_methods_supported`:
+  a public client is refused at `New` by the others (Google, Microsoft
+  Entra, Apple, GitLab, Salesforce), and Apple offers `client_secret_post`
+  only. A provider ignoring `acr_values` fails every login that sends them
+  (`ErrIDTokenACR`).
 
 ## Outbound requests
 
