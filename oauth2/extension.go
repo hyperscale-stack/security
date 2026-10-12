@@ -21,13 +21,6 @@ import (
 // onto the code and onto every token issued from it.
 const MaxExtensionDataLength = 4096
 
-// The grant_type values of the exchanges an [Extension] extends: the
-// authorization-code exchange (RFC 6749 §4.1.3) and the refresh (§6).
-const (
-	GrantTypeAuthorizationCode = "authorization_code"
-	GrantTypeRefreshToken      = "refresh_token"
-)
-
 // ErrUnredirectableRequest marks an /authorize refusal that MUST NOT be
 // redirected — e.g. an OpenID Connect request without the redirect_uri it
 // requires: the error response would travel to a redirection URI the

@@ -170,7 +170,7 @@ func (s *Server) resolveIssuer(ctx context.Context, r *http.Request) (string, st
 func profileConstraints(p Profile, grants []Grant) error {
 	for _, g := range grants {
 		switch g.Type() {
-		case "password", "implicit":
+		case GrantTypePassword, GrantTypeImplicit:
 			if !p.AllowsLegacyGrant() {
 				return fmt.Errorf("oauth2: profile %s forbids grant %q", p, g.Type())
 			}

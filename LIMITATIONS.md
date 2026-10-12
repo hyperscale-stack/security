@@ -11,11 +11,9 @@ future refactor phases.
 
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
-- **RFC 6749 §4.4 is not enforced yet** — the `client_credentials` grant
-  "MUST only be used by confidential clients", but it is not refused to
-  public clients (authenticated with `none`), and an empty
-  `GrantTypeValues` allows every grant: restrict `GrantTypeValues` for
-  public clients.
+- **An empty `GrantTypeValues` allows every grant** — but
+  `client_credentials`, which only confidential clients may use (RFC 6749
+  §4.4): restrict `GrantTypeValues` for public clients.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
   none, although its RFC 8414 metadata advertises `jwks_uri`: mount the
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or

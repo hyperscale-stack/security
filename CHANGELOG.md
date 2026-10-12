@@ -911,9 +911,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `oauth2.SecretMatcher` contract now says implementations MUST NOT match
   an empty secret: callers of `DefaultClient` are covered, custom matchers
   are told to follow suit. Public clients still authenticate with `none`,
-  by design; through it, a public client can still use any grant its
-  `GrantTypeValues` allow, `client_credentials` included (RFC 6749 §4.4 is
-  not enforced yet; see [MIGRATION.md](MIGRATION.md)). This breaks public
+  by design — they cannot use `client_credentials`, which only confidential
+  clients may (RFC 6749 §4.4). This breaks public
   clients that sent an empty Basic password — they must use `none` — and
   clients registered as confidential or untyped that authenticated with an
   empty Basic password. See [MIGRATION.md](MIGRATION.md).
@@ -962,3 +961,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   input (the checkboxes of a consent form) could grant `admin` to a client
   allowed `read`. A consent now only narrows the request (RFC 6749 §3.3), and
   a blank one (spaces only) grants exactly what was requested.
+- The OAuth2 `client_credentials` grant refuses every client that is not
+  confidential with `unauthorized_client` (RFC 6749 §4.4: it "MUST only be
+  used by confidential clients"). A public client authenticates with `none`
+  — its `client_id` alone, public by definition (shipped in every copy of a
+  browser or mobile app) — so anyone knowing it obtained access tokens whose
+  subject is the client, with any scope when the client registered none.
+  Untyped clients are refused too: the server cannot know they keep a
+  secret.

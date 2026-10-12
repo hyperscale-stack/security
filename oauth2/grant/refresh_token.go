@@ -67,7 +67,7 @@ func NewRefreshToken(cfg Config) *RefreshToken {
 }
 
 // Type implements [Grant].
-func (g *RefreshToken) Type() string { return "refresh_token" }
+func (g *RefreshToken) Type() string { return oauth2.GrantTypeRefreshToken }
 
 // Handle implements [Grant].
 func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, error) {

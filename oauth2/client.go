@@ -10,6 +10,29 @@ import (
 	"slices"
 )
 
+// The grant types a client declares in [Client.GrantTypes] — the RFC 7591
+// §2 grant_types values — and the grant_type values of the shipped grants.
+// An [Extension] extends the authorization_code exchange (RFC 6749 §4.1.3)
+// and the refresh (§6).
+const (
+	// GrantTypeAuthorizationCode is the authorization-code grant (RFC 6749
+	// §4.1); it also gates response_type=code at the authorization
+	// endpoint (RFC 7591 §2.1).
+	GrantTypeAuthorizationCode = "authorization_code"
+	// GrantTypeImplicit is the legacy implicit grant (RFC 6749 §4.2): it
+	// gates response_type=token at the authorization endpoint (RFC 7591
+	// §2.1). No grant_type of the token endpoint carries it.
+	GrantTypeImplicit = "implicit"
+	// GrantTypeRefreshToken is the refresh-token grant (RFC 6749 §6).
+	GrantTypeRefreshToken = "refresh_token"
+	// GrantTypeClientCredentials is the client-credentials grant (RFC 6749
+	// §4.4).
+	GrantTypeClientCredentials = "client_credentials"
+	// GrantTypePassword is the legacy resource-owner password grant (RFC
+	// 6749 §4.3).
+	GrantTypePassword = "password"
+)
+
 // ClientType describes whether an OAuth2 client is capable of safely keeping
 // a secret (confidential) or runs in an environment where it cannot
 // (public). Public clients MUST use PKCE per OAuth 2.0 BCP §2.1.1.

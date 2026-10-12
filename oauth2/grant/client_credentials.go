@@ -16,6 +16,16 @@ import (
 // itself and obtains an access token bound to its own identity (no
 // resource-owner concept).
 //
+// "The client credentials grant type MUST only be used by confidential
+// clients" (RFC 6749 §4.4): a client whose Type is not
+// [oauth2.ClientConfidential] — public, or untyped and so not known to be
+// confidential — is refused with unauthorized_client, whatever it declares.
+// The rule relies on the client authentication the server ran: the shipped
+// methods authenticate a confidential client only with its credentials
+// (client_secret_basic, client_secret_post; "none" refuses every client
+// that is not public), and a custom [oauth2.ClientAuthenticator] MUST NOT
+// authenticate a confidential client without one.
+//
 // Refresh tokens MUST NOT be issued for this grant (RFC 6749 §4.4.3),
 // so the handler ignores cfg.RefreshTokens even when set.
 type ClientCredentials struct {
@@ -32,12 +42,16 @@ func NewClientCredentials(cfg Config) *ClientCredentials {
 }
 
 // Type implements [Grant].
-func (g *ClientCredentials) Type() string { return "client_credentials" }
+func (g *ClientCredentials) Type() string { return oauth2.GrantTypeClientCredentials }
 
 // Handle implements [Grant]. The client has already been authenticated by
 // the time the server hands the request to the grant.
 func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "client_credentials") {
+	if req.Client.Type() != oauth2.ClientConfidential {
+		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client_credentials requires a confidential client")
+	}
+
+	if !grantTypeAllowed(req.Client, oauth2.GrantTypeClientCredentials) {
 		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use client_credentials")
 	}
 

@@ -53,7 +53,7 @@ func NewLegacyPassword(cfg Config, verifier ResourceOwnerVerifier) *LegacyPasswo
 
 // Type implements [oauth2.Grant]. The "password" identifier is what
 // oauth2.NewServer matches to refuse this grant outside Profile20.
-func (g *LegacyPassword) Type() string { return "password" }
+func (g *LegacyPassword) Type() string { return oauth2.GrantTypePassword }
 
 // Handle implements [oauth2.Grant].
 func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, error) {

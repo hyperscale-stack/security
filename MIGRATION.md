@@ -444,9 +444,9 @@ To migrate:
    `ClientAuthenticator` using another credential (e.g. `private_key_jwt`,
    mTLS). Register a client as public only if it cannot keep a secret — a
    browser or native app using `authorization_code` + PKCE — and then set
-   its `GrantTypeValues`: an empty list allows every grant, and the server
-   does not yet refuse `client_credentials` to public clients (RFC 6749
-   §4.4).
+   its `GrantTypeValues`: an empty list allows every grant
+   (`client_credentials` excepted: only confidential clients may use it, RFC
+   6749 §4.4).
 3. **Custom `SecretMatcher`s** must return `false` when no secret is
    registered or the presented one is empty, whatever they compare
    against: a bcrypt hash of `""` matches `""`.
@@ -1011,9 +1011,13 @@ asked for. It now enforces a fail-closed client policy:
 | --- | --- | --- |
 | `Consent.Scope` adding scopes to a request without `scope` | granted — even scopes outside the client's `ScopeValues` | `invalid_scope`, nothing issued: a consent only narrows the request (RFC 6749 §3.3) |
 | `Consent.Scope` made of spaces only | an empty grant | exactly what was requested, like an empty `Consent.Scope` |
+| `client_credentials` by a public client (authenticated with `none`, its `client_id` alone) or an untyped one | issued, with the scope requested when `ScopeValues` was empty | `400 unauthorized_client` whatever the client declares: only confidential clients may use it (RFC 6749 §4.4) |
 
 To migrate:
 
 1. A `ConsentFunc` that granted scopes to a request without `scope` — a
    default scope of its own — has the client request that scope instead:
    `Consent.Scope` can only narrow the request.
+2. Register every machine-to-machine client as confidential
+   (`TypeValue: oauth2.ClientConfidential`) with a high-entropy secret:
+   `client_credentials` refuses public and untyped clients.

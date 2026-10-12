@@ -66,7 +66,7 @@ func NewAuthorizationCode(cfg Config) *AuthorizationCode {
 }
 
 // Type implements [Grant].
-func (g *AuthorizationCode) Type() string { return "authorization_code" }
+func (g *AuthorizationCode) Type() string { return oauth2.GrantTypeAuthorizationCode }
 
 // Handle implements [Grant].
 func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response, error) {
