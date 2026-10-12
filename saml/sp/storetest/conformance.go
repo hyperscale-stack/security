@@ -5,7 +5,8 @@
 // Package storetest provides the black-box conformance suite every
 // [samlsp.Storage] implementation MUST pass. The in-memory, SQL and Redis
 // stores all run RunConformance against fresh instances, so behavioral
-// drift between backends is caught at test time.
+// drift between backends is caught at test time. Retention is checked over
+// time, not only on the next call: a run waits about 1.5 s.
 //
 // The package imports "testing" deliberately: it is a test helper in the
 // spirit of net/http/httptest, meant to be called from _test.go files.
@@ -32,19 +33,40 @@ type Factory func() samlsp.Storage
 // RunConformance executes the storage contract stated on
 // [samlsp.TransactionStore] and [samlsp.ReplayCache] against the stores
 // produced by newStore: exact round trips (Integrity included), single
-// consumption, the error
-// precedence, a binding mismatch that consumes nothing, insert-if-absent
-// saves and replay marks, input validation before I/O, retention until
-// expiry, and the atomicity of consumption, saves and replay marks under
-// 50-goroutine races. Purging after expiry is optional for stores and is
-// therefore left to each store's own tests.
+// consumption, the error precedence, a binding mismatch that consumes
+// nothing, insert-if-absent saves (identical content included) and replay
+// marks, input validation before I/O, retention over time (a consumption,
+// a replay mark and a pending record are checked again 1.5 s later, so the
+// suite takes about 1.5 s more than its other cases), records past their
+// expiry never altered, and the atomicity of consumption, saves and replay
+// marks under 50-goroutine races. Purging after expiry is optional for
+// stores and is therefore left to each store's own tests.
 func RunConformance(t *testing.T, newStore Factory) {
 	t.Helper()
 
-	cases := []struct {
-		name string
-		run  func(*testing.T, samlsp.Storage)
-	}{
+	for _, c := range conformanceCases() {
+		t.Run(c.name, func(t *testing.T) {
+			c.run(t, newStore())
+		})
+	}
+}
+
+// tester is what the cases need from a *testing.T; the suite's own tests
+// run them through a recorder against deliberately broken stores.
+type tester interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
+// conformanceCase is one named case of the suite.
+type conformanceCase struct {
+	name string
+	run  func(tester, samlsp.Storage)
+}
+
+// conformanceCases lists the cases RunConformance runs, in order.
+func conformanceCases() []conformanceCase {
+	return []conformanceCase{
 		{"TransactionSaveLookupConsume", testSaveLookupConsume},
 		{"TransactionSingleUse", testSingleUse},
 		{"TransactionUnknown", testUnknown},
@@ -57,6 +79,8 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"TransactionLookupNeverConsumes", testLookupNeverConsumes},
 		{"TransactionIsolation", testIsolation},
 		{"TransactionRetainedUntilExpiry", testRetainedUntilExpiry},
+		{"RetainedOverTime", testRetainedOverTime},
+		{"ExpiredRecords", testExpiredRecords},
 		{"TransactionConcurrentConsume", testConcurrentConsume},
 		{"TransactionConcurrentMixedBinding", testConcurrentMixedBinding},
 		{"TransactionConcurrentSave", testConcurrentSave},
@@ -66,16 +90,14 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"ReplayConcurrentMark", testReplayConcurrentMark},
 		{"NamespacesIsolated", testNamespacesIsolated},
 	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			c.run(t, newStore())
-		})
-	}
 }
 
 // racers is the number of goroutines of every race case.
 const racers = 50
+
+// retentionWait is how long RetainedOverTime lets pass before checking
+// that a store still holds what it must hold until the expiry.
+const retentionWait = 1500 * time.Millisecond
 
 func ctx() context.Context { return context.Background() }
 
@@ -105,7 +127,7 @@ func record(label string) *samlsp.TransactionRecord {
 
 // The assertion helpers hold every t.Fatalf of the suite.
 
-func mustNoError(t *testing.T, err error, msg string) {
+func mustNoError(t tester, err error, msg string) {
 	t.Helper()
 
 	if err != nil {
@@ -113,7 +135,7 @@ func mustNoError(t *testing.T, err error, msg string) {
 	}
 }
 
-func mustErrorIs(t *testing.T, err, target error, msg string) {
+func mustErrorIs(t tester, err, target error, msg string) {
 	t.Helper()
 
 	if !errors.Is(err, target) {
@@ -121,11 +143,25 @@ func mustErrorIs(t *testing.T, err, target error, msg string) {
 	}
 }
 
-func mustEqualRecord(t *testing.T, got, want *samlsp.TransactionRecord, msg string) {
+func mustErrorIsOneOf(t tester, err error, msg string, targets ...error) {
+	t.Helper()
+
+	for _, target := range targets {
+		if errors.Is(err, target) {
+			return
+		}
+	}
+
+	t.Fatalf("%s: got error %v, want one matching any of %v", msg, err, targets)
+}
+
+func mustEqualRecord(t tester, got, want *samlsp.TransactionRecord, msg string) {
 	t.Helper()
 
 	if got == nil {
 		t.Fatalf("%s: got a nil record", msg)
+
+		return // Fatalf does not return; a tester does not say so
 	}
 
 	if got.ID != want.ID || got.BindingHash != want.BindingHash || got.Payload != want.Payload ||
@@ -134,7 +170,7 @@ func mustEqualRecord(t *testing.T, got, want *samlsp.TransactionRecord, msg stri
 	}
 }
 
-func mustCount(t *testing.T, got, want int, msg string) {
+func mustCount(t tester, got, want int, msg string) {
 	t.Helper()
 
 	if got != want {
@@ -142,7 +178,7 @@ func mustCount(t *testing.T, got, want int, msg string) {
 	}
 }
 
-func save(t *testing.T, s samlsp.Storage, rec *samlsp.TransactionRecord) {
+func save(t tester, s samlsp.Storage, rec *samlsp.TransactionRecord) {
 	t.Helper()
 
 	mustNoError(t, s.SaveTransaction(ctx(), rec), "SaveTransaction")
@@ -186,7 +222,7 @@ func race(fn func(i int) error) []error {
 
 // countOutcomes classifies race results: nil, then each listed sentinel; any
 // other error fails the test.
-func countOutcomes(t *testing.T, errs []error, sentinels ...error) (successes int, counts []int) {
+func countOutcomes(t tester, errs []error, sentinels ...error) (successes int, counts []int) {
 	t.Helper()
 
 	counts = make([]int, len(sentinels))
@@ -217,7 +253,7 @@ func countOutcomes(t *testing.T, errs []error, sentinels ...error) (successes in
 	return successes, counts
 }
 
-func testSaveLookupConsume(t *testing.T, s samlsp.Storage) {
+func testSaveLookupConsume(t tester, s samlsp.Storage) {
 	rec := record("round-trip")
 	save(t, s, rec)
 
@@ -231,7 +267,7 @@ func testSaveLookupConsume(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrTransactionConsumed, "LookupTransaction after consume")
 }
 
-func testSingleUse(t *testing.T, s samlsp.Storage) {
+func testSingleUse(t tester, s samlsp.Storage) {
 	rec := record("single-use")
 	save(t, s, rec)
 
@@ -242,7 +278,7 @@ func testSingleUse(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrRejected, "second consume")
 }
 
-func testUnknown(t *testing.T, s samlsp.Storage) {
+func testUnknown(t tester, s samlsp.Storage) {
 	_, err := s.LookupTransaction(ctx(), key("unknown"))
 	mustErrorIs(t, err, samlsp.ErrTransactionNotFound, "LookupTransaction unknown")
 
@@ -250,7 +286,7 @@ func testUnknown(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrTransactionNotFound, "ConsumeTransaction unknown")
 }
 
-func testBindingMismatch(t *testing.T, s samlsp.Storage) {
+func testBindingMismatch(t tester, s samlsp.Storage) {
 	rec := record("binding")
 	save(t, s, rec)
 
@@ -264,7 +300,7 @@ func testBindingMismatch(t *testing.T, s samlsp.Storage) {
 	mustNoError(t, s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash), "consume with the right binding")
 }
 
-func testConsumedPrecedence(t *testing.T, s samlsp.Storage) {
+func testConsumedPrecedence(t tester, s samlsp.Storage) {
 	rec := record("precedence")
 	save(t, s, rec)
 	mustNoError(t, s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash), "consume")
@@ -273,7 +309,7 @@ func testConsumedPrecedence(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrTransactionConsumed, "consumed record with another binding")
 }
 
-func testDuplicateSave(t *testing.T, s samlsp.Storage) {
+func testDuplicateSave(t tester, s samlsp.Storage) {
 	rec := record("duplicate")
 	save(t, s, rec)
 
@@ -293,7 +329,7 @@ func testDuplicateSave(t *testing.T, s samlsp.Storage) {
 // testIdenticalDuplicateSave: an existing ID is never saved again, even by
 // a call with identical content, consumed or not; only a resend of the very
 // same call may be recognized as its own success.
-func testIdenticalDuplicateSave(t *testing.T, s samlsp.Storage) {
+func testIdenticalDuplicateSave(t tester, s samlsp.Storage) {
 	rec := record("identical")
 	save(t, s, rec)
 
@@ -309,7 +345,7 @@ func testIdenticalDuplicateSave(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrTransactionConsumed, "the consumed record stays consumed")
 }
 
-func testRejectsInvalidRecord(t *testing.T, s samlsp.Storage) {
+func testRejectsInvalidRecord(t tester, s samlsp.Storage) {
 	valid := record("invalid")
 
 	mutations := []struct {
@@ -347,7 +383,7 @@ func testRejectsInvalidRecord(t *testing.T, s samlsp.Storage) {
 	save(t, s, valid)
 }
 
-func testRejectsInvalidKeys(t *testing.T, s samlsp.Storage) {
+func testRejectsInvalidKeys(t tester, s samlsp.Storage) {
 	_, err := s.LookupTransaction(ctx(), "not-a-key")
 	mustErrorIs(t, err, samlsp.ErrInvalidStoreRecord, "lookup with an invalid ID")
 
@@ -358,7 +394,7 @@ func testRejectsInvalidKeys(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrInvalidStoreRecord, "consume with an invalid binding")
 }
 
-func testLookupNeverConsumes(t *testing.T, s samlsp.Storage) {
+func testLookupNeverConsumes(t tester, s samlsp.Storage) {
 	rec := record("lookups")
 	save(t, s, rec)
 
@@ -371,7 +407,7 @@ func testLookupNeverConsumes(t *testing.T, s samlsp.Storage) {
 	mustNoError(t, s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash), "consume after lookups")
 }
 
-func testIsolation(t *testing.T, s samlsp.Storage) {
+func testIsolation(t tester, s samlsp.Storage) {
 	a, b := record("a"), record("b")
 	save(t, s, a)
 	save(t, s, b)
@@ -387,7 +423,7 @@ func testIsolation(t *testing.T, s samlsp.Storage) {
 	mustNoError(t, s.ConsumeTransaction(ctx(), b.ID, b.BindingHash), "consume b")
 }
 
-func testRetainedUntilExpiry(t *testing.T, s samlsp.Storage) {
+func testRetainedUntilExpiry(t tester, s samlsp.Storage) {
 	rec := record("retained")
 	rec.ExpiresAt = time.Now().Add(3 * time.Second).Truncate(time.Second).Add(time.Second)
 	save(t, s, rec)
@@ -402,7 +438,69 @@ func testRetainedUntilExpiry(t *testing.T, s samlsp.Storage) {
 		"the consumed record is retained before its expiry")
 }
 
-func testConcurrentConsume(t *testing.T, s samlsp.Storage) {
+// testRetainedOverTime: a consumption, a replay mark and a pending record
+// are still there once time has passed, not only on the next call.
+func testRetainedOverTime(t tester, s samlsp.Storage) {
+	consumed, pending := record("consumed over time"), record("pending over time")
+	mark := key("marked over time")
+
+	save(t, s, consumed)
+	save(t, s, pending)
+	mustNoError(t, s.ConsumeTransaction(ctx(), consumed.ID, consumed.BindingHash), "consume")
+	mustNoError(t, s.MarkAssertionUsed(ctx(), mark, expiry()), "mark")
+
+	time.Sleep(retentionWait)
+
+	_, err := s.LookupTransaction(ctx(), consumed.ID)
+	mustErrorIs(t, err, samlsp.ErrTransactionConsumed, "lookup of the consumed record later")
+	mustErrorIs(t, s.ConsumeTransaction(ctx(), consumed.ID, consumed.BindingHash), samlsp.ErrTransactionConsumed,
+		"consume the consumed record again later")
+	mustErrorIs(t, s.ConsumeTransaction(ctx(), consumed.ID, key("another browser")), samlsp.ErrTransactionConsumed,
+		"consume the consumed record later with another binding")
+	mustErrorIs(t, s.MarkAssertionUsed(ctx(), mark, expiry()), samlsp.ErrAssertionReplayed, "mark the key again later")
+
+	got, err := s.LookupTransaction(ctx(), pending.ID)
+	mustNoError(t, err, "lookup of the pending record later")
+	mustEqualRecord(t, got, pending, "lookup of the pending record later")
+	mustNoError(t, s.ConsumeTransaction(ctx(), pending.ID, pending.BindingHash), "consume the pending record later")
+}
+
+// testExpiredRecords: past its expiry a record or a replay mark may be
+// purged, never altered: a lookup returns the record unchanged or
+// ErrTransactionNotFound, a consumed record never becomes consumable again,
+// and a mark is either still present or gone.
+func testExpiredRecords(t tester, s samlsp.Storage) {
+	past := time.Now().Add(-time.Minute).Truncate(time.Second)
+
+	rec := record("expired")
+	rec.ExpiresAt = past
+	save(t, s, rec)
+
+	got, err := s.LookupTransaction(ctx(), rec.ID)
+	if !errors.Is(err, samlsp.ErrTransactionNotFound) {
+		mustNoError(t, err, "lookup of an expired record")
+		mustEqualRecord(t, got, rec, "lookup of an expired record")
+	}
+
+	if err := s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash); !errors.Is(err, samlsp.ErrTransactionNotFound) {
+		mustNoError(t, err, "consume an expired record")
+	}
+
+	mustErrorIsOneOf(t, s.ConsumeTransaction(ctx(), rec.ID, rec.BindingHash), "consume an expired record again",
+		samlsp.ErrTransactionConsumed, samlsp.ErrTransactionNotFound)
+
+	_, err = s.LookupTransaction(ctx(), rec.ID)
+	mustErrorIsOneOf(t, err, "lookup of a consumed expired record", samlsp.ErrTransactionConsumed, samlsp.ErrTransactionNotFound)
+
+	mark := key("expired mark")
+	mustNoError(t, s.MarkAssertionUsed(ctx(), mark, past), "mark with a past expiry")
+
+	if err := s.MarkAssertionUsed(ctx(), mark, past); err != nil {
+		mustErrorIs(t, err, samlsp.ErrAssertionReplayed, "mark an expired key again")
+	}
+}
+
+func testConcurrentConsume(t tester, s samlsp.Storage) {
 	rec := record("race")
 	save(t, s, rec)
 
@@ -413,7 +511,7 @@ func testConcurrentConsume(t *testing.T, s samlsp.Storage) {
 	mustCount(t, counts[0], racers-1, "concurrent consumers told the transaction was consumed")
 }
 
-func testConcurrentMixedBinding(t *testing.T, s samlsp.Storage) {
+func testConcurrentMixedBinding(t tester, s samlsp.Storage) {
 	rec := record("mixed")
 	save(t, s, rec)
 
@@ -431,7 +529,7 @@ func testConcurrentMixedBinding(t *testing.T, s samlsp.Storage) {
 	mustCount(t, successes, 1, "consumers that succeeded")
 }
 
-func testConcurrentSave(t *testing.T, s samlsp.Storage) {
+func testConcurrentSave(t tester, s samlsp.Storage) {
 	base := record("concurrent-save")
 
 	errs := race(func(i int) error {
@@ -446,7 +544,7 @@ func testConcurrentSave(t *testing.T, s samlsp.Storage) {
 	mustCount(t, counts[0], racers-1, "concurrent saves told the transaction exists")
 }
 
-func testReplayMarkOnce(t *testing.T, s samlsp.Storage) {
+func testReplayMarkOnce(t tester, s samlsp.Storage) {
 	k := key("assertion")
 
 	mustNoError(t, s.MarkAssertionUsed(ctx(), k, expiry()), "first mark")
@@ -456,13 +554,13 @@ func testReplayMarkOnce(t *testing.T, s samlsp.Storage) {
 	mustErrorIs(t, err, samlsp.ErrRejected, "second mark")
 }
 
-func testReplayIndependentKeys(t *testing.T, s samlsp.Storage) {
+func testReplayIndependentKeys(t tester, s samlsp.Storage) {
 	mustNoError(t, s.MarkAssertionUsed(ctx(), key("one"), expiry()), "mark one")
 	mustNoError(t, s.MarkAssertionUsed(ctx(), key("two"), expiry()), "mark two")
 	mustErrorIs(t, s.MarkAssertionUsed(ctx(), key("one"), expiry()), samlsp.ErrAssertionReplayed, "remark one")
 }
 
-func testReplayRejectsInvalidInput(t *testing.T, s samlsp.Storage) {
+func testReplayRejectsInvalidInput(t tester, s samlsp.Storage) {
 	mustErrorIs(t, s.MarkAssertionUsed(ctx(), "nope", expiry()), samlsp.ErrInvalidStoreRecord, "invalid key")
 	mustErrorIs(t, s.MarkAssertionUsed(ctx(), key("k"), time.Time{}), samlsp.ErrInvalidStoreRecord, "zero expiry")
 	mustErrorIs(t, s.MarkAssertionUsed(ctx(), key("k"), expiry().Add(time.Millisecond)),
@@ -472,7 +570,7 @@ func testReplayRejectsInvalidInput(t *testing.T, s samlsp.Storage) {
 	mustNoError(t, s.MarkAssertionUsed(ctx(), key("k"), expiry()), "valid mark after refusals")
 }
 
-func testReplayConcurrentMark(t *testing.T, s samlsp.Storage) {
+func testReplayConcurrentMark(t tester, s samlsp.Storage) {
 	k := key("raced assertion")
 	exp := expiry()
 
@@ -483,7 +581,7 @@ func testReplayConcurrentMark(t *testing.T, s samlsp.Storage) {
 	mustCount(t, counts[0], racers-1, "concurrent marks reported as replays")
 }
 
-func testNamespacesIsolated(t *testing.T, s samlsp.Storage) {
+func testNamespacesIsolated(t tester, s samlsp.Storage) {
 	shared := key("shared")
 
 	mustNoError(t, s.MarkAssertionUsed(ctx(), shared, expiry()), "mark a key")

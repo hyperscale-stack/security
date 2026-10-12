@@ -146,7 +146,8 @@ type TransactionStore interface {
 	// ErrTransactionNotFound, ErrTransactionConsumed, then
 	// ErrBrowserBindingMismatch — the latter without consuming. A consumed
 	// record is retained until its ExpiresAt (a replay is then reported as
-	// ErrTransactionConsumed) and MAY be purged afterwards.
+	// ErrTransactionConsumed) and MAY be purged afterwards; it never becomes
+	// unconsumed.
 	ConsumeTransaction(ctx context.Context, id, bindingHash string) error
 }
 
