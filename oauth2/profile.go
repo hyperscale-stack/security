@@ -10,7 +10,8 @@ package oauth2
 //   - Profile20      — vanilla RFC 6749. Allows implicit and password
 //     grants when explicitly registered; PKCE and refresh-token
 //     rotation are opt-in for confidential clients — every other
-//     client needs PKCE whatever the profile.
+//     client needs PKCE and rotates its refresh tokens whatever the
+//     profile.
 //   - Profile20BCP   — IETF draft-ietf-oauth-security-topics ("OAuth 2.0
 //     Security Best Current Practice"). Refuses implicit
 //     and password grants outright; mandates PKCE on

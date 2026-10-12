@@ -1189,4 +1189,6 @@ To migrate:
 4. To bound sessions, set `grant.Config.RefreshFamilyTTL` on the grants —
    the `refresh_token` grant and the grants issuing refresh tokens — to the
    longest session you accept: users then sign in again at least that
-   often.
+   often. Set it once every instance runs this release: an instance still
+   on the previous one writes refresh tokens without a family start, so
+   each rotation it serves restarts the bound.

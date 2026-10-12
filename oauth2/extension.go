@@ -161,11 +161,12 @@ type TokenIssuance struct {
 	Nonce string
 	// RefreshTokenIssued reports whether a refresh token is persisted with
 	// the access token — minted at a code exchange (a RefreshTokens
-	// generator configured, and grant.Config.RefreshTokenScope satisfied),
-	// or the replacement of a rotating refresh. It is false for a refresh
-	// that does not rotate, whose presented token stays in use. An OpenID
-	// provider fails closed on a refresh token the end-user did not consent
-	// to (offline_access, OpenID Connect Core §11).
+	// generator configured, the client declaring the refresh_token grant,
+	// and grant.Config.RefreshTokenScope satisfied), or the replacement of
+	// a rotating refresh. It is false for a refresh that does not rotate,
+	// whose presented token stays in use. An OpenID provider fails closed
+	// on a refresh token the end-user did not consent to (offline_access,
+	// OpenID Connect Core §11).
 	RefreshTokenIssued bool
 }
 

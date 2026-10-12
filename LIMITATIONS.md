@@ -98,6 +98,11 @@ matrix. Not supported, and never advertised:
 - **Client authentication** — `client_secret_jwt`, `private_key_jwt` and
   mTLS (the core's `client_secret_basic`, `client_secret_post` and `none`
   are).
+- **Unknown scope values are refused** — a scope value outside the
+  client's registration is `invalid_scope` (the oauth2 core's client
+  policy), where Core §3.1.2.1 says unknown scope values SHOULD be ignored:
+  a client registers every scope it requests, `openid` and
+  `offline_access` included.
 - **Scope claims in the ID Token** — the claims of `profile`, `email`,
   `address` and `phone` are released at UserInfo only (OIDC Core §5.4); a
   client wanting them in the ID Token requests them through the `claims`

@@ -9,11 +9,13 @@
 // Three grants are shipped:
 //
 //   - authorization_code (with PKCE; PKCE is mandatory in
-//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft]); a replayed code
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft] and, under every
+//     profile, for every client that is not confidential); a replayed code
 //     revokes the tokens it issued
-//   - client_credentials
+//   - client_credentials, for confidential clients only
 //   - refresh_token (rotation + reuse detection; rotation is mandatory in
-//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft])
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft] and, under every
+//     profile, for every client that is not confidential)
 //
 // Legacy grants (password, implicit) live behind explicit opt-in helpers
 // and are refused outside [oauth2.Profile20].
