@@ -19,7 +19,8 @@ phases. Source-of-truth docs:
 - `CHANGELOG.md` — what the v2 stack ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
-- `docs/` — `architecture.md`, `oidc-provider.md`, `observability.md`,
+- `docs/` — `architecture.md`, `oidc-provider.md`, `oidc-client.md`,
+  `oidc-conformance.md`, `saml-sp.md`, `observability.md`,
   `security-considerations.md`, `migration-from-v0.md`.
 
 ## Working rules
@@ -300,6 +301,21 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
   (`testdata/metadata`); its Chrome test runs with `OIDC_BROWSER_TESTS=1`,
   its live discovery check with `OIDC_LIVE_DISCOVERY=1` (Internet, no
   credentials).
+- `internal/interop/oidcstack` runs the client against the provider over
+  HTTP — flows, attacks, failures, concurrency — with no third-party OIDC or
+  JOSE library (`TestDependencyPolicy`); its real-backend store runs are
+  opt-in (`OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`,
+  `OIDCCLIENT_REDIS_ADDR`, `compose.yaml`). `TestDocumentedTestsExist`
+  fails when `docs/oidc-{conformance,client,provider}.md` cite a test that
+  does not exist, or when a page claims a certification.
+- Opt-in, never in CI: `make e2e-oidc` (`e2e/oidc/*.tales`, Tales
+  v0.1.0-rc.23 + Chrome, against `examples/oidc-provider` and
+  `examples/oidc-client`), `make e2e-oidc-live` (`LIVE_OIDC_*`), and
+  `make conformance` (the OpenID Foundation suite, `OIDF_SUITE_DIR`;
+  `internal/interop/oidcstack/conformance`: the expectations in its
+  `testdata` must be updated with a rationale when a result changes).
+  `docs/oidc-conformance.md` records their results and the release
+  checklist.
 
 ## SAML Service Provider (`saml/sp/`)
 

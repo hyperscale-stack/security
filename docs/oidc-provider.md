@@ -26,15 +26,20 @@ package documentation), which is how the opt-in end-to-end suite
 ## Conformance status
 
 No certification and no blanket conformance claim: this page lists, row by
-row, what is supported, how, and the tests that prove it. Runs of the
-OpenID Foundation conformance suite are tracked separately (#86) and are not
-a certification either. Interoperability is checked in CI against an
+row, what is supported, how, and the tests that prove it. The OpenID
+Foundation conformance suite's OP plans run locally against the provider
+(`make conformance`) — not a certification either: configuration, results
+and gaps are in [oidc-conformance.md](oidc-conformance.md), with the
+cross-cutting matrix. Interoperability is checked in CI against an
 independent relying party — `github.com/coreos/go-oidc/v3` v3.21.0 and
 `golang.org/x/oauth2` v0.37.0, in the test-only module
-`internal/interop/oidcop` (never a dependency of a production module).
+`internal/interop/oidcop` (never a dependency of a production module) — and
+against this repository's relying party, attacks included
+(`internal/interop/oidcstack`).
 
 Test names refer to `oidc/provider` unless prefixed with `interop:`
-(`internal/interop/oidcop`), `oauth2:` or `jwt:`.
+(`internal/interop/oidcop`), `stack:` (`internal/interop/oidcstack`),
+`oauth2:` or `jwt:`.
 
 ## Feature matrix
 
@@ -61,7 +66,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | `sub` claim request                         | Core §5.5.1                        | Designates the end-user, like a hint; conflicting designations → `invalid_request`                                                                                                                                                  | `TestClaimsParameterDerivedRequirements`, `TestIDTokenHintDesignatesTheEndUser`                                         |
 | `request`, `request_uri`                    | Core §6                            | Not supported: `request_not_supported`, `request_uri_not_supported`; advertised as unsupported                                                                                                                                      | `TestRequestObjectParametersRefused`, `TestDiscoveryDocument`                                                           |
 | `registration` parameter                    | Core §7.2.1                        | Not supported: `registration_not_supported`                                                                                                                                                                                          | `TestRequestObjectParametersRefused`                                                                                    |
-| Realm of the authentication                 | Core §16.15                        | `AuthenticationEvent.Issuer` must be the request's issuer: else `login_required` (OpenID) or `access_denied` (OAuth 2.0)                                                                                                            | `TestRealmIsEnforced`, `TestRequestCheck`                                                                               |
+| Realm of the authentication                 | Core §16.15                        | `AuthenticationEvent.Issuer` must be the request's issuer: else `login_required` (OpenID) or `access_denied` (OAuth 2.0)                                                                                                            | `TestRealmIsEnforced`, `TestRequestCheck`, stack: `TestRefusalsRevealNoSession` |
 | Consent                                     | Core §3.1.2.4                      | `Decision`: approval, `Scope` narrowing (keeps `openid`), `Claims`, `Refusal`; an empty decision → `access_denied`                                                                                                                 | `TestDecisionScopeNarrows`, `TestInteractionFailures`, `TestApprovalContractViolations`, interop: `TestInteropConsentNarrowsScope` |
 | `offline_access`                            | Core §11                           | OpenID requests: granted only with consent — the `prompt=consent` dialog (`OfflineAccessPrompted`) or the application's policy (`OfflineAccessByPolicy`) — else dropped from the grant; a refresh token without that consent fails closed (`server_error` at issuance, `invalid_grant` at refresh) unless `Config.AllowRefreshWithoutOfflineAccess`. Plain OAuth 2.0 requests keep OAuth 2.0 semantics (narrow them with `Decision.Scope`) | `TestOfflineAccessRequiresConsent`, `TestRefreshWithoutOfflineConsentFailsClosed`, interop: `TestInteropRefresh`        |
 
@@ -74,7 +79,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | Application claims               | Core §5.4, §5.5                      | Only the claims requested through `claims` and released; protocol claims never come from the source; null and empty strings dropped. Scope claims (`profile`, `email`, …) go to UserInfo only | `TestIDTokenClaimsFromTheClaimsParameter`, `TestValueConstraintsMatchScalarsOnly`                   |
 | Code issued for OpenID           | Core §3.1.3.2                        | An `openid` code without the provider's context → `invalid_grant`                                                                                                                            | `TestOpenIDCodeWithoutContextIsRefused`                                                             |
 | Account validity                 | —                                    | `ClaimsSource` queried on every exchange of an OpenID grant: `ErrUnknownSubject` → `invalid_grant`                                                                                          | `TestCodeExchangeFailures`, `TestRefreshChecksTheAccountEvenWithoutOpenID`                          |
-| Token confusion                  | RFC 9068 §5, RFC 8725 §3.12          | An access-token audience equal to the client ID → `server_error`; JWT access tokens are typed `at+jwt`                                                                                      | `TestCodeExchangeFailures`, jwt: `TestOAuth2AccessTokenSignerFollowsRFC9068`, interop: `TestInteropJWTAccessTokenIsNotAnIDToken` |
+| Token confusion                  | RFC 9068 §5, RFC 8725 §3.12          | An access-token audience equal to the client ID → `server_error`; JWT access tokens are typed `at+jwt`                                                                                      | `TestCodeExchangeFailures`, jwt: `TestOAuth2AccessTokenSignerFollowsRFC9068`, interop: `TestInteropJWTAccessTokenIsNotAnIDToken`, stack: `TestIDTokenUsedAsAnotherToken` |
 | Refresh                          | Core §12.2                           | An ID Token at every refresh of an OpenID grant: same `iss`, `sub`, `aud`; new `iat`; the original `auth_time`, `acr`, `amr`; no `nonce`; none once the scope drops `openid`                | `TestRefreshIDTokensFollowCore12_2`, `TestRefreshWithoutOpenIDHasNoIDToken`, interop: `TestInteropRefresh`, `TestInteropRefreshReuse` |
 | Encrypted ID Tokens              | Core §10.2                           | Not supported, not advertised                                                                                                                                                                | —                                                                                                   |
 
@@ -94,9 +99,9 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | Capability                       | Spec                                   | Status                                                                                                                                                                                         | Tests                                                                                                                   |
 | -------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Discovery                        | Discovery §3, §4                       | Per-request issuer, path issuers (§4.1); advertises only what is served; consistent with the RFC 8414 metadata                                                                                | `TestDiscoveryDocument`, `TestDiscoveryPathIssuers`, `TestDiscoveryConsistentWithRFC8414Metadata`, interop: `TestInteropDiscoveryMetadata`, `TestAdvertisedURLsAreServed` |
-| Mix-up defense                   | RFC 9207                               | Every authorization response carries `iss`, the issuer as the `IssuerResolver` returns it; advertised. Except the `server_error` of a failed `IssuerResolver`, redirected without `iss` — a deliberate deviation from RFC 9207 §2 (the code review preferred a bare 500; see [security-considerations.md](security-considerations.md)) | oauth2: `TestAuthorizationResponsesNameTheIssuer`, interop: `TestInteropCodeFlowS256`                                    |
+| Mix-up defense                   | RFC 9207                               | Every authorization response carries `iss`, the issuer as the `IssuerResolver` returns it; advertised. Except the `server_error` of a failed `IssuerResolver`, redirected without `iss` — a deliberate deviation from RFC 9207 §2 (the code review preferred a bare 500; see [security-considerations.md](security-considerations.md)) | oauth2: `TestAuthorizationResponsesNameTheIssuer`, interop: `TestInteropCodeFlowS256`, stack: `TestMixUpBetweenIssuersOfOneProvider` |
 | JWK Set                          | RFC 7517; Core §10.1.1                 | Public signature keys only, per issuer; rotation through `KeyRing.Published`                                                                                                                  | `TestJWKSPublishesPublicKeysOnly`, `TestJWKSIsPerIssuer`, `TestKeyRotationThroughJWKS`, interop: `TestInteropKeyRotation` |
-| Key rings                        | RFC 7518 §3; RFC 8725 §3.1             | RS256 key required; one key per algorithm and one algorithm per key; RSA ≥ 2048 bits, curves bound to algorithms, unique `kid`s; no private or symmetric key published; validated on every use | `TestKeyRingValidate`, `TestJWKSFailsClosed`                                                                            |
+| Key rings                        | RFC 7518 §3; RFC 8725 §3.1             | RS256 key required; one key per algorithm and one algorithm per key; RSA ≥ 2048 bits, curves bound to algorithms, unique `kid`s; no private or symmetric key published; validated on every use | `TestKeyRingValidate`, `TestJWKSFailsClosed`, stack: `TestDocumentedRotationIsInvisibleToTheClient` |
 | Issuer identifier                | Core §2, §16.15; Discovery §3, §4.3    | An `https` URL with a host, without user info, query or fragment, in canonical form; `http` only for an exact loopback host with `Config.AllowInsecureLoopbackIssuer`                         | `TestIssuerValidation`, `TestIDTokenIssuerIsCheckedAtTheExchange`                                                       |
 | Subject types                    | Core §8                                | `public` only; pairwise not supported                                                                                                                                                         | `TestDiscoveryDocument`                                                                                                 |
 | Client authentication            | Core §9; RFC 6749 §2.3.1               | `client_secret_basic` (form-encoded credentials), `client_secret_post`, `none`; `client_secret_jwt`, `private_key_jwt` and mTLS not supported                                                | oauth2: `TestBasicDecodesFormURLEncodedCredentials`, interop: `TestInteropCodeFlowS256`, `TestInteropClientSecretPost`  |
@@ -188,6 +193,12 @@ travels to the client, and must not tell it what sessions the browser holds.
   `Decision.Claims` names the requested claims the end-user releases;
   `Decision.OfflineAccess` grants a requested `offline_access` —
   `OfflineAccessPrompted` only for a request with `prompt=consent`.
+- The login and consent pages are the application's: a CSRF token on every
+  form, no framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), no
+  caching, a return address limited to the authorization endpoint (never
+  an open redirect), no `307` redirects, no page at all under
+  `prompt=none`. The example's pages do all of it, and the `app-hardening`
+  scenarios of `e2e/oidc` check it through HTTP and a browser.
 
 ### Claims
 
@@ -214,6 +225,19 @@ Set publishes. Rotate without breaking a relying party:
 2. sign with it (move it to `Signing`, publish the retired one);
 3. drop the retired key once every ID Token it signed has expired
    (`Config.IDTokenTTL`, one hour by default) and no `id_token_hint` needs it.
+
+How long step 1 waits depends on the relying parties' caches. The JWK Set
+answers with `Cache-Control: max-age=300`; `oidc/client` keeps a set for an
+hour and refetches it at most every 10 seconds on an unknown `kid`
+([oidc-client.md](oidc-client.md#provider-keys-and-rotation)); go-oidc
+refetches on any unknown `kid`. Wait at least an hour — more if a relying
+party you know caches longer — between steps 1 and 2: a key that signs
+before a relying party learned it fails that relying party's logins until
+it refetches (stack: `TestAbruptRotationWithinTheRefreshInterval`).
+Withdrawing a leaked key is not instantaneous either: `oidc/client` keeps
+accepting it until its cached set is an hour old (stack:
+`TestKeyWithdrawalWindow`); ask the relying parties to rebuild their
+clients.
 
 The keys of JWT access tokens belong in `Published` too: one `jwks_uri`
 serves both (RFC 9068 §4). Their audiences must never be client IDs.

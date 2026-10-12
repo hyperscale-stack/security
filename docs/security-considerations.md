@@ -871,6 +871,26 @@ are attacker-influenced.
   set refetches on every failure without rate limit (see the package
   documentation of `oidc/client`).
 
+## OpenID Connect: protocol validation vs application policy
+
+`oidc/provider` and `oidc/client` validate the protocol — every rule their
+feature matrices list ([oidc-provider.md](oidc-provider.md),
+[oidc-client.md](oidc-client.md), [oidc-conformance.md](oidc-conformance.md)).
+What the protocol leaves open is policy, and stays with the application:
+
+| Concern                    | The library validates                                                                                                    | The application decides                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Tenants and connections    | issuer equality, a transaction bound to its connection, issuer, client and redirect URI, RFC 9207 `iss`; realms and issuer-bound clients (provider) | which connections exist, routing a login start to one, distinct redirect URIs, which issuers tenants may configure |
+| Identity and accounts      | the (issuer, subject) pair, UserInfo `sub` equality                                                                      | account linking (on connection, issuer, subject), just-in-time provisioning, link flows bound to a session    |
+| Authentication strength    | `max_age`/`auth_time`, `acr` among `acr_values` (client); freshness, essential `acr` (provider)                          | the acr levels required, step-up and MFA, AMR policy, the login pages                                         |
+| Consent                    | released claims, a scope that only narrows, `offline_access` only with `prompt=consent` or the application's policy      | the consent pages and records, the offline-access policy                                                      |
+| Sessions                   | no session of another realm or end-user, no state revealed under `prompt=none`                                           | session lifetime, a fresh session after each login, sign-out (no logout specification is supported)          |
+| Account disabling          | `ErrUnknownSubject` stops every grant at its next use (exchange, refresh, UserInfo)                                     | disabling accounts, revoking their token families for immediate effect                                        |
+| Keys                       | rings validated on every use, public keys only published; the client's bounded JWK Set cache                             | key custody (KMS), the rotation schedule, the response to a leaked key                                       |
+| Outbound requests          | https and public destinations only by default                                                                            | exemptions for on-premises providers (`AllowedPrefixes`, `CheckURL`, `RootCAs`)                               |
+| Login transactions         | browser binding, integrity, single use                                                                                   | the store's deployment, the transaction keys (generation, sharing, rotation), purging                        |
+| Abuse and audit            | nothing beyond the protocol's refusals                                                                                   | rate limiting of login starts and endpoints, audit logs (`OnError` sinks), monitoring                         |
+
 ## Outbound requests (SSRF)
 
 Modules that fetch URLs from configuration or remote metadata (OpenID
@@ -1015,3 +1035,12 @@ span catalog.
       create a fresh session after each login.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only
       the `form_post` callback routes from CSRF middleware.
+- [ ] Rotate an OpenID Provider's keys on its relying parties' timetable:
+      publish the next key at least an hour before it signs; after a leak,
+      withdraw the key and ask relying parties to rebuild their clients
+      (`oidc/client` keeps a withdrawn key for up to an hour).
+- [ ] Prefer providers that send the RFC 9207 `iss` parameter; never
+      register a connection's redirect URI at another provider.
+- [ ] Serialize the refreshes of one grant across instances: providers
+      that rotate refresh tokens with reuse detection revoke the grant
+      when a rotated token is presented twice.

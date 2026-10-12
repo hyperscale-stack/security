@@ -294,7 +294,15 @@ StartLogin / Begin                          HandleCallback / Complete
 - **What stays with the application** — choosing the connection, deploying
   the store, linking an identity (issuer + subject, never email) to an
   account, its own session, and rate limiting login starts. See
-  `examples/oidc-client`.
+  `examples/oidc-client` and [oidc-client.md](oidc-client.md).
+
+The two modules are tested against each other in
+`internal/interop/oidcstack` (CI), against independent implementations in
+`internal/interop/oidcop` and `internal/interop/oidcrp` (CI), and — opt-in —
+through `e2e/oidc` (Tales and Chrome against the two examples) and the
+OpenID Foundation conformance suite
+(`internal/interop/oidcstack/conformance`); see
+[oidc-conformance.md](oidc-conformance.md).
 
 ## SAML Service Provider
 

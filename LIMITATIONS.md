@@ -124,8 +124,13 @@ matrix. Not supported, and never advertised:
 - **No UI, directory or CORS** — no login or consent pages, tenant
   directory or identity linking (the application's `Interaction`), and no
   built-in CORS.
-- **No certification** — the OpenID Foundation conformance suite is run
-  separately (#86); no certification is claimed.
+- **No certification** — the OpenID Foundation conformance suite's OP
+  plans run locally (`make conformance`, results in
+  [docs/oidc-conformance.md](docs/oidc-conformance.md)); a local run is no
+  certification. Its Basic plan needs `oauth2.Profile20`: it sends PKCE in
+  a single module, and the default profile refuses requests without it.
+  `acr_values` stay voluntary (a warning of the suite when the application
+  asserts no requested `acr`).
 
 ## OpenID Connect client
 
@@ -146,6 +151,11 @@ PKCE. Not supported, and refused where a provider could select them:
   algorithm.
 - **Signed or encrypted UserInfo responses** (`application/jwt`):
   `UserInfo` returns `ErrUserInfoUnsupported`.
+- **UserInfo token in the header only** — the access token goes in the
+  `Authorization` header (RFC 6750 §2.1); a provider requiring the form
+  body fails `UserInfo` (the conformance suite's
+  `oidcc-client-test-userinfo-bearer-body`).
+- **WebFinger** (Discovery §2) — not supported: configure the issuer.
 - **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
   mTLS; DPoP. `client_secret_basic`, `client_secret_post` and `none` are
   supported.
@@ -193,6 +203,11 @@ PKCE. Not supported, and refused where a provider could select them:
   (`internal/interop/oidcrp`, headless Chrome, `OIDC_BROWSER_TESTS=1`) and
   the live discovery check against six real providers
   (`OIDC_LIVE_DISCOVERY=1`) are opt-in and do not run in CI.
+- **Opt-in evidence** — the end-to-end suites (`make e2e-oidc`), the
+  conformance-suite runs (`make conformance`), the real-backend, browser
+  and live checks need Docker, Chrome, Tales or the Internet and run
+  locally only; [docs/oidc-conformance.md](docs/oidc-conformance.md) keeps
+  their latest results and the release checklist.
 - **Provider metadata in the wild** — of the six providers of the pinned
   corpus, only Auth0 lists `none` in `token_endpoint_auth_methods_supported`:
   a public client is refused at `New` by the others (Google, Microsoft

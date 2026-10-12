@@ -269,7 +269,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   through a Go driver of the suite's REST API that pins the suite's result
   and the client's outcome of every module. Images are pinned by digest,
   the expected failures, skips and outcomes live in `testdata`. A local run
-  is not an OpenID Certification.
+  is not an OpenID Certification; its results are recorded in
+  [docs/oidc-conformance.md](docs/oidc-conformance.md).
+- **OpenID Connect documentation** (#86):
+  [docs/oidc-conformance.md](docs/oidc-conformance.md) — the cross-cutting
+  requirements matrix with the tests behind every row, what is not
+  supported, the independent implementations, the attack catalogue, the
+  end-to-end and conformance-suite runs with their gaps, and the release
+  checklist; [docs/oidc-client.md](docs/oidc-client.md) — the Relying
+  Party's feature matrix and integration guide (connections and redirect
+  URIs, callback and session, several instances, the provider-key
+  timetable, account linking, refresh tokens);
+  `docs/security-considerations.md` — protocol validation versus
+  application policy. `TestDocumentedTestsExist` keeps the cited tests
+  real and the pages free of certification claims.
 - **End-to-end suites of the OpenID Connect examples** (`e2e/oidc`, Tales,
   opt-in through `make e2e-oidc`, never in CI; #85, #86):
   `examples/oidc-provider` and `examples/oidc-client` built and started on
