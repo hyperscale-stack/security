@@ -39,10 +39,14 @@ transitive dependencies.
 | `./oidc/client/store/sql`   | `…/security/oidc/client/store/sql`     | OIDC `TransactionStore` on `database/sql`                                     |
 | `./oidc/client/store/redis` | `…/security/oidc/client/store/redis`   | OIDC `TransactionStore` on Redis (Lua atomicity)                              |
 | `./oidc/provider`           | `…/security/oidc/provider`             | `oidcprovider` — OpenID Provider: ID Tokens, UserInfo, Discovery, JWKS        |
+| `./saml/sp`                 | `…/security/saml/sp`                   | `samlsp` — SAML 2.0 Service Provider (SP-initiated SSO)                       |
+| `./saml/sp/store/sql`       | `…/security/saml/sp/store/sql`         | Production `samlsp.Storage` on `database/sql`                                 |
+| `./saml/sp/store/redis`     | `…/security/saml/sp/store/redis`       | Production `samlsp.Storage` on Redis (Lua atomicity)                          |
 | `./examples`                | `…/security/examples`                  | Runnable use-case demos                                                       |
 | `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
 | `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
+| `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak)                      |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
@@ -51,7 +55,8 @@ SSRF-safe `*http.Client` factory used for requests to URLs that come from
 configuration or remote metadata — see [Outbound requests](#outbound-requests).
 `oidc/client/storage/memory` (an in-memory `TransactionStore`) and
 `oidc/client/storetest` (the store conformance suite) are sub-packages of
-`oidc/client`.
+`oidc/client`; `saml/sp/storage/memory` and `saml/sp/storetest` are,
+likewise, packages of the `saml/sp` module.
 
 ## Dependency policy
 
@@ -73,15 +78,21 @@ oidc/client/            ← core + github.com/go-jose/go-jose/v4
 oidc/client/store/sql/  ← oidc/client + database/sql
 oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
 oidc/provider/          ← core + oauth2 + jwt (go-jose stays behind jwt)
+saml/sp/                ← core + otel + gosaml2 + goxmldsig (≥ v1.6.1)
+                          + etree + xml-roundtrip-validator
+saml/sp/store/sql/      ← saml/sp + database/sql
+saml/sp/store/redis/    ← saml/sp + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/saml/  ← (tests only) saml/sp + crewjam/saml
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,
 Redis, SQL drivers, HTTP routers, or concrete loggers. This boundary is
-what keeps the core importable from any transport.
+what keeps the core importable from any transport. The XML signature stack
+of SAML stays inside `saml/sp`, which no other library module imports.
 
 ## The authentication pipeline
 
@@ -277,6 +288,43 @@ StartLogin / Begin                          HandleCallback / Complete
   the store, linking an identity (issuer + subject, never email) to an
   account, its own session, and rate limiting login starts. See
   `examples/oidc-client`.
+
+## SAML Service Provider
+
+The `saml/sp` module (package `samlsp`) is the Service Provider side of
+SP-initiated Web Browser SSO. It does not plug into the authentication
+pipeline: an application calls it from two routes and creates its own
+session (for instance with `session`) from the verified identity.
+
+```
+BeginLogin ──▶ transaction (store) + __Host- binding cookie ──▶ 302 to the IdP
+                                                                     │
+CompleteLogin ◀── HTTP-POST SAMLResponse + RelayState + cookie ◀─────┘
+    │
+    ├─ lexical gate (bounded streaming tokenizer)
+    ├─ structural profile on the raw tree (shape, IDs, signature placement,
+    │  algorithm allowlist)
+    ├─ transaction lookup (browser binding, expiry, connection)
+    ├─ gosaml2 / goxmldsig verification (trusted certificates only)
+    ├─ processing rules on the verified, decoded values
+    └─ atomic consumption, then replay cache ──▶ Identity
+```
+
+- **Connections** — the application resolves them (`ConnectionResolver`);
+  each has its own SP entity ID, ACS URL and trusted `IdentityProvider`,
+  imported once or kept current from the IdP's metadata URL by a
+  `MetadataSource`, which fetches through `outbound` (see
+  [Outbound requests](#outbound-requests)).
+- **Storage** — `TransactionStore` (insert-if-absent, lookup, atomic
+  single consumption bound to the browser) and `ReplayCache`
+  (insert-if-absent): in-memory, SQL and Redis implementations, checked by
+  the shared `saml/sp/storetest` conformance suite.
+- **Errors** — every refusal matches `ErrRejected` (which wraps
+  `security.ErrInvalidCredentials`) and a typed sentinel; infrastructure
+  failures do not.
+
+See [security-considerations.md](security-considerations.md#saml-service-provider)
+for the trust policy.
 
 ## Outbound requests
 

@@ -25,10 +25,14 @@ released on its own cadence.
 | `./oidc/client/store/sql`   | `github.com/hyperscale-stack/security/oidc/client/store/sql`   | OIDC transaction store on `database/sql`                                             |
 | `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                                      |
 | `./oidc/provider`           | `github.com/hyperscale-stack/security/oidc/provider`           | `oidcprovider` — OpenID Provider on the `oauth2` extension points                    |
+| `./saml/sp`                 | `github.com/hyperscale-stack/security/saml/sp`                 | `samlsp` — SAML 2.0 Service Provider (SP-initiated Web SSO)                          |
+| `./saml/sp/store/sql`       | `github.com/hyperscale-stack/security/saml/sp/store/sql`       | SAML transactions + replay cache on `database/sql`                                   |
+| `./saml/sp/store/redis`     | `github.com/hyperscale-stack/security/saml/sp/store/redis`     | SAML transactions + replay cache on Redis (Lua atomicity)                            |
 | `./examples`                | `github.com/hyperscale-stack/security/examples`                | Runnable use-case demos (one sub-package per scenario)                               |
 | `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
 | `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
+| `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak (private, tests only)        |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -38,7 +42,9 @@ configuration-supplied URLs. It depends on the standard library only and
 is the only networking code of the core. `oidc/client/storage/memory`
 (in-memory transaction store) and `oidc/client/storetest` (the conformance
 suite every transaction store passes) are sub-packages of the
-`oidc/client` module.
+`oidc/client` module, as `saml/sp/storage/memory` (the in-memory
+`samlsp.Storage`) and `saml/sp/storetest` (its conformance suite) are of
+the `saml/sp` module.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
@@ -66,15 +72,23 @@ oidc/client/            ← core + github.com/go-jose/go-jose/v4
 oidc/client/store/sql/  ← oidc/client + database/sql
 oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
 oidc/provider/          ← core + oauth2 + jwt (go-jose stays behind jwt)
+saml/sp/                ← core + otel + github.com/russellhaering/gosaml2
+                          + github.com/russellhaering/goxmldsig (≥ v1.6.1)
+                          + github.com/beevik/etree
+                          + github.com/mattermost/xml-roundtrip-validator
+saml/sp/store/sql/      ← saml/sp + database/sql
+saml/sp/store/redis/    ← saml/sp + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/v3
                            + github.com/chromedp/chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/saml/  ← (tests only) saml/sp + github.com/crewjam/saml
 
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module;
 `oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
-of the `oidc/client` module.)
+of the `oidc/client` module; `saml/sp/storage/memory` and
+`saml/sp/storetest` of the `saml/sp` module.)
 ```
 
 `oidc/client` depends on neither `oauth2` nor `jwt`: the Relying Party
@@ -90,6 +104,12 @@ tests). The policy is enforced by review. `oauth2` never imports OIDC or JOSE:
 library, store driver or template engine (`TestDependencyPolicy`). go-oidc
 and x/oauth2 are confined to the test-only `internal/interop/oidcop` module,
 as an independent relying party.
+
+The SAML XML signature stack (gosaml2, goxmldsig, etree) is confined to
+`saml/sp`: no other library module imports it, and nothing imports
+`saml/sp` but its stores, the examples and the private interop tests.
+`github.com/crewjam/saml` is a test-only dependency of the private
+`internal/interop/saml` module; it never reaches a library build.
 
 ## Local development
 
@@ -120,7 +140,8 @@ pushed.
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
 (`=> ../../` for `oidc/provider` and `internal/integrations`, `=> ../../../`
 for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
-for the OIDC client stores), plus one for each in-repo module of its graph,
+for the OIDC client and SAML SP stores), plus one for each in-repo module
+of its graph,
 so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
 
 ## Breaking changes before the first v2 release

@@ -9,8 +9,9 @@ Hyperscale security [![Last release](https://img.shields.io/github/release/hyper
 
 A transport-agnostic authentication and authorization toolkit for Go —
 HTTP, gRPC and ConnectRPC, OAuth2, OpenID Connect login and an OpenID
-Provider, JWT, sessions, and a composable Voter-based access model. It is
-shipped as a multi-module workspace so you import only what you need.
+Provider, SAML 2.0 Service Provider federation, JWT, sessions, and a
+composable Voter-based access model. It is shipped as a multi-module
+workspace so you import only what you need.
 
 ## Modules
 
@@ -32,6 +33,9 @@ shipped as a multi-module workspace so you import only what you need.
 | `…/security/oidc/client/store/sql`     | OIDC login-transaction store on `database/sql`                   |
 | `…/security/oidc/client/store/redis`   | OIDC login-transaction store on Redis                            |
 | `…/security/oidc/provider`             | `oidcprovider` — OpenID Provider: ID Tokens, UserInfo, Discovery |
+| `…/security/saml/sp`                   | `samlsp` — SAML 2.0 Service Provider (SP-initiated SSO)          |
+| `…/security/saml/sp/store/sql`         | Production SAML SP storage on `database/sql`                     |
+| `…/security/saml/sp/store/redis`       | Production SAML SP storage on Redis                              |
 
 The core module also ships `…/security/outbound`, an SSRF-safe
 `*http.Client` factory for requests to configuration-supplied URLs.

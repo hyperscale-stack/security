@@ -102,6 +102,39 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
   `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
   long a revoked family is remembered.
+- **SAML 2.0 Service Provider** (`saml/sp`, package `samlsp`):
+  SP-initiated Web Browser SSO for enterprise federation (Profiles §4.1).
+  AuthnRequests over HTTP-Redirect, optionally signed (`rsa-sha256`);
+  Responses over HTTP-POST. Connections are the application's
+  (`ConnectionResolver`), each with its own SP entity ID, ACS URL, trusted
+  `IdentityProvider` and SP metadata (`Metadata`, `ServeMetadata`); IdP
+  metadata is imported with `ParseIdentityProviderMetadata`. A response
+  passes a streaming lexical gate and a strict structural profile before
+  gosaml2 v0.12.0 and goxmldsig v1.6.1 verify it: one assertion, signed
+  Response or signed Assertion (errata E93/E26), an algorithm allowlist
+  (SHA-1 only per connection, `InsecureAllowSHA1`), typed refusals of
+  ambiguous shapes and of encrypted assertions. Login transactions are
+  single-use and bound to the browser by a `__Host-` cookie; consumed
+  assertions go to a replay cache. Every refusal matches `ErrRejected`,
+  which wraps `security.ErrInvalidCredentials`; an IdP error status is a
+  `*StatusError`. OpenTelemetry spans under the module's own scope.
+- **SAML metadata retrieval**: `samlsp.FetchIdentityProviderMetadata`
+  downloads an IdP's metadata from its configured https URL through the
+  core `outbound` client (public destinations only, no redirect off the
+  configured origin, bounded time and size), and `samlsp.MetadataSource`
+  keeps it current for a resolver: pinned entity ID, refresh at the
+  document's `cacheDuration` clamped to `[MinRefresh, MaxRefresh]` and
+  when it expires, single-flight and rate-limited, in the background while
+  a usable document is cached, which is served for at most `MaxStale`
+  while refreshes fail and never past its `validUntil`. New sentinel
+  `ErrMetadataUnavailable`.
+- **SAML SP storage**: in-memory (`saml/sp/storage/memory`), SQL
+  (`saml/sp/store/sql`, PostgreSQL/MySQL/SQLite) and Redis
+  (`saml/sp/store/redis`, single-key Lua scripts), all validated by the
+  shared `saml/sp/storetest` conformance suite.
+- **SAML example and interoperability tests**: `examples/saml-sp`, and the
+  private `internal/interop/saml` module, which runs the SP against
+  crewjam/saml's IdP over TLS and replays a pinned Keycloak 26.0.7 login.
 - **OAuth2 code replay error**: `oauth2.CodeReplayError`, the error an
   `AuthorizationCodeStore` returns for a replayed code it still retains. It
   matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,
@@ -481,6 +514,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   holds, private and symmetric keys are never published, an access-token
   audience equal to a client ID is refused (RFC 9068 §5), and UserInfo only
   serves tokens of clients still registered at the issuer.
+- The SAML 2.0 Service Provider (`saml/sp`) trusts only the IdP entity ID
+  and the signing certificates of each connection, and refuses before any
+  signature work what parsers could read differently: DTDs, several
+  assertions, misplaced or repeated signatures, two attributes of one local
+  name, SHA-1 (unless a connection opts in), inclusive C14N and unknown
+  algorithms, encrypted assertions, and documents over the size, element,
+  depth and namespace limits — including SAMLResponse values of a form the
+  application parsed first. Every identity value comes from the verified
+  canonical bytes; responses are bound to the browser, the connection and
+  the request, and consumed once. It requires
+  `github.com/russellhaering/goxmldsig` v1.6.1 or later (CVE-2026-33487,
+  GHSA-qhrp-hfff-vphr) and gosaml2 v0.12.0 or later (GHSA-66r8-42f7-4q74).
+  See [docs/security-considerations.md](docs/security-considerations.md#saml-service-provider).
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

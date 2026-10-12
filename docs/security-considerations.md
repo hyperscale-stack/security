@@ -454,6 +454,270 @@ is, never for the protocol rules:
   carry a token, an `id_token_hint`, a `nonce`, a `login_hint` or a claim
   value.
 
+## SAML Service Provider
+
+`saml/sp` (package `samlsp`) consumes assertions from enterprise identity
+providers (SP-initiated Web Browser SSO, Profiles §4.1). An assertion is a
+bearer credential delivered through the browser, so the module trusts only
+what the operator configured and refuses whatever it cannot read in exactly
+one way.
+
+### Trust
+
+- **Explicit trust only.** Each connection pins the IdP entity ID and its
+  signing certificates, imported from administrator-provided metadata
+  (`ParseIdentityProviderMetadata`), fetched from the IdP's metadata URL
+  (`FetchIdentityProviderMetadata`, `MetadataSource`) or configured
+  directly. Importing is the act of trust: a signature embedded in the
+  metadata is not verified, and an aggregate (`EntitiesDescriptor`) is only
+  accepted with a pinned entity ID.
+  Nothing in a response extends that trust: the `Issuer` must equal the
+  connection's entity ID, and a `KeyInfo` certificate only *selects* one of
+  the trusted certificates (it must equal it exactly).
+- **What is verified is what is used.** gosaml2 and goxmldsig verify the
+  signature and decode the identity from the verified canonical bytes; no
+  identity data is read from the raw document, so a comment injected in a
+  `NameID` (the CVE-2017-11427 class) cannot truncate it. Before
+  verification, a structural profile pins the single `Assertion` as a child
+  of the `Response`, unique `ID`s and the placement of every signature, so
+  signature-wrapping attacks have nothing to wrap (see
+  `TestCompleteLogin_XMLSignatureWrapping`).
+- **No parser differential on attributes.** The pre-check reads the raw
+  tree with etree, goxmldsig and gosaml2 decode with `encoding/xml`, and
+  the two disagree on attributes that share a local name: etree's
+  `SelectAttr` returns the first in document order whatever its prefix,
+  `encoding/xml` the last, after exclusive C14N has reordered them. An
+  element carrying two attributes of one local name — whatever their
+  prefixes, namespace declarations included — and a prefixed attribute
+  named like a SAML or XML-DSig attribute (`foo:Algorithm`,
+  `foo:Destination`) are therefore refused, and the pre-check reads
+  unprefixed attributes only. Without this, `Algorithm="…sha256"
+  foo:Algorithm="…sha1"` passed the allowlist while goxmldsig digested with
+  SHA-1.
+- **Signed Response or signed Assertion** (Profiles §4.1.3.5/§4.1.4.5 as
+  amended by errata E93 and E26): a signed Response covers its single
+  assertion. The SP metadata omits `WantAssertionsSigned`.
+- **Algorithms.** goxmldsig accepts SHA-1, inclusive C14N and more; `samlsp`
+  enforces its own allowlist on every signature before any cryptography:
+  RSA or ECDSA with SHA-256/384/512, SHA-256/384/512 digests, and exactly the
+  enveloped-signature and exclusive C14N transforms, in that order; no
+  `ds:Object` (errata E91). SHA-1 (`rsa-sha1`, `ecdsa-sha1`, SHA-1 digests)
+  is accepted only from a connection that sets `InsecureAllowSHA1`;
+  inclusive C14N, HMAC and unknown algorithms never are. IdP keys are RSA of
+  2048 to 8192 bits or ECDSA P-256/384/521. ECDSA signature values are
+  verified as ASN.1 DER, as goxmldsig implements them: an IdP emitting the
+  XML Signature 1.1 raw `r‖s` encoding fails closed. The SP signs its
+  AuthnRequests with RSA (`rsa-sha256`).
+- **Encrypted assertions are refused** (`ErrEncryptedAssertionUnsupported`)
+  and the SP publishes no encryption key: TLS protects the assertion in
+  transit, and gosaml2's decryption code — the subject of several advisories
+  — is never reached.
+
+### Ambiguous responses are refused
+
+Some responses the schema allows are refused because two readers could
+take different identities from them: several assertions, several
+`SubjectConfirmation` or `AuthnStatement` elements, an assertion without
+`NameID`, a Response without `Issuer`, or a condition the SP does not
+understand (Core §2.5.1.1). Each refusal has a typed error. Configure the
+IdP to send one assertion carrying a persistent NameID:
+
+- **AD FS** sends no NameID unless a claim issuance rule of the relying
+  party trust issues one: add a rule (for example *Transform an Incoming
+  Claim*) whose outgoing claim type is *Name ID* with the *Persistent
+  Identifier* format, from an immutable source such as `objectGUID`.
+- **Microsoft Entra ID** — the *Unique User Identifier (Name ID)* claim
+  defaults to the user principal name, which can be reassigned: prefer
+  `user.objectid` with the persistent format.
+- **Okta** — set the Name ID format to *Persistent* and the application
+  username to an immutable value.
+- **Keycloak** — set the client's Name ID format to `persistent` and enable
+  *Force name ID format*; signing the documents, the assertions or both
+  works (the pinned interoperability fixture signs both).
+- **Google Workspace** — the custom SAML app sends the primary email with
+  the *unspecified* format by default; set the Name ID format to
+  *Persistent* and map the Name ID to an immutable attribute (an employee
+  ID, for instance), since email addresses can be renamed and reassigned.
+- **Shibboleth IdP** — it sends transient NameIDs unless a persistent
+  NameID generator (computed or stored IDs, see `saml-nameid.properties`
+  and `saml-nameid.xml`) is configured, and selects the format from the
+  AuthnRequest's NameIDPolicy, the SP metadata and the relying party's
+  `nameIDFormatPrecedence`. Without a persistent generator, a connection
+  requesting the persistent format gets an error status
+  (`InvalidNameIDPolicy`).
+
+### Browser binding, CSRF and replay
+
+- **Login CSRF.** `BeginLogin` binds the transaction to the browser with a
+  `__Host-samlsp` cookie (`Secure`, `HttpOnly`, `Path=/`, no `Domain`): the
+  prefix keeps sibling subdomains and network attackers from planting it. It
+  is `SameSite=None` because the IdP's POST to the ACS is a cross-site
+  navigation that would not carry a `Lax` or `Strict` cookie. A response is
+  accepted only for the transaction of the same browser, and its signed
+  `SubjectConfirmationData` must answer that transaction's request ID
+  (errata E90). Some legacy browsers (Safari on iOS 12 and macOS 10.14,
+  Chrome 51–66) mishandle `SameSite=None`: their logins fail with
+  `ErrMissingBrowserBinding`.
+- **The ACS must be exempt from the application's CSRF protection**: the
+  POST comes from the IdP's page. The binding cookie and `InResponseTo` are
+  its CSRF defense.
+- **RelayState is never a URL.** It is a random handle; the return target
+  stays server-side in `LoginOptions.AppState`, and the library never
+  redirects. An application redirecting to its AppState after the login
+  must accept local paths only, with an allowlist rather than a cleanup:
+  one leading `/` and no `//`, RFC 3986 path and query characters only — no
+  control character, white space, `\` or non-ASCII byte — and still a local
+  path once percent-decoded. Browsers drop TAB, LF and CR inside a URL and
+  read `\` as `/`: `/\t/evil.example` is `//evil.example`, another origin.
+  `safeReturn` in `examples/saml-sp` implements this.
+- **Unsolicited responses are refused**: IdP-initiated SSO cannot be bound
+  to a browser (Profiles §4.1.5, errata E90).
+- **Single use.** `CompleteLogin` consumes the transaction atomically — one
+  winner across instances — then records the assertion in the replay cache
+  (Profiles §4.1.4.5), keyed by a digest of the issuer and the assertion ID
+  and retained until the assertion can no longer be accepted (the earlier
+  of `SubjectConfirmationData NotOnOrAfter` + skew and the transaction
+  expiry, plus one minute). Both stores must be shared by every instance,
+  and read from the primary.
+- **`BeginLogin` writes to the store without authentication**: rate-limit
+  the login entry point.
+- **Gate login initiation.** A page of another site can send the user's
+  browser to the login entry point (forced login initiation, a form of
+  login CSRF): with an IdP session alive, the user is logged in, or
+  switched to another session, without asking. Start logins only from
+  same-origin navigations — Fetch Metadata's `Sec-Fetch-Site` is
+  `same-origin` or `none` (typed URL, bookmark); refuse `cross-site` and
+  `same-site` — or from a CSRF-protected POST. `examples/saml-sp` does the
+  former and accepts requests without the header (older browsers).
+- **The ACS location is checked**: the request path must be the
+  connection's ACS path (Bindings §3.5.5.2); `Destination` (required on a
+  signed Response) and `Recipient` must equal the configured ACS URL.
+
+### Time
+
+- `ClockSkew` (3 minutes by default, 5 at most; errata E92) applies to every
+  bound: an assertion is valid from `NotBefore − skew` and until
+  `NotOnOrAfter + skew`, exclusive. `IssueInstant`s must lie between the
+  transaction start − skew and now + skew; `ForceAuthn` requires an
+  `AuthnInstant` after the transaction start − skew.
+- goxmldsig checks the IdP certificate validity with gosaml2's single
+  clock, which `samlsp` sets to `now − ClockSkew` so that gosaml2's own time
+  checks are never stricter than those of `samlsp`. An IdP certificate is therefore
+  accepted until `NotAfter + skew`, but only from `NotBefore + skew`: a
+  certificate whose validity starts at a key rollover is refused during the
+  first `ClockSkew`. Import new IdP certificates ahead of their use (errata
+  E68: any listed key may sign).
+
+### Identity
+
+The IdP entity ID is a claim of the connection, not a global identity: in a
+multi-tenant application, one tenant can configure an IdP whose entity ID
+collides with another tenant's. Key external accounts on the connection ID
+and the persistent NameID (with the issuer and the NameID qualifiers).
+Never key them on a transient NameID or an email attribute, and never link
+accounts by email automatically: an IdP vouching for an address says nothing
+about the account another tenant's IdP vouches for. Encode the key without
+ambiguity — a connection ID may contain any separator: `examples/saml-sp`
+length-prefixes the connection ID, the issuer, the NameID qualifiers (absent
+ones stand for the issuer and the SP entity ID), the format and the value.
+
+### Resource limits
+
+`MaxResponseSize` (256 KiB by default, 16 KiB to 1 MiB) bounds the ACS
+request body — or, when the application parsed the form before calling
+`CompleteLogin` (Go's own limit is 10 MB), the SAMLResponse value itself.
+The response then passes a streaming lexical gate before anything builds a
+tree: at most 1 MiB, 450
+elements (`MaxResponseElements`, sized from goxmldsig's 1000-node
+canonicalization budget; gosaml2 verifies up to about 500), 4096 tokens,
+depth 64, 16 attributes and 16 namespace declarations per element, 32
+in-scope prefixes, 8 KiB attribute values; no DTD, entity or processing
+instruction. Measured on an Apple M-series machine (Go 1.26): a typical
+login costs about 1.1 ms and 1.1 MB; the most expensive response within the
+default limits about 25–33 ms and 21–28 MiB, about 61–69 ms and 33–43 MiB at
+the 1 MiB ceiling; inputs aimed at amplification are refused within 10 ms
+and 9 MiB. When a signature carries no KeyInfo and the connection trusts
+several certificates, each certificate tried re-runs the whole verification:
+at most the three most recent valid ones are tried, which bounds that case
+to three times the costs above. A response carrying hundreds of group
+memberships exceeds the element cap (`ErrResponseTooLarge`): filter the
+groups the IdP releases to the application rather than raising limits.
+
+### Metadata retrieval
+
+`FetchIdentityProviderMetadata` downloads an IdP's metadata once, and a
+`MetadataSource` keeps it current for a `ConnectionResolver`. Both treat the
+network as hostile:
+
+- **The URL is configuration** — the application's, or a tenant
+  administrator's — and never a value read from a SAML message or a
+  request. It must be https (http only with `Outbound.AllowHTTP`), without
+  credentials or fragment. No response content triggers a fetch: an
+  unknown `KeyInfo` certificate fails the login, it does not refresh the
+  metadata, so an attacker cannot make the SP fetch.
+- **Requests go through `outbound`** (see
+  [Outbound requests](#outbound-requests-ssrf)): publicly routable
+  destinations only, judged on the address dialed, no redirect, no proxy,
+  no cookie, no credentials, 10 s, and the smaller of `MaxSize` (1 MiB) and
+  the policy's body limit, counted after decompression. When the policy
+  allows redirects, none may leave the configured URL's origin (scheme,
+  host and port): keys can only come from that origin. A host or port that
+  `outbound` always refuses (`127.1`, a trailing dot, an underscore, port
+  0) fails at construction with `ErrInvalidConfig`. Only a 200 answer is
+  read; no error carries the response body. An on-premises IdP needs its
+  subnet in `Outbound.AllowedPrefixes`; pin its host in `CheckURL`, and its
+  private CA in `RootCAs`.
+- **Trust** rests on TLS to the configured origin and on the pinned entity
+  ID (`MetadataSourceConfig.EntityID` is required): a document of another
+  entity is refused. `FetchOptions.EntityID` is optional, to discover a new
+  IdP's entity ID: pin it whenever a fetch replaces keys already
+  configured. Keys and endpoints change only through a valid
+  document of that entity fetched from that URL, so an IdP key rollover is
+  picked up at the next refresh — announce the new key in the metadata
+  before signing with it. Signed metadata is not supported: the embedded
+  signature is ignored, and a federation aggregate, whose trust comes from
+  its signature, must not be used as a source. Where TLS to the IdP's
+  metadata host is not trusted enough, import the metadata out of band.
+- **Bounded refresh**: at the document's `cacheDuration` (one hour when
+  absent, the shortest interval for `PT0S`) clamped to `[MinRefresh,
+  MaxRefresh]` (5 minutes, 24 hours by default), and when it expires;
+  concurrent callers share one fetch, which runs detached from the caller
+  that started it and is bounded by the outbound timeout; fetches are
+  spaced by `RetryInterval` (one minute) after a failure or an early
+  expiry. A due refresh never delays a login while a usable document is
+  cached: it runs in the background, and only a caller with nothing usable
+  waits for it, so a slow or hostile metadata endpoint cannot put its
+  latency on the login path. While refreshes fail, the last good
+  document is served for at most `MaxStale` (7 days) after it was fetched
+  and never past its `validUntil` (Metadata §4.3.2, errata E94); then
+  logins fail closed with `ErrMetadataExpired`. Failures surface as
+  `ErrMetadataUnavailable` (the `outbound` errors stay matchable),
+  `ErrInvalidMetadata` or `ErrMetadataExpired`; a resolver returning them
+  makes `BeginLogin` and `CompleteLogin` fail as infrastructure errors, not
+  rejections.
+
+### Dependencies
+
+XML signature verification and canonicalization are never implemented in
+this repository. They come from:
+
+| Module | Minimum | Advisories considered |
+| ------ | ------- | --------------------- |
+| `github.com/russellhaering/goxmldsig` | v1.6.1 | GHSA-479m-364c-43vc (CVE-2026-33487, signature bypass, fixed in v1.6.0); GHSA-qhrp-hfff-vphr (quadratic memory in SignedInfo canonicalization, fixed in v1.6.1); older bypasses (CVE-2020-15216) |
+| `github.com/russellhaering/gosaml2` | v0.12.0 | GHSA-66r8-42f7-4q74 (allocation amplification in the round-trip validation, fixed in v0.12.0); GHSA-5hj8-q7fv-qrj6 and GHSA-hwqm-qvj9-4jr2 (decryption panics: unreachable, encrypted content is refused first); GHSA-pcgw-qcv5-h8ch and GHSA-vv4x-5gvr-chh8 (unsigned logout messages: Single Logout is not used); GHSA-6gc3-crp7-25w5 (CVE-2023-26483, DEFLATE bomb: POST bodies are never inflated, and gosaml2's own limit is set to one byte) |
+| `github.com/beevik/etree` | v1.8.1 | GHSA-qm2r-qg5g-crr3 (stack overflow on deep nesting, also bounded by the depth cap), GHSA-2mj8-7fmf-pr7x, GHSA-f965-f62m-c42m, GHSA-x27v-cqwr-28jx — all fixed by v1.7.1 |
+| `github.com/mattermost/xml-roundtrip-validator` | v0.1.0 | none (used by gosaml2 to refuse documents `encoding/xml` does not round-trip) |
+
+gosaml2 is maintained, verifies before it decodes, and decodes from the
+verified bytes; `samlsp` uses it only to encode AuthnRequests and to verify
+responses, never its `RetrieveAssertionInfo` (which reports audience and
+time problems as warnings). `github.com/crewjam/saml` was not chosen: it had
+critical signature bypasses (CVE-2020-27846, and CVE-2022-41912 with several
+assertions) and is less actively maintained; it serves only as the
+independent IdP of the private interoperability tests. A future goxmldsig or
+gosaml2 upgrade must keep `TestGosaml2TraversalBudgetIsPinned` green: the
+element cap depends on goxmldsig's traversal budget.
+
 ## Sessions
 
 `session` issues a **stateless encrypted cookie** — there is no server-side
@@ -694,6 +958,18 @@ span catalog.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.
+- [ ] SAML: import IdP metadata through a trusted channel, or fetch it from
+      the IdP's https metadata URL with a `MetadataSource` pinned to its
+      entity ID; never take a metadata URL from a request. Widen the
+      outbound policy only for an on-premises IdP (`AllowedPrefixes`,
+      `CheckURL`, `RootCAs`). Enable `InsecureAllowSHA1` only for an IdP
+      that cannot do better, with a plan to remove it.
+- [ ] SAML: share the transaction store and the replay cache between
+      instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
+      expired SQL rows.
+- [ ] SAML: exempt the ACS routes from CSRF protection, rate-limit the login
+      entry point, and key accounts on the connection and the persistent
+      NameID — never on an email.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and

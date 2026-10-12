@@ -11,6 +11,7 @@ use (
 	./internal/integrations
 	./internal/interop/oidcop
 	./internal/interop/oidcrp
+	./internal/interop/saml
 	./jwt
 	./oauth2
 	./oauth2/store/redis
@@ -20,5 +21,8 @@ use (
 	./oidc/client/store/sql
 	./oidc/provider
 	./password
+	./saml/sp
+	./saml/sp/store/redis
+	./saml/sp/store/sql
 	./session
 )
