@@ -6,6 +6,8 @@ package connectrpcsec
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"connectrpc.com/connect"
 	"github.com/hyperscale-stack/security"
@@ -22,8 +24,11 @@ import (
 // connect.WithInterceptors(authn, authz) runs authn (which enriches the
 // context) before authz.
 //
-// On grant the handler runs; on deny the configured [ErrorMapper] translates
-// the decision (typically connect.CodePermissionDenied).
+// On grant the handler runs. On deny it answers with its [WithErrorMapper]
+// (or challenge options), else the mapper of the authentication interceptor
+// before it, else [DefaultErrorMapper]: connect.CodePermissionDenied for an
+// authenticated principal, connect.CodeUnauthenticated — with a challenge —
+// for an unauthenticated one.
 type AuthorizationInterceptor struct {
 	adm   security.AccessDecisionManager
 	attrs []security.Attribute
@@ -31,12 +36,17 @@ type AuthorizationInterceptor struct {
 }
 
 // NewAuthorizationInterceptor builds a [connect.Interceptor] that enforces adm
-// against attrs for every inbound unary and streaming RPC.
+// against attrs for every inbound unary and streaming RPC. It panics if adm
+// is nil.
 func NewAuthorizationInterceptor(
 	adm security.AccessDecisionManager,
 	attrs []security.Attribute,
 	opts ...Option,
 ) *AuthorizationInterceptor {
+	if adm == nil {
+		panic("connectrpcsec: NewAuthorizationInterceptor: nil AccessDecisionManager")
+	}
+
 	return &AuthorizationInterceptor{adm: adm, attrs: attrs, cfg: buildConfig(opts...)}
 }
 
@@ -52,7 +62,7 @@ func (i *AuthorizationInterceptor) WrapUnary(next connect.UnaryFunc) connect.Una
 		}
 
 		if err := decide(ctx, i.adm, i.attrs); err != nil {
-			return nil, i.cfg.errorMapper.Map(ctx, err)
+			return nil, i.cfg.mapper(ctx).Map(withBearerToken(ctx, req.Header()), err)
 		}
 
 		return next(ctx, req) //nolint:wrapcheck // the handler / connect error is the terminal wire value
@@ -66,7 +76,7 @@ func (i *AuthorizationInterceptor) WrapStreamingHandler(
 ) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
 		if err := decide(ctx, i.adm, i.attrs); err != nil {
-			return i.cfg.errorMapper.Map(ctx, err)
+			return i.cfg.mapper(ctx).Map(withBearerToken(ctx, conn.RequestHeader()), err)
 		}
 
 		return next(ctx, conn) //nolint:wrapcheck // the handler error is the terminal wire value
@@ -90,8 +100,20 @@ func decide(ctx context.Context, adm security.AccessDecisionManager, attrs []sec
 	auth, _ := security.FromContext(ctx)
 
 	if err := adm.Decide(ctx, auth, attrs); err != nil {
-		return err //nolint:wrapcheck // security.* sentinels pass through to the ErrorMapper
+		return refusal(auth, err)
 	}
 
 	return nil
+}
+
+// refusal turns an access denial of an unauthenticated principal into
+// "authentication required" (connect.CodeUnauthenticated): the caller lacks
+// credentials. Any other error passes through.
+func refusal(auth security.Authentication, err error) error {
+	denied := errors.Is(err, security.ErrAccessDenied) || errors.Is(err, security.ErrInsufficientScope)
+	if denied && !auth.IsAuthenticated() {
+		return fmt.Errorf("%w: %w", security.ErrAuthenticationRequired, err)
+	}
+
+	return err //nolint:wrapcheck // security.* sentinels pass through to the ErrorMapper
 }

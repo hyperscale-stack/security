@@ -5,6 +5,9 @@
 package connectrpcsec
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/hyperscale-stack/security"
@@ -19,9 +22,14 @@ import (
 //
 // Writes accumulate in a private staged header that the interceptor flushes
 // onto the live response header once one is available — immediately for a
-// streaming handler (conn.ResponseHeader() is live) and after the handler
-// runs for a unary call (the response Header()). This lets an ErrorMapper or
-// an extractor attach, e.g., a diagnostic header alongside the response.
+// streaming handler (conn.ResponseHeader() is live), after the handler runs
+// for a unary call (the response Header()), and into the error's metadata
+// for a refused call or a handler error. This lets an extractor attach,
+// e.g., a diagnostic header alongside the response.
+//
+// A Carrier prints and logs its key counts only, never the header values.
+// It does not implement the session module's cookie accessor: a cookie
+// session does not authenticate ConnectRPC calls.
 //
 // Carrier is NOT safe for concurrent use; one instance per RPC.
 type Carrier struct {
@@ -67,3 +75,23 @@ func (c *Carrier) ResponseHeader() http.Header { return c.out }
 
 // Compile-time check.
 var _ security.Carrier = (*Carrier)(nil)
+
+// String implements fmt.Stringer with the number of incoming and staged
+// header keys: the values — the Authorization header among them — are never
+// printed.
+func (c Carrier) String() string {
+	return fmt.Sprintf("connectrpcsec.Carrier{Incoming: %d keys, Staged: %d keys}", len(c.in), len(c.out))
+}
+
+// GoString implements fmt.GoStringer like String.
+func (c Carrier) GoString() string { return c.String() }
+
+// Format implements fmt.Formatter like String, for every verb: without it,
+// fmt prints the header maps. fmt handles %p of a non-pointer value before
+// any method: no type can redact that one.
+func (c Carrier) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, c.String()) }
+
+// LogValue implements slog.LogValuer with the key counts only.
+func (c Carrier) LogValue() slog.Value {
+	return slog.GroupValue(slog.Int("incoming_keys", len(c.in)), slog.Int("staged_keys", len(c.out)))
+}

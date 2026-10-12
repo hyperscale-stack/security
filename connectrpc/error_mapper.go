@@ -7,14 +7,25 @@ package connectrpcsec
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/hyperscale-stack/security"
 )
 
+// defaultChallengeScheme is the WWW-Authenticate scheme used when none is
+// configured — RFC 6750 bearer tokens.
+const defaultChallengeScheme = "Bearer"
+
+// DefaultRealm is the realm of the default challenges when none is
+// configured: RFC 7617 §2 requires one in a Basic challenge, and RFC 6750 §3
+// requires an auth-param after Bearer.
+const DefaultRealm = "api"
+
 // ErrorMapper translates a security error into a Connect error. Custom
-// mappers can localize messages or attach metadata; the default mapper covers
-// the canonical security sentinels.
+// mappers can localize messages or attach metadata; they should classify
+// the error with [security.ErrorClass], as the default mapper does.
 //
 // Implementations MUST be safe for concurrent use.
 type ErrorMapper interface {
@@ -23,52 +34,127 @@ type ErrorMapper interface {
 	Map(ctx context.Context, err error) error
 }
 
-// DefaultErrorMapper returns the canonical mapper:
+// DefaultErrorMapper returns the canonical mapper. It answers from
+// [security.ErrorClass](err) with one fixed message per code — the message
+// never says why authentication failed — and, as a Connect unary error
+// travels as an HTTP response, with the WWW-Authenticate challenge of
+// scheme S and realm R in the error's metadata (sent as response headers):
 //
-//   - connect.CodeInvalidArgument  for [security.ErrUnsupportedCredential]
-//   - connect.CodePermissionDenied for [security.ErrAccessDenied] and
-//     [security.ErrInsufficientScope]
-//   - connect.CodeUnauthenticated  for ErrInvalidCredentials,
-//     ErrClientSecretMismatch, ErrTokenExpired, ErrTokenNotFound,
-//     ErrAuthenticatorRefused, and any other unclassified error
+//	class                                       code (HTTP)             challenge
+//	invalid_request                             InvalidArgument (400)   Bearer + bearer token sent: error="invalid_request"
+//	unavailable                                 Unavailable (503)       —
+//	token_expired, token_not_found,
+//	client_secret_mismatch, invalid_credentials Unauthenticated (401)   S realm=R; Bearer + bearer token sent: error="invalid_token"
+//	authentication_required,
+//	unsupported_credential                      Unauthenticated (401)   S realm=R (no error code)
+//	insufficient_scope, access_denied           PermissionDenied (403)  S realm=R; Bearer + bearer token sent: error="insufficient_scope"
+//	no_extractor, _OTHER                        Internal (500)          —
 //
-// The message is intentionally terse — Connect clients branch on the code,
-// not the string.
-func DefaultErrorMapper() ErrorMapper { return defaultErrorMapper{} }
+// A Basic challenge also carries charset="UTF-8" (RFC 7617 §2.1). Whether
+// the request carried a bearer token is told by the interceptors; without
+// them no RFC 6750 code is sent. An empty scheme means "Bearer" and an
+// empty realm [DefaultRealm]. DefaultErrorMapper panics when scheme is not
+// an RFC 9110 token or realm holds a character a quoted-string cannot
+// carry: a challenge configuration is static, so it fails at startup.
+func DefaultErrorMapper(scheme, realm string) ErrorMapper {
+	if scheme == "" {
+		scheme = defaultChallengeScheme
+	}
 
-type defaultErrorMapper struct{}
+	if realm == "" {
+		realm = DefaultRealm
+	}
 
-// Map implements [ErrorMapper]. The returned Connect error is the final wire
-// value — not a wrapping of err — so wrapcheck is silenced here.
-func (defaultErrorMapper) Map(_ context.Context, err error) error {
-	code, msg := classify(err)
+	if !isToken(scheme) {
+		panic(fmt.Sprintf("connectrpcsec: challenge scheme %q is not an RFC 9110 token", scheme))
+	}
 
-	return connect.NewError(code, errors.New(msg)) //nolint:wrapcheck // connect error is the terminal wire value
+	quoted, ok := quoteString(realm)
+	if !ok {
+		panic(fmt.Sprintf("connectrpcsec: realm %q is not printable ASCII (RFC 9110 §5.6.4 quoted-string)", realm))
+	}
+
+	params := "realm=" + quoted
+	if strings.EqualFold(scheme, "Basic") {
+		params += `, charset="UTF-8"`
+	}
+
+	return &defaultErrorMapper{
+		challenge: scheme + " " + params,
+		bearer:    strings.EqualFold(scheme, defaultChallengeScheme),
+	}
 }
 
-func classify(err error) (connect.Code, string) {
+type defaultErrorMapper struct {
+	// challenge is the scheme followed by its realm (and charset) auth-params.
+	challenge string
+	// bearer reports a Bearer challenge, which takes the RFC 6750 codes.
+	bearer bool
+}
+
+// Map implements [ErrorMapper]. The returned Connect error is the final wire
+// value — not a wrapping of err.
+func (m *defaultErrorMapper) Map(ctx context.Context, err error) error {
+	o := outcomeOf(security.ErrorClass(err))
+	ce := connect.NewError(o.code, errors.New(o.message))
+
+	if challenge := m.challengeFor(o, bearerTokenSent(ctx)); challenge != "" {
+		ce.Meta().Set("WWW-Authenticate", challenge)
+	}
+
+	return ce
+}
+
+// challengeFor returns the WWW-Authenticate value of an outcome, or "".
+func (m *defaultErrorMapper) challengeFor(o outcome, bearerSent bool) string {
 	switch {
-	case errors.Is(err, security.ErrUnsupportedCredential):
-		return connect.CodeInvalidArgument, "unsupported credential"
-
-	case errors.Is(err, security.ErrAccessDenied):
-		return connect.CodePermissionDenied, "access denied"
-
-	case errors.Is(err, security.ErrInsufficientScope):
-		return connect.CodePermissionDenied, "insufficient scope"
-
-	case errors.Is(err, security.ErrTokenExpired):
-		return connect.CodeUnauthenticated, "token expired"
-
-	case errors.Is(err, security.ErrTokenNotFound):
-		return connect.CodeUnauthenticated, "token not found"
-
-	case errors.Is(err, security.ErrInvalidCredentials),
-		errors.Is(err, security.ErrClientSecretMismatch),
-		errors.Is(err, security.ErrAuthenticatorRefused):
-		return connect.CodeUnauthenticated, "invalid credentials"
-
+	case m.bearer && o.oauthCode != "" && bearerSent:
+		return m.challenge + `, error="` + o.oauthCode + `", error_description="` + o.description + `"`
+	case o.challenge:
+		return m.challenge
 	default:
-		return connect.CodeUnauthenticated, "unauthenticated"
+		return ""
+	}
+}
+
+// outcome is the Connect answer to an error class.
+type outcome struct {
+	code    connect.Code
+	message string
+	// challenge reports an answer (401, 403) that always carries a challenge.
+	challenge bool
+	// oauthCode and description are the RFC 6750 §3.1 error of a Bearer
+	// challenge, for a request that carried a bearer token.
+	oauthCode   string
+	description string
+}
+
+// msgUnauthenticated is the one message of every Unauthenticated answer: it
+// never says why authentication failed.
+const msgUnauthenticated = "unauthenticated"
+
+// RFC 6750 §3.1 error_description strings: fixed and generic.
+const (
+	descInvalidRequest    = "The request is malformed."
+	descInvalidToken      = "The access token is invalid or has expired."
+	descInsufficientScope = "The request requires higher privileges than provided by the access token."
+)
+
+// outcomeOf maps a [security.ErrorClass] to its Connect answer.
+func outcomeOf(class string) outcome {
+	switch class {
+	case security.ErrorClassInvalidRequest:
+		return outcome{connect.CodeInvalidArgument, "invalid request", false, "invalid_request", descInvalidRequest}
+	case security.ErrorClassUnavailable:
+		return outcome{code: connect.CodeUnavailable, message: "authentication unavailable"}
+	case security.ErrorClassTokenExpired, security.ErrorClassTokenNotFound,
+		security.ErrorClassClientSecretMismatch, security.ErrorClassInvalidCredentials:
+		return outcome{connect.CodeUnauthenticated, msgUnauthenticated, true, "invalid_token", descInvalidToken}
+	case security.ErrorClassAuthenticationRequired, security.ErrorClassUnsupportedCredential:
+		return outcome{code: connect.CodeUnauthenticated, message: msgUnauthenticated, challenge: true}
+	case security.ErrorClassInsufficientScope, security.ErrorClassAccessDenied:
+		return outcome{connect.CodePermissionDenied, "permission denied", true, "insufficient_scope", descInsufficientScope}
+	default:
+		return outcome{code: connect.CodeInternal, message: "internal error"}
 	}
 }

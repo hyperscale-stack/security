@@ -457,6 +457,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `grpcsec.ServerOptions` and `grpcsec.AuthorizeServerOptions`: the
   authentication and authorization interceptors for unary AND streaming
   RPCs, as `grpc.ServerOption` values.
+- `connectrpcsec.WithChallengeScheme`, `connectrpcsec.WithRealm` and
+  `connectrpcsec.DefaultRealm`: the challenge of the Connect error mapping.
 
 ### Changed
 
@@ -683,6 +685,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   an `ErrUnavailable` `Unavailable`, and an error wrapping no sentinel
   `Internal` (was `Unauthenticated`). The authorization interceptors use the
   authentication interceptor's error mapper unless given their own.
+- `connectrpcsec.DefaultErrorMapper()` becomes
+  `DefaultErrorMapper(scheme, realm string)` and answers from
+  `security.ErrorClass` like the gRPC mapper (generic messages,
+  `Unauthenticated` for an unsupported credential and for an anonymous
+  principal refused by the authorization interceptor, `InvalidArgument` for
+  a repeated `Authorization` field, `Unavailable` for `ErrUnavailable`,
+  `Internal` for an error wrapping no sentinel), with the RFC 6750 / RFC
+  7617 `WWW-Authenticate` challenge in the error's metadata. The
+  authorization interceptor uses the authentication interceptor's error
+  mapper unless given its own.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -804,6 +816,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   header, refused RPCs included, as its documentation said; it was dropped.
   A custom `Engine` returning no authentication no longer panics the
   interceptors.
+- A ConnectRPC unary call refused with `Unauthenticated` (HTTP 401) carried
+  no `WWW-Authenticate` field (RFC 9110 §11.6.1); it now carries the
+  challenge. Headers staged on the `connectrpcsec.Carrier` reach the client
+  on a refused call and on a handler error too, and a custom `Engine`
+  returning no authentication no longer panics the interceptors.
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1269,3 +1286,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   code. `grpcsec.Carrier` printed its incoming metadata — the bearer token
   in `authorization` — with `%v`; it now prints and logs key counts only,
   whatever the verb.
+- `connectrpcsec.Carrier` printed its incoming headers — the bearer token
+  in `Authorization` — with `%v`, and the Connect error messages told the
+  client why authentication failed; the carrier now prints and logs key
+  counts only, and the messages are one fixed string per code.

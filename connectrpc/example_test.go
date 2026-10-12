@@ -36,11 +36,11 @@ func Example() {
 	_ = engine
 	_ = adm
 
-	mapper := connectrpcsec.DefaultErrorMapper()
+	mapper := connectrpcsec.DefaultErrorMapper("Bearer", connectrpcsec.DefaultRealm)
 	for _, err := range []error{
 		security.ErrInvalidCredentials,
 		security.ErrAccessDenied,
-		security.ErrUnsupportedCredential,
+		security.ErrUnavailable,
 	} {
 		fmt.Println(connect.CodeOf(mapper.Map(context.Background(), err)))
 	}
@@ -48,5 +48,5 @@ func Example() {
 	// Output:
 	// unauthenticated
 	// permission_denied
-	// invalid_argument
+	// unavailable
 }

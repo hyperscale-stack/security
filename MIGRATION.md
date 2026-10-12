@@ -1485,3 +1485,30 @@ To migrate:
 3. Authenticators: wrap `security.ErrUnavailable` only for a transient
    dependency failure (clients retry `Unavailable`), a credential sentinel
    for a refusal.
+
+### `connectrpc`: challenges on 401, generic codes and messages
+
+A ConnectRPC unary call refused with `Unauthenticated` is an HTTP 401, which
+MUST carry a `WWW-Authenticate` challenge (RFC 9110 §11.6.1); none was sent.
+The Connect error messages also told the client why authentication failed,
+and infrastructure failures read as `Unauthenticated`. The default mapper now
+takes the challenge configuration and answers like the gRPC one:
+
+| Situation | Before | After |
+| --- | --- | --- |
+| `DefaultErrorMapper()` | no argument | `DefaultErrorMapper(scheme, realm string)` (`""` → `Bearer`, `DefaultRealm`) |
+| Unauthenticated / PermissionDenied | no `WWW-Authenticate` | challenge in the error metadata (HTTP headers for unary calls) |
+| Credential failure | reason in the message | `unauthenticated` |
+| Unsupported credential | `InvalidArgument` | `Unauthenticated` |
+| Anonymous caller refused by the authorization interceptor | `PermissionDenied` | `Unauthenticated` |
+| Repeated `Authorization` field | first value used | `InvalidArgument` |
+| `ErrUnavailable` / error wrapping no sentinel | `Unauthenticated` | `Unavailable` / `Internal` |
+| Headers staged on the `Carrier`, refused call | dropped | in the error metadata |
+
+To migrate:
+
+1. Replace `connectrpcsec.DefaultErrorMapper()` by
+   `connectrpcsec.DefaultErrorMapper("Bearer", connectrpcsec.DefaultRealm)`
+   (or your scheme and realm), or configure the interceptors with
+   `connectrpcsec.WithChallengeScheme` / `connectrpcsec.WithRealm`.
+2. Branch on the code, never on the message.

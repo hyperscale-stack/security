@@ -186,7 +186,8 @@ and a `Carrier`, then map security errors to transport responses.
 - **`connectrpcsec`** — `NewAuthenticationInterceptor` authenticates every
   RPC; `NewAuthorizationInterceptor` enforces an ADM. Both return a
   `connect.Interceptor` covering unary and streaming. `ErrorMapper` turns
-  sentinels into `connect.Code`.
+  `security.ErrorClass` into `connect.Code` with the `WWW-Authenticate`
+  challenge in the error's metadata.
 
 ## OAuth2
 
