@@ -1,0 +1,11 @@
+[
+    {
+        "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+        "variant": "*",
+        "configuration-filename": "*/op-config.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+        "expected-result": "warning",
+        "comment": "acr_values are voluntary (Core §3.1.2.1): the provider passes them to the Interaction, which decides; the headless one performs no step-up and asserts no acr, so the ID Token carries none of the requested values"
+    }
+]

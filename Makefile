@@ -91,6 +91,13 @@ e2e-saml:
 e2e-oidc:
 	@./e2e/oidc/run.sh
 
+# The OpenID Foundation conformance suite against oidc/provider (OP plans) and
+# oidc/client (RP plans), locally: opt-in, never in CI, not a certification
+# (prerequisites in internal/interop/oidcstack/conformance/run.sh).
+.PHONY: conformance
+conformance:
+	@./internal/interop/oidcstack/conformance/run.sh
+
 # A sign-in with a real provider account (LIVE_OIDC_* variables, a person
 # at the keyboard): see e2e/oidc-live/run.sh.
 .PHONY: e2e-oidc-live

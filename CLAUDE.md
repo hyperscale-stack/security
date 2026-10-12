@@ -61,6 +61,7 @@ make coverage   # go tool cover -func on the aggregated profile
 make generate   # mockery — currently BROKEN, see "Tooling caveats" below
 make e2e        # opt-in browser suites (Tales + Chrome: e2e/saml, e2e/oidc), never in CI
 make e2e-oidc   # only the OIDC one (make e2e-saml: only the SAML one)
+make conformance # opt-in: the OpenID Foundation suite against oidc/provider and oidc/client (Docker, OIDF_SUITE_DIR)
 ```
 
 To run a **single test** or work on one module, `cd` into that module first

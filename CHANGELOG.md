@@ -260,6 +260,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   PostgreSQL, MySQL and Redis too), and provider, store or network
   failures. No third-party OpenID Connect or JOSE library is involved
   (`TestDependencyPolicy`).
+- **OpenID Foundation conformance-suite harness**
+  (`internal/interop/oidcstack/conformance`, `make conformance`, opt-in and
+  local, never in CI; #86): the suite's OP plans (Basic under
+  `oauth2.Profile20`, Config for a root and a path issuer) run against
+  `oidc/provider` with a headless interaction, and its RP plans (Basic,
+  Form Post Basic, Config, the comprehensive plan) against `oidc/client`
+  through a Go driver of the suite's REST API that pins the suite's result
+  and the client's outcome of every module. Images are pinned by digest,
+  the expected failures, skips and outcomes live in `testdata`. A local run
+  is not an OpenID Certification.
 - **End-to-end suites of the OpenID Connect examples** (`e2e/oidc`, Tales,
   opt-in through `make e2e-oidc`, never in CI; #85, #86):
   `examples/oidc-provider` and `examples/oidc-client` built and started on
