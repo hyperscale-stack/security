@@ -11,12 +11,13 @@ several independently-releasable modules**, so consumers import only the
 pieces they need and the core stays free of heavy transitive dependencies.
 
 The whole `v0.x` series was replaced by a ground-up transport-agnostic
-rewrite (the "v2 stack"); the legacy `authentication/` / `authorization/`
-packages were removed. The rewrite is functionally complete and currently
-`[Unreleased]` — remaining gaps are tracked as GitHub issues, not refactor
+rewrite; the legacy `authentication/` / `authorization/` packages were
+removed. The rewrite is functionally complete and currently `[Unreleased]`:
+its first release is **v1.0.0** for every module (the module paths carry
+no `/vN` suffix). Remaining gaps are tracked as GitHub issues, not refactor
 phases. Source-of-truth docs:
 
-- `CHANGELOG.md` — what the v2 stack ships.
+- `CHANGELOG.md` — what the first release ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
 - `docs/` — `architecture.md`, `oidc-provider.md`, `oidc-client.md`,
@@ -263,7 +264,7 @@ mount path of every handler (`AuthorizeHandler`, `UserInfoHandler`,
 - `docs/oidc-provider.md` is the exact feature matrix (no certification
   claimed); `internal/interop/oidcop` checks interop with go-oidc.
 
-`examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
+`examples/oauth2/main.go` is the canonical wiring example of the library;
 `examples/oidc-provider` the one for the OpenID Provider (login and consent
 pages, CSRF, sessions); `examples/` also has `basic-http`, `bearer-jwt`,
 `grpc-bearer`, `connectrpc-bearer`, `session-web`, `oidc-client` and `saml-sp` demos.

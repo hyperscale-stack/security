@@ -2,7 +2,7 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-// Package main demonstrates wiring of the v2 security library: an OAuth2
+// Package main demonstrates wiring of the security library: an OAuth2
 // authorization server (authorization_code with PKCE, client_credentials,
 // refresh_token) plus a resource server protected by a bearer middleware
 // sharing the same storage as the auth server.

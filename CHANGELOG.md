@@ -5,8 +5,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The library is a multi-module workspace; modules are tagged independently
-(`module/vX.Y.Z`). The entries below describe the ground-up rewrite that
-replaced the v0 stack.
+(`module/vX.Y.Z`), and the first release of every module is `v1.0.0`. The
+entries below describe the ground-up rewrite that replaced the v0 stack.
 
 ## [Unreleased]
 
@@ -20,7 +20,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   immutable `Authentication`/`Principal`, `Carrier`, `Extractor`,
   `Authenticator`, first-success-wins `Manager`, `Engine`, typed
   `SecurityError` sentinels, and a `Clock` abstraction.
-- **Authorization v2**: `Voter`/`Decision`/`Attribute`, an
+- **Authorization**: `Voter`/`Decision`/`Attribute`, an
   `AccessDecisionManager` with Affirmative/Consensus/Unanimous strategies,
   and a `voter/` catalog (`HasRole`, `HasAnyRole`, `HasScope`,
   `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,

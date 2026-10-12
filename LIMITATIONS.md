@@ -1,6 +1,6 @@
 # Known limitations
 
-The v2 stack covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
+The library covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
 password hashing, JWT, OAuth2 (issuer + resource server), OpenID Connect
 (provider and relying party), a SAML 2.0 Service Provider, production
 storage backends, and stateless cookie sessions. This document tracks what is

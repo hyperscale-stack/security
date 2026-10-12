@@ -2,12 +2,13 @@
 
 The v0 stack (`authentication/`, `authorization/`, the in-tree `password`
 package, and `authentication/provider/oauth2`) was removed during the
-refactor. This guide maps the old API to the v2 stack. For the workspace
-layout and the new module list see [../MIGRATION.md](../MIGRATION.md).
+refactor. This guide maps the old API to the v1 stack (first release:
+`v1.0.0`). For the workspace layout and the new module list see
+[../MIGRATION.md](../MIGRATION.md).
 
 ## Concept mapping
 
-| v0                                              | v2                                                       |
+| v0                                              | v1                                                       |
 | ----------------------------------------------- | --------------------------------------------------------- |
 | `authentication.Credential` (mutable, `any`)    | `security.Authentication` (immutable interface)           |
 | `authentication.Filter` / `OnFilter`            | `security.Extractor` — `Extract(ctx, Carrier)`            |
@@ -19,12 +20,12 @@ layout and the new module list see [../MIGRATION.md](../MIGRATION.md).
 
 ## Authentication is now immutable
 
-v0 credentials were a mutable bag mutated in place by each filter. v2
+v0 credentials were a mutable bag mutated in place by each filter. v1
 `Authentication` is a read-only interface; an authenticator returns a *new*
 value rather than mutating its input:
 
 ```go
-// v2
+// v1
 func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authentication) (security.Authentication, error) {
     // …validate…
     return in.WithAuthenticated(user, authorities), nil // new value
@@ -41,7 +42,7 @@ Every runtime operation now takes `context.Context` as its first argument —
 ## The Handler loop bug is gone
 
 v0's `Handler` kept iterating filters after a successful authentication and
-silently swallowed provider errors. v2 replaces it with:
+silently swallowed provider errors. v1 replaces it with:
 
 - `security.Manager` — first-success-wins, then stops; all-fail produces an
   aggregated error reachable via `errors.Is`.
@@ -53,7 +54,7 @@ silently swallowed provider errors. v2 replaces it with:
 ## Password verification reports errors
 
 v0's `Verify` returned a bare `bool`, conflating "wrong password" with
-"malformed hash". v2:
+"malformed hash". v1:
 
 ```go
 ok, err := hasher.Verify(ctx, encodedHash, password)
@@ -77,7 +78,7 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 ## OAuth2: provider split into issuer and resource server
 
 v0's `NewOAuth2AuthenticationProvider` mixed token issuance and token
-validation. v2 separates them:
+validation. v1 separates them:
 
 - **Authorization server** — `oauth2.NewServer(cfg)` exposes
   `TokenHandler`, `RevokeHandler`, `IntrospectHandler`, `MetadataHandler`.
@@ -89,6 +90,6 @@ and the [examples/](../examples) directory for the other per-scenario demos.
 
 ## Transport imports
 
-The v0 example imported `gorilla/mux`. v2 examples use the standard
+The v0 example imported `gorilla/mux`. v1 examples use the standard
 `net/http.ServeMux` — no third-party router is required, and none is a
 dependency of any module.

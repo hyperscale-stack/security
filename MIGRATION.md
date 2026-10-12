@@ -161,10 +161,11 @@ for the OIDC client and SAML SP stores), plus one for each in-repo module
 of its graph,
 so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
 
-## Breaking changes before the first v2 release
+## Breaking changes before the first release
 
-The v2 stack is not tagged yet, but code tracking `master` may already rely
-on its behavior. Each entry below states what changed and how to adapt.
+No module is tagged yet (the first release of every module is `v1.0.0`),
+but code tracking `master` may already rely on its behavior. Each entry
+below states what changed and how to adapt.
 
 ### `oauth2`: `/introspect` only answers confidential clients (#81)
 
