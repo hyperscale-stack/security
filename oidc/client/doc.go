@@ -77,7 +77,10 @@
 // The application owns connection selection and routing, the transaction
 // store deployment, account linking and provisioning, its own session
 // (create a fresh one after Complete), rate limiting of login starts, and
-// tenant isolation.
+// tenant isolation. To link an external identity to an account already
+// signed in, start the login with a CSRF-protected POST after a recent
+// re-authentication, put a random value bound to the local session in
+// AuthOptions.AppState, and link only when Identity.AppState matches it.
 //
 // # Library evaluation
 //

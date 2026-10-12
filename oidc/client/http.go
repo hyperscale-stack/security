@@ -64,7 +64,8 @@ func (c *Client) StartLogin(w http.ResponseWriter, r *http.Request, opts AuthOpt
 // HandleCallback completes a login for net/http. It reads the response
 // as the connection's response mode delivers it — a GET with the response
 // in the query, or a POST of an application/x-www-form-urlencoded body of
-// at most 64 KiB without response parameters in the query — reads and
+// at most 64 KiB (or the r.PostForm a middleware already parsed) without
+// response parameters in the query — reads and
 // expires the binding cookie of the response's state, sets Cache-Control:
 // no-store and Referrer-Policy: no-referrer (RFC 9700 §4.2.4), and calls
 // Complete with the URL the request was received on: the RedirectURL's
@@ -134,6 +135,10 @@ func (c *Client) readCallback(w http.ResponseWriter, r *http.Request) (url.Value
 		return nil, fmt.Errorf("%w: form_post body must be form-urlencoded", ErrInvalidCallback)
 	case slices.ContainsFunc(responseParams, query.Has):
 		return nil, fmt.Errorf("%w: response parameter in the query of a form_post callback", ErrInvalidCallback)
+	}
+
+	if r.PostForm != nil { // a middleware already parsed the body (r.ParseForm)
+		return r.PostForm, nil
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCallbackBody))

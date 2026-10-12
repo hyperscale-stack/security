@@ -432,9 +432,21 @@ are attacker-influenced.
   validate it before using it as a redirect target. After a successful
   callback, create a fresh session and answer 303 to a clean URL, so the
   code leaves the browser history (RFC 9700 §4.3.1).
-- **Provider errors** — `AuthorizationError` carries the provider's
-  `error`, `error_description` and `error_uri`: untrusted text, its
-  `Error()` prints the code only. Never render the description or the URI.
+- **Account linking** — linking an external identity to an account that
+  is already signed in is a login started on the victim's behalf if it can
+  be forged: on a hostile tenant's connection, a forged link start would
+  silently attach the attacker's identity to the victim's account. Start a
+  link only with a CSRF-protected POST after a recent re-authentication,
+  put a random value bound to the local session in `AppState`, and after
+  `Complete` link only when it matches the current session's value — never
+  link on an identity whose `AppState` does not prove the link was started
+  by that session.
+- **Provider errors** — `AuthorizationError` and `TokenError` carry the
+  provider's `error`, `error_description` and `error_uri`: untrusted text,
+  their `Error()` prints the code only. Never render the description or the
+  URI. The errors of `New` (discovery) may name the resolved address of an
+  allowed destination: when tenants configure issuers, log them and show a
+  generic message.
 - **Tokens** — token and UserInfo requests never follow redirects;
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
@@ -485,7 +497,19 @@ network:
 Exemptions are explicit: `AllowedPrefixes` for an on-premises identity
 provider's subnet (or `outbound.LoopbackPrefixes()` in tests). Any port
 is allowed by default; restrict ports and hosts in `CheckURL`, and deny
-specific public addresses in `CheckAddr`.
+specific public addresses in `CheckAddr`. Only the well-known NAT64 prefix
+is decoded: on a network translating a network-specific prefix (RFC 6052),
+refuse that prefix in `CheckAddr`, or its addresses reach the private IPv4
+addresses they embed.
+
+Host names ending in a number (`127.1`, `2130706433`, `0x7f.1`) are refused
+before `CheckURL`: resolvers read them as IPv4 addresses, so a host check
+would vet another name than the one dialed. A refused destination is never
+named in an error, but the errors of allowed destinations may name their
+resolved address and port, and every error tells whether a name is
+refused: when tenants supply URLs ("test this connection"), log the error
+and show them a generic message, or the error text becomes an oracle on
+the internal network.
 
 ## Transport error mapping
 

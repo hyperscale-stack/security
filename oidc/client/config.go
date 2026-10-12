@@ -125,13 +125,21 @@ type Config struct {
 	// instance that may serve the callback.
 	Store TransactionStore
 
-	// TransactionTTL bounds the time between Begin and the callback:
-	// DefaultTransactionTTL when zero, at most MaxTransactionTTL.
+	// TransactionTTL bounds the time between Begin and the callback, in
+	// whole seconds: DefaultTransactionTTL when zero, at most
+	// MaxTransactionTTL.
 	TransactionTTL time.Duration
 
 	// Algorithms restricts the ID Token signature algorithms; empty means
 	// every asymmetric algorithm. The effective set is its intersection
 	// with the provider's id_token_signing_alg_values_supported.
+	//
+	// One algorithm per key (RFC 8725 §3.1): an RSA JWK without "alg" is
+	// used for RS256 only — or for the single RSA algorithm of the
+	// effective set. A provider signing with PS256/384/512, RS384 or RS512
+	// and publishing RSA keys without "alg" therefore needs Algorithms set
+	// to that one RSA algorithm, else its ID Tokens fail with
+	// ErrUnknownSigningKey.
 	Algorithms []Algorithm
 
 	// TrustedAudiences lists the audiences besides ClientID an ID Token may
@@ -148,6 +156,11 @@ type Config struct {
 	// https only and publicly routable destinations only; exempt an
 	// on-premises provider's subnet in AllowedPrefixes. Token and UserInfo
 	// requests never follow redirects, whatever MaxRedirects says.
+	//
+	// The errors of New, Complete and UserInfo wrap the network errors of
+	// allowed destinations, which may name a resolved address and port
+	// (refused destinations are never named). When the issuer comes from a
+	// tenant, log these errors and show the tenant a generic message.
 	Outbound outbound.Policy
 
 	// InsecureCookies makes the net/http helpers set the binding cookie
@@ -245,8 +258,8 @@ func (c Config) validateFlow() error {
 		return fmt.Errorf("%w: unsupported ResponseMode %q", ErrInvalidConfig, c.ResponseMode)
 	case c.Store == nil:
 		return fmt.Errorf("%w: Store is required", ErrInvalidConfig)
-	case c.TransactionTTL < 0 || c.TransactionTTL > MaxTransactionTTL:
-		return fmt.Errorf("%w: TransactionTTL must be between 0 and %s", ErrInvalidConfig, MaxTransactionTTL)
+	case c.TransactionTTL < 0 || c.TransactionTTL > MaxTransactionTTL || c.TransactionTTL%time.Second != 0:
+		return fmt.Errorf("%w: TransactionTTL must be whole seconds between 0 and %s", ErrInvalidConfig, MaxTransactionTTL)
 	case c.ClockSkew < 0 || c.ClockSkew > MaxClockSkew:
 		return fmt.Errorf("%w: ClockSkew must be between 0 and %s", ErrInvalidConfig, MaxClockSkew)
 	case c.InsecureCookies && c.ResponseMode == ResponseModeFormPost:

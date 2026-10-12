@@ -26,9 +26,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hyperscale-stack/security/outbound"
 	oidcclient "github.com/hyperscale-stack/security/oidc/client"
 	"github.com/hyperscale-stack/security/oidc/client/storage/memory"
+	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zitadel/oidc/v3/example/server/exampleop"

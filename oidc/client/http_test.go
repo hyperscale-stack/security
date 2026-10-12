@@ -145,14 +145,16 @@ func TestStartLoginCapsCookies(t *testing.T) {
 	op := newFakeOP(t)
 	c := op.client(t)
 
+	// The application's own cookies come first — oldest — and are never
+	// touched, __Host- prefixed or not.
+	app := []*http.Cookie{{Name: "__Host-session", Value: "app"}, {Name: "session", Value: "app"}}
+
 	var existing []*http.Cookie
 	for i := range 6 {
 		existing = append(existing, &http.Cookie{Name: "__Host-oidc-" + strings.Repeat(string(rune('a'+i)), 16), Value: "v"})
 	}
 
-	existing = append(existing, &http.Cookie{Name: "session", Value: "app"})
-
-	rec := startLogin(t, c, existing...)
+	rec := startLogin(t, c, append(app, existing...)...)
 
 	expired := map[string]bool{}
 
@@ -297,6 +299,27 @@ func TestHandleCallbackFormPost(t *testing.T) {
 	cleared := cookieNamed(t, rec, binding.Name)
 	assert.Negative(t, cleared.MaxAge)
 	assert.Equal(t, http.SameSiteNoneMode, cleared.SameSite)
+}
+
+// TestHandleCallbackParsedForm checks a form_post callback whose body a
+// middleware already parsed (r.ParseForm): the parsed form is used.
+func TestHandleCallbackParsedForm(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	c := op.client(t, func(cfg *oidcclient.Config) { cfg.ResponseMode = oidcclient.ResponseModeFormPost })
+
+	login := startLogin(t, c)
+	state := loginState(t, login)
+	code := op.authorize(t, login.Header().Get("Location"))
+	binding := cookieNamed(t, login, expectedCookieName("__Host-oidc-", state))
+
+	req := callbackRequest(http.MethodPost, testRedirectURL, strings.NewReader(url.Values{"code": {code}, "state": {state}}.Encode()), binding)
+	require.NoError(t, req.ParseForm())
+
+	id, err := c.HandleCallback(httptest.NewRecorder(), req)
+	require.NoError(t, err)
+	assert.Equal(t, testSubject, id.Subject)
 }
 
 // TestHandleCallbackRefuses checks the request shape per response mode;

@@ -215,6 +215,20 @@ func TestIDTokenHeader(t *testing.T) {
 // TestAccessTokenNotAcceptedAsIDToken plays the RFC 9068 token confusion:
 // a correctly signed access token whose aud is the client and that even
 // carries the login's nonce is refused.
+// TestIDTokenTypeNotEchoed checks that an attacker-chosen typ never reaches
+// the error text (log forging).
+func TestIDTokenTypeNotEchoed(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	op.set(func(op *fakeOP) { op.headerHook = func(h map[string]any) { h["typ"] = "at+jwt\nforged log line" } })
+
+	_, err := op.login(t, op.client(t))
+	require.ErrorIs(t, err, oidcclient.ErrIDTokenType)
+	assert.NotContains(t, err.Error(), "forged")
+	assert.NotContains(t, err.Error(), "\n")
+}
+
 func TestAccessTokenNotAcceptedAsIDToken(t *testing.T) {
 	t.Parallel()
 

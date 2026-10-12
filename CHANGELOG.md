@@ -119,10 +119,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (RFC 6598), link-local and cloud-metadata, multicast, reserved,
   documentation and benchmarking space, IPv4-mapped and NAT64 addresses
   being judged on their IPv4 and IPv6 being limited to `2000::/3` minus
-  its special-purpose blocks; it requires ASCII host names, follows no
-  redirect, uses no proxy and no cookie jar, bounds the exchange (10 s)
-  and every body (1 MiB, counted after decompression), and requires TLS
-  1.2 or later. Applications widen it explicitly (`AllowedPrefixes`,
+  its special-purpose blocks; it requires ASCII host names and refuses
+  those ending in a number (`127.1`, `0x7f.1`, which resolvers read as
+  IPv4 addresses) before the `CheckURL` hook, never names a refused
+  address in an error, follows no redirect, uses no proxy and no cookie
+  jar, bounds the exchange (10 s), the response headers (64 KiB) and every
+  body (1 MiB, counted after decompression), and requires TLS 1.2 or
+  later. Applications widen it explicitly (`AllowedPrefixes`,
   `AllowHTTP`, `MaxRedirects`) and narrow it with the `CheckURL` and
   `CheckAddr` hooks.
 - **OpenID Connect Relying Party** (`oidc/client`, package `oidcclient`):

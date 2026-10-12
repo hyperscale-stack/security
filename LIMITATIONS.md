@@ -78,6 +78,11 @@ PKCE. Not supported, and refused where a provider could select them:
 - **ID Token formats** — encrypted ID Tokens (JWE), HMAC-signed ones
   (HS256/384/512), `alg=none`, and the fully-specified `Ed25519` algorithm
   identifier of RFC 9864 (go-jose v4.1.5 knows `EdDSA` only).
+- **RSA keys without `alg`** — one algorithm per key (RFC 8725 §3.1): an
+  RSA JWK without `alg` verifies RS256 only, or the single RSA algorithm of
+  `Config.Algorithms`. A provider signing with PS256/384/512, RS384 or
+  RS512 and publishing such keys needs `Config.Algorithms` set to that one
+  algorithm.
 - **Signed or encrypted UserInfo responses** (`application/jwt`):
   `UserInfo` returns `ErrUserInfoUnsupported`.
 - **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
@@ -132,10 +137,16 @@ PKCE. Not supported, and refused where a provider could select them:
   Deployments whose egress must go through a proxy cannot use them yet.
 - **Ports are not restricted** by default — restrict them in
   `Policy.CheckURL`.
-- **Private networks** need an explicit `AllowedPrefixes` exemption, and
-  only the well-known NAT64 prefix (`64:ff9b::/96`) is translated; a
-  network-specific NAT64 prefix is refused like any non-global IPv6
-  address.
+- **Private networks** need an explicit `AllowedPrefixes` exemption.
+- **NAT64** — only the well-known prefix (`64:ff9b::/96`) is decoded and
+  judged on its embedded IPv4 address. A network-specific prefix (RFC 6052
+  §2.2) is carved from global unicast space, so its addresses pass as
+  ordinary global IPv6 and reach whatever IPv4 address they embed, private
+  ones included: a network translating such a prefix must refuse it in
+  `Policy.CheckAddr`.
+- **Error text** — a refused destination is never named, but the errors of
+  allowed destinations (refused connection, timeout, TLS failure) come
+  from the standard library and may name the resolved address and port.
 
 ## Transports
 

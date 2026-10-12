@@ -135,7 +135,7 @@ func checkHeader(h jose.Header) error {
 	if typ, ok := h.ExtraHeaders[jose.HeaderType]; ok {
 		s, isString := typ.(string)
 		if !isString || !strings.EqualFold(strings.TrimPrefix(strings.ToLower(s), "application/"), "jwt") {
-			return fmt.Errorf("%w: typ %v", ErrIDTokenType, typ)
+			return fmt.Errorf("%w: typ is not JWT", ErrIDTokenType) // the value is attacker-chosen: never echoed
 		}
 	}
 

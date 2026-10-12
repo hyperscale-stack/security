@@ -64,6 +64,7 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		"no store":                      func(c *oidcclient.Config) { c.Store = nil },
 		"negative ttl":                  func(c *oidcclient.Config) { c.TransactionTTL = -time.Second },
 		"ttl over an hour":              func(c *oidcclient.Config) { c.TransactionTTL = time.Hour + time.Second },
+		"sub-second ttl":                func(c *oidcclient.Config) { c.TransactionTTL = 1500 * time.Millisecond },
 		"HS256 allowed":                 func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"HS256"} },
 		"none allowed":                  func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"none"} },
 		"unknown algorithm":             func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"RS1"} },

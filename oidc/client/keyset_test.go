@@ -218,6 +218,30 @@ func TestKeySetStaleOnFailure(t *testing.T) {
 	require.ErrorIs(t, err, oidcclient.ErrKeySet, "older than 24 hours: fail closed")
 }
 
+// TestFailingKeySetIsRateLimited checks that a failing jwks_uri — possibly
+// a hostile tenant's — is fetched at most once per 10 seconds, whatever the
+// number of logins.
+func TestFailingKeySetIsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	op.set(func(op *fakeOP) { op.jwksStatus = http.StatusInternalServerError })
+	c := op.client(t)
+
+	for range 20 {
+		_, err := op.login(t, c)
+		require.ErrorIs(t, err, oidcclient.ErrKeySet)
+	}
+
+	assert.Equal(t, 1, op.hitCount("/jwks"))
+
+	op.clock.Advance(11 * time.Second)
+
+	_, err := op.login(t, c)
+	require.ErrorIs(t, err, oidcclient.ErrKeySet)
+	assert.Equal(t, 2, op.hitCount("/jwks"))
+}
+
 // TestNoRefetchOnBadSignature checks that a bad signature under a known
 // kid never triggers a fetch.
 func TestNoRefetchOnBadSignature(t *testing.T) {

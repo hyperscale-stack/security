@@ -169,7 +169,12 @@ func (e *AuthorizationError) Error() string {
 // Unwrap returns ErrAuthorizationFailed.
 func (e *AuthorizationError) Unwrap() error { return ErrAuthorizationFailed }
 
-// TokenError is an error response of the token endpoint (RFC 6749 §5.2).
+// TokenError is an error response of the token endpoint (RFC 6749 §5.2):
+// the HTTP status and the error code, description and URI the provider
+// sent. Code is 1 to 256 characters of the RFC 6749 error charset;
+// Description and URI are dropped when outside their charsets. All three
+// are provider-controlled text: log them, never render them as trusted
+// content (a tenant-configured provider can be hostile).
 type TokenError struct {
 	StatusCode  int
 	Code        string
