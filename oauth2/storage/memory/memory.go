@@ -7,7 +7,9 @@
 // implementations instead — the in-memory store loses all state on
 // restart, and never purges anything: it grows with every code and token
 // it is given, since consumed and expired codes, expired tokens and
-// revoked families stay in memory for the process lifetime.
+// revoked families stay in memory for the process lifetime. Like every
+// store it keeps codes and tokens hashed only: the raw code or token of a
+// record it is handed is never kept, nor returned by a lookup.
 //
 // All operations are guarded by a single sync.Mutex; the resulting
 // throughput is fine for tens of thousands of req/s but the structure is
@@ -231,12 +233,18 @@ func (s *Store) isRevoked(familyID string) bool {
 	return revoked
 }
 
-// persist writes the tokens of pair. The caller holds the mutex.
+// persist writes the tokens of pair — copies without their raw value: the
+// store keeps hashes only, and leaves the caller's pair untouched. The
+// caller holds the mutex.
 func (s *Store) persist(pair *oauth2.TokenPair) {
-	s.access[pair.Access.TokenHash] = pair.Access
+	access := pair.Access
+	access.Token = ""
+	s.access[access.TokenHash] = access
 
 	if pair.Refresh != nil {
-		s.refresh[pair.Refresh.TokenHash] = *pair.Refresh
+		refresh := *pair.Refresh
+		refresh.Token = ""
+		s.refresh[refresh.TokenHash] = refresh
 	}
 }
 

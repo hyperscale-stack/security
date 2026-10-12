@@ -1475,3 +1475,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   entry for the life of the process. It compares the password of an
   unknown username with a dummy hash — the response time told whether an
   account existed — and its HTTP server sets read, write and idle timeouts.
+- The in-memory OAuth2 store (`oauth2/storage/memory`) keeps tokens hashed
+  only. It kept the raw access and refresh tokens it was handed — and
+  returned them from `LookupAccessToken` and `LookupRefreshToken` — contrary
+  to the storage contract ("MUST store hashes"); codes were already stored
+  without their raw value. The `oauth2/storetest` conformance suite now
+  checks that no lookup returns a raw token and that a store leaves the
+  caller's pair untouched: a custom store keeping raw tokens fails it.

@@ -58,6 +58,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"AuthorizationCodeReplayRevokesIssuedTokens", testCodeReplayRevokesIssuedTokens},
 		{"AccessTokenSaveLookupRevoke", testAccessLifecycle},
 		{"AccessTokenLookupUnknown", testAccessUnknown},
+		{"TokensAreNeverStoredRaw", testTokensAreNeverStoredRaw},
 		{"RefreshTokenSaveLookup", testRefreshSaveLookup},
 		{"RefreshTokenRotation", testRefreshRotation},
 		{"RefreshTokenReuseRevokesFamily", testRefreshReuse},
@@ -346,6 +347,57 @@ func testAccessLifecycle(t *testing.T, s oauth2.Storage) {
 func testAccessUnknown(t *testing.T, s oauth2.Storage) {
 	_, err := s.LookupAccessToken(ctx(), "missing")
 	mustCode(t, err, oauth2.CodeInvalidGrant, "lookup of an unknown access token")
+}
+
+// testTokensAreNeverStoredRaw checks that a store keeps tokens hashed only
+// ([oauth2.AccessTokenStore]: "MUST store hashes"): no lookup returns the
+// raw value of a token — after SaveTokenPair, after RotateRefreshToken, for
+// the consumed ancestor, for an access token outside any family — and the
+// pairs the caller handed over are left as they were: the server answers
+// the client from them once they are persisted.
+func testTokensAreNeverStoredRaw(t *testing.T, s oauth2.Storage) {
+	first := newPair("raw-0", "fam-raw")
+	mustSave(t, s, first)
+	requireCallerTokens(t, first, "raw-0")
+	requireNoRawToken(t, s, first)
+
+	next := newPair("raw-1", "fam-raw")
+	mustRotate(t, s, first, next)
+	requireCallerTokens(t, next, "raw-1")
+	requireNoRawToken(t, s, next)
+	requireNoRawToken(t, s, first)
+
+	cc := accessOnly("raw-cc", "")
+	mustSave(t, s, cc)
+	mustEqual(t, cc.Access.Token, "raw-at-raw-cc", "the caller's access token")
+	requireNoRawToken(t, s, cc)
+}
+
+// requireCallerTokens asserts that the store left the raw tokens of the
+// pair it was handed — newPair(name, …) — untouched.
+func requireCallerTokens(t *testing.T, pair *oauth2.TokenPair, name string) {
+	t.Helper()
+
+	mustEqual(t, pair.Access.Token, "raw-at-"+name, "the caller's access token")
+	mustEqual(t, pair.Refresh.Token, "raw-rt-"+name, "the caller's refresh token")
+}
+
+// requireNoRawToken asserts that the lookups of pair's tokens — consumed
+// or not — return no raw token value.
+func requireNoRawToken(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
+	t.Helper()
+
+	at, err := s.LookupAccessToken(ctx(), pair.Access.TokenHash)
+	mustNoError(t, err, "lookup access token "+pair.Access.TokenHash)
+	mustEqual(t, at.Token, "", "lookup of access token "+pair.Access.TokenHash+" returns the raw token")
+
+	if pair.Refresh == nil {
+		return
+	}
+
+	rt, err := s.LookupRefreshToken(ctx(), pair.Refresh.TokenHash)
+	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
+	mustEqual(t, rt.Token, "", "lookup of refresh token "+pair.Refresh.TokenHash+" returns the raw token")
 }
 
 // --- refresh tokens ------------------------------------------------------

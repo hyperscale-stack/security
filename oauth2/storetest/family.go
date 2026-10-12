@@ -76,6 +76,7 @@ func requireContext(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
 	mustNoError(t, err, "lookup access token "+pair.Access.TokenHash)
 	mustEqual(t, at.Issuer, pair.Access.Issuer, "access token issuer")
 	mustEqual(t, at.ExtensionData, pair.Access.ExtensionData, "access token extension data")
+	mustEqual(t, at.Token, "", "the raw access token is never kept")
 
 	if pair.Refresh == nil {
 		return
@@ -85,6 +86,7 @@ func requireContext(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
 	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
 	mustEqual(t, rt.Issuer, pair.Refresh.Issuer, "refresh token issuer")
 	mustEqual(t, rt.ExtensionData, pair.Refresh.ExtensionData, "refresh token extension data")
+	mustEqual(t, rt.Token, "", "the raw refresh token is never kept")
 	requireFamilyIssuedAt(t, rt, pair.Refresh.FamilyIssuedAt)
 }
 

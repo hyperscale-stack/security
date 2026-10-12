@@ -252,8 +252,9 @@ The `oauth2` module is an authorization server, not just a provider:
   travels unchanged through every refresh — the stores refuse a rotation
   that would change it.
 
-Tokens and authorization codes are **never stored in cleartext** — the
-store only ever sees a hash.
+Tokens and authorization codes are **never stored in cleartext** — every
+store, the in-memory one included, keeps their hash only, and the
+`storetest` conformance suite checks that no lookup returns a raw value.
 
 ## OpenID Provider
 
