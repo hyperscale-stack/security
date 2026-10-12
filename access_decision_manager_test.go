@@ -143,8 +143,10 @@ func TestUnanimousAbstainFallbackDefaultsToDeny(t *testing.T) {
 func TestUnanimousAbstainFallbackOverride(t *testing.T) {
 	t.Parallel()
 
+	// The voter supports the attribute but abstains: the fallback decides.
+	// (An attribute no voter supports always denies.)
 	adm := security.NewUnanimousDecisionManager([]security.Voter{
-		&scriptedVoter{prefix: "role:", vote: security.DecisionGrant},
+		&scriptedVoter{prefix: "scope:", vote: security.DecisionAbstain},
 	}, security.WithAbstainFallback(security.DecisionGrant))
 
 	err := adm.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(),

@@ -7,20 +7,30 @@ package security
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
 // AccessDecisionManager combines the verdicts of multiple [Voter]s into a
-// single decision. Three strategies are provided, mirroring Spring Security:
+// single decision. Three strategies are provided, named after Spring
+// Security's:
 //
 //   - Affirmative — a single [DecisionGrant] grants access; everything else
-//     denies. Abstentions are ignored. The strictest "fail closed
-//     by default" policy.
+//     denies. Abstentions are ignored. With several attributes, one
+//     satisfied attribute is enough (OR).
 //   - Consensus   — the majority wins. Ties default to deny; pass
 //     [WithTieBreak](DecisionGrant) to flip the policy.
 //   - Unanimous   — every voter that does not abstain MUST grant. A single
 //     deny refuses; if every voter abstains, the result depends on
-//     [WithAbstainFallback].
+//     [WithAbstainFallback]. Unlike Spring's UnanimousBased, the voters see
+//     all their attributes at once: it is an AND across voters, while a
+//     multi-name voter (voter.HasAnyRole) grants when the principal holds
+//     any of the requested names — express an AND of roles with one voter
+//     per role, or with voter.And.
+//
+// Whatever the strategy, a decision is denied when one of its attributes is
+// supported by no voter (a requirement nobody checks is never ignored), and
+// when there is no attribute or no voter at all.
 //
 // Implementations are safe for concurrent use.
 type AccessDecisionManager interface {
@@ -119,8 +129,13 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 	}
 
 	final := DecisionDeny
+
 	if !containsNil(attrs) {
-		final = m.decide(m.votes(ctx, auth, attrs))
+		if unsupported := m.unsupported(attrs); unsupported > 0 {
+			span.SetAttributes(AttrAttributesUnsupported.Int(unsupported))
+		} else {
+			final = m.decide(m.votes(ctx, auth, attrs))
+		}
 	}
 
 	span.SetAttributes(AttrDecision.String(final.String()))
@@ -134,19 +149,34 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 	return ErrAccessDenied
 }
 
+// unsupported counts the attributes that no voter supports.
+func (m *accessDecisionManager) unsupported(attrs []Attribute) int {
+	count := 0
+
+	for _, a := range attrs {
+		if !slices.ContainsFunc(m.voters, func(v Voter) bool { return v.Supports(a) }) {
+			count++
+		}
+	}
+
+	return count
+}
+
 // votes collects one normalized vote per voter: an abstention for a voter
-// that supports none of the attributes, the voter's verdict otherwise.
+// that supports none of the attributes, otherwise the voter's verdict on
+// the attributes it supports — and only those.
 func (m *accessDecisionManager) votes(ctx context.Context, auth Authentication, attrs []Attribute) []Decision {
 	votes := make([]Decision, 0, len(m.voters))
 
 	for _, v := range m.voters {
-		if !anySupported(v, attrs) {
+		supported := supportedBy(v, attrs)
+		if len(supported) == 0 {
 			votes = append(votes, DecisionAbstain)
 
 			continue
 		}
 
-		votes = append(votes, normalize(v.Vote(ctx, auth, attrs)))
+		votes = append(votes, normalize(v.Vote(ctx, auth, supported)))
 	}
 
 	return votes
@@ -254,14 +284,17 @@ func containsNil(attrs []Attribute) bool {
 	return false
 }
 
-func anySupported(v Voter, attrs []Attribute) bool {
+// supportedBy returns the attributes v supports, in order.
+func supportedBy(v Voter, attrs []Attribute) []Attribute {
+	var out []Attribute
+
 	for _, a := range attrs {
 		if v.Supports(a) {
-			return true
+			out = append(out, a)
 		}
 	}
 
-	return false
+	return out
 }
 
 func joinAttributes(attrs []Attribute) string {

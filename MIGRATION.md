@@ -1298,3 +1298,54 @@ To migrate:
 4. Make the `Authorities` method of your own `Authentication` types return a
    copy (`slices.Clone`): `basic`, `bearer` and `session` now do, so a caller
    can no longer rewrite the authorities of an authenticated value.
+
+### `voter`: voters compare attribute values; dedicated authentication-state attributes
+
+The attributes passed to `AccessDecisionManager.Decide` (and to
+`httpsec.Authorize`, `grpcsec.UnaryAuthorize`, …) only selected *which*
+voters ran: a role voter checked the role it was built with whatever role
+the route asked for, and `voter.Authenticated()` / `voter.Anonymous()` voted
+on every attribute. A decision manager shared by several routes therefore
+granted an ADMIN route to a USER, `Authenticated()` next to a role voter
+granted any route to any logged-in principal, `HasAnyRole("ADMIN",
+"MANAGER")` granted a MANAGER on `Role("ADMIN")`, and `voter.Not()` turned
+the refusal of an anonymous caller into a grant. The voters now follow
+Spring Security's semantics: the attributes a route lists are its policy,
+and each voter votes only on the attributes whose family **and** value it
+supports.
+
+| Policy | Before | After |
+| --- | --- | --- |
+| ADM `{HasRole("USER"), HasRole("ADMIN")}`, USER on `[Role("ADMIN")]` | granted | denied |
+| ADM `{HasRole("USER")}` on `[Role("ADMIN")]` | role USER checked | denied (no voter supports `Role("ADMIN")`) |
+| `HasAnyRole("ADMIN", "MANAGER")`, MANAGER on `[Role("ADMIN")]` | granted | denied; granted on `[Role("ADMIN"), Role("MANAGER")]` |
+| ADM `{Authenticated(), HasRole("ADMIN")}`, USER on `[Role("ADMIN")]` | granted | denied |
+| ADM `{Authenticated()}` on `[Role("X")]` | any logged-in principal | denied — list `security.IsAuthenticated` |
+| ADM `{Anonymous()}` on `[Role("X")]` | any anonymous caller | denied — list `security.IsAnonymous` |
+| `Not(HasRole("BANNED"))`, anonymous on `[Role("BANNED")]` | granted | denied |
+| `And(HasRole("USER"), Not(HasRole("BANNED")))` on `[Role("USER")]` | banned users granted | denied for everyone — list `[Role("USER"), Role("BANNED")]` |
+| Unanimous / consensus with an attribute no voter supports | ignored | denied |
+| `voter.FullyAuthenticated()` | same as `Authenticated()` | removed |
+
+To migrate:
+
+1. Make every route's attributes name exactly what its voters check, and
+   give the decision manager a voter for every attribute: `Authorize(adm,
+   security.Role("ADMIN"))` with `voter.HasRole("ADMIN")` in `adm`. An
+   attribute that no voter supports now denies the request.
+2. Require a logged-in or a logged-out caller with an attribute:
+   `voter.Authenticated()` with `security.IsAuthenticated`,
+   `voter.Anonymous()` with `security.IsAnonymous`.
+   `voter.FullyAuthenticated()` is gone: use `voter.Authenticated()`.
+3. With `HasAnyRole` / `HasAnyScope` / `HasAnyAuthority`, list every name the
+   route accepts among its attributes.
+4. With `voter.And`, list one attribute per inner requirement: every inner
+   voter must grant. `And(HasRole("USER"), Not(HasRole("BANNED")))` needs
+   `[Role("USER"), Role("BANNED")]`; do not share a decision manager holding
+   such a `Not(HasRole("X"))` policy with a positive `HasRole("X")` voter.
+5. Do not rely on `voter.Not` to admit anonymous callers:
+   `Not(Authenticated())` never grants them — use `voter.Anonymous()` with
+   `security.IsAnonymous`.
+6. Custom voters: `Supports` must check the attribute's value, not only its
+   type, and `Vote` must consider only the attributes it supports (the
+   decision manager now passes it only those) and abstain without them.

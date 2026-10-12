@@ -44,29 +44,32 @@ func TestHasScopeSupportsOnlyScopeAttribute(t *testing.T) {
 
 	v := voter.HasScope("read")
 	assert.True(t, v.Supports(security.Scope("read")))
+	assert.False(t, v.Supports(security.Scope("write")), "only the scope it is bound to")
 	assert.False(t, v.Supports(security.Role("ADMIN")))
 }
 
-func TestHasAnyScopeMatchesAtLeastOne(t *testing.T) {
+func TestHasAnyScopeMatchesAtLeastOneRequestedScope(t *testing.T) {
 	t.Parallel()
 
 	v := voter.HasAnyScope("read", "write")
-	attrs := []security.Attribute{security.Scope("read")}
 
 	cases := []struct {
-		name string
-		auth fakeAuth
-		want security.Decision
+		name  string
+		auth  fakeAuth
+		attrs []security.Attribute
+		want  security.Decision
 	}{
-		{"first", newAuth("a", "read"), security.DecisionGrant},
-		{"second", newAuth("a", "write"), security.DecisionGrant},
-		{"none", newAuth("a", "admin"), security.DecisionDeny},
+		{"first", newAuth("a", "read"), []security.Attribute{security.Scope("read")}, security.DecisionGrant},
+		{"second", newAuth("a", "write"), []security.Attribute{security.Scope("read"), security.Scope("write")}, security.DecisionGrant},
+		{"held_but_not_requested", newAuth("a", "write"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
+		{"none", newAuth("a", "admin"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
+		{"not_bound", newAuth("a", "admin"), []security.Attribute{security.Scope("admin")}, security.DecisionAbstain},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, c.want, v.Vote(context.Background(), c.auth, attrs))
+			assert.Equal(t, c.want, v.Vote(context.Background(), c.auth, c.attrs))
 		})
 	}
 }

@@ -207,10 +207,16 @@ Carrier ──> Extractor ──> Authentication ──> Manager/Authenticator �
   the Manager, returns a context enriched via `WithAuthentication`.
 - **Authorization** — `Voter` returns `Decision` (Grant/Deny/Abstain) over a
   set of `Attribute`s; `AccessDecisionManager` combines votes with an
-  `affirmative` / `consensus` / `unanimous` strategy (mirrors Spring
-  Security). Stock voters live in `voter/` (`HasRole`, `HasAnyRole`,
-  `HasScope`, `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,
-  `FullyAuthenticated`); compose them with `And`/`Or`/`Not`.
+  `affirmative` / `consensus` / `unanimous` strategy (named after Spring
+  Security's). The attributes a route lists are the policy: each voter votes
+  only on the attributes it supports — family AND value (`HasRole("ADMIN")`
+  abstains on `Role("USER")`) — and the ADM denies when an attribute is
+  supported by no voter. Stock voters live in `voter/` (`HasRole`,
+  `HasAnyRole`, `HasScope`, `HasAnyScope`, `HasAuthority`,
+  `HasAnyAuthority`, `HasPermission`, and `Authenticated` / `Anonymous`,
+  which vote only on `security.IsAuthenticated` / `security.IsAnonymous`);
+  compose them with `And` (strict) / `Or` / `Not` (never grants an
+  unauthenticated principal).
 
 Conventions baked into the core:
 - **Fail closed by default.** No credentials → `Anonymous()`; voters deny

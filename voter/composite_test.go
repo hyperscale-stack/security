@@ -33,7 +33,11 @@ func TestAndTruthTable(t *testing.T) {
 		{"all_grant", []security.Decision{security.DecisionGrant, security.DecisionGrant}, security.DecisionGrant},
 		{"one_deny", []security.Decision{security.DecisionGrant, security.DecisionDeny}, security.DecisionDeny},
 		{"all_abstain", []security.Decision{security.DecisionAbstain, security.DecisionAbstain}, security.DecisionAbstain},
-		{"grant_with_abstain", []security.Decision{security.DecisionGrant, security.DecisionAbstain}, security.DecisionGrant},
+		{"grant_with_abstain", []security.Decision{security.DecisionGrant, security.DecisionAbstain}, security.DecisionDeny},
+		{"abstain_with_deny", []security.Decision{security.DecisionAbstain, security.DecisionDeny}, security.DecisionDeny},
+		{"undefined", []security.Decision{security.DecisionGrant, security.Decision(42)}, security.DecisionDeny},
+		{"only_undefined", []security.Decision{security.Decision(42)}, security.DecisionDeny},
+		{"undefined_with_abstain", []security.Decision{security.DecisionAbstain, security.Decision(42)}, security.DecisionDeny},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -62,6 +66,8 @@ func TestOrTruthTable(t *testing.T) {
 		{"one_grant", []security.Decision{security.DecisionGrant, security.DecisionDeny}, security.DecisionGrant},
 		{"all_abstain", []security.Decision{security.DecisionAbstain, security.DecisionAbstain}, security.DecisionAbstain},
 		{"deny_with_abstain", []security.Decision{security.DecisionDeny, security.DecisionAbstain}, security.DecisionDeny},
+		{"grant_with_abstain", []security.Decision{security.DecisionAbstain, security.DecisionGrant}, security.DecisionGrant},
+		{"undefined", []security.Decision{security.Decision(42), security.DecisionAbstain}, security.DecisionDeny},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

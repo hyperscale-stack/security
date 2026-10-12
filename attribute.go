@@ -6,10 +6,13 @@ package security
 
 import "context"
 
-// Attribute is an opaque authorization predicate carried alongside a request.
-// Voters opt-in via [Voter.Supports] and inspect the concrete type through
-// type switches. Four concrete attributes are shipped below; applications
-// can define their own (they just need to implement String()).
+// Attribute names one requirement of a resource: the role, scope,
+// authority, permission or authentication state an access decision must
+// check. The attributes a route lists are the policy — each [Voter] of the
+// [AccessDecisionManager] votes on the attributes it supports, comparing
+// their value with the authentication, and an attribute that no voter
+// supports denies the decision. Five concrete attributes are shipped below;
+// applications can define their own (they just need to implement String()).
 type Attribute interface {
 	// String returns a stable, log-friendly form of the attribute. It is used
 	// by [AccessDecisionManager] for OTel attributes; it MUST NOT include
@@ -80,3 +83,19 @@ func (p PermissionAttribute) String() string { return "permission:" + p.Name }
 func Permission(name string, predicate func(ctx context.Context, auth Authentication) bool) Attribute {
 	return PermissionAttribute{Name: name, Predicate: predicate}
 }
+
+// StateAttribute requires a state of the authentication itself rather than
+// an authority. The voter package's Authenticated and Anonymous voters
+// evaluate it, and no other stock voter does.
+type StateAttribute string
+
+const (
+	// IsAuthenticated requires an authenticated principal.
+	IsAuthenticated StateAttribute = "authenticated"
+	// IsAnonymous requires an unauthenticated request — e.g. a signup or
+	// password-reset request page reserved to logged-out clients.
+	IsAnonymous StateAttribute = "anonymous"
+)
+
+// String implements [Attribute]. Output is "state:<state>".
+func (s StateAttribute) String() string { return "state:" + string(s) }

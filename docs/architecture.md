@@ -145,17 +145,27 @@ AccessDecisionManager  ──▶  Voter₁ ─┐
    nil | ErrAccessDenied
 ```
 
-- **`Attribute`** is an opaque authorization predicate handle: `Role`,
-  `Scope`, `Authority`, `Permission`.
-- **`Voter`** inspects an `Authentication` against attributes and returns
-  `Grant`, `Deny`, or `Abstain`. Voters are pure and concurrency-safe.
+- **`Attribute`** names one requirement of the resource: `Role`, `Scope`,
+  `Authority`, `Permission`, or an authentication state
+  (`security.IsAuthenticated`, `security.IsAnonymous`). The attributes a
+  route lists are its policy.
+- **`Voter`** votes on the attributes it supports — their family **and**
+  their value (Spring Security's `RoleVoter` semantics): `HasRole("ADMIN")`
+  votes on `Role("ADMIN")` and abstains on `Role("USER")`, so one decision
+  manager can serve several routes. It returns `Grant`, `Deny`, or
+  `Abstain` (none of its attributes is listed). Voters are pure and
+  concurrency-safe.
 - **`AccessDecisionManager`** aggregates voter decisions under a strategy:
   Affirmative (one grant wins), Consensus (majority), Unanimous (one deny
-  refuses).
+  refuses; an AND across voters). It denies a decision when one of the
+  attributes is supported by no voter, and hands each voter only the
+  attributes it supports.
 
 The `voter/` sub-package ships the standard catalog: `HasRole`,
-`HasAnyRole`, `HasScope`, `HasAuthority`, `HasPermission`, `Authenticated`,
-`Anonymous`, `FullyAuthenticated`, plus `And`/`Or`/`Not` combinators.
+`HasAnyRole`, `HasScope`, `HasAnyScope`, `HasAuthority`, `HasAnyAuthority`,
+`HasPermission`, `Authenticated` and `Anonymous` (which vote only on the
+state attributes), plus the `And` (strict: every inner voter must grant),
+`Or` and `Not` (never grants an unauthenticated principal) combinators.
 
 ## Transport adapters
 

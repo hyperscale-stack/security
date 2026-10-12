@@ -1091,6 +1091,34 @@ refused: when tenants supply URLs ("test this connection"), log the error
 and show them a generic message, or the error text becomes an oracle on
 the internal network.
 
+## Authorization
+
+Authorization follows Spring Security's voter model, and fails closed:
+
+- **The attributes are the policy.** Each voter votes only on the
+  attributes whose family and value it supports: `HasRole("ADMIN")` votes
+  on `security.Role("ADMIN")` and abstains on `security.Role("USER")`, so a
+  decision manager shared by several routes grants each route only what it
+  asks for. `voter.Authenticated()` and `voter.Anonymous()` vote only on
+  `security.IsAuthenticated` / `security.IsAnonymous`: list the state you
+  require among the route's attributes.
+- **No requirement is ignored.** A decision is denied when one of its
+  attributes is supported by no voter of the decision manager, when there
+  is no attribute, and when there is no voter.
+- **Composites.** `voter.And` grants only when every inner voter grants — an
+  inner voter whose attribute the route does not list makes it deny, so list
+  one attribute per inner requirement. `voter.Not` never turns the refusal
+  of an unauthenticated principal into a grant: `Not(HasRole("BANNED"))`
+  admits authenticated principals without the role, not anonymous callers.
+  Do not share a decision manager holding a `Not(HasRole("X"))` policy with
+  a positive `HasRole("X")` voter: under the affirmative strategy the
+  positive voter would grant `Role("X")` routes.
+- **Strategies.** Affirmative grants on one satisfied attribute (OR);
+  unanimous requires every voting voter to grant (AND across voters), but a
+  multi-name voter such as `HasAnyRole` grants when the principal holds any
+  of the requested names — use one voter per role, or `voter.And`, for an
+  AND of roles.
+
 ## Transport error mapping
 
 Error mappers return terse, code-first responses. HTTP emits a status code

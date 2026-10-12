@@ -67,4 +67,9 @@ const (
 	// [ErrorClass] of the error a span failed with, never its text. Set on
 	// failure only. Value: string.
 	AttrErrorType = attribute.Key("error.type")
+
+	// AttrAttributesUnsupported counts the attributes of a refused decision
+	// that no voter supports (the decision is denied when it is not zero).
+	// Set only when not zero. Value: int.
+	AttrAttributesUnsupported = attribute.Key("security.attributes.unsupported")
 )

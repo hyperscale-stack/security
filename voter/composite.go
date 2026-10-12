@@ -6,34 +6,49 @@ package voter
 
 import (
 	"context"
+	"fmt"
+	"slices"
 
 	"github.com/hyperscale-stack/security"
 )
 
-// And combines voters with conjunction semantics:
+// And combines voters with strict conjunction semantics. A composite
+// supports the attributes its inner voters support, and when it votes:
 //
-//   - Any inner Deny  => Deny.
-//   - At least one Grant and no Deny => Grant.
-//   - All inner voters Abstain      => Abstain.
+//   - Any inner Deny                 => Deny.
+//   - Every inner voter grants       => Grant.
+//   - A Grant mixed with an Abstain  => Deny.
+//   - All inner voters Abstain       => Abstain.
 //
-// Inner abstentions never block the conjunction: a permission voter that
-// does not apply to the current attributes should not single-handedly veto.
+// An inner voter abstains when the route does not list its attribute: the
+// conjunction then fails closed instead of silently dropping that
+// requirement, so list one attribute per inner requirement — e.g.
+// [Role("USER"), Role("BANNED")] for And(HasRole("USER"),
+// Not(HasRole("BANNED"))).
+//
+// And panics if it is given no voter or a nil one.
 func And(voters ...security.Voter) security.Voter {
-	return compositeVoter{voters: voters, mode: composeAnd}
+	return newComposite("And", composeAnd, voters)
 }
 
 // Or combines voters with disjunction semantics:
 //
-//   - Any inner Grant => Grant.
+//   - Any inner Grant                => Grant.
 //   - No Grant and at least one Deny => Deny.
-//   - All inner voters Abstain      => Abstain.
+//   - All inner voters Abstain       => Abstain.
+//
+// Or panics if it is given no voter or a nil one.
 func Or(voters ...security.Voter) security.Voter {
-	return compositeVoter{voters: voters, mode: composeOr}
+	return newComposite("Or", composeOr, voters)
 }
 
-// Not inverts an inner voter: Grant <-> Deny; Abstain stays Abstain.
+// Not inverts an inner voter: Grant becomes Deny and Deny becomes Grant — but
+// only for an authenticated principal. The stock voters deny unauthenticated
+// requests; Not never turns that refusal into a grant, so Not(Authenticated())
+// does not admit anonymous callers (use [Anonymous] with
+// security.IsAnonymous). Abstain stays Abstain. Not panics on a nil voter.
 func Not(inner security.Voter) security.Voter {
-	return compositeVoter{voters: []security.Voter{inner}, mode: composeNot}
+	return newComposite("Not", composeNot, []security.Voter{inner})
 }
 
 type composeMode int
@@ -49,8 +64,21 @@ type compositeVoter struct {
 	mode   composeMode
 }
 
-// Supports returns true when at least one inner voter does, plus always for
-// the auth-state voters embedded inside the composite (they Supports anything).
+func newComposite(constructor string, mode composeMode, voters []security.Voter) compositeVoter {
+	if len(voters) == 0 {
+		panic("voter: " + constructor + ": no voter")
+	}
+
+	for i, v := range voters {
+		if v == nil {
+			panic(fmt.Sprintf("voter: %s: nil voter at index %d", constructor, i))
+		}
+	}
+
+	return compositeVoter{voters: slices.Clone(voters), mode: mode}
+}
+
+// Supports returns true when at least one inner voter does.
 func (c compositeVoter) Supports(a security.Attribute) bool {
 	for _, v := range c.voters {
 		if v.Supports(a) {
@@ -61,58 +89,98 @@ func (c compositeVoter) Supports(a security.Attribute) bool {
 	return false
 }
 
+// Vote combines the inner votes according to the composite's mode.
 func (c compositeVoter) Vote(ctx context.Context, auth security.Authentication, attrs []security.Attribute) security.Decision {
-	if c.mode == composeNot {
-		switch c.voters[0].Vote(ctx, auth, attrs) {
+	switch c.mode {
+	case composeNot:
+		return not(c.voters[0].Vote(ctx, auth, attrs), auth)
+	case composeAnd:
+		return and(c.votes(ctx, auth, attrs))
+	case composeOr:
+		return or(c.votes(ctx, auth, attrs))
+	}
+
+	return security.DecisionDeny
+}
+
+func (c compositeVoter) votes(ctx context.Context, auth security.Authentication, attrs []security.Attribute) []security.Decision {
+	out := make([]security.Decision, len(c.voters))
+
+	for i, v := range c.voters {
+		out[i] = v.Vote(ctx, auth, attrs)
+	}
+
+	return out
+}
+
+// and is the strict conjunction: Grant only when every vote is a Grant. An
+// undefined decision counts as Deny.
+func and(votes []security.Decision) security.Decision {
+	grants, abstains := 0, 0
+
+	for _, d := range votes {
+		switch d {
 		case security.DecisionGrant:
-			return security.DecisionDeny
-		case security.DecisionDeny:
-			return security.DecisionGrant
+			grants++
 		case security.DecisionAbstain:
-			return security.DecisionAbstain
+			abstains++
+		case security.DecisionDeny:
+			return security.DecisionDeny
+		default:
+			return security.DecisionDeny
 		}
 	}
 
-	var (
-		sawGrant bool
-		sawDeny  bool
-	)
+	switch len(votes) {
+	case abstains:
+		return security.DecisionAbstain
+	case grants:
+		return security.DecisionGrant
+	default:
+		return security.DecisionDeny
+	}
+}
 
-	for _, v := range c.voters {
-		switch v.Vote(ctx, auth, attrs) {
+// or grants on any Grant; otherwise any Deny (or undefined decision) denies;
+// all abstentions abstain.
+func or(votes []security.Decision) security.Decision {
+	sawDeny := false
+
+	for _, d := range votes {
+		switch d {
 		case security.DecisionGrant:
-			sawGrant = true
-		case security.DecisionDeny:
-			sawDeny = true
+			return security.DecisionGrant
 		case security.DecisionAbstain:
 			// ignore
+		case security.DecisionDeny:
+			sawDeny = true
+		default:
+			sawDeny = true
 		}
 	}
 
-	switch c.mode {
-	case composeAnd:
-		switch {
-		case sawDeny:
-			return security.DecisionDeny
-		case sawGrant:
-			return security.DecisionGrant
-		default:
-			return security.DecisionAbstain
-		}
-	case composeOr:
-		switch {
-		case sawGrant:
-			return security.DecisionGrant
-		case sawDeny:
-			return security.DecisionDeny
-		default:
-			return security.DecisionAbstain
-		}
-	case composeNot:
-		// Unreachable: composeNot is handled by the early return above; the
-		// case is here only to make the switch exhaustive.
-		return security.DecisionAbstain
+	if sawDeny {
+		return security.DecisionDeny
 	}
 
 	return security.DecisionAbstain
+}
+
+// not inverts d, but never grants an unauthenticated principal. An undefined
+// decision counts as Deny.
+func not(d security.Decision, auth security.Authentication) security.Decision {
+	switch d {
+	case security.DecisionGrant:
+		return security.DecisionDeny
+	case security.DecisionDeny:
+		if auth.IsAuthenticated() {
+			return security.DecisionGrant
+		}
+
+		return security.DecisionDeny
+	case security.DecisionAbstain:
+		return security.DecisionAbstain
+	default:
+		return security.DecisionDeny
+	}
 }

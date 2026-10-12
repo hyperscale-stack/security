@@ -6,52 +6,45 @@ package voter
 
 import (
 	"context"
+	"slices"
 
 	"github.com/hyperscale-stack/security"
 )
 
-// Authenticated returns a voter that grants when the request carries an
-// authenticated [security.Authentication]. Useful as the universal
-// "must be logged in" check before more specific role/scope voters run.
-func Authenticated() security.Voter { return authStateVoter{requireAuth: true} }
+// Authenticated returns a voter that evaluates the [security.IsAuthenticated]
+// attribute: it grants an authenticated principal and denies anything else.
+// It abstains on every other attribute — list [security.IsAuthenticated]
+// among the route's attributes to require a logged-in principal.
+func Authenticated() security.Voter { return stateVoter{state: security.IsAuthenticated} }
 
-// Anonymous returns a voter that grants when the request is NOT
-// authenticated. Useful for endpoints reserved to logged-out clients
-// (signup, password-reset request, ...).
-func Anonymous() security.Voter { return authStateVoter{requireAuth: false} }
+// Anonymous returns a voter that evaluates the [security.IsAnonymous]
+// attribute: it grants an unauthenticated request and denies an
+// authenticated one — for endpoints reserved to logged-out clients (signup,
+// password-reset request, ...). It abstains on every other attribute.
+func Anonymous() security.Voter { return stateVoter{state: security.IsAnonymous} }
 
-// FullyAuthenticated is a stricter variant of [Authenticated] reserved for
-// flows where "remember-me" / passive sessions must NOT be enough (e.g.
-// password change, billing changes). It currently behaves like
-// Authenticated; it is the hook a future "remember-me" session flag would
-// key off to refuse passively-authenticated requests.
-func FullyAuthenticated() security.Voter { return authStateVoter{requireAuth: true, fully: true} }
-
-type authStateVoter struct {
-	requireAuth bool
-	fully       bool
+// stateVoter evaluates one authentication-state attribute.
+type stateVoter struct {
+	state security.StateAttribute
 }
 
-// Supports always returns true: the auth-state voters do not need a specific
-// attribute; they observe the request itself.
-func (authStateVoter) Supports(security.Attribute) bool { return true }
+// Supports reports whether a is the voter's state attribute.
+func (v stateVoter) Supports(a security.Attribute) bool {
+	s, ok := a.(security.StateAttribute)
 
-func (v authStateVoter) Vote(_ context.Context, auth security.Authentication, _ []security.Attribute) security.Decision {
-	if v.requireAuth {
-		if !auth.IsAuthenticated() {
-			return security.DecisionDeny
-		}
+	return ok && s == v.state
+}
 
-		// The "fully" flag will gain teeth when session.Authentication
-		// exposes IsRememberMe(); for now any authenticated value qualifies.
-		_ = v.fully
+// Vote abstains without the voter's attribute; otherwise it grants when the
+// authentication is in the required state.
+func (v stateVoter) Vote(_ context.Context, auth security.Authentication, attrs []security.Attribute) security.Decision {
+	if !slices.ContainsFunc(attrs, v.Supports) {
+		return security.DecisionAbstain
+	}
 
+	if auth.IsAuthenticated() == (v.state == security.IsAuthenticated) {
 		return security.DecisionGrant
 	}
 
-	if auth.IsAuthenticated() {
-		return security.DecisionDeny
-	}
-
-	return security.DecisionGrant
+	return security.DecisionDeny
 }

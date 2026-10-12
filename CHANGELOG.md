@@ -23,8 +23,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **Authorization**: `Voter`/`Decision`/`Attribute`, an
   `AccessDecisionManager` with Affirmative/Consensus/Unanimous strategies,
   and a `voter/` catalog (`HasRole`, `HasAnyRole`, `HasScope`,
-  `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,
-  `FullyAuthenticated`, `And`/`Or`/`Not`).
+  `HasAnyScope`, `HasAuthority`, `HasAnyAuthority`, `HasPermission`,
+  `Authenticated`, `Anonymous`, `And`/`Or`/`Not`).
 - **HTTP adapter** (`httpsec`): `Middleware`, `Authorize`, a request/response
   `Carrier`, and a configurable `ErrorMapper`.
 - **gRPC adapter** (`grpcsec`): unary and stream server interceptors,
@@ -443,6 +443,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   classification of security errors — joined errors included — shared by
   the core spans (`error.type`) and the default HTTP, gRPC and ConnectRPC
   error mappers; custom error mappers should use it too.
+- `security.StateAttribute` with `security.IsAuthenticated` and
+  `security.IsAnonymous`: the attributes `voter.Authenticated()` and
+  `voter.Anonymous()` vote on.
 
 ### Changed
 
@@ -622,6 +625,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `security.Manager.Authenticate`, `security.AccessDecisionManager.Decide`)
   record the class of their error as status description and `error.type`
   attribute, and no longer add an `exception` event.
+- Voters follow Spring Security's semantics: each votes only on the
+  attributes whose family and value it supports (`HasRole("ADMIN")` abstains
+  on `Role("USER")`), `HasAny*` grants for the requested names only,
+  `Authenticated()`/`Anonymous()` vote only on `security.IsAuthenticated` /
+  `security.IsAnonymous`, `voter.And` is strict (an inner abstention denies
+  when the composite votes), `voter.Not` never grants an unauthenticated
+  principal, and the decision managers deny an attribute that no voter
+  supports and pass each voter only the attributes it supports. `And`, `Or`
+  and `Not` panic on a nil or missing voter. See
+  [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -765,6 +778,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - The legacy v0 packages: `authentication/`, `authentication/credential/`,
   `authentication/provider/{dao,oauth2}/`, `authorization/`, and the
   in-tree `password` package.
+- `voter.FullyAuthenticated()`: it behaved exactly like
+  `voter.Authenticated()` — no remember-me or authentication-strength concept
+  exists to tell them apart — while promising a stronger check.
 
 ### Security
 
@@ -1173,3 +1189,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   returned their internal slice: a caller could rewrite the authorities of
   an authenticated value (`ROLE_USER` → `ROLE_ADMIN`). They now return a
   copy, and the `security.Authentication` contract requires it.
+- The stock voters ignored the value of the attribute they were asked to
+  check, and `voter.Authenticated()` / `voter.Anonymous()` voted on every
+  attribute: a decision manager shared by several routes granted an ADMIN
+  route to a USER, and `Authenticated()` next to a role voter granted any
+  route to any logged-in principal. Voters now compare attribute values,
+  and the authentication-state voters need their own attributes.
+- `voter.Not()` turned the refusal of an unauthenticated principal into a
+  grant (`Not(HasRole("BANNED"))` admitted anonymous callers); it no longer
+  does.

@@ -12,10 +12,10 @@ import (
 	"github.com/hyperscale-stack/security/voter"
 )
 
-// Example shows the canonical authorization pipeline: bind the expected
-// permission into the voter at construction time and call Decide on the
-// known authentication. Attributes are matched against Voter.Supports to
-// activate the voter; the voter itself knows what to check.
+// Example shows the canonical authorization pipeline: the attributes name
+// what the resource requires, and each voter of the decision manager votes
+// on the attributes it supports — its family and its value — comparing them
+// with the authentication.
 func Example() {
 	adminOnly := security.NewAffirmativeDecisionManager(
 		voter.HasRole("ADMIN"),
@@ -36,21 +36,30 @@ func Example() {
 	// write:mail: security: access denied
 }
 
-// Example_compose demonstrates the And/Or/Not combinators.
+// Example_compose demonstrates the And/Or/Not combinators. A composite votes
+// on the attributes its inner voters support, and And grants only when every
+// inner voter grants: list one attribute per inner requirement.
 func Example_compose() {
 	adm := security.NewAffirmativeDecisionManager(
 		voter.And(
 			voter.Authenticated(),
 			voter.HasAnyRole("ADMIN", "MANAGER"),
+			voter.Not(voter.HasRole("BANNED")),
 		),
 	)
 
-	auth := newAuth("bob", "ROLE_MANAGER")
-	err := adm.Decide(context.Background(), auth, []security.Attribute{
-		security.Role("ADMIN"),
-	})
-	fmt.Println("manager:", err)
+	managerRoute := []security.Attribute{security.IsAuthenticated, security.Role("MANAGER"), security.Role("BANNED")}
+	adminRoute := []security.Attribute{security.IsAuthenticated, security.Role("ADMIN"), security.Role("BANNED")}
+
+	manager := newAuth("bob", "ROLE_MANAGER")
+	bannedManager := newAuth("eve", "ROLE_MANAGER", "ROLE_BANNED")
+
+	fmt.Println("manager:", adm.Decide(context.Background(), manager, managerRoute))
+	fmt.Println("banned manager:", adm.Decide(context.Background(), bannedManager, managerRoute))
+	fmt.Println("manager on the admin route:", adm.Decide(context.Background(), manager, adminRoute))
 
 	// Output:
 	// manager: <nil>
+	// banned manager: security: access denied
+	// manager on the admin route: security: access denied
 }

@@ -136,7 +136,7 @@ storage layer, so apply the same redaction rules you apply to your logs.
 | --------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `security.Engine.Process`               | `Engine.Process` — extract + authenticate | `security.extractors.count` (int), `security.authenticated` (bool); `error.type` (string, on failure) | `ErrNoExtractor`, extractor error, or manager error        |
 | `security.Manager.Authenticate`         | `Manager.Authenticate` — chain authenticators | `security.authenticators.count` (int), `security.authenticated` (bool, on success), `security.authenticator.name` (string, on success); event `authenticator.try` per candidate; `error.type` (string, on failure) | `ErrUnsupportedCredential`, `ErrAuthenticatorRefused`      |
-| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string); `error.type` (string, on denial) | `ErrAccessDenied` when the final decision is not Grant     |
+| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string); `security.attributes.unsupported` (int, when an attribute is supported by no voter); `error.type` (string, on denial) | `ErrAccessDenied` when the final decision is not Grant     |
 
 A failing core span records **the class of its error, never the error
 text**: the status description and the OpenTelemetry `error.type` attribute

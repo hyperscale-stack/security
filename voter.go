@@ -45,10 +45,19 @@ func (d Decision) String() string {
 // against a set of [Attribute]s and returns a [Decision]. Voters MUST be
 // pure (no I/O) and safe for concurrent use.
 //
-// Supports is a fast-path filter: a voter that does not recognize any of the
-// passed attributes SHOULD return false to short-circuit the call. When
-// Supports returns false, the [AccessDecisionManager] records an abstention
-// for the voter without invoking Vote.
+// The attributes name what the resource requires, and a voter evaluates the
+// ones it understands (Spring Security's RoleVoter / AuthenticatedVoter
+// semantics):
+//
+//   - Supports reports whether the voter evaluates attr — its family AND its
+//     value: HasRole("ADMIN") supports Role("ADMIN"), not Role("USER"). The
+//     [AccessDecisionManager] denies when an attribute is supported by no
+//     voter, records an abstention for a voter that supports none of the
+//     attributes, and passes every other voter only the attributes it
+//     supports.
+//   - Vote MUST consider only the attributes it supports, compare their
+//     value with the authentication, and return [DecisionAbstain] when none
+//     of them is present.
 type Voter interface {
 	Supports(attr Attribute) bool
 	Vote(ctx context.Context, auth Authentication, attrs []Attribute) Decision

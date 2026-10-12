@@ -5,58 +5,41 @@
 package voter
 
 import (
-	"context"
 	"slices"
 	"strings"
 
 	"github.com/hyperscale-stack/security"
 )
 
-// HasScope returns a [security.Voter] that grants when the authenticated
-// principal carries the given OAuth2 scope. Scope matching is exact and
-// supports two storage conventions on [security.Authentication.Authorities]:
+// HasScope returns a [security.Voter] bound to one OAuth2 scope: it votes on
+// the [security.ScopeAttribute] naming that scope and abstains on every other
+// attribute. It grants when the authenticated principal carries the scope
+// and denies otherwise; unauthenticated requests always vote Deny. Scope
+// matching is exact and supports two storage conventions on
+// [security.Authentication.Authorities]:
 //
 //   - bare scope name ("read:mail")
 //   - "scope:" prefix ("scope:read:mail")
-//
-// Unauthenticated requests always vote Deny; non-scope attributes Abstain.
 func HasScope(scope string) security.Voter {
-	return scopeVoter{wanted: []string{scope}, anyOf: false}
+	return newScopeVoter(scope)
 }
 
-// HasAnyScope grants when the principal carries at least one of the listed
-// scopes. Same comparison rules as [HasScope].
+// HasAnyScope returns a [security.Voter] bound to several scopes: it grants
+// when the principal carries at least one of the scopes the route requests.
+// Same comparison rules as [HasScope].
 func HasAnyScope(scopes ...string) security.Voter {
-	return scopeVoter{wanted: scopes, anyOf: true}
+	return newScopeVoter(scopes...)
 }
 
-type scopeVoter struct {
-	wanted []string
-	anyOf  bool
+func newScopeVoter(scopes ...string) security.Voter {
+	return nameVoter{names: slices.Clone(scopes), nameOf: scopeName, holds: hasScope}
 }
 
-func (v scopeVoter) Supports(a security.Attribute) bool {
-	_, ok := a.(security.ScopeAttribute)
+// scopeName returns the name of a scope attribute.
+func scopeName(a security.Attribute) (string, bool) {
+	s, ok := a.(security.ScopeAttribute)
 
-	return ok
-}
-
-func (v scopeVoter) Vote(_ context.Context, auth security.Authentication, _ []security.Attribute) security.Decision {
-	if !auth.IsAuthenticated() {
-		return security.DecisionDeny
-	}
-
-	for _, want := range v.wanted {
-		if hasScope(auth.Authorities(), want) {
-			return security.DecisionGrant
-		}
-
-		if !v.anyOf {
-			break
-		}
-	}
-
-	return security.DecisionDeny
+	return s.Name(), ok
 }
 
 func hasScope(authorities []string, scope string) bool {
