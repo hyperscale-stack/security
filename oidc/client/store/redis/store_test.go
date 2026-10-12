@@ -64,6 +64,7 @@ func sample(seed string, at time.Time, ttl time.Duration) *oidcclient.Transactio
 		AppState:     "a\x00b <&> \U0001F512 é",
 		CreatedAt:    at,
 		ExpiresAt:    at.Add(ttl),
+		Integrity:    hash("integrity-" + seed),
 	}
 }
 
@@ -112,6 +113,7 @@ func TestKeyLayout(t *testing.T) {
 		"app_state":     tx.AppState,
 		"created_at":    float64(at.Unix()),
 		"expires_at":    float64(at.Add(10 * time.Minute).Unix()),
+		"integrity":     tx.Integrity,
 	}, payload)
 	assert.Equal(t, 10*time.Minute, mr.TTL(key(tx.StateHash)))
 }

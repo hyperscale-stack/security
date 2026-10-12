@@ -280,21 +280,32 @@ func TestCompleteExpired(t *testing.T) {
 	})
 }
 
-// TestCompleteTransactionMismatch checks that a transaction started by
-// another connection, issuer, client, redirect URI or response mode is
-// refused before the code is redeemed.
+// TestCompleteTransactionMismatch checks that an intact transaction started
+// by a Client of another connection, issuer, client, redirect URI or
+// response mode is refused before the code is redeemed.
 func TestCompleteTransactionMismatch(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string]func(*oidcclient.Transaction){
-		"connection":    func(tx *oidcclient.Transaction) { tx.ConnectionID = "other" },
-		"issuer":        func(tx *oidcclient.Transaction) { tx.Issuer = "https://other.example.com" },
-		"client":        func(tx *oidcclient.Transaction) { tx.ClientID = "other-client" },
-		"redirect":      func(tx *oidcclient.Transaction) { tx.RedirectURI = "https://rp.example.com/oidc/other/callback" },
-		"response mode": func(tx *oidcclient.Transaction) { tx.ResponseMode = oidcclient.ResponseModeFormPost },
+	other := newFakeOP(t)
+
+	cases := map[string]struct {
+		op     func(own *fakeOP) *fakeOP
+		config func(*oidcclient.Config)
+		mode   oidcclient.ResponseMode
+	}{
+		"connection": {config: func(cfg *oidcclient.Config) { cfg.ConnectionID = "other" }},
+		"issuer":     {op: func(*fakeOP) *fakeOP { return other }},
+		"client":     {config: func(cfg *oidcclient.Config) { cfg.ClientID = "other-client" }},
+		"redirect": {config: func(cfg *oidcclient.Config) {
+			cfg.RedirectURL = "https://rp.example.com/oidc/acme/callback?tenant=other"
+		}},
+		"response mode": {
+			config: func(cfg *oidcclient.Config) { cfg.ResponseMode = oidcclient.ResponseModeFormPost },
+			mode:   oidcclient.ResponseModeFormPost,
+		},
 	}
 
-	for name, mutate := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -302,16 +313,188 @@ func TestCompleteTransactionMismatch(t *testing.T) {
 			store := newSpyStore()
 			c := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = store })
 			ar, code := op.begin(t, c, oidcclient.AuthOptions{})
-
 			tx := store.last(t)
-			mutate(&tx)
-			forged := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = &lenientStore{tx: &tx} })
 
-			_, err := forged.Complete(context.Background(), callbackFor(ar, code))
+			completing := op
+			if tc.op != nil {
+				completing = tc.op(op)
+			}
+
+			forged := completing.client(t, func(cfg *oidcclient.Config) {
+				cfg.Store = &lenientStore{tx: &tx}
+				if tc.config != nil {
+					tc.config(cfg)
+				}
+			})
+
+			cb := callbackFor(ar, code)
+			if tc.mode != "" {
+				cb.Mode = tc.mode
+			}
+
+			_, err := forged.Complete(context.Background(), cb)
 			require.ErrorIs(t, err, oidcclient.ErrTransactionMismatch)
+			assert.Zero(t, op.hitCount("/token"))
+			assert.Zero(t, other.hitCount("/token"))
+		})
+	}
+}
+
+// tamperingStore stores transactions in memory and alters the one it
+// returns, as an attacker with write access to a shared store could.
+type tamperingStore struct {
+	inner  oidcclient.TransactionStore
+	mutate func(*oidcclient.Transaction)
+}
+
+func (s *tamperingStore) Save(ctx context.Context, tx *oidcclient.Transaction) error {
+	return s.inner.Save(ctx, tx)
+}
+
+func (s *tamperingStore) Consume(ctx context.Context, stateHash, bindingHash string, now time.Time) (*oidcclient.Transaction, error) {
+	tx, err := s.inner.Consume(ctx, stateHash, bindingHash, now)
+	if err == nil {
+		s.mutate(tx)
+	}
+
+	return tx, err
+}
+
+// TestCompleteIntegrity checks the transaction integrity MAC: a transaction
+// altered in the store — any field — fails the login before the code is
+// redeemed.
+func TestCompleteIntegrity(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]func(*oidcclient.Transaction){
+		"state hash":    func(tx *oidcclient.Transaction) { tx.StateHash = sha256Hex("another state") },
+		"binding hash":  func(tx *oidcclient.Transaction) { tx.BindingHash = sha256Hex("another binding") },
+		"connection":    func(tx *oidcclient.Transaction) { tx.ConnectionID += "x" },
+		"issuer":        func(tx *oidcclient.Transaction) { tx.Issuer += "/x" },
+		"client":        func(tx *oidcclient.Transaction) { tx.ClientID += "x" },
+		"redirect":      func(tx *oidcclient.Transaction) { tx.RedirectURI += "?x=1" },
+		"response mode": func(tx *oidcclient.Transaction) { tx.ResponseMode = oidcclient.ResponseModeFormPost },
+		"max age":       func(tx *oidcclient.Transaction) { tx.MaxAge = 60 },
+		"acr values":    func(tx *oidcclient.Transaction) { tx.ACRValues = "urn:acr:bronze" },
+		"app state":     func(tx *oidcclient.Transaction) { tx.AppState = "return=https://evil.example/" },
+		"created at":    func(tx *oidcclient.Transaction) { tx.CreatedAt = tx.CreatedAt.Add(-time.Second) },
+		"expires at":    func(tx *oidcclient.Transaction) { tx.ExpiresAt = tx.ExpiresAt.Add(time.Hour) },
+		"integrity":     func(tx *oidcclient.Transaction) { tx.Integrity = sha256Hex("forged") },
+		"fields swapped": func(tx *oidcclient.Transaction) {
+			tx.ACRValues, tx.AppState = tx.AppState, tx.ACRValues
+		},
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t, func(cfg *oidcclient.Config) {
+				cfg.Store = &tamperingStore{inner: memory.New(), mutate: mutate}
+			})
+			ar, code := op.begin(t, c, oidcclient.AuthOptions{AppState: "return=/settings"})
+
+			id, err := c.Complete(context.Background(), callbackFor(ar, code))
+			require.ErrorIs(t, err, oidcclient.ErrTransactionIntegrity)
+			require.ErrorIs(t, err, security.ErrInvalidCredentials)
+			assert.Nil(t, id)
 			assert.Zero(t, op.hitCount("/token"))
 		})
 	}
+
+	t.Run("intact transaction", func(t *testing.T) {
+		t.Parallel()
+
+		op := newFakeOP(t)
+		c := op.client(t, func(cfg *oidcclient.Config) {
+			cfg.Store = &tamperingStore{inner: memory.New(), mutate: func(*oidcclient.Transaction) {}}
+		})
+		ar, code := op.begin(t, c, oidcclient.AuthOptions{AppState: "return=/settings"})
+
+		id, err := c.Complete(context.Background(), callbackFor(ar, code))
+		require.NoError(t, err)
+		assert.Equal(t, "return=/settings", id.AppState)
+	})
+}
+
+// TestCompleteIntegrityStepUp replays the store-write attack of the code
+// review: the step-up requirements of a login are stripped in the store
+// while the provider authenticated more weakly than requested.
+func TestCompleteIntegrityStepUp(t *testing.T) {
+	t.Parallel()
+
+	maxAge := 5 * time.Minute
+
+	cases := map[string]struct {
+		opts   oidcclient.AuthOptions
+		claims func(map[string]any)
+		strip  func(*oidcclient.Transaction)
+		intact error
+	}{
+		"acr_values": {
+			opts:   oidcclient.AuthOptions{ACRValues: []string{"urn:acr:gold"}},
+			claims: func(c map[string]any) { c["acr"] = "urn:acr:bronze" },
+			strip:  func(tx *oidcclient.Transaction) { tx.ACRValues = "" },
+			intact: oidcclient.ErrIDTokenACR,
+		},
+		"max_age": {
+			opts:   oidcclient.AuthOptions{MaxAge: &maxAge},
+			claims: func(c map[string]any) { c["auth_time"] = testNow.Add(-24 * time.Hour).Unix() },
+			strip:  func(tx *oidcclient.Transaction) { tx.MaxAge = oidcclient.NoMaxAge },
+			intact: oidcclient.ErrIDTokenAuthTime,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, tampered := range []bool{false, true} {
+				op := newFakeOP(t)
+				op.set(func(op *fakeOP) { op.claimsHook = func(_ *grant, c map[string]any) { tc.claims(c) } })
+
+				mutate := func(*oidcclient.Transaction) {}
+				if tampered {
+					mutate = tc.strip
+				}
+
+				c := op.client(t, func(cfg *oidcclient.Config) {
+					cfg.Store = &tamperingStore{inner: memory.New(), mutate: mutate}
+				})
+				ar, code := op.begin(t, c, tc.opts)
+
+				_, err := c.Complete(context.Background(), callbackFor(ar, code))
+				if tampered {
+					require.ErrorIs(t, err, oidcclient.ErrTransactionIntegrity)
+				} else {
+					require.ErrorIs(t, err, tc.intact)
+				}
+			}
+		})
+	}
+}
+
+// nilStore breaks the contract: no transaction and no error.
+type nilStore struct{}
+
+func (nilStore) Save(context.Context, *oidcclient.Transaction) error { return nil }
+
+func (nilStore) Consume(context.Context, string, string, time.Time) (*oidcclient.Transaction, error) {
+	return nil, nil //nolint:nilnil // the contract violation under test
+}
+
+func TestCompleteNilTransaction(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	c := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = nilStore{} })
+	ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+
+	id, err := c.Complete(context.Background(), callbackFor(ar, code))
+	require.ErrorIs(t, err, oidcclient.ErrTransactionNotFound)
+	assert.Nil(t, id)
+	assert.Zero(t, op.hitCount("/token"))
 }
 
 // TestCompleteMixUp plays RFC 9700 §4.4.1 against a broker with two

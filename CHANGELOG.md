@@ -137,7 +137,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   provider to advertise S256). A login is bound to the user agent that
   started it: a 256-bit binding secret kept in an HttpOnly `__Host-` cookie
   (SameSite=Lax for `query`, None for `form_post`), from which the nonce and
-  the PKCE verifier are derived, so the transaction store holds no secret.
+  the PKCE verifier are derived, so the transaction store holds no secret,
+  and which keys an integrity MAC over every field of the transaction
+  (`Transaction.Integrity`, verified before any field is used: a
+  transaction altered in the store fails with `ErrTransactionIntegrity`).
   The transaction is also bound to its connection, issuer, client, redirect
   URI and response mode, expires (10 minutes by default), and is consumed
   once. `Complete` requires the callback path to be the connection's

@@ -30,6 +30,7 @@ type transactionDTO struct {
 	AppState     string `json:"app_state"`
 	CreatedAt    int64  `json:"created_at"`
 	ExpiresAt    int64  `json:"expires_at"`
+	Integrity    string `json:"integrity"`
 	// ConsumedBy is only written by the consume script: the nonce of the
 	// call that consumed the transaction.
 	ConsumedBy string `json:"consumed_by,omitempty"`
@@ -50,6 +51,7 @@ func encodeTransaction(tx *oidcclient.Transaction) []byte {
 		AppState:     tx.AppState,
 		CreatedAt:    tx.CreatedAt.Unix(),
 		ExpiresAt:    tx.ExpiresAt.Unix(),
+		Integrity:    tx.Integrity,
 	})
 
 	return b
@@ -74,5 +76,6 @@ func decodeTransaction(stateHash string, raw []byte) (*oidcclient.Transaction, e
 		AppState:     d.AppState,
 		CreatedAt:    time.Unix(d.CreatedAt, 0).UTC(),
 		ExpiresAt:    time.Unix(d.ExpiresAt, 0).UTC(),
+		Integrity:    d.Integrity,
 	}, nil
 }

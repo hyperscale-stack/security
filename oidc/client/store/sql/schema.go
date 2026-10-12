@@ -14,8 +14,8 @@ import (
 // hash. Timestamps are BIGINT Unix seconds, which every engine stores
 // alike; app_state holds the application state base64-encoded, so that any
 // UTF-8 — NUL included, which PostgreSQL text refuses — round-trips whatever
-// the column character set. No column holds a secret (see
-// oidcclient.Transaction).
+// the column character set; integrity holds the transaction's MAC. No column
+// holds a secret (see oidcclient.Transaction).
 //
 // The DDL sticks to the subset every supported engine accepts, so it is
 // the same for every [Dialect]: the argument is accepted for API stability
@@ -39,7 +39,8 @@ func Schema(_ Dialect) []string {
 			acr_values    TEXT         NOT NULL,
 			app_state     TEXT         NOT NULL,
 			created_at    BIGINT       NOT NULL,
-			expires_at    BIGINT       NOT NULL
+			expires_at    BIGINT       NOT NULL,
+			integrity     VARCHAR(64)  NOT NULL
 		)`,
 	}
 }

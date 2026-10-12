@@ -11,8 +11,12 @@
 // The table holds no secret: transactions are keyed by a hash of the
 // state, the browser binding is a keyed hash, and the nonce and PKCE
 // verifier are derived from the binding secret only the user agent holds.
-// Reading the table yields nothing that completes a login; rewriting it can
-// only make logins fail.
+// Reading the table yields nothing that completes a login. A row altered in
+// the table fails its login (oidcclient.ErrTransactionIntegrity), except
+// for the user agent of that login, which holds the key of its integrity
+// MAC: an attacker with write access can relax the max_age and acr_values
+// checks of logins it runs itself. Protect the database's integrity when
+// relying on step-up authentication.
 //
 // # Deployment requirements
 //

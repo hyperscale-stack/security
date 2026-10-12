@@ -184,13 +184,16 @@ func TestBeginPersistsTransaction(t *testing.T) {
 	assert.Equal(t, testNow.Add(15*time.Minute), tx.ExpiresAt)
 	assert.Equal(t, tx.ExpiresAt, ar.ExpiresAt)
 
+	assert.Regexp(t, `^[0-9a-f]{64}$`, tx.Integrity)
+
 	for _, secret := range []string{ar.Binding, ar.State} {
-		assert.NotContains(t, tx.BindingHash+tx.StateHash+tx.AppState+tx.ACRValues, secret)
+		assert.NotContains(t, tx.BindingHash+tx.StateHash+tx.AppState+tx.ACRValues+tx.Integrity, secret)
 	}
 
 	_, err = c.Begin(context.Background(), oidcclient.AuthOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, oidcclient.NoMaxAge, store.last(t).MaxAge, "no max_age sent")
+	assert.NotEqual(t, tx.Integrity, store.last(t).Integrity)
 }
 
 // TestBeginSubSecondClock checks that the transaction times are whole

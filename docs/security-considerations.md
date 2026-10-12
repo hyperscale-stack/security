@@ -369,6 +369,16 @@ are attacker-influenced.
   only a hash of the state and of the binding: reading the store yields
   nothing that completes a login, and a stolen state alone cannot be
   replayed from another browser (login CSRF, RFC 9700 §4.7).
+- **Store integrity** — every transaction carries an integrity MAC over all
+  its fields, keyed by a value derived from the binding secret, which
+  `Complete` verifies before using any stored field: a transaction altered
+  in the store — a stripped `max_age` or `acr_values`, a rewritten
+  `AppState` or redirect URI — fails its login
+  (`ErrTransactionIntegrity`). The user agent of a login holds its binding
+  secret, though: an attacker who can write to the store can still relax
+  the `max_age` and `acr_values` checks of logins it runs with its own
+  browser. When step-up authentication matters, protect the store's
+  integrity (authentication, network isolation), not only its availability.
 - **Single use** — `TransactionStore.Consume` removes the transaction
   atomically, unknown first, then expired whatever the binding, then a
   binding mismatch, which keeps the transaction so that a leaked state
@@ -527,7 +537,8 @@ span catalog.
       (`/oidc/{connection}/callback`), registered exactly at its provider.
 - [ ] Use a shared `TransactionStore` (`oidc/client/store/sql` or
       `store/redis`) when several instances serve callbacks, and schedule
-      `PurgeExpired` with the SQL store.
+      `PurgeExpired` with the SQL store; restrict write access to it when
+      you rely on `max_age` or `acr_values`.
 - [ ] Link accounts on (connection, issuer, subject), never on email;
       create a fresh session after each login.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only

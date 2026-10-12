@@ -80,6 +80,7 @@ func sample(seed string, created, expires time.Time) *oidcclient.Transaction {
 		MaxAge:       oidcclient.NoMaxAge,
 		CreatedAt:    created,
 		ExpiresAt:    expires,
+		Integrity:    hash("integrity-" + seed),
 	}
 }
 

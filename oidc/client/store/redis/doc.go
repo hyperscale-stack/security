@@ -15,7 +15,12 @@
 // payload holds no secret: the browser binding is a keyed hash, and the
 // nonce and PKCE verifier are derived from the binding secret only the
 // user agent holds. Reading the keys yields nothing that completes a
-// login; rewriting them can only make logins fail.
+// login. A payload altered in Redis fails its login
+// (oidcclient.ErrTransactionIntegrity), except for the user agent of that
+// login, which holds the key of its integrity MAC: an attacker with write
+// access can relax the max_age and acr_values checks of logins it runs
+// itself. Protect the server's integrity when relying on step-up
+// authentication.
 //
 // # Deployment requirements
 //

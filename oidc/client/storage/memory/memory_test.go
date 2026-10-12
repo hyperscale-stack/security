@@ -36,6 +36,7 @@ func transaction(seed string, created time.Time, ttl time.Duration) *oidcclient.
 		MaxAge:       oidcclient.NoMaxAge,
 		CreatedAt:    created,
 		ExpiresAt:    created.Add(ttl),
+		Integrity:    hash("integrity-" + seed),
 	}
 }
 

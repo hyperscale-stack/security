@@ -57,6 +57,11 @@ var (
 	// Client completing it (mix-up, RFC 9700 §4.4): it is consumed and the
 	// code is never redeemed.
 	ErrTransactionMismatch = fmt.Errorf("oidcclient: login transaction of another connection: %w", security.ErrInvalidCredentials)
+	// ErrTransactionIntegrity reports a transaction whose fields do not
+	// match its integrity MAC under the binding the user agent presented:
+	// it was altered in the store. It is consumed and the code is never
+	// redeemed.
+	ErrTransactionIntegrity = fmt.Errorf("oidcclient: login transaction altered in the store: %w", security.ErrInvalidCredentials)
 	// ErrTransactionExpired reports a transaction past its expiry.
 	ErrTransactionExpired = fmt.Errorf("oidcclient: login transaction expired: %w", security.ErrInvalidCredentials)
 	// ErrIssuerParameter reports an authorization response whose RFC 9207

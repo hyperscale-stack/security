@@ -29,8 +29,8 @@ import (
 type Factory func() oidcclient.TransactionStore
 
 // RunConformance runs the TransactionStore contract against the stores
-// newStore builds: round trip of every field (boundary values included,
-// timestamps returned in UTC), single consumption, the pinned decision
+// newStore builds: round trip of every field, Integrity included (boundary
+// values included, timestamps returned in UTC), single consumption, the pinned decision
 // order of Consume (unknown, expired whatever the binding, binding
 // mismatch leaving the transaction stored), Save never overwriting,
 // Validate enforced before any I/O, isolation, and atomic consumption
@@ -93,6 +93,7 @@ func sample(seed string) *oidcclient.Transaction {
 		MaxAge:       oidcclient.NoMaxAge,
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(10 * time.Minute),
+		Integrity:    hash("integrity-" + seed),
 	}
 }
 
@@ -240,6 +241,7 @@ func testSaveNeverOverwrites(t *testing.T, s oidcclient.TransactionStore) {
 	clash := sample("duplicate")
 	clash.BindingHash = hash("attacker binding")
 	clash.ConnectionID = "attacker"
+	clash.Integrity = hash("attacker integrity")
 	mustErrorIs(t, s.Save(ctx(), clash), oidcclient.ErrTransactionExists, "Save of an existing state hash")
 
 	mustConsume(t, s, tx) // the original, untouched
@@ -250,6 +252,8 @@ func testSaveInvalid(t *testing.T, s oidcclient.TransactionStore) {
 		"short state hash":        func(tx *oidcclient.Transaction) { tx.StateHash = "abc" },
 		"upper-case state hash":   func(tx *oidcclient.Transaction) { tx.StateHash = strings.ToUpper(tx.StateHash) },
 		"empty binding hash":      func(tx *oidcclient.Transaction) { tx.BindingHash = "" },
+		"empty integrity":         func(tx *oidcclient.Transaction) { tx.Integrity = "" },
+		"upper-case integrity":    func(tx *oidcclient.Transaction) { tx.Integrity = strings.ToUpper(tx.Integrity) },
 		"empty connection":        func(tx *oidcclient.Transaction) { tx.ConnectionID = "" },
 		"connection with space":   func(tx *oidcclient.Transaction) { tx.ConnectionID = "acme okta" },
 		"long connection":         func(tx *oidcclient.Transaction) { tx.ConnectionID = strings.Repeat("c", 256) },

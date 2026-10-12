@@ -28,7 +28,7 @@ type Dialect interface {
 
 // selectTransaction reads a transaction by its state hash.
 const selectTransaction = `SELECT state_hash, binding_hash, connection_id, issuer, client_id, redirect_uri,
-		response_mode, max_age, acr_values, app_state, created_at, expires_at
+		response_mode, max_age, acr_values, app_state, created_at, expires_at, integrity
 		FROM oidc_client_transactions WHERE state_hash = ?`
 
 // Postgres is the PostgreSQL dialect ($1,$2,… placeholders). Consume runs

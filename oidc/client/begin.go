@@ -96,8 +96,9 @@ func (r AuthRequest) LogValue() slog.Value {
 // Begin starts a login: it stores a Transaction and returns the
 // authorization request — Authorization Code with PKCE S256 (RFC 7636),
 // fresh state and nonce. The state and the binding secret come from
-// crypto/rand (256 bits); the nonce and the PKCE verifier are derived from
-// the binding secret, so the store holds no secret. Nothing is returned
+// crypto/rand (256 bits); the nonce, the PKCE verifier and the
+// transaction's integrity key are derived from the binding secret, so the
+// store holds no secret. Nothing is returned
 // when the store fails. Begin writes to the store on every call: rate-limit
 // login starts.
 func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, error) {
@@ -123,6 +124,7 @@ func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, err
 		CreatedAt:    created,
 		ExpiresAt:    created.Add(c.cfg.TransactionTTL),
 	}
+	tx.Integrity = integrityFor(secret, tx)
 
 	if err := c.cfg.Store.Save(ctx, tx); err != nil {
 		return nil, fmt.Errorf("oidcclient: save login transaction: %w", err)

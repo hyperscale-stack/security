@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"context"
+	"crypto/hmac"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -72,7 +73,9 @@ type authorizationResponse struct {
 //     error, iss — else ErrInvalidCallback;
 //  2. the binding secret is checked for form — else ErrBindingMismatch;
 //  3. the transaction is consumed atomically with the binding's hash (a
-//     wrong binding leaves it stored);
+//     wrong binding leaves it stored), then its integrity MAC is verified
+//     with the binding before any of its fields is used — else
+//     ErrTransactionIntegrity;
 //  4. it must belong to this connection, issuer, client, redirect URI and
 //     response mode — else ErrTransactionMismatch — and be unexpired;
 //  5. the RFC 9207 iss parameter must be the issuer when present, and is
@@ -101,6 +104,14 @@ func (c *Client) Complete(ctx context.Context, cb Callback) (*Identity, error) {
 	tx, err := c.cfg.Store.Consume(ctx, stateHashFor(resp.state), bindingHashFor(secret), now)
 	if err != nil {
 		return nil, fmt.Errorf("oidcclient: consume login transaction: %w", err)
+	}
+
+	if tx == nil { // a store breaking its contract
+		return nil, fmt.Errorf("oidcclient: consume login transaction: %w", ErrTransactionNotFound)
+	}
+
+	if !hmac.Equal([]byte(integrityFor(secret, tx)), []byte(tx.Integrity)) {
+		return nil, ErrTransactionIntegrity
 	}
 
 	if err := c.checkTransaction(tx, now); err != nil {

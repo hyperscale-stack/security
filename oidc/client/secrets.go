@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"strconv"
 )
 
 // secretSize is the size of the state and of the binding secret: 256 bits,
@@ -23,9 +24,10 @@ const encodedSecretLength = 43
 // is HMAC-SHA256(binding secret, label): independent pseudorandom values
 // under one 256-bit key.
 const (
-	labelNonce    = "oidcclient/nonce/v1"
-	labelVerifier = "oidcclient/code_verifier/v1"
-	labelBinding  = "oidcclient/binding/v1"
+	labelNonce     = "oidcclient/nonce/v1"
+	labelVerifier  = "oidcclient/code_verifier/v1"
+	labelBinding   = "oidcclient/binding/v1"
+	labelIntegrity = "oidcclient/integrity/v1"
 )
 
 // newSecret returns 256 bits from crypto/rand, base64url-encoded without
@@ -90,4 +92,22 @@ func stateHashFor(state string) string {
 	sum := sha256.Sum256([]byte(state))
 
 	return hex.EncodeToString(sum[:])
+}
+
+// integrityFor is the Transaction.Integrity of tx under the binding
+// secret: HMAC-SHA256, keyed by a value derived from the secret, over every
+// other field of tx, each as a netstring (length, ':', value, ',') so that
+// no two transactions encode alike.
+func integrityFor(secret []byte, tx *Transaction) string {
+	mac := hmac.New(sha256.New, derive(secret, labelIntegrity))
+
+	for _, field := range []string{
+		tx.StateHash, tx.BindingHash, tx.ConnectionID, tx.Issuer, tx.ClientID, tx.RedirectURI,
+		string(tx.ResponseMode), strconv.FormatInt(tx.MaxAge, 10), tx.ACRValues, tx.AppState,
+		strconv.FormatInt(tx.CreatedAt.Unix(), 10), strconv.FormatInt(tx.ExpiresAt.Unix(), 10),
+	} {
+		mac.Write([]byte(strconv.Itoa(len(field)) + ":" + field + ","))
+	}
+
+	return hex.EncodeToString(mac.Sum(nil))
 }

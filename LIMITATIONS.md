@@ -101,7 +101,12 @@ PKCE. Not supported, and refused where a provider could select them:
   carry one of the requested values; list every acceptable level.
 - **No OpenTelemetry spans** — `oidc/client` and `outbound` return errors
   to the caller and emit no spans.
-- **Transaction stores** — `oidc/client/storage/memory` keeps transactions
+- **Transaction stores** — the integrity MAC of a transaction is keyed by
+  its binding secret, which the user agent of the login holds: an attacker
+  with write access to the store can still relax the `max_age` and
+  `acr_values` checks of logins it runs itself (a server-held key would
+  close this; not implemented). Protect the store's integrity when relying
+  on step-up authentication. `oidc/client/storage/memory` keeps transactions
   in the process: use the SQL or Redis store when several instances serve
   callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its

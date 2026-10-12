@@ -30,6 +30,7 @@ func validTransaction() *oidcclient.Transaction {
 		AppState:     "é",
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(time.Minute),
+		Integrity:    strings.Repeat("c", 64),
 	}
 }
 
@@ -46,6 +47,9 @@ func TestTransactionValidate(t *testing.T) {
 		"state hash not hex":      func(tx *oidcclient.Transaction) { tx.StateHash = strings.Repeat("g", 64) },
 		"state hash upper case":   func(tx *oidcclient.Transaction) { tx.StateHash = strings.Repeat("A", 64) },
 		"binding hash too long":   func(tx *oidcclient.Transaction) { tx.BindingHash = strings.Repeat("b", 65) },
+		"empty integrity":         func(tx *oidcclient.Transaction) { tx.Integrity = "" },
+		"integrity too short":     func(tx *oidcclient.Transaction) { tx.Integrity = strings.Repeat("c", 63) },
+		"integrity upper case":    func(tx *oidcclient.Transaction) { tx.Integrity = strings.Repeat("C", 64) },
 		"empty connection":        func(tx *oidcclient.Transaction) { tx.ConnectionID = "" },
 		"connection with space":   func(tx *oidcclient.Transaction) { tx.ConnectionID = "acme okta" },
 		"connection non-ASCII":    func(tx *oidcclient.Transaction) { tx.ConnectionID = "acmé" },

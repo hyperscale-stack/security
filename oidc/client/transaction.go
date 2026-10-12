@@ -45,8 +45,17 @@ const (
 // that the callback consumes once. It holds no secret: it is keyed by a
 // hash of the state, the browser binding is stored as a keyed hash, and
 // the nonce and PKCE verifier are re-derived at the callback from the
-// binding secret the user agent presents, so reading — or rewriting — the
-// store yields nothing that completes a login.
+// binding secret the user agent presents, so reading the store yields
+// nothing that completes a login.
+//
+// Integrity, a MAC keyed by the binding secret, makes every field
+// tamper-evident: Complete refuses a transaction altered in the store
+// (ErrTransactionIntegrity). It protects a login against whoever does not
+// hold its binding secret. The user agent that started the login holds
+// it, though: an attacker who can write to the store can still relax the
+// max_age and acr_values checks of logins it runs itself, with its own
+// browser. When step-up authentication matters, protect the store's
+// integrity (authentication, network isolation), as its availability.
 //
 // CreatedAt and ExpiresAt are whole seconds; stores return them in UTC.
 type Transaction struct {
@@ -73,11 +82,15 @@ type Transaction struct {
 	CreatedAt time.Time
 	// ExpiresAt is when the transaction stops being usable.
 	ExpiresAt time.Time
+	// Integrity is hex(HMAC-SHA256(k, every other field, length-prefixed)),
+	// k an HMAC-SHA256 of the binding secret under its own label: 64
+	// lowercase hex digits.
+	Integrity string
 }
 
 // Validate reports whether t is a transaction a store may persist. Stores
-// call it before any I/O and refuse what it refuses. It requires: hashes of
-// 64 lowercase hex digits; a ConnectionID of 1 to 255 visible ASCII
+// call it before any I/O and refuse what it refuses. It requires: hashes
+// and Integrity of 64 lowercase hex digits; a ConnectionID of 1 to 255 visible ASCII
 // characters; an Issuer and a RedirectURI of 1 to 2048 visible ASCII
 // characters; a ClientID of 1 to 2048 printable ASCII characters; a
 // supported ResponseMode; a MaxAge between NoMaxAge and 2^31-1; ACRValues of
@@ -89,8 +102,9 @@ func (t *Transaction) Validate() error {
 		return fmt.Errorf("%w: nil transaction", ErrInvalidTransaction)
 	}
 
-	if !isLowerHex(t.StateHash, hashHexLength) || !isLowerHex(t.BindingHash, hashHexLength) {
-		return fmt.Errorf("%w: state and binding hashes must be 64 lowercase hex digits", ErrInvalidTransaction)
+	if !isLowerHex(t.StateHash, hashHexLength) || !isLowerHex(t.BindingHash, hashHexLength) ||
+		!isLowerHex(t.Integrity, hashHexLength) {
+		return fmt.Errorf("%w: hashes and integrity must be 64 lowercase hex digits", ErrInvalidTransaction)
 	}
 
 	if err := t.validateBindings(); err != nil {

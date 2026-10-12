@@ -20,8 +20,8 @@ import (
 const (
 	insertTransaction = `INSERT INTO oidc_client_transactions
 		(state_hash, binding_hash, connection_id, issuer, client_id, redirect_uri,
-		 response_mode, max_age, acr_values, app_state, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 response_mode, max_age, acr_values, app_state, created_at, expires_at, integrity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	existsTransaction = `SELECT 1 FROM oidc_client_transactions WHERE state_hash = ?`
 	deleteIfExpired   = `DELETE FROM oidc_client_transactions WHERE state_hash = ? AND expires_at <= ?`
 	deleteTransaction = `DELETE FROM oidc_client_transactions WHERE state_hash = ?`
@@ -77,7 +77,7 @@ func (s *Store) Save(ctx context.Context, tx *oidcclient.Transaction) error {
 	_, err := s.db.ExecContext(ctx, s.dialect.rebind(insertTransaction),
 		tx.StateHash, tx.BindingHash, tx.ConnectionID, tx.Issuer, tx.ClientID, tx.RedirectURI,
 		string(tx.ResponseMode), tx.MaxAge, tx.ACRValues, base64.StdEncoding.EncodeToString([]byte(tx.AppState)),
-		tx.CreatedAt.Unix(), tx.ExpiresAt.Unix())
+		tx.CreatedAt.Unix(), tx.ExpiresAt.Unix(), tx.Integrity)
 	if err == nil {
 		return nil
 	}
@@ -157,7 +157,7 @@ func (s *Store) lockRow(ctx context.Context, tx *sql.Tx, stateHash string) (*oid
 
 	err := tx.QueryRowContext(ctx, s.dialect.rebind(s.dialect.lockRow()), stateHash).Scan(
 		&t.StateHash, &t.BindingHash, &t.ConnectionID, &t.Issuer, &t.ClientID, &t.RedirectURI,
-		&mode, &t.MaxAge, &t.ACRValues, &appState, &createdAt, &expires)
+		&mode, &t.MaxAge, &t.ACRValues, &appState, &createdAt, &expires, &t.Integrity)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

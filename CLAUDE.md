@@ -231,8 +231,11 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - **Invariants**: the issuer comes from configuration only; every fetch goes
   through `outbound`; token and UserInfo requests follow no redirect; a
   login is bound to the user agent by a binding secret from which the nonce
-  and PKCE verifier are derived (the store holds no secret); a transaction
-  is consumed once, in the pinned order of `TransactionStore.Consume`;
+  and PKCE verifier are derived (the store holds no secret) and which keys
+  the transaction's integrity MAC (`integrityFor`, verified in `Complete`
+  before any stored field is used; every store persists `Integrity`); a
+  transaction is consumed once, in the pinned order of
+  `TransactionStore.Consume`;
   `Callback.Path` must equal the connection's redirect URI path (mix-up
   defense — redirect URIs are distinct per connection); nothing is returned
   before the ID Token is fully validated; every JSON document goes through
