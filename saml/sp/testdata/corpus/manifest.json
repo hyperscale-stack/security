@@ -2094,6 +2094,48 @@
       }
     },
     {
+      "id": "status/success-with-whitespace",
+      "category": "status",
+      "attack": "a Success status code followed by a TAB: Success once sanitized, not the URI (audit SAML-I6)",
+      "refs": [
+        "SAML Core §3.2.2.2",
+        "SAML errata E65"
+      ],
+      "file": "status/success-with-whitespace.xml",
+      "sha256": "59d674c30aa20961644eaa67f0caa030d80b4474488ab28e7ecb3535cea42fa6",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "malformed Success status code"
+      }
+    },
+    {
+      "id": "status/message-with-format-characters",
+      "category": "status",
+      "attack": "StatusMessage carrying bidi overrides, zero-width characters and line separators (log and display spoofing, audit SAML-I7)",
+      "refs": [
+        "SAML Core §3.2.2.2",
+        "SAML errata E65",
+        "Unicode TR #36 §2"
+      ],
+      "file": "status/message-with-format-characters.xml",
+      "sha256": "823981f8858a9b9d1995809962f4690b6901cd69601531238f5b2e04594c59bc",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "status",
+        "sentinel": "ErrResponseStatus",
+        "status": {
+          "code": "urn:oasis:names:tc:SAML:2.0:status:Responder",
+          "subCode": "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed",
+          "message": "Sign-in failed for adminlevel=error user=mallory",
+          "printed": "Responder, AuthnFailed"
+        }
+      }
+    },
+    {
       "id": "status/error-with-assertion",
       "category": "status",
       "attack": "error status carrying an assertion",

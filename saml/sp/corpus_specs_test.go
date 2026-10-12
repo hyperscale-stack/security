@@ -828,6 +828,26 @@ func (g *corpusGen) statusSpecs() []corpusSpec {
 			expect: statusOf("urn:oasis:names:tc:SAML:2.0:status:AdminLoggedIn", "", "", "non-standard status"),
 		},
 		{
+			id: "status/success-with-whitespace", attack: "a Success status code followed by a TAB: Success once sanitized, not the URI (audit SAML-I6)",
+			refs: refStatus,
+			build: func() []byte {
+				return g.xml("acme", compact(respOpts{raw: func(s string) string {
+					return strings.Replace(s, `status:Success"`, `status:Success&#x9;"`, 1)
+				}}))
+			},
+			expect: rejected("ErrMalformedResponse", "malformed Success status code"),
+		},
+		{
+			id:     "status/message-with-format-characters",
+			attack: "StatusMessage carrying bidi overrides, zero-width characters and line separators (log and display spoofing, audit SAML-I7)",
+			refs:   append(refStatus, "Unicode TR #36 §2"),
+			build: func() []byte {
+				return g.statusResponseXML("acme", setStatus(responderCode, authnFailed,
+					"Sign-in failed\u202e\u2066 for\u200b admin\u2028level=error\u2029\ufeff\u00ad user=mallory"))
+			},
+			expect: statusOf(responderCode, authnFailed, "Sign-in failed for adminlevel=error user=mallory", "Responder, AuthnFailed"),
+		},
+		{
 			id: "status/error-with-assertion", attack: "error status carrying an assertion", refs: refStatus,
 			build: func() []byte {
 				return g.xml("acme", onResponse(setStatus(requesterCode, "", "")))

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/hyperscale-stack/security"
 )
@@ -208,9 +209,12 @@ var (
 // expiry, and InResponseTo when present); nothing is consumed.
 //
 // Code, SubCode and Message come from a message that may be unsigned: they
-// are diagnostics, never authenticated. Control characters are stripped and
-// each value is capped at 256 bytes. Message MUST NOT be rendered to end
-// users. ConnectionID and AppState come from the server-side transaction, so
+// are diagnostics, never authenticated. Code and SubCode keep visible ASCII
+// only; Message loses its control, Unicode format (bidi, zero-width) and
+// line or paragraph separator characters; each value is capped at 256
+// bytes. Message MUST NOT be rendered to end users. A Success code is never
+// reported here: a code that is Success only once sanitized is refused as
+// ErrMalformedResponse. ConnectionID and AppState come from the server-side transaction, so
 // the application can send the user back where the login started.
 //
 // errors.Is(err, ErrResponseStatus) and errors.Is(err, ErrRejected) hold.
@@ -300,13 +304,17 @@ func (e *rejection) Unwrap() []error {
 // maxDiagnosticLen caps diagnostic strings copied from untrusted messages.
 const maxDiagnosticLen = 256
 
-// sanitizeDiagnostic keeps printable characters only (no control characters,
-// so no log injection) and caps the length.
+// sanitizeDiagnostic keeps printable characters only and caps the length:
+// control characters (no log injection), Unicode format characters (bidi
+// overrides and isolates, zero-width characters, soft hyphen, byte order
+// mark) and the line and paragraph separators are stripped, so the text
+// cannot spoof a log line or reorder what is displayed (Unicode TR #36
+// §2). Letters of every script are kept.
 func sanitizeDiagnostic(s string) string {
 	var b strings.Builder
 
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
 			continue
 		}
 

@@ -773,6 +773,74 @@ func TestCompleteLogin_StatusError(t *testing.T) {
 	assert.LessOrEqual(t, len(se.Message), 256)
 }
 
+// TestCompleteLogin_SuccessStatusIsExact: Success is decided on the exact
+// status code (Core §3.2.2.2). A code that is Success only once white space
+// or control characters are stripped is malformed: neither a login (gosaml2
+// compares the raw value) nor a *StatusError claiming "Success" (audit
+// SAML-I6). It is refused before any signature work and consumes nothing.
+func TestCompleteLogin_SuccessStatusIsExact(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]string{
+		"trailing tab":      `status:Success&#x9;"`,
+		"trailing newline":  `status:Success&#xA;"`,
+		"trailing space":    `status:Success "`,
+		"carriage return":   `status:Success&#xD;"`,
+		"non-breaking byte": "status:Success\u0085\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			xml := respondXML(t, lr.requestID, respOpts{})
+			require.Contains(t, xml, `status:Success"`)
+
+			res, err := complete(e, lr, encodeString(strings.Replace(xml, `status:Success"`, value, 1)))
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrMalformedResponse)
+			require.NotErrorIs(t, err, samlsp.ErrResponseStatus)
+			assert.Equal(t, samlsp.ErrMalformedResponse.Error()+" (malformed Success status code)", err.Error())
+		})
+	}
+
+	// A non-Success code with white space stays an IdP error status.
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	path(r, "Status", "StatusCode").CreateAttr("Value", " urn:oasis:names:tc:SAML:2.0:status:Requester\t")
+
+	_, err := complete(e, lr, encodeElement(t, r))
+
+	var se *samlsp.StatusError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, "urn:oasis:names:tc:SAML:2.0:status:Requester", se.Code)
+}
+
+// TestCompleteLogin_StatusMessageFormatCharacters: the StatusMessage comes
+// from an unauthenticated message; Unicode format and separator characters
+// (bidi overrides, zero-width characters, line and paragraph separators)
+// would let it spoof a log line or a rendering, so they are stripped like
+// control characters, while letters of every script stay (audit SAML-I7).
+func TestCompleteLogin_StatusMessageFormatCharacters(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	path(r, "Status", "StatusCode").CreateAttr("Value", "urn:oasis:names:tc:SAML:2.0:status:Responder")
+	child(r, "Status").CreateElement("samlp:StatusMessage").SetText(
+		"Échec\u202e\u2066 認証\u200b\u200c\u200d\u200e\u200f\u2028level=error\u2029\ufeff\u00ad\u2060\u061c ok")
+
+	_, err := complete(e, lr, encodeElement(t, r))
+
+	var se *samlsp.StatusError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, "Échec 認証level=error ok", se.Message)
+}
+
 // encodeElement serializes and base64-encodes an element.
 func encodeElement(t testing.TB, el *etree.Element) string {
 	t.Helper()

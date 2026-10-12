@@ -34,6 +34,8 @@ type responseStatus struct {
 	code, subCode, message string
 }
 
+// success reports a Success status; readStatus refused any code that is
+// Success only once sanitized, so code is then exactly the URI.
 func (s responseStatus) success() bool { return s.code == statusSuccess }
 
 // gateRejection maps a lexical-gate refusal to a rejection.
@@ -335,7 +337,15 @@ func readStatus(root *etree.Element) (responseStatus, error) {
 		return responseStatus{}, reject(ErrMalformedResponse, "repeated StatusCode or StatusMessage", nil)
 	}
 
-	st := responseStatus{code: sanitizeURI(attrValue(codes[0], "Value"))}
+	// Success is decided on the exact value (Core §3.2.2.2), as gosaml2
+	// does: a code that only becomes Success once sanitized is neither a
+	// login nor an error status to report as "Success".
+	code := attrValue(codes[0], "Value")
+	st := responseStatus{code: sanitizeURI(code)}
+
+	if st.code == statusSuccess && code != statusSuccess {
+		return responseStatus{}, reject(ErrMalformedResponse, "malformed Success status code", nil)
+	}
 
 	if len(subs) == 1 {
 		st.subCode = sanitizeURI(attrValue(subs[0], "Value"))
