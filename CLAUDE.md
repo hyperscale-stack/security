@@ -298,7 +298,10 @@ its own SP entity ID, ACS URL and trusted `IdentityProvider`), a
 `TransactionStore` and a `ReplayCache`. `BeginLogin` (HTTP-Redirect
 AuthnRequest + `__Host-samlsp` browser-binding cookie) and `CompleteLogin`
 (HTTP-POST ACS) are the flow; `Metadata`/`ServeMetadata` publish SP
-metadata; `ParseIdentityProviderMetadata` imports trusted IdP metadata.
+metadata; `ParseIdentityProviderMetadata` imports trusted IdP metadata, and
+`FetchIdentityProviderMetadata`/`MetadataSource` fetch it from a configured
+URL through `outbound` (pinned entity ID, bounded refresh, never triggered
+by response content).
 
 - Validation is layered: streaming lexical gate (`xmlgate.go`) → structural
   profile on the raw etree (`precheck*.go`) → gosaml2/goxmldsig verification

@@ -199,6 +199,7 @@ carry a non-reversible SHA-256 fingerprint for correlation only.
 | --------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | `samlsp.ServiceProvider.BeginLogin`     | `ServiceProvider.BeginLogin`    | `samlsp.connection_id` (string), `samlsp.idp_entity_id` (string), `samlsp.insecure_sha1` (bool, when set), `samlsp.outcome` (string), `samlsp.reason` (string, on failure) | any error                       |
 | `samlsp.ServiceProvider.CompleteLogin`  | `ServiceProvider.CompleteLogin` | same as `BeginLogin`                                                                                                               | any error                       |
+| `samlsp.FetchMetadata`                  | every metadata download (`FetchIdentityProviderMetadata`, `MetadataSource`) | `samlsp.outcome` (string), `samlsp.reason` (string, on failure: `metadata_unavailable`, `invalid_metadata`, `metadata_expired`) | any error |
 
 `samlsp.outcome` is `success`, `rejected` (the error matches
 `samlsp.ErrRejected`: the login was refused) or `error` (an
@@ -207,8 +208,9 @@ sentinel in snake case — `audience_mismatch`, `assertion_replayed`,
 `missing_browser_binding`… — so refusals can be counted per cause. The
 connection attributes are set once the connection is resolved. No span
 carries a NameID, an attribute value, a RelayState handle, the binding
-cookie, a request or assertion ID, or any message content, and error
-messages are not recorded.
+cookie, a request or assertion ID, a metadata URL or address, or any
+message content, and error messages are not recorded. A `MetadataSource`
+serving cached metadata opens no span: only downloads do.
 
 ## Secrets policy
 

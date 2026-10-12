@@ -311,7 +311,10 @@ CompleteLogin ◀── HTTP-POST SAMLResponse + RelayState + cookie ◀──�
 ```
 
 - **Connections** — the application resolves them (`ConnectionResolver`);
-  each has its own SP entity ID, ACS URL and trusted `IdentityProvider`.
+  each has its own SP entity ID, ACS URL and trusted `IdentityProvider`,
+  imported once or kept current from the IdP's metadata URL by a
+  `MetadataSource`, which fetches through `outbound` (see
+  [Outbound requests](#outbound-requests)).
 - **Storage** — `TransactionStore` (insert-if-absent, lookup, atomic
   single consumption bound to the browser) and `ReplayCache`
   (insert-if-absent): in-memory, SQL and Redis implementations, checked by

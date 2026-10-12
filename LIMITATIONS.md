@@ -214,9 +214,15 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Not supported** — Single Logout, IdP-initiated SSO (unsolicited
   responses are refused), the HTTP-Artifact and other bindings, encrypted
   assertions (refused with `ErrEncryptedAssertionUnsupported`), the IdP
-  role, and the verification of signed metadata: importing
-  administrator-provided metadata is the act of trust. Network retrieval of
-  IdP metadata is not shipped.
+  role, and signed metadata: an embedded signature is not verified.
+  Importing administrator-provided metadata is the act of trust; fetched
+  metadata is trusted through TLS to the configured URL and the pinned
+  entity ID, so federation aggregates (whose trust comes from their
+  signature) must not be used as metadata sources.
+- **Metadata refresh** — a `MetadataSource` refreshes lazily, on use: an
+  idle connection is refreshed at its next login, and a document whose
+  `validUntil` is nearer than `MinRefresh` fails closed from its
+  `validUntil` until the next refresh.
 - **Legal but ambiguous responses are refused** — several assertions,
   `SubjectConfirmation`s or `AuthnStatement`s, an assertion without
   `NameID`, a Response without `Issuer`. Configure the IdP to send one

@@ -466,9 +466,11 @@ one way.
 
 - **Explicit trust only.** Each connection pins the IdP entity ID and its
   signing certificates, imported from administrator-provided metadata
-  (`ParseIdentityProviderMetadata`) or configured directly. Importing is the
-  act of trust: a signature embedded in the metadata is not verified, and an
-  aggregate (`EntitiesDescriptor`) is only accepted with a pinned entity ID.
+  (`ParseIdentityProviderMetadata`), fetched from the IdP's metadata URL
+  (`FetchIdentityProviderMetadata`, `MetadataSource`) or configured
+  directly. Importing is the act of trust: a signature embedded in the
+  metadata is not verified, and an aggregate (`EntitiesDescriptor`) is only
+  accepted with a pinned entity ID.
   Nothing in a response extends that trust: the `Issuer` must equal the
   connection's entity ID, and a `KeyInfo` certificate only *selects* one of
   the trusted certificates (it must equal it exactly).
@@ -632,6 +634,49 @@ at most the three most recent valid ones are tried, which bounds that case
 to three times the costs above. A response carrying hundreds of group
 memberships exceeds the element cap (`ErrResponseTooLarge`): filter the
 groups the IdP releases to the application rather than raising limits.
+
+### Metadata retrieval
+
+`FetchIdentityProviderMetadata` downloads an IdP's metadata once, and a
+`MetadataSource` keeps it current for a `ConnectionResolver`. Both treat the
+network as hostile:
+
+- **The URL is configuration** — the application's, or a tenant
+  administrator's — and never a value read from a SAML message or a
+  request. It must be https (http only with `Outbound.AllowHTTP`), without
+  credentials or fragment. No response content triggers a fetch: an
+  unknown `KeyInfo` certificate fails the login, it does not refresh the
+  metadata, so an attacker cannot make the SP fetch.
+- **Requests go through `outbound`** (see
+  [Outbound requests](#outbound-requests-ssrf)): publicly routable
+  destinations only, judged on the address dialed, no redirect, no proxy,
+  no cookie, no credentials, 10 s, and the smaller of `MaxSize` (1 MiB) and
+  the policy's body limit, counted after decompression. Only a 200 answer
+  is read; no error carries the response body. An on-premises IdP needs its
+  subnet in `Outbound.AllowedPrefixes`; pin its host in `CheckURL`, and its
+  private CA in `RootCAs`.
+- **Trust** rests on TLS to the configured host and on the pinned entity
+  ID (`MetadataSourceConfig.EntityID` is required): a document of another
+  entity is refused. Keys and endpoints change only through a valid
+  document of that entity fetched from that URL, so an IdP key rollover is
+  picked up at the next refresh — announce the new key in the metadata
+  before signing with it. Signed metadata is not supported: the embedded
+  signature is ignored, and a federation aggregate, whose trust comes from
+  its signature, must not be used as a source. Where TLS to the IdP's
+  metadata host is not trusted enough, import the metadata out of band.
+- **Bounded refresh**: at the document's `cacheDuration` (one hour when
+  absent), shortened to its `validUntil` and clamped to `[MinRefresh,
+  MaxRefresh]` (5 minutes, 24 hours by default); concurrent callers share
+  one fetch, which runs detached from the caller that started it and is
+  bounded by the outbound timeout; failed attempts are spaced by
+  `RetryInterval` (one minute). While refreshes fail, the last good
+  document is served for at most `MaxStale` (7 days) after it was fetched
+  and never past its `validUntil` (Metadata §4.3.2, errata E94); then
+  logins fail closed with `ErrMetadataExpired`. Failures surface as
+  `ErrMetadataUnavailable` (the `outbound` errors stay matchable),
+  `ErrInvalidMetadata` or `ErrMetadataExpired`; a resolver returning them
+  makes `BeginLogin` and `CompleteLogin` fail as infrastructure errors, not
+  rejections.
 
 ### Dependencies
 
@@ -895,9 +940,12 @@ span catalog.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.
-- [ ] SAML: import IdP metadata through a trusted channel and refresh it
-      before the IdP's certificate rollovers; enable `InsecureAllowSHA1`
-      only for an IdP that cannot do better, with a plan to remove it.
+- [ ] SAML: import IdP metadata through a trusted channel, or fetch it from
+      the IdP's https metadata URL with a `MetadataSource` pinned to its
+      entity ID; never take a metadata URL from a request. Widen the
+      outbound policy only for an on-premises IdP (`AllowedPrefixes`,
+      `CheckURL`, `RootCAs`). Enable `InsecureAllowSHA1` only for an IdP
+      that cannot do better, with a plan to remove it.
 - [ ] SAML: share the transaction store and the replay cache between
       instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
       expired SQL rows.

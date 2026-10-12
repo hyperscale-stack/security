@@ -118,6 +118,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   assertions go to a replay cache. Every refusal matches `ErrRejected`,
   which wraps `security.ErrInvalidCredentials`; an IdP error status is a
   `*StatusError`. OpenTelemetry spans under the module's own scope.
+- **SAML metadata retrieval**: `samlsp.FetchIdentityProviderMetadata`
+  downloads an IdP's metadata from its configured https URL through the
+  core `outbound` client (public destinations only, no redirect, bounded
+  time and size), and `samlsp.MetadataSource` keeps it current for a
+  resolver: pinned entity ID, refresh at the document's `cacheDuration`
+  clamped to `[MinRefresh, MaxRefresh]`, single-flight and rate-limited,
+  last good document served for at most `MaxStale` while refreshes fail and
+  never past its `validUntil`. New sentinel `ErrMetadataUnavailable`.
 - **SAML SP storage**: in-memory (`saml/sp/storage/memory`), SQL
   (`saml/sp/store/sql`, PostgreSQL/MySQL/SQLite) and Redis
   (`saml/sp/store/redis`, single-key Lua scripts), all validated by the
