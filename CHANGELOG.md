@@ -130,7 +130,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   with a persisted pair. `GrantRequest.Extension` carries the hook to the
   grants; `oauth2.GrantTypeAuthorizationCode` / `GrantTypeRefreshToken` name
   the exchanges; `oauth2.ErrUnredirectableRequest` lets a hook refuse
-  without redirecting. See `ExampleExtension`.
+  without redirecting; `oauth2.ErrAuthorizeRequestModified` is the cause
+  reported when a callback modified the read-only request it was handed.
+  See `ExampleExtension`.
 - **OAuth2 consent refusals**: `Consent.Refusal` redirects an
   authorization-endpoint error instead of `access_denied` — e.g.
   `oauth2.ErrLoginRequired`, `ErrConsentRequired`, `ErrInteractionRequired`,
@@ -215,9 +217,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   may add (`id_token`).
 - **OAuth2 `/authorize`** resolves the issuer right after the redirect URI is
   trusted, for both flows: a resolver failure answers a redirected
-  `server_error` before the `ConsentFunc` runs. The `ConsentFunc` gets a copy
-  of the validated request: rewriting it no longer changes the redirect
-  target, the state, the scope or the PKCE parameters. An approval must name
+  `server_error` before the `ConsentFunc` runs. The request a `ConsentFunc`
+  — or an extension hook — gets is a read-only copy: modifying any field of
+  it but `ExtensionRequest`, or the identity of the client it shares, fails
+  the authorization with `server_error` (`oauth2.ErrAuthorizeRequestModified`
+  at `OnError`) and issues nothing — breaking for a `ConsentFunc` that
+  narrowed the grant by rewriting `ar.Scope`, which must use
+  `Consent.Scope`; on master the server read the rewritten request back. The
+  code is bound to the client ID read at validation. An approval must name
   its subject — non-empty, at most 255 bytes (OIDC Core §2) — or it is
   answered `server_error` and issues nothing (breaking for `ConsentFunc`s
   approving without one). A `ConsentFunc` error still answers `server_error`,

@@ -200,9 +200,13 @@ first:
   narrow a granted scope, never broaden it, and add an `id_token` member to
   a token response, never replace `access_token`, `token_type`,
   `expires_in`, `refresh_token` or `scope` — the response members are typed
-  fields, not a map. Callbacks get copies of the validated request: neither
-  the `ConsentFunc` nor the extension can change the redirect target, the
-  state, the scope or the PKCE parameters the server records.
+  fields, not a map. Callbacks get read-only copies of the validated
+  request: a `ConsentFunc` or extension hook that modifies its copy — the
+  redirect URI, the state, the scope, the PKCE parameters, the nonce, the
+  issuer, the client's identity — fails the authorization closed with
+  `server_error` (`oauth2.ErrAuthorizeRequestModified`) rather than having
+  its rewrite either honored or silently ignored; a grant narrows only
+  through `Consent.Scope` and `ExtensionGrant.Scope`.
 - **Grant context.** What `CompleteAuthorization` records (`ExtensionData`:
   at most 4096 bytes of UTF-8 without NUL, so every store keeps it
   byte-exact) is persisted with the code and copied onto every token derived

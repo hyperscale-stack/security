@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -250,39 +249,4 @@ func TestRefreshAtAnotherIssuerIsRefused(t *testing.T) {
 
 	rec = tokenAt(srv, "a.example", form)
 	assert.Equal(t, http.StatusOK, rec.Code, "the refused refresh consumed nothing")
-}
-
-// TestCallbacksCannotAlterValidatedRequest: a ConsentFunc rewriting the
-// request it is handed changes neither the redirect nor the code — the
-// server keeps the request it validated.
-func TestCallbacksCannotAlterValidatedRequest(t *testing.T) {
-	t.Parallel()
-
-	srv, store := newRealmServer(t, hostIssuer{})
-
-	rec := authorizeAt(srv, "a.example", authorizeQuery(),
-		func(_ http.ResponseWriter, _ *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
-			ar.RedirectURI = "https://evil.example/cb"
-			ar.State = "forged"
-			ar.Scope = "read write"
-			ar.CodeChallenge, ar.CodeChallengeMethod = "", ""
-			ar.Issuer = "https://evil.example"
-			ar.Client = &oauth2.DefaultClient{IDValue: "evil"}
-
-			return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
-		})
-	require.Equal(t, http.StatusFound, rec.Code)
-
-	loc := mustLocation(t, rec)
-	assert.True(t, strings.HasPrefix(loc.String(), redirectURI+"?"), loc.String())
-	assert.Equal(t, "xyz-state", loc.Query().Get("state"))
-
-	record, err := store.ConsumeAuthorizationCode(t.Context(), oauth2.HashToken(nil, loc.Query().Get("code")))
-	require.NoError(t, err)
-	assert.Equal(t, testClientID, record.ClientID)
-	assert.Equal(t, "read", record.Scope)
-	assert.Equal(t, pkceChallenge, record.CodeChallenge)
-	assert.Equal(t, "S256", record.CodeChallengeMethod)
-	assert.Equal(t, "https://a.example", record.Issuer)
-	assert.Equal(t, redirectURI, record.RedirectURI)
 }

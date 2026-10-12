@@ -447,6 +447,7 @@ answer a protocol refusal such as OpenID Connect's `login_required`.
 | `response_mode` absent or empty, `query` (code flow), `fragment` (enabled implicit flow) | served | unchanged |
 | any other `response_mode` — `fragment` for the code flow, `query` for the implicit one, `form_post`, a case variant, an unknown value | ignored, answered in the default mode | bare `400` (`text/plain`, never redirected), reported to `OnError` as `invalid_request`, before any other check that would redirect |
 | approval with an empty `Subject`, or one longer than 255 bytes | code or token issued | redirected `server_error`, nothing issued |
+| `ConsentFunc` or extension hook modifying the `*AuthorizeRequest` it is handed (scope, redirect URI, state, PKCE, nonce, issuer, client identity) | the server read the rewritten request back: rewriting `ar.Scope` narrowed — or broadened — the grant | redirected `server_error` (`ErrAuthorizeRequestModified` at `OnError`), nothing issued; the request is read-only |
 | denial carrying `Consent.Refusal` | — (field new) | `Refusal` redirected instead of `access_denied`; only the RFC 6749 §4.1.2.1 and OIDC Core §3.1.2.6 authorization-endpoint codes travel, any other answers `server_error` |
 | approval carrying a `Refusal` | — | `server_error` (contradiction, fail closed) |
 | `ConsentFunc` returning `(nil, err)` | `server_error` | unchanged, whatever `err` — an `*oauth2.Error` included; the cause now reaches `OnError` |
@@ -457,7 +458,10 @@ To migrate:
 1. Clients sending `response_mode` send nothing, or the default mode of
    their response type; `form_post` is not supported.
 2. `ConsentFunc`s name the resource owner in `Consent.Subject` — at most 255
-   bytes (OIDC Core §2) — on every approval.
+   bytes (OIDC Core §2) — on every approval, and treat the
+   `*AuthorizeRequest` they are handed as read-only: narrow the grant with
+   `Consent.Scope`, never by rewriting `ar.Scope` — the authorization would
+   now fail with `server_error`.
 3. A `ConsentFunc` refusing with a protocol code returns
    `&oauth2.Consent{Refusal: oauth2.ErrLoginRequired}` (or
    `ErrConsentRequired`, `ErrInteractionRequired`, … `access_denied` stays

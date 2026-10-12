@@ -63,9 +63,12 @@ type OpaqueTokenGenerator interface {
 // AuthorizeRequest is the parsed and validated /authorize request handed to
 // a [ConsentFunc]. By the time the ConsentFunc sees it, the client, the
 // redirect URI, the response type, the scope and the PKCE parameters are
-// verified and the issuer is resolved. It is a copy: the handler keeps the
-// request it validated, so changing it changes neither the redirect nor
-// what is granted.
+// verified and the issuer is resolved. It is a read-only copy of the
+// request the handler validated: a callback changing any field but
+// ExtensionRequest, or the identity of the Client it shares with the server,
+// fails the authorization with server_error ([ErrAuthorizeRequestModified]).
+// A consent narrows the grant through [Consent.Scope]. The values Client and
+// ExtensionRequest point to are shared: never mutate them.
 type AuthorizeRequest struct {
 	// Client is the resolved, registered client.
 	Client Client
@@ -86,7 +89,8 @@ type AuthorizeRequest struct {
 	// challenge is well-formed for it (RFC 7636 §4.2).
 	CodeChallenge       string
 	CodeChallengeMethod string
-	// Nonce echoes the OIDC nonce parameter, when present.
+	// Nonce echoes the OIDC nonce parameter, when present. The core does not
+	// bound it: an extension relying on it MUST bound it (see LIMITATIONS).
 	Nonce string
 	// Issuer is the issuer the IssuerResolver returned for the request: the
 	// realm the authorization code — or implicit access token — is bound
@@ -152,6 +156,10 @@ type Consent struct {
 //     client with a server_error, whatever err — an [*Error] included,
 //     since a refusal is a decision, returned as [Consent.Refusal] — and
 //     hands err to the [ErrorHook].
+//
+// ar is read-only: a decision returned after changing it is answered with
+// a server_error ([ErrAuthorizeRequestModified]); narrow the grant with
+// Consent.Scope instead.
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -287,6 +295,10 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 // the ones it validated.
 type authorizeState struct {
 	ar AuthorizeRequest
+	// clientID is the identifier of the validated client, read once: the
+	// code and the implicit token are bound to it, and a callback changing
+	// the identity of the client it shares with the server is detected.
+	clientID string
 	// audience is the audience the IssuerResolver returned with ar.Issuer;
 	// the implicit flow stamps it on its access token.
 	audience string
@@ -300,6 +312,30 @@ func (st *authorizeState) request() *AuthorizeRequest {
 	ar := st.ar
 
 	return &ar
+}
+
+// modified reports whether a callback changed the copy cp it was handed —
+// any field but ExtensionRequest, the extension's own — or the identity of
+// the client the copy shares with the validated request.
+func (st *authorizeState) modified(cp *AuthorizeRequest) bool {
+	if cp.Client == nil || cp.Client.ID() != st.clientID || st.ar.Client.ID() != st.clientID {
+		return true
+	}
+
+	return cp.ResponseType != st.ar.ResponseType ||
+		cp.RedirectURI != st.ar.RedirectURI ||
+		cp.Scope != st.ar.Scope ||
+		cp.State != st.ar.State ||
+		cp.CodeChallenge != st.ar.CodeChallenge ||
+		cp.CodeChallengeMethod != st.ar.CodeChallengeMethod ||
+		cp.Nonce != st.ar.Nonce ||
+		cp.Issuer != st.ar.Issuer
+}
+
+// refuseModified answers a request a callback modified: server_error, the
+// callback's own error, if any, joined to the cause.
+func (s *Server) refuseModified(w http.ResponseWriter, r *http.Request, st *authorizeState, err error) {
+	s.refuseAuthorize(w, r, st, ErrServerError.WithCause(errors.Join(ErrAuthorizeRequestModified, err)))
 }
 
 // validateAuthorize validates the request behind a trusted redirect URI:
@@ -340,13 +376,21 @@ func (s *Server) validateAuthorize(
 	}
 
 	ar.Issuer = issuer
-	st := &authorizeState{ar: *ar, audience: audience, fragment: fragment}
+	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: fragment}
 
 	if s.cfg.Extension == nil {
 		return st, true
 	}
 
-	view, err := s.cfg.Extension.ValidateAuthorizeRequest(r.Context(), r, st.request())
+	cp := st.request()
+
+	view, err := s.cfg.Extension.ValidateAuthorizeRequest(r.Context(), r, cp)
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, err)
+
+		return nil, false
+	}
+
 	if err != nil {
 		s.extensionFailed(w, r, st, err)
 
@@ -382,7 +426,9 @@ func (s *Server) extensionFailed(w http.ResponseWriter, r *http.Request, st *aut
 // authorize runs the ConsentFunc on a validated request and issues what
 // the resource owner granted.
 func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.ResponseWriter, r *http.Request, st *authorizeState) {
-	decision, err := consent(w, r, st.request())
+	cp := st.request()
+
+	decision, err := consent(w, r, cp)
 	if err != nil {
 		s.refuseAuthorize(w, r, st, ErrServerError.WithDescription("consent handler failed").WithCause(err))
 
@@ -391,6 +437,12 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 
 	if decision == nil {
 		// The ConsentFunc rendered its own response (login / consent page).
+		return
+	}
+
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, nil)
+
 		return
 	}
 
@@ -477,8 +529,15 @@ func (s *Server) completeAuthorization(
 ) bool {
 	consent := *decision
 	consent.Scope = grant.scope
+	cp := st.request()
 
-	g, err := s.cfg.Extension.CompleteAuthorization(r.Context(), st.request(), consent, grant.now)
+	g, err := s.cfg.Extension.CompleteAuthorization(r.Context(), cp, consent, grant.now)
+	if st.modified(cp) {
+		s.refuseModified(w, r, st, err)
+
+		return false
+	}
+
 	if err != nil {
 		s.extensionFailed(w, r, st, err)
 
@@ -630,7 +689,7 @@ func (s *Server) issueAuthorizationCode(
 	code := &AuthorizationCode{
 		Code:                raw,
 		CodeHash:            HashToken(nil, raw),
-		ClientID:            st.ar.Client.ID(),
+		ClientID:            st.clientID,
 		Subject:             grant.subject,
 		RedirectURI:         st.ar.RedirectURI,
 		Scope:               grant.scope,
@@ -677,7 +736,7 @@ func (s *Server) issueImplicitToken(
 	at := &AccessToken{
 		Token:         raw,
 		TokenHash:     hash,
-		ClientID:      st.ar.Client.ID(),
+		ClientID:      st.clientID,
 		Subject:       grant.subject,
 		Scope:         grant.scope,
 		Audience:      st.audience,

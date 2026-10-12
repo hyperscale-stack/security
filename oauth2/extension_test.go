@@ -159,10 +159,10 @@ func TestExtensionRunsAfterTheCoreValidation(t *testing.T) {
 
 // TestExtensionHooksReceiveTheValidatedRequest: ValidateAuthorizeRequest
 // gets the validated request, issuer resolved; its result reaches the
-// ConsentFunc; CompleteAuthorization gets a pristine copy of the request —
-// whatever the ConsentFunc did to its own — the consent with the granted
-// scope, its trusted result, and the server clock. The code records the
-// pristine request.
+// ConsentFunc; CompleteAuthorization gets a fresh copy of the request —
+// the extension's view included, whatever the ConsentFunc did to that field
+// of its own copy — the consent with the granted scope, its trusted result,
+// and the server clock. The code records the validated request.
 func TestExtensionHooksReceiveTheValidatedRequest(t *testing.T) {
 	t.Parallel()
 
@@ -183,7 +183,7 @@ func TestExtensionHooksReceiveTheValidatedRequest(t *testing.T) {
 
 	code := env.code(t, q, func(_ http.ResponseWriter, _ *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
 		consentView = ar.ExtensionRequest
-		ar.Scope, ar.RedirectURI, ar.State, ar.ExtensionRequest = "openid", "https://evil.example/cb", "forged", nil
+		ar.ExtensionRequest = nil // the extension's field: replacing it in the copy is harmless
 
 		return &oauth2.Consent{Approved: true, Subject: "alice", Scope: "openid read", ExtensionResult: result}, nil
 	})

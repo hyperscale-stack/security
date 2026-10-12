@@ -36,6 +36,17 @@ const (
 // ConsentFunc writes its own response instead.
 var ErrUnredirectableRequest = errors.New("oauth2: authorization request refused without redirect")
 
+// ErrAuthorizeRequestModified is the cause of the server_error answering an
+// /authorize request whose [AuthorizeRequest] a callback modified — a
+// [ConsentFunc] or an [Extension] hook, changing any field of its copy but
+// ExtensionRequest, or the identity of the client it shares with the
+// server. The request is read-only: a consent narrows the grant through
+// Consent.Scope, an extension through ExtensionGrant.Scope. Failing closed
+// keeps a callback that relied on rewriting the request from silently
+// granting what it meant to refuse. Match it with errors.Is in the
+// [ErrorHook]; it never reaches the client.
+var ErrAuthorizeRequestModified = errors.New("oauth2: a callback modified the authorization request it was handed")
+
 // Extension is an optional protocol extension of the authorization-code
 // flow, registered on [ServerConfig.Extension] — an OpenID Connect
 // provider is the reference use: it validates its own authorization
@@ -80,8 +91,9 @@ type Extension interface {
 	// (ar.Issuer). It runs on every /authorize call, before the
 	// ConsentFunc, which gets its result as AuthorizeRequest.ExtensionRequest
 	// (nil: nothing to add, e.g. a request outside the extension's
-	// protocol). ar is a copy. r.Form holds every parameter, duplicates
-	// included.
+	// protocol). ar is a read-only copy: changing it fails the request with
+	// server_error ([ErrAuthorizeRequestModified]). r.Form holds every
+	// parameter, duplicates included, and the nonce unbounded: bound it.
 	ValidateAuthorizeRequest(ctx context.Context, r *http.Request, ar *AuthorizeRequest) (any, error)
 
 	// CompleteAuthorization decides what an approved authorization records.
@@ -92,10 +104,12 @@ type Extension interface {
 	// refused — and returns the [ExtensionGrant] the code, or the implicit
 	// access token, records. consent.Scope is the granted scope, the
 	// consent's narrowing applied; now is the server clock reading the code
-	// is stamped with. ar and consent are copies; the values they carry
-	// (ExtensionRequest, ExtensionResult) are shared and MUST NOT be
-	// mutated. It MUST NOT have externally visible side effects: the
-	// authorization can still fail after it returns.
+	// is stamped with. ar is a read-only copy — changing it fails the
+	// request with server_error ([ErrAuthorizeRequestModified]) — and
+	// consent a copy; the values they carry (Client, ExtensionRequest,
+	// ExtensionResult) are shared and MUST NOT be mutated. It MUST NOT have
+	// externally visible side effects: the authorization can still fail
+	// after it returns.
 	CompleteAuthorization(ctx context.Context, ar *AuthorizeRequest, consent Consent, now time.Time) (ExtensionGrant, error)
 
 	// ExtendTokenResponse adds members to the response of an
@@ -141,6 +155,8 @@ type TokenIssuance struct {
 	Access AccessToken
 	// Nonce is the nonce the authorization code recorded: set at the code
 	// exchange only, always empty on a refresh (OpenID Connect Core §12.2).
+	// The core does not bound it: an extension bounds it when it validates
+	// the authorization request.
 	Nonce string
 }
 
