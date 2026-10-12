@@ -49,9 +49,14 @@ the `saml/sp` module.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
-in-tree `password`) were removed during the rewrite. The core module now
-depends only on stdlib + `go.opentelemetry.io/otel` (+ `testify` for its
-own tests).
+in-tree `password`) were removed during the rewrite. The core module's
+non-test imports are now stdlib + `go.opentelemetry.io/otel`; its tests also
+use `testify` and `otel/sdk`.
+
+`tools/golangci-lint`, `tools/govulncheck` and `tools/mockery` are not
+library modules: each pins one development tool, outside `go.work`, so the
+tools' dependencies never reach a library `go.mod` or a consumer's module
+graph. They are never released.
 
 ## Dependency policy
 
@@ -110,9 +115,12 @@ and `golang.org/x/oauth2` are not dependencies of any production module
 (see the package documentation of `oidc/client` for the evaluation).
 
 The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
-SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly
-stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify` scoped to its own
-tests). The policy is enforced by review. `oauth2` never imports OIDC or JOSE:
+SQL drivers, HTTP routers, or concrete loggers. Its non-test imports are
+exactly stdlib + `go.opentelemetry.io/otel`; its tests also use
+`stretchr/testify` (with `stretchr/objx` behind the generated testify mocks)
+and `otel/sdk`. No development tool is a dependency of any library module:
+the tools live in their own modules under `tools/`. The policy is enforced by
+review. `oauth2` never imports OIDC or JOSE:
 `oidc/provider` plugs into its extension points, and imports no relying-party
 library, store driver or template engine (`TestDependencyPolicy`). go-oidc
 and x/oauth2 are confined to the test-only `internal/interop/oidcop` module,
@@ -132,14 +140,19 @@ and Chrome; it adds no Go dependency.
 ```sh
 make sync         # go work sync
 make build        # build all modules
-make test         # race + coverage, aggregated into build/coverage.out
-make lint         # golangci-lint on every module with the shared config
-make tidy         # go mod tidy on every module + go work sync
+make generate     # mockery mocks: in-package mock_*_test.go files, never committed
+make test         # generate, then race + coverage, aggregated into build/coverage.out
+make lint         # golangci-lint (tools/golangci-lint) on every module with the shared config
+make vuln         # govulncheck -test on every module, outside the workspace
+make tidy         # go work sync + go mod tidy on every module and tool + go work sync
 make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 ```
 
-The `Makefile` discovers modules dynamically via `find . -name go.mod`, so a
-new sub-module is picked up automatically as soon as its `go.mod` lands.
+The `Makefile` discovers modules dynamically via `find . -name go.mod`
+(except the tool modules under `tools/`), so a new sub-module is picked up
+automatically as soon as its `go.mod` lands. The tools (golangci-lint,
+govulncheck, mockery) are built from their pinned modules into `build/bin`
+on first use; mocks are generated before anything that compiles tests.
 Example program lines are excluded from the aggregated coverage profile
 (their `main()` is not unit-testable); the examples are still built, tested,
 and linted.

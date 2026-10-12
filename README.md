@@ -106,8 +106,10 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 ```sh
 make sync     # go work sync
 make build    # build every module
+make generate # mockery mocks for the tests (never committed; test/lint/vuln run it first)
 make test     # race + coverage
-make lint     # golangci-lint with the shared config
+make lint     # golangci-lint with the shared config (pinned in tools/golangci-lint)
+make vuln     # govulncheck on every module
 make e2e      # opt-in browser suites (Tales and Chrome: docs/saml-sp.md, e2e/oidc/run.sh)
 make conformance # opt-in: the OpenID Foundation conformance suite, locally (docs/oidc-conformance.md)
 ```

@@ -327,14 +327,6 @@ PKCE. Not supported, and refused where a provider could select them:
   holding them) the raw code and tokens they carry during issuance: never
   log them.
 
-## Tooling
-
-- `.mockery.yaml` targets mockery v3 syntax while the tool pinned in the
-  module is still v2. `make generate` therefore fails until the config and
-  the tool pin are reconciled; CI skips `make generate`. No module relies on
-  generated mocks — every test uses hand-written fakes — so this is not on
-  the critical path.
-
 ## Not planned
 
 - **`HTTPDigestFilter` (RFC 7616)** — Digest auth is effectively dead; it

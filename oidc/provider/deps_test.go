@@ -21,8 +21,9 @@ const repo = "github.com/hyperscale-stack/security"
 // TestDependencyPolicy pins the allowed dependencies of the package
 // (doc.go): the standard library without its template engines, the core,
 // oauth2 without its stores, and jwt — go-jose stays behind jwt, and no
-// relying-party module or store driver comes in. Tests may add testify and
-// the oauth2 building blocks of a server.
+// relying-party module or store driver comes in. Tests may add testify
+// (testify/mock for the mocks `make generate` writes) and the oauth2
+// building blocks of a server.
 func TestDependencyPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +66,8 @@ func productionImport(path string) bool {
 func testImport(path string) bool {
 	switch path {
 	case repo + "/oidc/provider", repo + "/oauth2/storage/memory", repo + "/oauth2/grant", repo + "/oauth2/token",
-		repo + "/oauth2/clientauth", "github.com/stretchr/testify/assert", "github.com/stretchr/testify/require":
+		repo + "/oauth2/clientauth", "github.com/stretchr/testify/assert", "github.com/stretchr/testify/require",
+		"github.com/stretchr/testify/mock":
 		return true
 	default:
 		return productionImport(path)

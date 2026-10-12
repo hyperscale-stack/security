@@ -514,6 +514,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
   without the client secret and the keys, whatever the `fmt` verb. The example
   reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
+- **Development tools in their own modules**: golangci-lint (v2.14.0, Go
+  1.27 support), govulncheck (v1.9.0) and mockery (v3.8.1) are pinned in one
+  module each under `tools/`, outside `go.work`. The core module no longer
+  declares the mockery `tool` directive: a consumer importing only the core
+  now resolves 22 modules instead of 50 (no mockery, cobra, viper, zerolog or
+  `x/tools`). `make lint` builds golangci-lint from its pinned module instead
+  of piping an unpinned install script (`curl …/HEAD/install.sh | sh`).
+- **Mocks are generated, never committed**: `make generate` (mockery v3,
+  testify template) writes in-package `mock_<interface>_test.go` files, which
+  exist only in test binaries; `make test`/`lint`/`vuln`/`tidy` and CI run it
+  first. New tests use them for interface doubles. A module that gets mocks
+  keeps a `mockery_test.go` importing `testify/mock`, so its `go.mod` is the
+  same with or without them (`github.com/stretchr/objx` becomes an indirect
+  requirement).
 
 ### Fixed
 
@@ -585,6 +599,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   escape is a malformed header); credentials made of unreserved characters
   are unaffected. The empty-credential guard applies to the decoded values.
   See [MIGRATION.md](MIGRATION.md).
+- `make generate` works again: `.mockery.yaml` used mockery v3 syntax while
+  the pinned tool was v2, and mockery needs a Go 1.27-aware `x/tools` to load
+  the packages (v3.8.1).
 
 ### Removed
 
