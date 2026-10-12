@@ -25,7 +25,9 @@
 // ID http://localhost:8084/saml/corp, ACS http://localhost:8084/saml/corp/acs)
 // and open http://localhost:8084. Plain http is accepted on loopback hosts
 // only, which browsers treat as secure: they keep the Secure, __Host-
-// prefixed cookies there.
+// prefixed cookies there. The server listens on 127.0.0.1:8084 (SAMLSP_ADDR
+// changes it) with read, write and idle timeouts, and refuses logins
+// started from another site (Sec-Fetch-Site).
 package main
 
 import (
@@ -223,8 +225,23 @@ func accountKey(id *samlsp.Identity) string {
 	return b.String()
 }
 
-// login starts an SP-initiated login with the configured connection.
+// login starts an SP-initiated login with the configured connection. A page
+// of another site must not be able to start one in the user's browser
+// (forced login initiation, a form of login CSRF): browsers send
+// Sec-Fetch-Site with every navigation, and only same-origin navigations
+// and the user's own (a typed URL or a bookmark: "none") are accepted.
+// Requests without it (older browsers, scripts) are accepted; an
+// application needing more serves the entry point behind a CSRF-protected
+// POST.
 func (a *app) login(w http.ResponseWriter, r *http.Request) {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		http.Error(w, "sign-in must start from this site", http.StatusForbidden)
+
+		return
+	}
+
 	target, err := a.sp.BeginLogin(r.Context(), w, r, a.connID, samlsp.LoginOptions{
 		AppState: safeReturn(r.URL.Query().Get("return")),
 	})
@@ -351,6 +368,29 @@ func main() {
 		log.Fatalf("saml-sp: %v", err)
 	}
 
-	log.Print("saml-sp: listening on :8084")
-	log.Fatal(http.ListenAndServe(":8084", handler)) //nolint:gosec // demo server, no timeouts needed
+	addr := os.Getenv("SAMLSP_ADDR")
+	if addr == "" {
+		addr = defaultAddr
+	}
+
+	log.Print("saml-sp: listening")
+	log.Fatal(newHTTPServer(addr, handler).ListenAndServe())
+}
+
+// defaultAddr is the listening address: the loopback interface. Set
+// SAMLSP_ADDR to listen elsewhere, behind a TLS-terminating proxy.
+const defaultAddr = "127.0.0.1:8084"
+
+// newHTTPServer bounds the time a client may take at every stage, so that
+// slow clients cannot hold connections open.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 }

@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -426,6 +428,59 @@ func TestSAMLSPExampleSessionEndsWithTheIdPSession(t *testing.T) {
 
 	_, body = h.get(h.client, "/")
 	assert.Contains(t, body, `href="/login"`)
+}
+
+func TestSAMLSPExampleRefusesCrossSiteLoginInitiation(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	// A page of another site must not start a login in the user's browser
+	// (forced login initiation): navigations carry Sec-Fetch-Site.
+	for site, want := range map[string]int{
+		"cross-site":  http.StatusForbidden,
+		"same-site":   http.StatusForbidden,
+		"same-origin": http.StatusFound,
+		"none":        http.StatusFound, // typed URL, bookmark
+		"":            http.StatusFound, // no Fetch Metadata (older browser)
+	} {
+		req, err := http.NewRequest(http.MethodGet, h.base+"/login", nil)
+		require.NoError(t, err)
+
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+
+		resp, err := h.newBrowser().Do(req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+
+		assert.Equal(t, want, resp.StatusCode, "Sec-Fetch-Site %q", site)
+
+		if want == http.StatusForbidden {
+			assert.Empty(t, resp.Cookies(), "no transaction, no binding cookie")
+		}
+	}
+}
+
+func TestNewHTTPServer(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer(defaultAddr, http.NotFoundHandler())
+
+	// Slow clients cannot hold connections open.
+	assert.Positive(t, srv.ReadHeaderTimeout)
+	assert.Positive(t, srv.ReadTimeout)
+	assert.Positive(t, srv.WriteTimeout)
+	assert.Positive(t, srv.IdleTimeout)
+
+	// The demo listens on the loopback interface unless told otherwise.
+	host, _, err := net.SplitHostPort(defaultAddr)
+	require.NoError(t, err)
+
+	addr, err := netip.ParseAddr(host)
+	require.NoError(t, err)
+	assert.True(t, addr.IsLoopback())
 }
 
 func TestSafeReturn(t *testing.T) {
