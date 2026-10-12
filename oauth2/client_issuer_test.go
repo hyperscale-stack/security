@@ -272,6 +272,32 @@ func TestClientBindingSurvivesCustomAuthenticators(t *testing.T) {
 	assert.True(t, sink.matches(oauth2.ErrClientNotAtIssuer))
 }
 
+// TestClientAuthenticatorFailureIsAServerError: an authenticator failing
+// with an error that is no protocol error answers server_error.
+func TestClientAuthenticatorFailureIsAServerError(t *testing.T) {
+	t.Parallel()
+
+	sink := &errorSink{}
+	srv := newTenantServer(t, sink, failingAuthenticator{})
+
+	rec := basicAt(srv.TokenHandler(), realmA, "/oauth2/token", boundClientID, boundSecret,
+		url.Values{"grant_type": {"client_credentials"}})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, oauth2.CodeServerError, decodeError(t, rec))
+	assert.Equal(t, []string{oauth2.CodeServerError}, sink.codes())
+}
+
+// failingAuthenticator fails every authentication with a backend error.
+type failingAuthenticator struct{}
+
+func (failingAuthenticator) Method() string { return "client_secret_basic" }
+
+func (failingAuthenticator) Match(*http.Request) bool { return true }
+
+func (failingAuthenticator) Authenticate(context.Context, *http.Request, oauth2.ClientStore) (oauth2.Client, error) {
+	return nil, errors.New("client directory down")
+}
+
 // fixedAuthenticator authenticates every request as client, without the
 // store.
 type fixedAuthenticator struct{ client oauth2.Client }
