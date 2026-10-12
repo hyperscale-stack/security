@@ -72,6 +72,18 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   counts as absent (RFC 6749 §3.1). The refusal burns the code but revokes
   nothing: a replay of a code redeemed without PKCE still revokes its
   tokens, whatever `code_verifier` it carries.
+- **Scope values** — every scope a client or a callback sends (the `scope`
+  of `/authorize` and `/token`, `Consent.Scope`, `ExtensionGrant.Scope`) is
+  parsed strictly as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`
+  (NQCHAR), separated by SP; runs of SP and leading or trailing SPs are
+  tolerated, any other whitespace is not — at most 100 tokens (repetitions
+  included) and 4096 bytes. Anything else is `invalid_scope` (`server_error`
+  for an extension), refused before the value is compared with anything.
+  Comparisons are set lookups, so the work a request causes stays linear in
+  its bounded size, and the server issues and stores scopes canonical:
+  single-SP joined, duplicates dropped. A registered scope outside that
+  syntax can never be requested; a scope the server stored itself is never
+  refused for its syntax.
 - **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
   and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
   every refresh exchange consumes the presented token and issues a new one

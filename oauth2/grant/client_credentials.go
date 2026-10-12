@@ -6,10 +6,9 @@ package grant
 
 import (
 	"context"
-	"slices"
-	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
@@ -79,27 +78,46 @@ func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response,
 	}, nil
 }
 
-// narrowScopes filters requested against the client's allowed scopes. When
-// the client has no allowed list, requested is accepted as-is. When
-// requested is empty and the client has at least one scope, the first one
-// is returned as the default — matches the common UX of "no scope ->
-// default scope".
+// The descriptions of the scope refusals of the /token grants: fixed texts
+// that never echo the request.
+const (
+	scopeMalformed  = "the requested scope is malformed or too large"
+	scopeNotAllowed = "a requested scope is not allowed for this client"
+)
+
+// parseRequestedScope parses the scope value a /token request carries:
+// RFC 6749 §3.3 syntax, at most 100 tokens and 4096 bytes (see
+// oauth2/internal/scopes), else invalid_scope (§5.2 "malformed") with the
+// scopes sentinel as cause.
+func parseRequestedScope(requested string) ([]string, error) {
+	tokens, err := scopes.Parse(requested)
+	if err != nil {
+		return nil, oauth2.ErrInvalidScope.WithDescription(scopeMalformed).WithCause(err)
+	}
+
+	return tokens, nil
+}
+
+// narrowScopes checks a requested scope value against the client's allowed
+// scopes and returns it canonical: single-SP joined, duplicates dropped.
+// When the client has no allowed list, any well-formed scope is accepted.
+// When requested holds no scope and the client has at least one, the first
+// one is returned as the default — the common UX of "no scope -> default
+// scope" (RFC 6749 §3.3 lets the server use a pre-defined default).
 func narrowScopes(requested string, allowed []string) (string, error) {
-	requestedFields := strings.Fields(requested)
-
-	if len(allowed) == 0 {
-		return requested, nil
+	tokens, err := parseRequestedScope(requested)
+	if err != nil {
+		return "", err
 	}
 
-	if len(requestedFields) == 0 {
+	switch {
+	case len(allowed) == 0:
+		return scopes.Join(tokens), nil
+	case len(tokens) == 0:
 		return allowed[0], nil
+	case !scopes.NewSet(allowed).Admits(tokens):
+		return "", oauth2.ErrInvalidScope.WithDescription(scopeNotAllowed)
+	default:
+		return scopes.Join(tokens), nil
 	}
-
-	for _, s := range requestedFields {
-		if !slices.Contains(allowed, s) {
-			return "", oauth2.ErrInvalidScope.WithDescription("scope " + s + " not allowed for client")
-		}
-	}
-
-	return strings.Join(requestedFields, " "), nil
 }

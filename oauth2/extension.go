@@ -8,10 +8,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 )
 
 // MaxExtensionDataLength is the longest ExtensionGrant.Data, in bytes, an
@@ -127,9 +128,11 @@ type Extension interface {
 type ExtensionGrant struct {
 	// Scope, when it holds a scope token, narrows the granted scope — e.g.
 	// dropping an offline_access the extension must ignore (OpenID Connect
-	// Core §11). It is read as its whitespace-separated tokens, duplicates
-	// dropped, and each MUST be granted already: a broader one fails the
-	// request with server_error. A blank Scope keeps the consented one.
+	// Core §11). It is parsed like a request's scope — SP-separated RFC 6749
+	// §3.3 tokens, at most 100 and 4096 bytes, duplicates dropped — and each
+	// token MUST be granted already: a malformed or broader one fails the
+	// request with server_error. A blank Scope — empty or SPs only — keeps
+	// the consented one.
 	Scope string
 	// Data is the opaque, extension-defined grant context recorded as
 	// ExtensionData on the code, or implicit access token, and on every
@@ -192,23 +195,18 @@ func applyExtensionGrant(granted string, g ExtensionGrant) (string, *Error) {
 		return "", ErrServerError.WithCause(errExtensionData)
 	}
 
-	fields := strings.Fields(g.Scope)
-	if len(fields) == 0 {
+	tokens, err := scopes.Parse(g.Scope)
+	if err != nil {
+		return "", ErrServerError.WithCause(errors.Join(errExtensionScope, err))
+	}
+
+	if len(tokens) == 0 {
 		return granted, nil
 	}
 
-	allowed := strings.Fields(granted)
-	narrowed := make([]string, 0, len(fields))
-
-	for _, scope := range fields {
-		if !slices.Contains(allowed, scope) {
-			return "", ErrServerError.WithCause(errExtensionScope)
-		}
-
-		if !slices.Contains(narrowed, scope) {
-			narrowed = append(narrowed, scope)
-		}
+	if !scopes.NewSet(strings.Fields(granted)).Admits(tokens) {
+		return "", ErrServerError.WithCause(errExtensionScope)
 	}
 
-	return strings.Join(narrowed, " "), nil
+	return scopes.Join(tokens), nil
 }

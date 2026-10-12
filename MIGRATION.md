@@ -968,3 +968,36 @@ To migrate:
 2. Login starts are unauthenticated: consider
    `memory.New(memory.WithCapacity(n))`, sized as LIMITATIONS.md explains,
    together with rate limiting.
+
+### `oauth2`: scope values are parsed strictly and bounded
+
+Comparing a requested scope with a client's registration, a consent's
+narrowing or an extension's narrowing cost a time proportional to the
+product of their sizes, and nothing bounded the request: tens of thousands
+of scope tokens in one URL took seconds of CPU per `/authorize` request.
+Scope values were also split on any Unicode whitespace and, for a client
+without `ScopeValues`, accepted with any character. Every scope value a
+client or a callback sends — the `scope` of `/authorize` and `/token`,
+`Consent.Scope`, `ExtensionGrant.Scope` — is now parsed once, strictly, as
+RFC 6749 §3.3 tokens, compared with set lookups, and issued canonical:
+
+| Scope value | Before | After |
+| ----------- | ------ | ----- |
+| tokens separated by SP (runs of SP, leading or trailing SPs included) | accepted | unchanged |
+| separated by TAB, LF or another Unicode space; holding `"`, `\`, a control or a non-ASCII character | split on any whitespace; any character accepted for a client without `ScopeValues` | `invalid_scope` (`ExtensionGrant.Scope`: `server_error`) |
+| more than 100 tokens (repetitions included) or 4096 bytes | accepted | `invalid_scope` |
+| repeated tokens | kept (`read read`) | dropped: the scope issued and stored is single-SP joined, duplicates dropped (`read`) — `AuthorizeRequest.Scope` included |
+| refresh narrowing | returned as sent (a TAB-separated value too) | canonical; a value holding no token keeps the original scope (RFC 6749 §6) |
+| `/token` `invalid_scope` description | `scope <token> not allowed for client` | a fixed text that never echoes the request |
+
+To migrate:
+
+1. Clients send scope tokens of printable ASCII without `"` or `\`,
+   separated by single spaces — at most 100 of them.
+2. Register scopes in that syntax: a registered scope holding a space or a
+   non-ASCII character can no longer be requested.
+3. A `ConsentFunc` narrowing with `Consent.Scope`, or an `Extension`
+   narrowing with `ExtensionGrant.Scope`, joins its tokens with a single
+   space.
+4. Nothing to do for stored codes and tokens: the server never refuses a
+   scope it stored itself.

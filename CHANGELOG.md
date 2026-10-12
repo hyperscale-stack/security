@@ -561,6 +561,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   keeps a `mockery_test.go` importing `testify/mock`, so its `go.mod` is the
   same with or without them (`github.com/stretchr/objx` becomes an indirect
   requirement).
+- **OAuth2 scope values are parsed strictly (breaking)**: the `scope` of
+  `/authorize` and `/token`, `Consent.Scope` and `ExtensionGrant.Scope` are
+  read as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`, separated by
+  SP — at most 100 tokens and 4096 bytes; anything else is `invalid_scope`
+  (`server_error` for an extension). Scopes are issued and stored canonical,
+  duplicates dropped, refresh narrowing included, and the `/token`
+  `invalid_scope` description no longer echoes the request. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -941,3 +949,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `unsupported_response_type` descriptions no longer quote or echo the
   request: the former put a double quote, outside the charset, in every
   `invalid_scope` redirect.
+- OAuth2 scope handling is linear and bounded: comparing a requested scope
+  with a client's registration, or a consent's or an extension's narrowing
+  with the request, took time proportional to the product of their sizes, and
+  no request bounded them — tens of thousands of unique scope tokens in one
+  `/authorize` URL cost seconds of CPU. Scope values are now parsed once,
+  refused beyond 100 tokens or 4096 bytes, and compared with set lookups.

@@ -7,8 +7,10 @@ package grant
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 )
 
 // RefreshToken implements the RFC 6749 §6 refresh_token grant with the
@@ -231,50 +233,26 @@ func (g *RefreshToken) revokeReusedFamily(ctx context.Context, familyID string) 
 	}
 }
 
-// narrowScopesForRefresh refuses broadening (RFC 6749 §6). An empty
-// requested scope inherits the original grant's scope.
+// narrowScopesForRefresh narrows the scope of a refresh (RFC 6749 §6): the
+// requested value is parsed strictly (§3.3) and every token MUST belong to
+// the original grant — a refresh never broadens it — and the narrowed scope
+// is returned canonical. A requested value holding no token is omitted: it
+// inherits the original scope. The original, a value the server stored, is
+// split leniently: a record written before scopes were canonical is never
+// refused for its own scope.
 func narrowScopesForRefresh(requested, original string) (string, error) {
-	if requested == "" {
+	tokens, err := parseRequestedScope(requested)
+	if err != nil {
+		return "", err
+	}
+
+	if len(tokens) == 0 {
 		return original, nil
 	}
 
-	originalSet := make(map[string]struct{}, 8)
-
-	for _, s := range splitScopes(original) {
-		originalSet[s] = struct{}{}
+	if !scopes.NewSet(strings.Fields(original)).Admits(tokens) {
+		return "", oauth2.ErrInvalidScope.WithDescription("refresh cannot broaden scope")
 	}
 
-	for _, s := range splitScopes(requested) {
-		if _, ok := originalSet[s]; !ok {
-			return "", oauth2.ErrInvalidScope.WithDescription("refresh cannot broaden scope")
-		}
-	}
-
-	return requested, nil
-}
-
-func splitScopes(s string) []string {
-	out := make([]string, 0, 4)
-	start := -1
-
-	for i, r := range s {
-		if r == ' ' || r == '\t' {
-			if start >= 0 {
-				out = append(out, s[start:i])
-				start = -1
-			}
-
-			continue
-		}
-
-		if start < 0 {
-			start = i
-		}
-	}
-
-	if start >= 0 {
-		out = append(out, s[start:])
-	}
-
-	return out
+	return scopes.Join(tokens), nil
 }

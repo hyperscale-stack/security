@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/hyperscale-stack/security/oauth2/pkce"
 )
 
@@ -78,7 +79,8 @@ type AuthorizeRequest struct {
 	// client registration).
 	RedirectURI string
 	// Scope is the requested scope, already checked against the client's
-	// allowed scopes.
+	// allowed scopes, in canonical form: its RFC 6749 §3.3 tokens joined by
+	// a single SP, duplicates dropped.
 	Scope string
 	// State is the opaque client state echoed back on the redirect.
 	State string
@@ -194,6 +196,13 @@ type AuthorizeConfig struct {
 // The library owns the protocol plumbing — request validation, code /
 // token minting, the redirect — while the application owns the login and
 // consent UI through the [ConsentFunc].
+//
+// The scope is parsed strictly (RFC 6749 §3.3): tokens of printable ASCII
+// but the double quote and the backslash, separated by SP — runs of SP are
+// tolerated, any other whitespace is not — at most 100 tokens, repetitions
+// included, and 4096 bytes; anything else is answered invalid_scope before
+// the value is compared with anything. The scope the request carries on is
+// canonical: single-SP joined, duplicates dropped.
 //
 // Errors that occur before the redirect URI is trusted (a client unknown
 // at the issuer, an unregistered redirect URI) are returned directly with a
@@ -548,7 +557,7 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 
 	granted, err := grantedScope(&st.ar, decision)
 	if err != nil {
-		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request"))
+		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request").WithCause(err))
 
 		return
 	}
@@ -699,9 +708,9 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 // parseAuthorizeRequest validates the scope and (for the code flow) the
 // PKCE parameters, returning the [AuthorizeRequest] or an [*Error].
 func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectURI string, flow authorizeFlow) (*AuthorizeRequest, *Error) {
-	scope, err := authorizeScope(r.FormValue("scope"), client.Scopes())
-	if err != nil {
-		return nil, ErrInvalidScope.WithDescription(err.Error())
+	scope, oerr := authorizeScope(r.FormValue("scope"), client.Scopes())
+	if oerr != nil {
+		return nil, oerr
 	}
 
 	challenge := r.FormValue("code_challenge")
@@ -859,13 +868,24 @@ func (s *Server) issueImplicitToken(
 }
 
 // grantedScope resolves the scope to grant: the consent value when it
-// narrows the request, the request scope otherwise. Broadening is refused.
+// narrows the request — parsed like a request's (RFC 6749 §3.3) and
+// returned canonical — the request scope otherwise. Broadening is refused.
 func grantedScope(ar *AuthorizeRequest, decision *Consent) (string, error) {
 	if decision.Scope == "" {
 		return ar.Scope, nil
 	}
 
-	return authorizeScope(decision.Scope, strings.Fields(ar.Scope))
+	tokens, err := scopes.Parse(decision.Scope)
+	if err != nil {
+		return "", err //nolint:wrapcheck // a scopes sentinel, the cause the ErrorHook gets
+	}
+
+	requested := strings.Fields(ar.Scope)
+	if len(requested) > 0 && !scopes.NewSet(requested).Admits(tokens) {
+		return "", errScopeNotAllowed
+	}
+
+	return scopes.Join(tokens), nil
 }
 
 // resolveRedirectURI returns the redirect URI to use: the requested one
@@ -890,27 +910,30 @@ func resolveRedirectURI(client Client, requested string) (string, bool) {
 	return "", false
 }
 
-// errScopeNotAllowed reports a requested scope outside the allowed set. Its
-// text is the error_description: it never echoes the request.
-var errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+// Why a requested scope is refused. Their text is the error_description: it
+// never echoes the request.
+var (
+	errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+	errScopeMalformed  = errors.New("the requested scope is malformed or too large")
+)
 
-// authorizeScope checks that every requested scope is in the allowed set
-// and returns the normalized (space-joined) scope. An empty allowed set
-// means the client carries no scope restriction.
-func authorizeScope(requested string, allowed []string) (string, error) {
-	fields := strings.Fields(requested)
-
-	if len(allowed) == 0 {
-		return strings.Join(fields, " "), nil
+// authorizeScope checks a requested scope value against the client's allowed
+// scopes and returns it canonical: single-SP joined, duplicates dropped. The
+// value is parsed strictly (RFC 6749 §3.3: SP-separated NQCHAR tokens), at
+// most 100 tokens and 4096 bytes — anything else is invalid_scope
+// ("malformed", §4.1.2.1), with the scopes sentinel as cause. An empty
+// allowed set means the client carries no scope restriction.
+func authorizeScope(requested string, allowed []string) (string, *Error) {
+	tokens, err := scopes.Parse(requested)
+	if err != nil {
+		return "", ErrInvalidScope.WithDescription(errScopeMalformed.Error()).WithCause(err)
 	}
 
-	for _, s := range fields {
-		if !slices.Contains(allowed, s) {
-			return "", errScopeNotAllowed
-		}
+	if len(allowed) > 0 && !scopes.NewSet(allowed).Admits(tokens) {
+		return "", ErrInvalidScope.WithDescription(errScopeNotAllowed.Error())
 	}
 
-	return strings.Join(fields, " "), nil
+	return scopes.Join(tokens), nil
 }
 
 // redirectAuthorizeError sends an RFC 6749 §4.1.2.1 / §4.2.2.1 error

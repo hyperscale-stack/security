@@ -24,6 +24,10 @@ import (
 //     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
 //     (error).
 //
+// The shipped grants parse a scope parameter like the authorization
+// endpoint does (RFC 6749 §3.3, at most 100 tokens and 4096 bytes:
+// invalid_scope otherwise) and issue it canonical.
+//
 // Errors are emitted as JSON: {"error":"...","error_description":"..."}.
 func (s *Server) TokenHandler() http.Handler {
 	return http.HandlerFunc(s.serveToken)
