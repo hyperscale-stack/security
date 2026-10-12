@@ -22,6 +22,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
 	op := newFakeOP(t)
+	// Checked once every parallel case has run (a parent assertion after
+	// the loop would run before them): every refusal comes before any
+	// network access — the transaction keys' included.
+	t.Cleanup(func() {
+		assert.Zero(t, op.hitCount("/.well-known/openid-configuration"), "a refused configuration never reaches the network")
+	})
 
 	cases := map[string]func(*oidcclient.Config){
 		"empty connection":              func(c *oidcclient.Config) { c.ConnectionID = "" },
@@ -95,8 +101,6 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 			assert.Nil(t, c)
 		})
 	}
-
-	assert.Zero(t, op.hitCount("/.well-known/openid-configuration"), "a refused configuration never reaches the network")
 }
 
 // TestNewAcceptsBoundaries checks the accepted edges of the configuration.

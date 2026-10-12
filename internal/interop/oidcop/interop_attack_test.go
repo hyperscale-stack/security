@@ -73,7 +73,7 @@ func TestInteropCodeReplay(t *testing.T) {
 	requireRetrieveError(t, err, "invalid_grant")
 
 	_, err = r.provider.UserInfo(r.ctx, xoauth2.StaticTokenSource(tok))
-	require.Error(t, err, "the access token of the first exchange is revoked")
+	require.ErrorContains(t, err, "401", "the access token of the first exchange is revoked")
 }
 
 // TestInteropRefreshReuse pins RFC 9700 §4.14.2 through x/oauth2's token
@@ -113,5 +113,5 @@ func TestInteropRefreshReuse(t *testing.T) {
 	requireRetrieveError(t, err, "invalid_grant")
 
 	_, err = r.provider.UserInfo(r.ctx, xoauth2.StaticTokenSource(rotated))
-	require.Error(t, err, "the family is revoked")
+	require.ErrorContains(t, err, "401", "the family is revoked")
 }

@@ -59,6 +59,9 @@ func TestResignedIDTokensAreRefused(t *testing.T) {
 
 	keyURL := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { keyURLHits.Add(1) }))
 	t.Cleanup(keyURL.Close)
+	// Checked once every parallel case has run: a parent assertion after
+	// the loop would run before them.
+	t.Cleanup(func() { assert.Zero(t, keyURLHits.Load(), "jku and x5u are never fetched") })
 
 	cases := []struct {
 		name   string
@@ -173,8 +176,6 @@ func TestResignedIDTokensAreRefused(t *testing.T) {
 			assert.Nil(t, id, "no token of a failed login is exposed")
 		})
 	}
-
-	assert.Zero(t, keyURLHits.Load(), "jku and x5u are never fetched")
 }
 
 // TestTokenResponseSubstitution replaces members of a genuine token

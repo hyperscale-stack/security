@@ -24,7 +24,6 @@ type attackerAS struct {
 	mu     sync.Mutex
 	divert func(q url.Values) string // the honest authorization URL to send the user agent to
 	codes  []string                  // codes the token endpoint received
-	issSup bool                      // advertise RFC 9207 iss support
 }
 
 func newAttackerAS(t *testing.T, divert func(q url.Values) string) *attackerAS {
@@ -34,19 +33,12 @@ func newAttackerAS(t *testing.T, divert func(q url.Values) string) *attackerAS {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		a.mu.Lock()
-		iss := a.issSup
-		a.mu.Unlock()
-
 		doc := map[string]any{
 			"issuer": a.srv.URL, "authorization_endpoint": a.srv.URL + "/authorize",
 			"token_endpoint": a.srv.URL + "/token", "jwks_uri": a.srv.URL + "/jwks",
 			"response_types_supported": []string{"code"}, "subject_types_supported": []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"code_challenge_methods_supported":      []string{"S256"},
-		}
-		if iss {
-			doc["authorization_response_iss_parameter_supported"] = true
 		}
 
 		w.Header().Set("Content-Type", "application/json")

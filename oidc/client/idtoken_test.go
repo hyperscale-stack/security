@@ -255,6 +255,9 @@ func TestIDTokenKeySelection(t *testing.T) {
 
 	evil := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { evilHits.Add(1) }))
 	t.Cleanup(evil.Close)
+	// Checked once every parallel case has run: a parent assertion after
+	// runIDCases would run before them.
+	t.Cleanup(func() { assert.Zero(t, evilHits.Load(), "jku and x5u are never fetched") })
 
 	signedBy := func(key signingKey, header map[string]any) func(op *fakeOP) {
 		return func(op *fakeOP) {
@@ -368,8 +371,6 @@ func TestIDTokenKeySelection(t *testing.T) {
 			op.jwksRaw = jwksWithMember(op.t, op.signer.jwk(), "key_ops", []string{"verify"})
 		}},
 	})
-
-	assert.Zero(t, evilHits.Load(), "jku and x5u are never fetched")
 }
 
 // jwksWithMember returns the JWK Set of key with an extra member.

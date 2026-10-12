@@ -102,7 +102,9 @@ func TestTransactionStoreDownAtTheCallback(t *testing.T) {
 // tokens, then the connection drops before the client reads them. The
 // client fails the login without retrying the code — a retry would be a
 // replay that revokes them (RFC 6749 §4.1.2) — and the tokens it never
-// received are never exposed; the user's next login succeeds.
+// received are never exposed. The transaction stays consumed: the same
+// callback delivered again (the user reloading the page) never reaches the
+// token endpoint. The user's next login succeeds.
 func TestTokenResponseLostAfterCommit(t *testing.T) {
 	t.Parallel()
 
@@ -112,12 +114,19 @@ func TestTokenResponseLostAfterCommit(t *testing.T) {
 
 	o.faults.set(token, rule{drop: true})
 
-	id, err := o.login(t, c, oidcclient.AuthOptions{})
+	ar, loc := o.begin(t, c, oidcclient.AuthOptions{})
+
+	id, err := c.Complete(t.Context(), callbackOf(loc, ar.Binding))
 	require.ErrorIs(t, err, oidcclient.ErrTokenEndpoint)
 	assert.Nil(t, id)
 	assert.Equal(t, 1, o.hits(token), "the code is redeemed once, never retried")
 
 	o.faults.clear(token)
+
+	id, err = c.Complete(t.Context(), callbackOf(loc, ar.Binding))
+	require.ErrorIs(t, err, oidcclient.ErrTransactionNotFound, "a consumed transaction is never restored")
+	assert.Nil(t, id)
+	assert.Equal(t, 1, o.hits(token), "the redelivered callback never reaches the token endpoint")
 
 	_, err = o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err)
@@ -165,7 +174,7 @@ func TestJWKSOutage(t *testing.T) {
 	o.clock.advance(11 * time.Second)
 
 	_, err = o.login(t, c, oidcclient.AuthOptions{})
-	require.ErrorIs(t, err, oidcclient.ErrInvalidIDToken)
+	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey)
 
 	o.faults.clear(jwks)
 	o.clock.advance(11 * time.Second)
