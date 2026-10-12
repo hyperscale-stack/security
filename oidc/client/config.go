@@ -181,9 +181,18 @@ type Config struct {
 
 	// Outbound is the network policy of every request to the provider
 	// (discovery, JWK Set, token, UserInfo). Its zero value is strict:
-	// https only and publicly routable destinations only; exempt an
-	// on-premises provider's subnet in AllowedPrefixes. Token and UserInfo
-	// requests never follow redirects, whatever MaxRedirects says.
+	// https only, publicly routable destinations only, no redirect; exempt
+	// an on-premises provider's subnet in AllowedPrefixes. Token and
+	// UserInfo requests never follow redirects, whatever MaxRedirects says.
+	// Discovery and JWK Set requests follow at most MaxRedirects redirects,
+	// and only within the origin — scheme, host and port — of the URL
+	// requested: the issuer's for discovery, the jwks_uri's for the keys,
+	// whose TLS identity OpenID Connect Discovery 1.0 §7.2 relies on. A
+	// hop to another origin fails like one beyond MaxRedirects, with
+	// outbound.ErrRedirectNotAllowed. The origin is trusted as a whole: a
+	// same-origin redirect to another path is followed. The default, which
+	// follows no redirect, retrieves the metadata at the well-known path
+	// itself (Discovery §4.1).
 	//
 	// The errors of New, Complete and UserInfo wrap the network errors of
 	// allowed destinations, which may name a resolved address and port

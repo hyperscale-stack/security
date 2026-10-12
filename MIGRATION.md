@@ -854,3 +854,30 @@ To migrate:
    `go.mod requires go >= 1.27.2`.
 3. Build and ship with the latest Go patch release: the `go` line is a
    floor, not the toolchain to release with.
+
+### `oidc/client`: discovery and JWK Set redirects stay on their origin
+
+With `Config.Outbound.MaxRedirects` above zero, the discovery request and
+the JWK Set requests followed redirects to any origin. A server at the end of
+such a redirect only had to write the configured issuer in its document to
+get its own endpoints and keys trusted — OpenID Connect Discovery 1.0 §7.2
+relies on TLS to the issuer — and a redirected `jwks_uri` made another
+origin's keys verify ID Tokens. Every hop must now stay on the origin —
+scheme, host and port — of the URL first requested:
+
+| Redirect, with `MaxRedirects > 0` | Before | After |
+| --- | --- | --- |
+| discovery, to another host, port or scheme (an http→https redirect on the same host with `AllowHTTP` included) | followed; the document used if its `issuer` matched | `New` fails with `ErrDiscovery` (`outbound.ErrRedirectNotAllowed`) |
+| JWK Set, to another origin than the `jwks_uri`'s — the issuer's included | followed; its keys verify ID Tokens | the fetch fails: logins fail with `ErrKeySet` (`outbound.ErrRedirectNotAllowed`) |
+| discovery or JWK Set, within the origin requested | followed | unchanged |
+| token, UserInfo | never followed | unchanged |
+| any, with `MaxRedirects: 0` (the default) | refused | unchanged |
+
+To migrate:
+
+1. Nothing with the default policy (`MaxRedirects: 0`).
+2. Configure as `Issuer` the issuer whose own server answers
+   `/.well-known/openid-configuration`: metadata redirected to another
+   server is no longer used.
+3. A provider whose `jwks_uri` redirects to another origin (a CDN, say) must
+   publish the final URL as its `jwks_uri`; there is no opt-out.

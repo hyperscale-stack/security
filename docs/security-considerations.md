@@ -859,7 +859,8 @@ are attacker-influenced.
   URI. The errors of `New` (discovery) may name the resolved address of an
   allowed destination: when tenants configure issuers, log them and show a
   generic message.
-- **Tokens** — token and UserInfo requests never follow redirects;
+- **Tokens** — token and UserInfo requests never follow redirects
+  (discovery and JWK Set requests only within the origin requested);
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
   their `sub` is the identity's. Every `fmt` verb and `slog` redact
@@ -920,7 +921,12 @@ network:
   host check in `CheckURL` sees the name actually dialed.
 - **Redirects** are not followed unless `MaxRedirects` allows it; every
   hop is re-checked, and https→http is always refused. Credential-bearing
-  requests (token, UserInfo) never follow redirects.
+  requests (token, UserInfo) never follow redirects. Requests whose answer
+  is trusted because of the origin it comes from — OpenID Connect
+  discovery and JWK Sets, SAML metadata — never follow a redirect to
+  another origin (scheme, host and port), whatever `MaxRedirects` allows:
+  after such a hop another server would only have to write the expected
+  issuer to get its keys trusted.
 - **Resources** are bounded: one timeout for the whole exchange (10 s by
   default), a size cap on every body (1 MiB by default) counted after
   transparent decompression — a gzip bomb fails — and a 64 KiB header cap.

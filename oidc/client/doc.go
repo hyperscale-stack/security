@@ -45,7 +45,10 @@
 //   - Every outbound request — discovery, JWK Set, token, UserInfo — goes
 //     through the outbound package: https, publicly routable destinations,
 //     bounded time and size. Token and UserInfo requests never follow
-//     redirects.
+//     redirects; discovery and JWK Set requests follow them only when
+//     Config.Outbound.MaxRedirects allows it, and never to another origin
+//     than the one requested, so metadata and keys come from the issuer's
+//     and the jwks_uri's origins only.
 //   - A login transaction is bound to the user agent that started it: Begin
 //     returns a binding secret the user agent keeps (an HttpOnly __Host-
 //     cookie with the net/http helpers) and the callback presents. The

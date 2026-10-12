@@ -676,6 +676,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   their secrets with the verbs their `String` method does not cover (`%d`,
   `%t`…). Every one now prints its redacted form with every verb
   (`fmt.Formatter`) and logs without secrets in `slog` (#86).
+- An `oidc/client` `Client` whose `Config.Outbound.MaxRedirects` allowed
+  redirects followed its discovery and JWK Set requests to any origin: a
+  server at the end of a redirect from the issuer's well-known URL only had
+  to write the configured issuer in its document to get its own endpoints
+  and keys trusted, and its ID Tokens accepted (OpenID Connect Discovery 1.0
+  §7.2 relies on TLS to the issuer), and a redirect of the `jwks_uri` made
+  another origin's keys verify ID Tokens. Every hop of these requests must
+  now stay on the origin — scheme, host and port — of the URL requested:
+  the issuer's for discovery, the `jwks_uri`'s for the keys; another hop
+  fails with `outbound.ErrRedirectNotAllowed`. Token and UserInfo requests
+  still never follow redirects, and the default policy follows none.
 - `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
   or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
   `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key

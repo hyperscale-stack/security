@@ -75,7 +75,7 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | ---------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | Discovery                    | Discovery §4               | Required; the metadata issuer must equal the configured one byte for byte; templated multi-tenant issuers refused; WebFinger and static metadata not supported | `TestDiscoveryURL`, `TestIssuerMismatch`, `TestRequiredMetadata`, `TestStrictMetadataJSON`, rp: `TestProviderMetadataCorpus` |
 | JWK Set                      | Core §10.1.1, RFC 7517     | Cached one hour; an unknown `kid` refetches at most every 10 s; stale keys serve at most 24 h while the endpoint fails; never refetched on a bad signature | `TestKeySetTTL`, `TestUnknownKidIsRateLimited`, `TestKeySetStaleOnFailure`, `TestNoRefetchOnBadSignature`, stack: `TestDocumentedRotationIsInvisibleToTheClient`, `TestKeyWithdrawalWindow` |
-| Outbound requests            | —                          | Through `outbound`: https, public destinations, bounded time and size, no redirects for token and UserInfo                                                  | `TestDiscoveryHTTP`, `TestUserInfoTransport`                                                          |
+| Outbound requests            | Discovery §4.1, §7.2       | Through `outbound`: https, public destinations, bounded time and size; no redirects for token and UserInfo; discovery and JWK Set redirects only with `MaxRedirects`, and never to another origin than the one requested | `TestDiscoveryHTTP`, `TestUserInfoTransport`, `TestDiscoveryRedirectStaysOnTheIssuerOrigin`, `TestKeySetRedirectStaysOnTheJWKSOrigin` |
 | Transaction stores           | —                          | `storage/memory`, `store/sql`, `store/redis`; atomic single consumption; integrity keyed by `Config.TransactionKeys`                                         | `TestMemoryStoreConformance`, `TestStoreWriterCannotForgeIntegrity`, `TestTransactionKeyRotation`, stack: `TestConcurrentCallbacksAcrossReplicas`, `TestRealBackendCallbackRace` |
 | Failures                     | RFC 9700 §4.5.3.2          | Fail closed: no identity, no token of a failed login                                                                                                         | stack: `TestProviderStorageFailuresReachTheClient`, `TestTokenResponseLostAfterCommit`, `TestJWKSOutage`, `TestDiscoveryOutage` |
 | Logout, dynamic registration | Session/Front/Back-Channel/RP-Initiated Logout, Registration | Not supported                                                                                                                  | —                                                                                                     |
@@ -114,10 +114,13 @@ mux.HandleFunc("GET /oidc/acme/callback", func(w http.ResponseWriter, r *http.Re
   behind `http.CrossOriginProtection` or a CSRF token) and rate limit them:
   each start writes a transaction.
 - `Config.Outbound` is the request policy: the default reaches public https
-  destinations only. Exempt an on-premises provider's network with
-  `AllowedPrefixes`; `AllowHTTP` is for local development only
-  (`examples/oidc-client`'s `OIDC_DEV_ALLOW_LOOPBACK` limits it to the
-  loopback interface).
+  destinations only and follows no redirect. Exempt an on-premises
+  provider's network with `AllowedPrefixes`; `AllowHTTP` is for local
+  development only (`examples/oidc-client`'s `OIDC_DEV_ALLOW_LOOPBACK`
+  limits it to the loopback interface). `MaxRedirects` lets the discovery
+  and JWK Set requests follow redirects within the origin they were sent
+  to — the issuer's, the `jwks_uri`'s — never to another one; token and
+  UserInfo requests never follow any.
 
 ### Connections and redirect URIs
 

@@ -286,6 +286,9 @@ type fakeOP struct {
 	tokenRequests  []tokenRequest
 	userinfo       http.HandlerFunc
 	hits           map[string]int
+	// redirects maps a request path to the Location the OP answers it
+	// with (302 Found), before any other handling.
+	redirects map[string]string
 }
 
 // newFakeOP starts a fake OP whose issuer is the server URL plus
@@ -364,7 +367,15 @@ func (op *fakeOP) pool() *x509.CertPool {
 func (op *fakeOP) serve(w http.ResponseWriter, r *http.Request) {
 	op.mu.Lock()
 	op.hits[r.URL.Path]++
+	location, redirected := op.redirects[r.URL.Path]
 	op.mu.Unlock()
+
+	if redirected {
+		w.Header().Set("Location", location)
+		w.WriteHeader(http.StatusFound)
+
+		return
+	}
 
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration"):
@@ -751,6 +762,24 @@ func (op *fakeOP) login(t *testing.T, c *oidcclient.Client) (*oidcclient.Identit
 	ar, code := op.begin(t, c, oidcclient.AuthOptions{})
 
 	return c.Complete(context.Background(), callbackFor(ar, code))
+}
+
+// receive returns the next value of ch, failing the test — instead of
+// hanging until the global test timeout — when none comes within ten
+// seconds.
+func receive[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for a channel value")
+
+		var zero T
+
+		return zero
+	}
 }
 
 // readAll reads and closes a body.
