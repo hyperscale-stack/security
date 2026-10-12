@@ -80,7 +80,9 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `client_credentials` refuses every client that is not confidential (RFC
   6749 §4.4); a consent narrows the requested scope, never broadens it; a
   refresh token goes only to a client declaring `refresh_token` (RFC 9700
-  §4.14.2). Refusals caused by an empty declaration reach `OnError` with
+  §4.14.2), and a refresh issues an access token only within the client's
+  current scope registration, so shrinking a registration takes effect at
+  the next refresh. Refusals caused by an empty declaration reach `OnError` with
   `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` as cause. Unlike RFC
   7591 §2, an empty grant-type list implies nothing, and scopes outside the
   registration are refused rather than ignored (OpenID Connect Core

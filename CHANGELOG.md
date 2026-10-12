@@ -987,3 +987,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   endpoint checks the client's grant types for every grant before it runs,
   so a custom grant can no longer forget the check, and a code presented by
   a client not allowed `authorization_code` is no longer consumed.
+- A refresh no longer outlives a client's scope registration: the
+  `refresh_token` grant checked the requested scope against the original
+  grant only, so a refresh token minted with a scope the client was not, or
+  is no longer, registered for — through an empty `ScopeValues`, the
+  consent broadening fixed above, or before an operator removed a scope from
+  a compromised client — kept minting access tokens with it. A refresh now
+  issues an access token only within the client's current `Scopes()`
+  (`invalid_scope` otherwise, nothing consumed).

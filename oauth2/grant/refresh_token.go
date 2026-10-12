@@ -24,7 +24,9 @@ import (
 //  2. Re-bind client (refresh.ClientID MUST match the authenticated client)
 //     and issuer (refresh.Issuer MUST match the issuer resolved for the
 //     request; a token stored without one only matches an empty issuer).
-//  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
+//  3. Optionally narrow scope (RFC 6749 §6 forbids broadening), then
+//     require the access token's scope within the client's current scope
+//     registration (invalid_scope otherwise, nothing consumed).
 //  4. Decide rotation before minting anything: mandatory under
 //     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
 //     [Config.RotateRefreshTokens] under [oauth2.Profile20]. A rotation
@@ -112,7 +114,32 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 		return nil, err
 	}
 
+	if err := checkRegisteredScope(req.Client, scope); err != nil {
+		return nil, err
+	}
+
 	return g.issueRotated(ctx, req, rt, scope)
+}
+
+// checkRegisteredScope refuses, with invalid_scope (RFC 6749 §5.2), an
+// access-token scope holding a token the client no longer declares —
+// [oauth2.Client.Scopes], compared exactly, an empty list allowing none: a
+// registration that shrank, or that never declared the scope of a refresh
+// token issued when an empty registration meant "any scope". A refresh
+// token stays bound to the scope consented (RFC 9700 §4.14.2); the server
+// applies its current policy on top (RFC 6749 §3.3). Nothing is consumed.
+func checkRegisteredScope(client oauth2.Client, scope string) error {
+	registered := client.Scopes()
+	if scopes.NewSet(registered).Admits(strings.Fields(scope)) {
+		return nil
+	}
+
+	refusal := oauth2.ErrInvalidScope.WithDescription("the client may no longer use the granted scope")
+	if len(registered) == 0 {
+		return refusal.WithCause(oauth2.ErrNoScopesDeclared)
+	}
+
+	return refusal
 }
 
 // rotates reports whether the exchange rotates the refresh token. The

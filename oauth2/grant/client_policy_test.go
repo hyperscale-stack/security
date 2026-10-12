@@ -139,3 +139,49 @@ func TestPasswordGrantIssuesNoRefreshTokenWithoutTheRefreshGrant(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshTokenRechecksTheScopeRegistration: the refresh_token grant
+// refuses, before anything is minted or consumed, an access-token scope the
+// client no longer declares; an empty stored scope needs no declaration.
+func TestRefreshTokenRechecksTheScopeRegistration(t *testing.T) {
+	t.Parallel()
+
+	g := func(store oauth2.Storage) *grant.RefreshToken {
+		return grant.NewRefreshToken(grant.Config{
+			Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),
+			AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour,
+		})
+	}
+	client := func(scopes ...string) oauth2.Client {
+		return &oauth2.DefaultClient{
+			IDValue: clientID, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: []string{oauth2.GrantTypeRefreshToken}, ScopeValues: scopes,
+		}
+	}
+
+	store := newStore()
+	seedRefresh(t, store, "shrunk-rt", "read:mail write:mail", time.Now().Add(time.Hour))
+
+	resp, err := g(store).Handle(context.Background(), grant.Request{
+		Client: client("read:mail"), Form: url.Values{"refresh_token": {"shrunk-rt"}},
+		Now: time.Now(), Issuer: "https://auth.example",
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
+	assert.False(t, errors.Is(err, oauth2.ErrNoScopesDeclared))
+
+	stored, err := store.LookupRefreshToken(context.Background(), oauth2.HashToken(nil, "shrunk-rt"))
+	require.NoError(t, err)
+	assert.False(t, stored.Consumed, "nothing consumed")
+
+	store = newStore()
+	seedRefresh(t, store, "unscoped-rt", "", time.Now().Add(time.Hour))
+
+	resp, err = g(store).Handle(context.Background(), grant.Request{
+		Client: client(), Form: url.Values{"refresh_token": {"unscoped-rt"}},
+		Now: time.Now(), Issuer: "https://auth.example",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Scope)
+}

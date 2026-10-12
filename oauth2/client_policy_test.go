@@ -515,3 +515,66 @@ func TestRefreshTokenOnlyForClientsAllowedTheRefreshGrant(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshRechecksTheScopeRegistration pins RFC 9700 §4.14.2 (refresh
+// tokens bound to the scope as consented) with the fail-closed policy: a
+// refresh issues an access token only within the client's current scope
+// registration. A refresh token minted before a registration shrank — or
+// before empty registrations stopped meaning "any scope" — stops
+// refreshing beyond it (invalid_scope, nothing consumed), while a narrowing
+// inside the registration still refreshes.
+func TestRefreshRechecksTheScopeRegistration(t *testing.T) {
+	t.Parallel()
+
+	client := confidentialClient(
+		[]string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken}, []string{"read", "write"})
+	env := newPolicyEnv(t, oauth2.Profile20BCP, client)
+
+	q := machineQuery()
+	q.Set("scope", "read write")
+
+	rec := runAuthorize(env.srv, q, approve)
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	rec = env.token(codeExchangeForm(mustLocation(t, rec).Query().Get("code")), "machine", "machine-secret")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rt, _ := jsonBody(t, rec)["refresh_token"].(string)
+	require.NotEmpty(t, rt)
+
+	refresh := func(rt string, scope ...string) *httptest.ResponseRecorder {
+		form := url.Values{"grant_type": {oauth2.GrantTypeRefreshToken}, "refresh_token": {rt}}
+		if len(scope) > 0 {
+			form.Set("scope", scope[0])
+		}
+
+		return env.token(form, "machine", "machine-secret")
+	}
+
+	client.ScopeValues = []string{"read"} // the registration shrinks
+
+	rec = refresh(rt)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, oauth2.CodeInvalidScope, jsonBody(t, rec)["error"])
+
+	rec = refresh(rt, "read write")
+	require.Equal(t, http.StatusBadRequest, rec.Code, "narrowing that still exceeds the registration")
+	assert.Equal(t, oauth2.CodeInvalidScope, jsonBody(t, rec)["error"])
+
+	// The refusals consumed nothing: a narrowing inside the registration
+	// still refreshes, and the replacement keeps the original scope (RFC
+	// 6749 §6).
+	rec = refresh(rt, "read")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "read", jsonBody(t, rec)["scope"])
+
+	next, _ := jsonBody(t, rec)["refresh_token"].(string)
+	require.NotEmpty(t, next)
+
+	client.ScopeValues = nil // the client now declares no scope
+
+	rec = refresh(next, "read")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, oauth2.CodeInvalidScope, jsonBody(t, rec)["error"])
+	assert.True(t, env.sink.matches(oauth2.ErrNoScopesDeclared))
+}

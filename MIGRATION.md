@@ -1016,6 +1016,7 @@ asked for. It now enforces a fail-closed client policy:
 | `Scopes()` empty (`DefaultClient.ScopeValues` unset) | any scope allowed | no scope allowed: a request carrying one is `invalid_scope`; one without scope gets the empty scope |
 | refresh token at a code exchange or a password grant | issued whenever the grant has a `RefreshTokens` generator | issued only to a client declaring `refresh_token` (RFC 9700 §4.14.2) |
 | a refusal caused by an empty declaration | — | `OnError` gets `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` as cause |
+| refresh whose access-token scope holds a scope the client no longer declares | issued: a refresh token kept its scope whatever the registration became | `400 invalid_scope`, nothing consumed; a narrowing inside the registration still refreshes |
 
 To migrate:
 
@@ -1054,5 +1055,9 @@ To migrate:
    `errors.Is(err, oauth2.ErrNoGrantTypesDeclared)` and
    `oauth2.ErrNoScopesDeclared`: they name the refusals of clients whose
    registration declares nothing.
-6. No storage change: the policy applies per request, and instances may be
+6. Refresh tokens whose scope exceeds what their client now declares —
+   issued when an empty `ScopeValues` meant any scope, or before the
+   registration shrank — stop refreshing beyond it: the user authorizes
+   again, or the client narrows its refresh requests to declared scopes.
+7. No storage change: the policy applies per request, and instances may be
    upgraded one at a time.
