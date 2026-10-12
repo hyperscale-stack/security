@@ -7,6 +7,9 @@
 // It exposes unary and stream server interceptors that hand the gRPC metadata
 // (the Carrier) to the core Engine and map security errors to the appropriate
 // gRPC status codes (codes.Unauthenticated, codes.PermissionDenied, …).
+// Install both kinds: ServerOptions and AuthorizeServerOptions return the
+// unary and stream chains together, so no streaming RPC is left
+// unauthenticated.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

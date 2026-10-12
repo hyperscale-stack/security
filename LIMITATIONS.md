@@ -361,7 +361,9 @@ PKCE. Not supported, and refused where a provider could select them:
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
   keys, signers and key sets, `session.Codec`…) print redacted with every
-  `fmt` verb and in `slog` output, but fmt prints some values without
+  `fmt` verb and in `slog` output — as do the `grpcsec` and
+  `connectrpcsec` carriers, which print metadata key counts only — but fmt
+  prints some values without
   calling any of their methods: `%p` of a value that is not a pointer, a
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.

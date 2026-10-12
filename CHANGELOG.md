@@ -454,6 +454,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   field, refusing a repeated one with `ErrInvalidRequest`; the Basic and
   Bearer extractors read `Authorization` through it. `httpsec.DefaultRealm`
   (`api`).
+- `grpcsec.ServerOptions` and `grpcsec.AuthorizeServerOptions`: the
+  authentication and authorization interceptors for unary AND streaming
+  RPCs, as `grpc.ServerOption` values.
 
 ### Changed
 
@@ -672,6 +675,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - The `httpsec.Middleware` span records `http.request.method` (`_OTHER`
   for a method outside RFC 9110 / RFC 5789) instead of `http.method`, and
   `http.route` only as the `ServeMux` pattern's path template.
+- The gRPC error mapping answers from `security.ErrorClass` with one
+  generic message per code: an unsupported credential is `Unauthenticated`
+  (was `InvalidArgument`), an anonymous principal refused by
+  `UnaryAuthorize`/`StreamAuthorize` `Unauthenticated` (was
+  `PermissionDenied`), a repeated `authorization` value `InvalidArgument`,
+  an `ErrUnavailable` `Unavailable`, and an error wrapping no sentinel
+  `Internal` (was `Unauthenticated`). The authorization interceptors use the
+  authentication interceptor's error mapper unless given their own.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -789,6 +800,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   nil `Attribute`, a nil `Authentication` passed to `Decide`, and a voter
   returning an undefined `Decision` now fail closed (an error, a denial, the
   anonymous authentication, a deny vote).
+- `grpcsec` sends the metadata staged on its `Carrier` as the response
+  header, refused RPCs included, as its documentation said; it was dropped.
+  A custom `Engine` returning no authentication no longer panics the
+  interceptors.
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1249,3 +1264,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   absent) and a known method (or `_OTHER`).
 - A request with several `Authorization` fields was authenticated with the
   first one; it is now refused (400), whatever the transport.
+- The gRPC error messages told the client why authentication failed
+  (`token expired`, `token not found`); they are now one fixed string per
+  code. `grpcsec.Carrier` printed its incoming metadata — the bearer token
+  in `authorization` — with `%v`; it now prints and logs key counts only,
+  whatever the verb.

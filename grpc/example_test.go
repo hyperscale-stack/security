@@ -7,19 +7,19 @@ package grpcsec_test
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/hyperscale-stack/security"
 	grpcsec "github.com/hyperscale-stack/security/grpc"
 	"github.com/hyperscale-stack/security/voter"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
 
 // Example wires the Bearer-token engine into a gRPC server: the
-// authentication interceptor validates the token, the authorization
-// interceptor enforces a role, and the call only reaches the handler when
-// both pass.
+// authentication interceptors validate the token, the authorization
+// interceptors enforce a role, and a call — unary or streaming — only
+// reaches its handler when both pass.
 func Example() {
 	engine := security.NewEngine(
 		security.NewManager(tokenAuthenticator{authorities: []string{"ROLE_ADMIN"}}),
@@ -27,33 +27,27 @@ func Example() {
 	)
 	adm := security.NewAffirmativeDecisionManager(voter.HasRole("ADMIN"))
 
-	// In a real server:
-	//
-	//	grpc.NewServer(
-	//	    grpc.ChainUnaryInterceptor(
-	//	        grpcsec.UnaryServerInterceptor(engine),
-	//	        grpcsec.UnaryAuthorize(adm, []security.Attribute{security.Role("ADMIN")}),
-	//	    ),
-	//	)
-	//
-	// Here we just demonstrate the error mapping the interceptors apply.
-	_ = engine
-	_ = adm
+	// ServerOptions and AuthorizeServerOptions chain the unary AND the
+	// stream interceptors: chaining only unary ones would leave streaming
+	// RPCs unauthenticated.
+	srv := grpc.NewServer(slices.Concat(
+		grpcsec.ServerOptions(engine),
+		grpcsec.AuthorizeServerOptions(adm, []security.Attribute{security.Role("ADMIN")}),
+	)...)
+	defer srv.Stop()
 
+	// The interceptors answer with the default error mapping.
 	mapper := grpcsec.DefaultErrorMapper()
 	for _, err := range []error{
 		security.ErrInvalidCredentials,
 		security.ErrAccessDenied,
-		security.ErrUnsupportedCredential,
+		security.ErrUnavailable,
 	} {
 		fmt.Println(status.Code(mapper.Map(context.Background(), err)))
 	}
 
-	_ = healthpb.HealthCheckRequest{}
-	_ = codes.OK
-
 	// Output:
 	// Unauthenticated
 	// PermissionDenied
-	// InvalidArgument
+	// Unavailable
 }

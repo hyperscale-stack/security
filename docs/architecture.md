@@ -180,7 +180,9 @@ and a `Carrier`, then map security errors to transport responses.
   HTTP status codes + RFC 6750 / RFC 7617 `WWW-Authenticate` challenges.
 - **`grpcsec`** — `UnaryServerInterceptor` / `StreamServerInterceptor`
   authenticate every RPC; `UnaryAuthorize` / `StreamAuthorize` enforce an
-  ADM. `ErrorMapper` turns sentinels into `codes.Code`.
+  ADM; `ServerOptions` / `AuthorizeServerOptions` install the unary and the
+  stream chains together. `ErrorMapper` turns `security.ErrorClass` into
+  `codes.Code` with one generic message per code.
 - **`connectrpcsec`** — `NewAuthenticationInterceptor` authenticates every
   RPC; `NewAuthorizationInterceptor` enforces an ADM. Both return a
   `connect.Interceptor` covering unary and streaming. `ErrorMapper` turns

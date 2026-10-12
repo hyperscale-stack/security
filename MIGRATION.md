@@ -1454,3 +1454,34 @@ To migrate:
    `authentication_required`).
 5. Dashboards: the `httpsec.Middleware` span records `http.request.method`
    (instead of `http.method`) and `http.route` only as a route template.
+
+### `grpc`: status codes and messages, staged headers, server options
+
+The gRPC error mapping told the client why authentication failed
+(`token expired`, `token not found`), answered an infrastructure failure
+`Unauthenticated`, an unsupported credential `InvalidArgument` and an
+anonymous caller refused by `UnaryAuthorize` `PermissionDenied`; the
+metadata an extractor staged on the carrier was never sent; and the
+documented wiring (`grpc.ChainUnaryInterceptor` only) left streaming RPCs
+unauthenticated.
+
+| Situation | Before | After |
+| --- | --- | --- |
+| Credential failure | `Unauthenticated` + reason (`token expired`…) | `Unauthenticated`, `unauthenticated` |
+| Unsupported credential | `InvalidArgument` | `Unauthenticated` |
+| Anonymous caller refused by `UnaryAuthorize` / `StreamAuthorize` | `PermissionDenied` | `Unauthenticated` |
+| Repeated `authorization` metadata | first value used | `InvalidArgument` |
+| `ErrUnavailable` | `Unauthenticated` | `Unavailable` (retryable) |
+| Error wrapping no sentinel, `ErrNoExtractor` | `Unauthenticated` | `Internal` |
+| Metadata staged on the `Carrier` | dropped | sent as the response header |
+| `UnaryAuthorize` without `WithErrorMapper` | `DefaultErrorMapper()` | the authentication interceptor's mapper |
+
+To migrate:
+
+1. Install the stream interceptors next to the unary ones — simplest:
+   `grpc.NewServer(slices.Concat(grpcsec.ServerOptions(engine),
+   grpcsec.AuthorizeServerOptions(adm, attrs))...)`.
+2. Branch on the status code, never on the message.
+3. Authenticators: wrap `security.ErrUnavailable` only for a transient
+   dependency failure (clients retry `Unavailable`), a credential sentinel
+   for a refusal.

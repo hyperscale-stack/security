@@ -176,7 +176,9 @@ the middleware runs inside a route, never the raw path.
 | `grpcsec.Authorize`    | `UnaryAuthorize` / `StreamAuthorize`            | none directly — delegates to `security.AccessDecisionManager.Decide` | inherited from the core |
 
 `grpcsec` deliberately does **not** open an `rpc` span — that belongs to
-`otelgrpc`, which you compose alongside these interceptors.
+`otelgrpc`, which you compose alongside these interceptors. `rpc.method` is
+the full method gRPC routed the call to; behind a `grpc.UnknownServiceHandler`
+it is the name the client sent.
 
 ### ConnectRPC — `github.com/hyperscale-stack/security/connectrpc`
 
