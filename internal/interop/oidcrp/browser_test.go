@@ -116,7 +116,7 @@ func TestBrowserBindingCookie(t *testing.T) {
 
 	browser, cancel := chromedp.NewContext(allocator)
 	t.Cleanup(cancel)
-	require.NoError(t, chromedp.Run(browser), "starting Chrome")
+	require.NoError(t, chromedp.Do(browser), "starting Chrome")
 
 	for _, name := range []string{"query", "formpost", "lax"} {
 		t.Run(name, func(t *testing.T) {
@@ -128,28 +128,22 @@ func TestBrowserBindingCookie(t *testing.T) {
 			tab, cancel = context.WithTimeout(tab, 30*time.Second)
 			defer cancel()
 
-			var (
-				result  string
-				cookies []*network.Cookie
-			)
-
-			require.NoError(t, chromedp.Run(tab,
+			require.NoError(t, chromedp.Do(tab,
 				chromedp.Navigate(origin+"/login/"+name),
-				chromedp.WaitVisible("#username", chromedp.ByID),
-				chromedp.SendKeys("#username", "test-user@127.0.0.1", chromedp.ByID),
-				chromedp.SendKeys("#password", userPassword, chromedp.ByID),
-				chromedp.Submit("#password", chromedp.ByID),
-				chromedp.WaitVisible("#result", chromedp.ByID),
-				chromedp.Text("#result", &result, chromedp.ByID),
-				chromedp.ActionFunc(func(ctx context.Context) error {
-					var err error
-					cookies, err = network.GetCookies().WithURLs([]string{origin + "/"}).Do(ctx)
-
-					return err //nolint:wrapcheck // test
-				}),
+				chromedp.WaitVisible(chromedp.ID("username")),
+				chromedp.SendKeys(chromedp.ID("username"), "test-user@127.0.0.1"),
+				chromedp.SendKeys(chromedp.ID("password"), userPassword),
+				chromedp.Submit(chromedp.ID("password")),
+				chromedp.WaitVisible(chromedp.ID("result")),
 			))
 
-			err := <-conn.results
+			result, err := chromedp.Run(tab, chromedp.Text(chromedp.ID("result")))
+			require.NoError(t, err)
+
+			jar, err := chromedp.Call(tab, network.GetCookies, network.GetCookiesParams{URLs: []string{origin + "/"}})
+			require.NoError(t, err)
+
+			err = <-conn.results
 			if conn.want == nil {
 				require.NoError(t, err)
 				assert.Equal(t, "subject: "+userID, result)
@@ -158,7 +152,7 @@ func TestBrowserBindingCookie(t *testing.T) {
 				assert.True(t, strings.HasPrefix(result, "error: "))
 			}
 
-			for _, c := range cookies {
+			for _, c := range jar.Cookies {
 				assert.False(t, strings.HasPrefix(c.Name, "__Host-oidc-"), "binding cookie %s left after the callback", c.Name)
 			}
 		})
