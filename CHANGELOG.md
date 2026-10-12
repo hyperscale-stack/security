@@ -260,6 +260,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   PostgreSQL, MySQL and Redis too), and provider, store or network
   failures. No third-party OpenID Connect or JOSE library is involved
   (`TestDependencyPolicy`).
+- **End-to-end suites of the OpenID Connect examples** (`e2e/oidc`, Tales,
+  opt-in through `make e2e-oidc`, never in CI; #85, #86):
+  `examples/oidc-provider` and `examples/oidc-client` built and started on
+  two loopback sites — provider scenarios over HTTP (discovery and JWK Set,
+  code flow with PKCE, UserInfo, code replay, `prompt`, `max_age`, consent,
+  offline access, refresh rotation and reuse, refused requests, the login
+  and consent pages' hardening), the relying party's callback binding,
+  and a real Chrome: consent denied then given, sign-out, single sign-on,
+  cross-site form posts refused. Only the configuration and four keywords
+  are specific to the examples, so the provider scenarios can run against
+  another provider. `make e2e-oidc-live` signs in with a real provider
+  account (`LIVE_OIDC_*`, a person at the keyboard).
 - **Example** `examples/oidc-client`: sign-in through several connections
   with distinct callback routes, account linking on (connection, issuer,
   subject), and a local session. `OIDC_DEV_ALLOW_LOOPBACK=1` (development

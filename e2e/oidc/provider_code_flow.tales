@@ -1,0 +1,366 @@
+version = 1
+
+# The Authorization Code flow with PKCE (OpenID Connect Core §3.1, RFC
+# 7636), the token response (RFC 6749 §5), UserInfo (Core §5.3, RFC 6750
+# §2) and code replay (RFC 6749 §4.1.2).
+
+scenario "Confidential client: code flow, UserInfo and code replay" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid profile email"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.request.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  # The redirect carries the code, the state and the issuer (RFC 9207).
+  step "keyword" "consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.request.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.request.prefix}code=[^&]+${result.request.suffix}"
+    }
+  }
+
+  # No refresh token without offline_access (Core §11).
+  step "http" "exchange_code" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          code          = regex_find(result.consent.location, "[?&]code=([^&]+)", 1)
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.request.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      headers = {
+        Cache-Control = ["no-store"]
+        Pragma        = ["no-cache"]
+      }
+      json = {
+        access_token  = is_string()
+        token_type    = "Bearer"
+        expires_in    = is_number()
+        id_token      = matches("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")
+        scope         = "openid profile email"
+        refresh_token = not_exists()
+      }
+    }
+
+    capture {
+      access_token = response.json.access_token
+      code         = request.body.form.code
+    }
+  }
+
+  step "http" "userinfo_get" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer ${result.exchange_code.access_token}"
+      }
+    }
+
+    expect {
+      status = 200
+      headers = {
+        Content-Type  = [contains("application/json")]
+        Cache-Control = ["no-store"]
+      }
+      json = {
+        sub            = result.user.subject
+        name           = is_string()
+        email          = is_string()
+        email_verified = true
+      }
+    }
+  }
+
+  step "http" "userinfo_post" {
+    request {
+      method = "POST"
+      url    = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer ${result.exchange_code.access_token}"
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        sub = result.user.subject
+      }
+    }
+  }
+
+  # RFC 6750 §2.2: the form-encoded body parameter.
+  step "http" "userinfo_post_body" {
+    request {
+      method = "POST"
+      url    = result.endpoints.userinfo_endpoint
+
+      body {
+        form = {
+          access_token = result.exchange_code.access_token
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        sub = result.user.subject
+      }
+    }
+  }
+
+  # The second redemption of the code is refused, and the tokens the first
+  # one issued are revoked (RFC 6749 §4.1.2).
+  step "http" "replay_code" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          code          = result.exchange_code.code
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.request.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      json = {
+        error = "invalid_grant"
+      }
+    }
+  }
+
+  step "http" "userinfo_after_replay" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer ${result.exchange_code.access_token}"
+      }
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = [contains("error=\"invalid_token\"")]
+      }
+    }
+  }
+}
+
+# A public client authenticates with PKCE only: a code is redeemed with its
+# own verifier, never without one or with another login's.
+scenario "Public client: the PKCE verifier is required" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "public" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "first" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.first.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "first_consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.first.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.first.prefix}code=[^&]+${result.first.suffix}"
+    }
+  }
+
+  step "http" "without_verifier" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      body {
+        form = {
+          grant_type   = "authorization_code"
+          client_id    = result.client.client_id
+          code         = regex_find(result.first_consent.location, "[?&]code=([^&]+)", 1)
+          redirect_uri = config.redirect_uri
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      json = {
+        error = "invalid_grant"
+      }
+    }
+  }
+
+  step "keyword" "second" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "second_consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.second.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.second.prefix}code=[^&]+${result.second.suffix}"
+    }
+  }
+
+  step "http" "with_another_verifier" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          client_id     = result.client.client_id
+          code          = regex_find(result.second_consent.location, "[?&]code=([^&]+)", 1)
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.first.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      json = {
+        error = "invalid_grant"
+      }
+    }
+  }
+
+  step "keyword" "third" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "third_consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.third.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.third.prefix}code=[^&]+${result.third.suffix}"
+    }
+  }
+
+  step "http" "with_its_verifier" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          client_id     = result.client.client_id
+          code          = regex_find(result.third_consent.location, "[?&]code=([^&]+)", 1)
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.third.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        access_token = is_string()
+        id_token     = is_string()
+      }
+    }
+  }
+}

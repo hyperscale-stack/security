@@ -1,0 +1,465 @@
+version = 1
+
+# Refused requests: authorization requests (OpenID Connect Core §3.1.2.6,
+# RFC 6749 §4.1.2.1), client authentication (RFC 6749 §5.2), UserInfo
+# bearer tokens (RFC 6750 §3) — and the hardening of the example's own
+# login and consent pages (tag "app-hardening").
+
+# Without a valid redirect URI there is nowhere safe to send an error: the
+# provider answers itself, never redirecting (RFC 6749 §4.1.2.1).
+scenario "Unregistered or missing redirect_uri: no redirect" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "http" "unregistered_redirect_uri" {
+    request {
+      url = "${result.endpoints.authorization_endpoint}?response_type=code&client_id=${url_encode(result.client.client_id)}&redirect_uri=${url_encode("https://evil.example/callback")}&scope=openid&state=s1&nonce=n1&code_challenge=${pkce_challenge("e2e-verifier-0123456789-0123456789-0123456789")}&code_challenge_method=S256"
+    }
+
+    expect {
+      status = 400
+      headers = {
+        Location = not_exists()
+      }
+    }
+  }
+
+  step "http" "missing_redirect_uri" {
+    request {
+      url = "${result.endpoints.authorization_endpoint}?response_type=code&client_id=${url_encode(result.client.client_id)}&scope=openid&state=s1&nonce=n1&code_challenge=${pkce_challenge("e2e-verifier-0123456789-0123456789-0123456789")}&code_challenge_method=S256"
+    }
+
+    expect {
+      status = 400
+      headers = {
+        Location = not_exists()
+      }
+    }
+  }
+}
+
+# Request objects are not supported (Core §6): refused as such, not
+# ignored.
+scenario "request and request_uri: not supported" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "with_request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&request=eyJhbGciOiJub25lIn0.e30."
+    }
+  }
+
+  step "http" "request_parameter" {
+    request {
+      url = result.with_request.url
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.with_request.prefix}error=request_not_supported&error_description=[^&]*${result.with_request.suffix}")]
+      }
+    }
+  }
+
+  step "keyword" "with_request_uri" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&request_uri=${url_encode("https://rp.example/request.jwt")}"
+    }
+  }
+
+  step "http" "request_uri_parameter" {
+    request {
+      url = result.with_request_uri.url
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.with_request_uri.prefix}error=request_uri_not_supported&error_description=[^&]*${result.with_request_uri.suffix}")]
+      }
+    }
+  }
+}
+
+# RFC 6749 §3.1: request parameters MUST NOT be included more than once.
+scenario "Repeated parameter: invalid_request" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&scope=openid"
+    }
+  }
+
+  step "http" "repeated_scope" {
+    request {
+      url = result.request.url
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.request.prefix}error=invalid_request&error_description=[^&]*${result.request.suffix}")]
+      }
+    }
+  }
+}
+
+# PKCE is required, S256 only (RFC 9700 §2.1.1, the default profile).
+scenario "PKCE: code_challenge required, plain refused" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "http" "without_code_challenge" {
+    request {
+      url = "${result.endpoints.authorization_endpoint}?response_type=code&client_id=${url_encode(result.client.client_id)}&redirect_uri=${url_encode(config.redirect_uri)}&scope=openid&state=s1&nonce=n1"
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s1$")]
+      }
+    }
+  }
+
+  step "http" "plain_method" {
+    request {
+      url = "${result.endpoints.authorization_endpoint}?response_type=code&client_id=${url_encode(result.client.client_id)}&redirect_uri=${url_encode(config.redirect_uri)}&scope=openid&state=s2&nonce=n2&code_challenge=e2e-verifier-0123456789-0123456789-0123456789&code_challenge_method=plain"
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s2$")]
+      }
+    }
+  }
+}
+
+scenario "Client authentication failure: invalid_client" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "http" "wrong_secret" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = "not-the-secret"
+        }
+      }
+
+      body {
+        form = {
+          grant_type   = "authorization_code"
+          code         = "any"
+          redirect_uri = config.redirect_uri
+        }
+      }
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = [contains("Basic")]
+        Cache-Control    = ["no-store"]
+      }
+      json = {
+        error = "invalid_client"
+      }
+    }
+  }
+}
+
+# RFC 6750 §3, §3.1: a request without a token gets the challenge without
+# an error code; an unusable token invalid_token; two methods at once
+# invalid_request. A token in the query alone is not accepted (the
+# provider supports the header and the form body).
+scenario "UserInfo bearer token errors" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "http" "no_token" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = ["Bearer realm=\"${config.issuer}\""]
+      }
+    }
+  }
+
+  step "http" "unknown_token" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer not-a-token"
+      }
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = [contains("error=\"invalid_token\"")]
+      }
+    }
+  }
+
+  step "http" "query_token_alone" {
+    request {
+      url = "${result.endpoints.userinfo_endpoint}?access_token=not-a-token"
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = ["Bearer realm=\"${config.issuer}\""]
+      }
+    }
+  }
+
+  step "http" "two_methods" {
+    request {
+      method = "POST"
+      url    = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer not-a-token"
+      }
+
+      body {
+        form = {
+          access_token = "not-a-token"
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      headers = {
+        Www-Authenticate = [contains("error=\"invalid_request\"")]
+      }
+    }
+  }
+}
+
+# The login and consent pages of examples/oidc-provider: CSRF tokens, a
+# return address limited to the authorization endpoint, no framing, no
+# caching.
+scenario "Login and consent pages: CSRF, open redirect, framing" {
+  tags = ["provider", "app-hardening"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "http" "login_page" {
+    request {
+      url = result.request.url
+    }
+
+    expect {
+      status = 200
+      headers = {
+        X-Frame-Options         = ["DENY"]
+        Content-Security-Policy = ["frame-ancestors 'none'"]
+        Cache-Control           = ["no-store"]
+      }
+    }
+
+    capture {
+      cookie = "op_session=${response.cookies.op_session.value}"
+      csrf   = regex_find(response.body, "name=\"csrf_token\" value=\"([^\"]+)\"", 1)
+    }
+  }
+
+  step "http" "login_without_csrf_token" {
+    request {
+      method = "POST"
+      url    = "${config.issuer}/login"
+      headers = {
+        Cookie = result.login_page.cookie
+      }
+
+      body {
+        form = {
+          return_to = regex_find(result.request.url, "^https?://[^/]+(/.*)$", 1)
+          username  = result.user.username
+          password  = result.user.password
+        }
+      }
+    }
+
+    expect {
+      status = 403
+    }
+  }
+
+  step "http" "login_with_an_absolute_return_to" {
+    request {
+      method = "POST"
+      url    = "${config.issuer}/login"
+      headers = {
+        Cookie = result.login_page.cookie
+      }
+
+      body {
+        form = {
+          csrf_token = result.login_page.csrf
+          return_to  = "https://evil.example/oauth2/authorize"
+          username   = result.user.username
+          password   = result.user.password
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      headers = {
+        Location = not_exists()
+      }
+    }
+  }
+
+  step "http" "login_with_a_scheme_relative_return_to" {
+    request {
+      method = "POST"
+      url    = "${config.issuer}/login"
+      headers = {
+        Cookie = result.login_page.cookie
+      }
+
+      body {
+        form = {
+          csrf_token = result.login_page.csrf
+          return_to  = "//evil.example/oauth2/authorize"
+          username   = result.user.username
+          password   = result.user.password
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      headers = {
+        Location = not_exists()
+      }
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.request.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "http" "consent_page" {
+    request {
+      url = result.request.url
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+    }
+
+    expect {
+      status = 200
+      headers = {
+        X-Frame-Options         = ["DENY"]
+        Content-Security-Policy = ["frame-ancestors 'none'"]
+        Cache-Control           = ["no-store"]
+      }
+      body = contains("action=\"/consent\"")
+    }
+  }
+
+  step "http" "consent_without_csrf_token" {
+    request {
+      method = "POST"
+      url    = "${config.issuer}/consent"
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+
+      body {
+        form = {
+          return_to = regex_find(result.request.url, "^https?://[^/]+(/.*)$", 1)
+          decision  = "allow"
+        }
+      }
+    }
+
+    expect {
+      status = 403
+    }
+  }
+}

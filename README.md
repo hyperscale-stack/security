@@ -106,7 +106,7 @@ make sync     # go work sync
 make build    # build every module
 make test     # race + coverage
 make lint     # golangci-lint with the shared config
-make e2e      # opt-in browser suites (Tales and Chrome, see docs/saml-sp.md)
+make e2e      # opt-in browser suites (Tales and Chrome: docs/saml-sp.md, e2e/oidc/run.sh)
 ```
 
 ## License

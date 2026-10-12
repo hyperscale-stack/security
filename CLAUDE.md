@@ -59,7 +59,8 @@ make sync       # go work sync
 make bench      # benchmarks across all modules
 make coverage   # go tool cover -func on the aggregated profile
 make generate   # mockery — currently BROKEN, see "Tooling caveats" below
-make e2e        # opt-in browser suites (Tales + Chrome, e2e/saml), never in CI
+make e2e        # opt-in browser suites (Tales + Chrome: e2e/saml, e2e/oidc), never in CI
+make e2e-oidc   # only the OIDC one (make e2e-saml: only the SAML one)
 ```
 
 To run a **single test** or work on one module, `cd` into that module first

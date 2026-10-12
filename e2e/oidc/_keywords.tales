@@ -1,0 +1,329 @@
+version = 1
+
+# Keywords of the OpenID Connect suite.
+#
+# Specific to examples/oidc-provider — replace them, with _config.tales,
+# to run the provider scenarios against another provider:
+#   provision_client, provision_user  the registered client and end-user
+#                                     (static here; an admin API elsewhere)
+#   op_sign_in, op_consent            the provider's login and consent pages
+#
+# Protocol keywords, the same for every provider: discover,
+# new_authorization, redeem_code.
+
+# provision_client returns the client of kind "confidential"
+# (client_secret_basic) or "public" (PKCE only, RFC 7636).
+keyword "provision_client" {
+  inputs {
+    kind = string
+  }
+
+  outputs {
+    client_id     = input.kind == "public" ? config.public_client_id : config.confidential_client_id
+    client_secret = input.kind == "public" ? "" : config.confidential_client_secret
+  }
+}
+
+# provision_user returns the end-user the scenarios sign in as.
+keyword "provision_user" {
+  outputs {
+    username = config.username
+    password = config.password
+    subject  = config.subject
+  }
+}
+
+# discover reads the discovery document (OpenID Connect Discovery 1.0 §4)
+# and returns the endpoints the scenarios use.
+keyword "discover" {
+  step "http" "discover_document" {
+    request {
+      url = "${config.issuer}/.well-known/openid-configuration"
+    }
+
+    expect {
+      status = 200
+      json = {
+        issuer                 = config.issuer
+        authorization_endpoint = is_string()
+        token_endpoint         = is_string()
+        userinfo_endpoint      = is_string()
+        jwks_uri               = is_string()
+      }
+    }
+  }
+
+  outputs {
+    authorization_endpoint = result.discover_document.response.json.authorization_endpoint
+    token_endpoint         = result.discover_document.response.json.token_endpoint
+    userinfo_endpoint      = result.discover_document.response.json.userinfo_endpoint
+    jwks_uri               = result.discover_document.response.json.jwks_uri
+  }
+}
+
+# new_authorization prepares an authorization request (OpenID Connect Core
+# §3.1.2.1) of client_id for scope, with S256 PKCE (RFC 7636), a state and a
+# nonce; extra is appended to the query as is ("&prompt=consent", or "").
+# It returns the request URL and what the client keeps, and two regular
+# expressions to check the redirect back to the client: an authorization
+# response is "${prefix}code=[^&]+${suffix}", an error response
+# "${prefix}error=<code>&error_description=[^&]*${suffix}" — the redirect
+# URI, then the parameters in the provider's order (sorted), iss (RFC 9207)
+# and state last.
+keyword "new_authorization" {
+  inputs {
+    client_id = string
+    scope     = string
+    extra     = string
+  }
+
+  step "http" "new_authorization_discovery" {
+    vars {
+      verifier = generate("pkce_verifier")
+      state    = generate("state")
+      nonce    = generate("nonce")
+      query    = "response_type=code&client_id=${url_encode(input.client_id)}&redirect_uri=${url_encode(config.redirect_uri)}&scope=${url_encode(input.scope)}&state=${vars.state}&nonce=${vars.nonce}&code_challenge=${pkce_challenge(vars.verifier)}&code_challenge_method=S256${input.extra}"
+    }
+
+    request {
+      url = "${config.issuer}/.well-known/openid-configuration"
+    }
+
+    expect {
+      status = 200
+    }
+
+    capture {
+      url      = "${response.json.authorization_endpoint}?${vars.query}"
+      verifier = vars.verifier
+      state    = vars.state
+      nonce    = vars.nonce
+    }
+  }
+
+  outputs {
+    url      = result.new_authorization_discovery.url
+    verifier = result.new_authorization_discovery.verifier
+    state    = result.new_authorization_discovery.state
+    nonce    = result.new_authorization_discovery.nonce
+    prefix   = "^${config.redirect_uri}\\?"
+    suffix   = "&iss=${url_encode(config.issuer)}&state=${result.new_authorization_discovery.state}$"
+  }
+}
+
+# op_sign_in signs the end-user in for the authorization request url
+# through the login form of examples/oidc-provider — the authorization
+# endpoint renders it, POST /login signs in and sends the browser back to
+# the request — and returns the provider's session as a Cookie header
+# value.
+keyword "op_sign_in" {
+  inputs {
+    url      = string
+    username = string
+    password = string
+  }
+
+  step "http" "op_login_form" {
+    request {
+      url = input.url
+    }
+
+    expect {
+      status = 200
+      headers = {
+        X-Frame-Options = ["DENY"]
+      }
+      body = contains("name=\"csrf_token\"")
+    }
+
+    capture {
+      cookie = "op_session=${response.cookies.op_session.value}"
+      csrf   = regex_find(response.body, "name=\"csrf_token\" value=\"([^\"]+)\"", 1)
+    }
+  }
+
+  step "http" "op_login_submit" {
+    vars {
+      return_to = regex_find(input.url, "^https?://[^/]+(/.*)$", 1)
+    }
+
+    request {
+      method = "POST"
+      url    = "${config.issuer}/login"
+      headers = {
+        Cookie = result.op_login_form.cookie
+      }
+
+      body {
+        form = {
+          csrf_token = result.op_login_form.csrf
+          return_to  = vars.return_to
+          username   = input.username
+          password   = input.password
+        }
+      }
+    }
+
+    expect {
+      status = 303
+      headers = {
+        Location = [vars.return_to]
+      }
+    }
+
+    capture {
+      cookie = "op_session=${response.cookies.op_session.value}"
+    }
+  }
+
+  outputs {
+    cookie = result.op_login_submit.cookie
+  }
+}
+
+# op_consent answers the consent page of examples/oidc-provider for the
+# authorization request url, signed in with cookie: decision is "allow" or
+# "deny", offline ticks "Keep access while I am away" (offline_access,
+# OpenID Connect Core §11). It returns the provider's redirect to the
+# client, which must match the regular expression location.
+keyword "op_consent" {
+  inputs {
+    url      = string
+    cookie   = string
+    decision = string
+    offline  = bool
+    location = string
+  }
+
+  step "http" "op_consent_form" {
+    request {
+      url = input.url
+      headers = {
+        Cookie = input.cookie
+      }
+    }
+
+    expect {
+      status = 200
+      headers = {
+        X-Frame-Options = ["DENY"]
+      }
+      body = contains("action=\"/consent\"")
+    }
+
+    capture {
+      csrf = regex_find(response.body, "name=\"csrf_token\" value=\"([^\"]+)\"", 1)
+    }
+  }
+
+  step "http" "op_consent_submit" {
+    vars {
+      return_to = regex_find(input.url, "^https?://[^/]+(/.*)$", 1)
+    }
+
+    request {
+      method = "POST"
+      url    = "${config.issuer}/consent"
+      headers = {
+        Cookie = input.cookie
+      }
+
+      body {
+        form = {
+          csrf_token     = result.op_consent_form.csrf
+          return_to      = vars.return_to
+          decision       = input.decision
+          offline_access = input.offline ? "on" : ""
+        }
+      }
+    }
+
+    expect {
+      status = 303
+      headers = {
+        Location = [vars.return_to]
+      }
+    }
+  }
+
+  step "http" "op_consent_resume" {
+    request {
+      url = input.url
+      headers = {
+        Cookie = input.cookie
+      }
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches(input.location)]
+      }
+    }
+
+    capture {
+      location = response.headers["Location"][0]
+    }
+  }
+
+  outputs {
+    location = result.op_consent_resume.location
+  }
+}
+
+# redeem_code exchanges code at the token endpoint (RFC 6749 §4.1.3) as a
+# confidential client (client_secret_basic), with the PKCE verifier, and
+# checks the successful token response (RFC 6749 §5.1, OpenID Connect Core
+# §3.1.3.3).
+keyword "redeem_code" {
+  inputs {
+    token_endpoint = string
+    client_id      = string
+    client_secret  = string
+    code           = string
+    verifier       = string
+  }
+
+  step "http" "redeem_code_request" {
+    request {
+      method = "POST"
+      url    = input.token_endpoint
+
+      auth {
+        basic {
+          username = input.client_id
+          password = input.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          code          = input.code
+          redirect_uri  = config.redirect_uri
+          code_verifier = input.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      headers = {
+        Cache-Control = ["no-store"]
+      }
+      json = {
+        access_token = is_string()
+        token_type   = "Bearer"
+        expires_in   = is_number()
+        id_token     = is_string()
+        scope        = contains("openid")
+      }
+    }
+  }
+
+  outputs {
+    access_token = result.redeem_code_request.response.json.access_token
+    id_token     = result.redeem_code_request.response.json.id_token
+    scope        = result.redeem_code_request.response.json.scope
+  }
+}

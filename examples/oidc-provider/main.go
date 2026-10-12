@@ -31,7 +31,8 @@
 //	OIDC_DEMO_CLIENT_ID=demo-rp OIDC_DEMO_CLIENT_SECRET=demo-rp-secret \
 //	go run ./oidc-client
 //
-// then open http://localhost:9000.
+// then open http://localhost:9000. make e2e-oidc runs both the same way
+// (e2e/oidc), through a browser.
 //
 // The demo cuts corners a deployment must not: an http issuer
 // (AllowInsecureLoopbackIssuer — production issuers are https), a key

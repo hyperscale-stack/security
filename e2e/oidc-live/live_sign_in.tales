@@ -1,0 +1,60 @@
+version = 1
+
+# A sign-in with a real OpenID Provider account, through examples/oidc-client
+# in a visible Chrome window: a person completes the provider's login. Run
+# it with `make e2e-oidc-live` (e2e/oidc-live/run.sh) — never in CI. The
+# client secret stays in the relying party's environment: it never appears
+# in this suite or its reports.
+
+config {
+  issuer = env("LIVE_OIDC_ISSUER", "")
+  rp_url = env("OIDC_E2E_RP_URL", "http://localhost:9000")
+
+  browser = {
+    targets = {
+      chrome = {
+        browser  = "chrome"
+        headless = false
+        timeout  = "6m"
+      }
+    }
+  }
+}
+
+scenario "Live provider: a person signs in" {
+  tags = ["live"]
+
+  skip_unless {
+    env_set = ["LIVE_OIDC_ISSUER", "LIVE_OIDC_CLIENT_ID"]
+    reason  = "set LIVE_OIDC_ISSUER and LIVE_OIDC_CLIENT_ID (see e2e/oidc-live/run.sh)"
+  }
+
+  step "browser" "sign_in" {
+    target = "chrome"
+
+    actions {
+      goto {
+        url = "${config.rp_url}/"
+      }
+      click {
+        selector = "form[action='/login/live'] button"
+      }
+      # The person signs in at the provider (up to five minutes).
+      wait_visible {
+        selector = "form[action='/logout'] button"
+        timeout  = "5m"
+      }
+    }
+
+    expect {
+      text {
+        selector = "h1"
+        value    = matches("^Signed in as account-[0-9]+$")
+      }
+      text {
+        selector = "li"
+        value    = contains("live: ${config.issuer}, subject ")
+      }
+    }
+  }
+}

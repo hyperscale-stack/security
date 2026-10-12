@@ -20,7 +20,8 @@ The provider owns the protocol; the application owns the end-user:
 `examples/oidc-provider` is a complete, runnable demo: login and consent
 pages with CSRF tokens, sessions, `prompt` handling, offline access. It
 runs together with the relying party of `examples/oidc-client` (see its
-package documentation).
+package documentation), which is how the opt-in end-to-end suite
+`e2e/oidc` (`make e2e-oidc`) drives both, through a browser too.
 
 ## Conformance status
 
