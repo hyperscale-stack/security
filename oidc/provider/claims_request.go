@@ -304,6 +304,20 @@ func (r ClaimsRequest) essentialACR() []string {
 	return out
 }
 
+// voluntaryACR returns the values of a voluntary acr request for the ID
+// Token (Core §5.5.1.1) — from value and values.
+func (r ClaimsRequest) voluntaryACR() []string {
+	var out []string
+
+	for _, c := range r.IDToken {
+		if c.Name == claimACR && !c.Essential {
+			out = append(out, stringValues(c.Values)...)
+		}
+	}
+
+	return out
+}
+
 // subjects returns the end-users every sub constraint of the request
 // allows — nil without one; an empty, non-nil set when they conflict
 // (Core §5.5.1: "If the Claim was sub, a mismatch MUST cause the

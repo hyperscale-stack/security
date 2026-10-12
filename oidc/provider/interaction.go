@@ -98,9 +98,11 @@ type Request struct {
 	// MaxAge is max_age (Core §3.1.2.1), nil when absent: the end-user MUST
 	// have authenticated at most that long before the request.
 	MaxAge *time.Duration
-	// ACRValues are the requested acr_values, by preference: voluntary
-	// (Core §3.1.2.1) — the provider enforces none of them. Its first 32
-	// values; an acr_values over 2048 bytes is ignored.
+	// ACRValues are the acr values the request prefers, in order: those of
+	// acr_values (Core §3.1.2.1), then those of a voluntary acr claim
+	// request for the ID Token (§5.5.1.1) — once each, at most 32; an
+	// acr_values over 2048 bytes is ignored. Voluntary: the provider
+	// enforces none of them.
 	ACRValues []string
 	// EssentialACR lists the acr values of an essential acr claim request
 	// (Core §5.5.1.1): the authentication MUST satisfy one of them.

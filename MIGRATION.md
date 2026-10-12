@@ -1731,7 +1731,7 @@ and Unicode white space, and drops — dropping is never an error (Core
 | `team` and `teaM`, `name#fr` and `name#FR` (case variants of one another) | both released | both dropped |
 | a source name with invalid UTF-8, a control character or over 255 bytes (a tagged variant) | released, invalid UTF-8 as U+FFFD | dropped |
 | a value with case-variant, invalid or control-character member names at any depth, an unpaired surrogate escape, a number beyond float64, or nested over 31 levels | released | dropped |
-| a `claims` request for a name never released | shown in `Request.Claims`, recorded with the grant | left out of both (`Subjects`, `EssentialACR` unchanged) |
+| a `claims` request for a name never released | shown in `Request.Claims`, recorded with the grant | left out of both (`Subjects`, `EssentialACR` unchanged; the values of a voluntary `acr` request join `Request.ACRValues`, which holds each value once) |
 | `Config.ClaimsSupported` with `azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`, `c_hash`, `s_hash`, `_claim_names`, `_claim_sources`, a case variant of a protocol or standard claim (`SUB`, `Email`) or of another entry (`tenant`, `Tenant`) | accepted (published, never emitted) | `New` fails |
 | `Config.ClaimsSupported` with a protocol or standard claim spelled exactly (`sub`, `email`) | published | unchanged (published once) |
 

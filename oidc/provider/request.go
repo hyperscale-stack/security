@@ -291,7 +291,7 @@ func (v *authRequest) parseParameters(form url.Values) error {
 	v.prompt, v.maxAge, v.claims = prompt, maxAge, claims
 	v.essentialACR = claims.essentialACR()
 
-	v.acrValues = tokens(value(form, "acr_values"))
+	v.acrValues = preferredACR(tokens(value(form, "acr_values")), claims.voluntaryACR())
 	v.uiLocales = tokens(value(form, "ui_locales"))
 	v.claimsLocales = tokens(value(form, "claims_locales"))
 	v.display = bounded(value(form, "display"), maxPassthroughLength)
@@ -380,6 +380,26 @@ func tokens(raw string) []string {
 		out = append(out, v)
 		if len(out) == maxListTokens {
 			break
+		}
+	}
+
+	return out
+}
+
+// preferredACR returns the acr values a request prefers: those of
+// acr_values, then those of a voluntary acr claim request for the ID Token
+// — Core §5.5.1.1 leaves their combination unspecified —, once each, at
+// most maxListTokens.
+func preferredACR(acrValues, claimed []string) []string {
+	var out []string
+
+	for _, v := range append(acrValues, claimed...) {
+		if len(out) == maxListTokens {
+			break
+		}
+
+		if !slices.Contains(out, v) {
+			out = append(out, v)
 		}
 	}
 

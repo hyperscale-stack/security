@@ -758,8 +758,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `s_hash`, `_claim_names`, `_claim_sources`) and case variants of a
   protocol, standard or other entry's claim; its names become the only
   spelling released. `Request.Claims` only holds the claim requests the
-  provider may release, and a grant records only those. See
-  [MIGRATION.md](MIGRATION.md).
+  provider may release, and a grant records only those; the values of a
+  voluntary `acr` request join `Request.ACRValues`, which now holds each
+  value once. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 

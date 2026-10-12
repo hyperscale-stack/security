@@ -359,7 +359,7 @@ func TestOversizedListParametersAreIgnored(t *testing.T) {
 		if value == atBound {
 			assert.Len(t, req.UILocales, 32)
 			assert.Len(t, req.ClaimsLocales, 32)
-			assert.Len(t, req.ACRValues, 32)
+			assert.Equal(t, []string{"fr"}, req.ACRValues, "acr values once each")
 
 			continue
 		}

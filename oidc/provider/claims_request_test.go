@@ -70,6 +70,53 @@ func TestClaimsParameterDerivedRequirements(t *testing.T) {
 	assert.Equal(t, []string{"alice"}, req.Subjects, "every sub constraint holds (Core §5.5.1)")
 }
 
+// TestVoluntaryACRRequestsReachTheInteraction: a voluntary acr request for
+// the ID Token (Core §5.5.1.1) is no claim the provider releases from the
+// source, but its values are preferences the Interaction may honor: they
+// join Request.ACRValues — after those of acr_values, once each, at most
+// 32. An essential acr request stays a requirement (EssentialACR), and
+// UserInfo acr requests are no authentication request.
+func TestVoluntaryACRRequestsReachTheInteraction(t *testing.T) {
+	t.Parallel()
+
+	many := make([]string, 32)
+	for i := range many {
+		many[i] = fmt.Sprintf("urn:loa:%d", i)
+	}
+
+	cases := []struct {
+		name, acrValues, claims string
+		want, essential         []string
+	}{
+		{"with acr_values", "urn:silver urn:bronze urn:silver", `{"id_token": {"acr": {"values": ["urn:gold", "urn:silver"]}}}`,
+			[]string{"urn:silver", "urn:bronze", "urn:gold"}, nil},
+		{"alone", "", `{"id_token": {"acr": {"value": "urn:gold"}}}`, []string{"urn:gold"}, nil},
+		{"essential", "urn:bronze", `{"id_token": {"acr": {"essential": true, "values": ["urn:gold"]}}}`,
+			[]string{"urn:bronze"}, []string{"urn:gold"}},
+		{"for UserInfo", "", `{"userinfo": {"acr": {"value": "urn:gold"}}}`, nil, nil},
+		{"over the cap", strings.Join(many, " "), `{"id_token": {"acr": {"value": "urn:gold"}}}`, many, nil},
+		{"with an oversized acr_values", strings.Repeat("x", 2049), `{"id_token": {"acr": {"value": "urn:gold"}}}`,
+			[]string{"urn:gold"}, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			e.decide(func(ev *oidcprovider.AuthenticationEvent) { ev.ACR = "urn:gold" }, nil)
+
+			q := with(authorizeQuery(), "acr_values", tc.acrValues, "claims", tc.claims)
+			require.NotEmpty(t, redirect(t, e.authorize(q)).Get("code"))
+
+			req := e.lastRequest()
+			assert.Equal(t, tc.want, req.ACRValues)
+			assert.Equal(t, tc.essential, req.EssentialACR)
+			assert.Empty(t, req.Claims.IDToken, "acr is never released from the source")
+		})
+	}
+}
+
 func TestClaimsParameterRefusals(t *testing.T) {
 	t.Parallel()
 
