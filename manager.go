@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"go.opentelemetry.io/otel/codes"
 )
 
 // Manager orchestrates a chain of [Authenticator]s with first-success-wins
@@ -98,17 +96,13 @@ func (m *manager) Authenticate(ctx context.Context, auth Authentication) (Authen
 	}
 
 	if len(refusals) == 0 {
-		err := ErrUnsupportedCredential
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+		recordFailure(span, ErrUnsupportedCredential)
 
-		return Anonymous(), err
+		return Anonymous(), ErrUnsupportedCredential
 	}
 
-	joined := errors.Join(refusals...)
-	err := fmt.Errorf("%w: %w", ErrAuthenticatorRefused, joined)
-	span.SetStatus(codes.Error, ErrAuthenticatorRefused.Error())
-	span.RecordError(err)
+	err := fmt.Errorf("%w: %w", ErrAuthenticatorRefused, errors.Join(refusals...))
+	recordFailure(span, err)
 
 	return Anonymous(), err
 }

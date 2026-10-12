@@ -79,8 +79,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 	if err != nil {
 		// Loader-level errors (db down, unknown user, ...) collapse to a
 		// single ErrInvalidCredentials at the client boundary. The original
-		// error stays in the chain for observability.
-		return auth, fmt.Errorf("basic: load user %q: %w (%w)", in.Username(), err, security.ErrInvalidCredentials)
+		// error stays in the chain for observability; the typed username
+		// does not (it can be a password typed in the wrong field).
+		return auth, fmt.Errorf("basic: load user: %w (%w)", err, security.ErrInvalidCredentials)
 	}
 
 	if user == nil {

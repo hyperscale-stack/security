@@ -134,9 +134,18 @@ storage layer, so apply the same redaction rules you apply to your logs.
 
 | Span                                   | When                                   | Attributes                                                                       | Error status                                              |
 | --------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `security.Engine.Process`               | `Engine.Process` — extract + authenticate | `security.extractors.count` (int), `security.authenticated` (bool)                | `ErrNoExtractor`, extractor error, or manager error        |
-| `security.Manager.Authenticate`         | `Manager.Authenticate` — chain authenticators | `security.authenticators.count` (int), `security.authenticated` (bool, on success), `security.authenticator.name` (string, on success); event `authenticator.try` per candidate | `ErrUnsupportedCredential`, `ErrAuthenticatorRefused`      |
-| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string) | `ErrAccessDenied` when the final decision is not Grant     |
+| `security.Engine.Process`               | `Engine.Process` — extract + authenticate | `security.extractors.count` (int), `security.authenticated` (bool); `error.type` (string, on failure) | `ErrNoExtractor`, extractor error, or manager error        |
+| `security.Manager.Authenticate`         | `Manager.Authenticate` — chain authenticators | `security.authenticators.count` (int), `security.authenticated` (bool, on success), `security.authenticator.name` (string, on success); event `authenticator.try` per candidate; `error.type` (string, on failure) | `ErrUnsupportedCredential`, `ErrAuthenticatorRefused`      |
+| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string); `error.type` (string, on denial) | `ErrAccessDenied` when the final decision is not Grant     |
+
+A failing core span records **the class of its error, never the error
+text**: the status description and the OpenTelemetry `error.type` attribute
+are `security.ErrorClass(err)` — `invalid_credentials`, `token_expired`,
+`unavailable`, `access_denied`, … or `_OTHER` for an error that wraps no
+security sentinel — and no `exception` event is added. The error text can
+hold user input (a username, a password typed in the username field) and
+the wrapped errors of your stores; it reaches only the caller, which may log
+it server-side. `error.type` is not set on success.
 
 `security.principal.subject` is a **reserved** attribute key. It is not
 emitted by default — subject identifiers are PII and high-cardinality. Wire
@@ -222,7 +231,9 @@ serving cached metadata opens no span: only downloads do.
 
 No span attribute ever carries a secret: cleartext passwords, access or
 refresh tokens, authorization codes, client secrets, raw session IDs, or
-SAML assertions, NameIDs, RelayState handles and binding cookies.
+SAML assertions, NameIDs, RelayState handles and binding cookies. The core,
+`session` and `samlsp` spans never record an error message either: only its
+class.
 Where correlation is genuinely needed, the value is hashed first
 (`session.id_hash`). When you add your own instrumentation around this
 library, keep the same rule.

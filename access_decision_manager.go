@@ -8,8 +8,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"go.opentelemetry.io/otel/codes"
 )
 
 // AccessDecisionManager combines the verdicts of multiple [Voter]s into a
@@ -131,7 +129,7 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 		return nil
 	}
 
-	span.SetStatus(codes.Error, ErrAccessDenied.Error())
+	recordFailure(span, ErrAccessDenied)
 
 	return ErrAccessDenied
 }

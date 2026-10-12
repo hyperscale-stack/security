@@ -439,6 +439,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `security.ErrUnavailable` (the credentials could not be checked because a
   dependency — key set, user store, introspection endpoint — is temporarily
   unavailable; not a verdict on the credentials).
+- `security.ErrorClass(err)` and the `security.ErrorClass*` constants: one
+  classification of security errors — joined errors included — shared by
+  the core spans (`error.type`) and the default HTTP, gRPC and ConnectRPC
+  error mappers; custom error mappers should use it too.
 
 ### Changed
 
@@ -614,6 +618,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   without an authenticated value as a refusal. `NewEngine`, `NewManager`
   and the three `AccessDecisionManager` constructors panic on a nil
   dependency. See [MIGRATION.md](MIGRATION.md).
+- Failing core spans (`security.Engine.Process`,
+  `security.Manager.Authenticate`, `security.AccessDecisionManager.Decide`)
+  record the class of their error as status description and `error.type`
+  attribute, and no longer add an `exception` event.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1156,3 +1164,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - After a failed authentication the `Engine` stored the extracted
   `Authentication` — a cleartext password, a bearer token — in the request
   context; it now stores the anonymous authentication.
+- The core spans carried the full error chain of the authenticators —
+  including the username typed at a Basic prompt (a password typed in the
+  username field) and wrapped store errors — as status description and
+  exception event; they now carry the error class only, and
+  `basic.Authenticator` no longer puts the typed username in its errors.

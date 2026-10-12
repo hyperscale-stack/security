@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"go.opentelemetry.io/otel/codes"
 )
 
 // errContractViolation marks a component that broke its contract — an
@@ -81,8 +79,7 @@ func (e *engine) Process(ctx context.Context, c Carrier) (context.Context, Authe
 	span.SetAttributes(AttrExtractorsCount.Int(len(e.extractors)))
 
 	if len(e.extractors) == 0 {
-		span.SetStatus(codes.Error, ErrNoExtractor.Error())
-		span.RecordError(ErrNoExtractor)
+		recordFailure(span, ErrNoExtractor)
 
 		ctx = WithAuthentication(ctx, Anonymous())
 
@@ -94,8 +91,7 @@ func (e *engine) Process(ctx context.Context, c Carrier) (context.Context, Authe
 	for _, ex := range e.extractors {
 		auth, err := ex.Extract(ctx, c)
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.RecordError(err)
+			recordFailure(span, err)
 
 			ctx = WithAuthentication(ctx, Anonymous())
 
@@ -126,7 +122,7 @@ func (e *engine) Process(ctx context.Context, c Carrier) (context.Context, Authe
 		// The extracted value carries the presented credentials (a
 		// cleartext password, a bearer token): it is dropped here and the
 		// context gets the anonymous authentication.
-		span.SetStatus(codes.Error, err.Error())
+		recordFailure(span, err)
 
 		ctx = WithAuthentication(ctx, Anonymous())
 

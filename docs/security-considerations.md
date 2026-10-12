@@ -1100,7 +1100,9 @@ leaks why authentication failed.
 
 ## Observability
 
-No secret is ever placed on a span attribute or log line. See
+No secret is ever placed on a span attribute or log line, and the core
+spans record the class of an error (`security.ErrorClass`), never its text,
+which can hold user input such as a typed username. See
 [observability.md](observability.md) for the secrets policy and the full
 span catalog.
 
