@@ -16,6 +16,7 @@ import (
 
 	"github.com/hyperscale-stack/security"
 	oidcclient "github.com/hyperscale-stack/security/oidc/client"
+	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -223,6 +224,22 @@ func TestUserInfoTransport(t *testing.T) {
 		_, err = c.UserInfo(context.Background(), id)
 		require.ErrorIs(t, err, oidcclient.ErrUserInfo)
 		assert.Zero(t, hits.Load(), "the access token never follows a redirect")
+	})
+
+	t.Run("redirect on the same origin not followed", func(t *testing.T) {
+		t.Parallel()
+
+		op := newFakeOP(t)
+		c := op.client(t, maxRedirects(5))
+		id, err := op.login(t, c)
+		require.NoError(t, err)
+
+		op.set(func(op *fakeOP) { op.redirects = map[string]string{"/userinfo": "/userinfo-v2"} })
+
+		_, err = c.UserInfo(context.Background(), id)
+		require.ErrorIs(t, err, oidcclient.ErrUserInfo)
+		require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed)
+		assert.Zero(t, op.hitCount("/userinfo-v2"), "the access token never follows a redirect, even on the same origin")
 	})
 
 	t.Run("oversized", func(t *testing.T) {

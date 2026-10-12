@@ -37,6 +37,7 @@ func TestOriginOf(t *testing.T) {
 		"IPv6 literal forms":      {"https://[::1]:8443/a", "https://[0:0:0:0:0:0:0:1]:8443/b"},
 		"IPv4 default port":       {"https://127.0.0.1/a", "https://127.0.0.1:443/b"},
 		"port with a leading 0":   {"https://op.example:8443/a", "https://op.example:08443/b"},
+		"case of A and Z":         {"https://AZ.example/a", "https://az.example/b"},
 	}
 
 	for name, pair := range same {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	oidcclient "github.com/hyperscale-stack/security/oidc/client"
+	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,6 +143,21 @@ func TestTokenRedirectNotFollowed(t *testing.T) {
 	require.ErrorIs(t, err, oidcclient.ErrTokenEndpoint)
 	assert.Nil(t, id)
 	assert.Zero(t, hits.Load())
+
+	t.Run("on the same origin", func(t *testing.T) {
+		t.Parallel()
+
+		// Discovery and JWK Set requests may follow such a redirect; the
+		// token request, which carries the client's credentials, may not.
+		op := newFakeOP(t)
+		op.set(func(op *fakeOP) { op.redirects = map[string]string{"/token": "/token-v2"} })
+
+		id, err := op.login(t, op.client(t, maxRedirects(5)))
+		require.ErrorIs(t, err, oidcclient.ErrTokenEndpoint)
+		require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed)
+		assert.Nil(t, id)
+		assert.Zero(t, op.hitCount("/token-v2"), "the code, the verifier and the secret are never re-sent")
+	})
 }
 
 // TestTokenResponse checks the successful response of RFC 6749 §5.1 and

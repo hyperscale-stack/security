@@ -71,7 +71,7 @@ func TestDiscoveryRedirectStaysOnTheIssuerOrigin(t *testing.T) {
 		evil := impostor(t, honest)
 		honest.set(func(op *fakeOP) {
 			op.redirects = map[string]string{
-				wellKnown:          "/v2" + wellKnown,
+				wellKnown:         "/v2" + wellKnown,
 				"/v2" + wellKnown: evil.srv.URL + wellKnown,
 			}
 		})
@@ -99,8 +99,10 @@ func TestDiscoveryRedirectWithinTheIssuerOrigin(t *testing.T) {
 			max:       1, ok: true,
 		},
 		"absolute location": {
-			redirects: func(op *fakeOP) map[string]string { return map[string]string{wellKnown: op.srv.URL + "/v2" + wellKnown} },
-			max:       1, ok: true,
+			redirects: func(op *fakeOP) map[string]string {
+				return map[string]string{wellKnown: op.srv.URL + "/v2" + wellKnown}
+			},
+			max: 1, ok: true,
 		},
 		"two hops within the limit": {
 			redirects: func(*fakeOP) map[string]string {
