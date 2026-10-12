@@ -8,7 +8,7 @@ Hyperscale security [![Last release](https://img.shields.io/github/release/hyper
 | master  | [![Build Status](https://github.com/hyperscale-stack/security/workflows/Go/badge.svg?branch=master)](https://github.com/hyperscale-stack/security/actions?query=workflow%3AGo) | [![Coveralls](https://img.shields.io/coveralls/hyperscale-stack/security/master.svg)](https://coveralls.io/github/hyperscale-stack/security?branch=master) |
 
 A transport-agnostic authentication and authorization toolkit for Go —
-HTTP, gRPC and ConnectRPC, OAuth2, JWT, sessions, and a composable
+HTTP, gRPC and ConnectRPC, OAuth2, OpenID Connect login, JWT, sessions, and a composable
 Voter-based access model. It is shipped as a multi-module workspace so you
 import only what you need.
 
@@ -28,6 +28,9 @@ import only what you need.
 | `…/security/oauth2`                                 | OAuth2 server: profiles, grants, endpoints, extension points    |
 | `…/security/oauth2/store/sql`                       | Production OAuth2 storage on `database/sql`                     |
 | `…/security/oauth2/store/redis`                     | Production OAuth2 storage on Redis                              |
+| `…/security/oidc/client`                            | `oidcclient` — OpenID Connect Relying Party (code flow + PKCE)  |
+| `…/security/oidc/client/store/sql`                  | OIDC login-transaction store on `database/sql`                  |
+| `…/security/oidc/client/store/redis`                | OIDC login-transaction store on Redis                           |
 
 The core module also ships `…/security/outbound`, an SSRF-safe
 `*http.Client` factory for requests to configuration-supplied URLs.

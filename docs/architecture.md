@@ -35,14 +35,21 @@ transitive dependencies.
 | `./oauth2`                | `…/security/oauth2`                                          | OAuth2 server: profiles, grants, client auth, endpoints              |
 | `./oauth2/store/sql`      | `…/security/oauth2/store/sql`                                | Production `oauth2.Storage` on `database/sql`                        |
 | `./oauth2/store/redis`    | `…/security/oauth2/store/redis`                              | Production `oauth2.Storage` on Redis (Lua atomicity)                 |
+| `./oidc/client`           | `…/security/oidc/client`                                     | `oidcclient` — OpenID Connect Relying Party                          |
+| `./oidc/client/store/sql` | `…/security/oidc/client/store/sql`                           | OIDC `TransactionStore` on `database/sql`                            |
+| `./oidc/client/store/redis` | `…/security/oidc/client/store/redis`                       | OIDC `TransactionStore` on Redis (Lua atomicity)                     |
 | `./examples`              | `…/security/examples`                                        | Runnable use-case demos                                              |
 | `./internal/integrations` | (private)                                                    | Cross-module end-to-end tests                                        |
+| `./internal/interop/oidcrp` | (private)                                                  | OIDC client interoperability tests (zitadel/oidc, headless Chrome)   |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
 `outbound` is a sub-package of the core module (standard library only): the
 SSRF-safe `*http.Client` factory used for requests to URLs that come from
 configuration or remote metadata — see [Outbound requests](#outbound-requests).
+`oidc/client/storage/memory` (an in-memory `TransactionStore`) and
+`oidc/client/storetest` (the store conformance suite) are sub-packages of
+`oidc/client`.
 
 ## Dependency policy
 
@@ -60,7 +67,11 @@ session/                ← core + golang.org/x/crypto + otel
 oauth2/                 ← core + stdlib
 oauth2/store/sql/       ← oauth2 + database/sql
 oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
+oidc/client/            ← core + github.com/go-jose/go-jose/v4
+oidc/client/store/sql/  ← oidc/client + database/sql
+oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
+internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,
@@ -197,6 +208,43 @@ The `oauth2` module is an authorization server, not just a provider:
 
 Tokens and authorization codes are **never stored in cleartext** — the
 store only ever sees a hash.
+
+## OpenID Connect client
+
+The `oidc/client` module is a Relying Party: it logs users in through an
+external OpenID Provider and returns a verified identity. It is independent
+of the `oauth2` server and of `jwtsec`.
+
+```
+StartLogin / Begin                          HandleCallback / Complete
+  ├─ binding secret (cookie) ─┐               ├─ response shape + callback path
+  ├─ nonce, PKCE verifier  ◄──┘ HMAC          ├─ Consume(state hash, binding hash)
+  ├─ TransactionStore.Save                    ├─ transaction ↔ connection checks, iss
+  └─ 303 → authorization endpoint             ├─ code exchange (PKCE, client auth)
+                                              └─ ID Token checks → Identity
+```
+
+- **One `Client` per connection** — issuer, client registration and a
+  redirect URI distinct from every other connection's. `New` runs
+  discovery; the metadata issuer must equal the configured one.
+- **Browser binding** — `Begin` draws a 256-bit binding secret that the
+  user agent keeps (an HttpOnly `__Host-` cookie with the net/http helpers);
+  the nonce and the PKCE verifier are HMACs of it, and the store keeps only
+  a hash of it and of the state. Reading the store gives nothing that
+  completes a login.
+- **`TransactionStore`** — `Save` never overwrites, `Consume` removes a
+  transaction atomically in a pinned decision order (unknown, expired,
+  binding mismatch — which keeps it). In-memory, SQL and Redis
+  implementations pass `oidc/client/storetest`.
+- **ID Token validation** — OpenID Connect Core §3.1.3.7 on top of go-jose:
+  asymmetric algorithms only, keys from the issuer's `jwks_uri` through a
+  bounded, rate-limited cache, and every claim check including nonce,
+  auth_time against `max_age`, acr and at_hash. JSON is decoded strictly
+  (no duplicate or case-variant member names).
+- **What stays with the application** — choosing the connection, deploying
+  the store, linking an identity (issuer + subject, never email) to an
+  account, its own session, and rate limiting login starts. See
+  `examples/oidc-client`.
 
 ## Outbound requests
 

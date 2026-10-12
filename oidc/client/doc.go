@@ -91,8 +91,9 @@
 // behavior outside our control. This package therefore implements the
 // OpenID Connect Core §3.1.3.7 checklist itself on top of
 // github.com/go-jose/go-jose/v4 for the JOSE primitives. go-oidc and
-// golang.org/x/oauth2 are used only as an independent Relying Party in
-// interoperability tests of the OpenID Provider module.
+// golang.org/x/oauth2 are never production dependencies of this
+// repository; at most they serve as an independent Relying Party in
+// interoperability tests.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core: outbound, sentinel errors)

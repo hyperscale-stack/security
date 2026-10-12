@@ -95,11 +95,18 @@ is intentionally skipped in CI.
 | `./oauth2/storage/memory` | `.../oauth2/storage/memory`                | In-memory `oauth2.Storage` — **package of `oauth2`** |
 | `./oauth2/store/sql`      | `.../oauth2/store/sql`                      | Production storage on `database/sql` (PG/MySQL/SQLite) |
 | `./oauth2/store/redis`    | `.../oauth2/store/redis`                    | Production storage on Redis (Lua atomicity)          |
-| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2 |
+| `./oidc/client`           | `.../oidc/client` → `oidcclient`            | OpenID Connect Relying Party (code flow + PKCE)      |
+| `./oidc/client/storage/memory` | `.../oidc/client/storage/memory`      | In-memory `TransactionStore` — **package of `oidc/client`** |
+| `./oidc/client/storetest` | `.../oidc/client/storetest`                | Store conformance suite — **package of `oidc/client`** |
+| `./oidc/client/store/sql` | `.../oidc/client/store/sql` → `sqlstore`    | Transaction store on `database/sql` (PG/MySQL/SQLite) |
+| `./oidc/client/store/redis` | `.../oidc/client/store/redis` → `redisstore` | Transaction store on Redis (Lua atomicity)       |
+| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2, oidc-client |
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
+| `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
-of `oauth2`; `outbound` is a sub-package of the core (stdlib only, the core's
+of `oauth2`; likewise `oidc/client/storage/memory` and `oidc/client/storetest`
+belong to `oidc/client`; `outbound` is a sub-package of the core (stdlib only, the core's
 only networking code: every server-side fetch of a configuration- or
 metadata-supplied URL MUST go through `outbound.NewClient`). The other rows
 are independent modules (own `go.mod`).
@@ -110,13 +117,17 @@ are independent modules (own `go.mod`).
 import gRPC, ConnectRPC, JOSE/JWT libs, OAuth2, Redis, SQL drivers, HTTP
 routers, or concrete loggers. Adapters depend on the core, never the reverse. The
 `oauth2` module has **no hard dependency on `jwt`** — JWT access tokens are
-wired via an adapter (`jwt` depends on `oauth2`, not the other way). When
-adding code, check the allowed-dependency list in `MIGRATION.md` before
-adding an import.
+wired via an adapter (`jwt` depends on `oauth2`, not the other way).
+`oidc/client` depends on the core and go-jose only — neither `oauth2` nor
+`jwt`; `coreos/go-oidc` and `golang.org/x/oauth2` are not dependencies (see
+the evaluation in `oidc/client/doc.go`). When adding code, check the
+allowed-dependency list in `MIGRATION.md` before adding an import.
 
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
-(`=> ../../../` for the SQL/Redis stores) so local dev works without
-published versions.
+(`=> ../../../` for the OAuth2 SQL/Redis stores and the interop module,
+`=> ../../../../` for the OIDC client stores, which also replace
+`oidc/client => ../../`) so local dev works without published versions.
+New modules declare `go 1.26.5`, like the core.
 
 ## Core architecture
 
@@ -207,7 +218,31 @@ configurable via `ServerConfig.RoutePrefix`).
 
 `examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
 `examples/` also has `basic-http`, `bearer-jwt`, `grpc-bearer`,
-`connectrpc-bearer`, and `session-web` demos.
+`connectrpc-bearer`, `session-web`, and `oidc-client` demos.
+
+## OpenID Connect client (`oidc/client/`)
+
+`oidcclient.New(ctx, Config{...})` builds the Relying Party of **one
+connection** (issuer + client registration + redirect URI) after discovery;
+`Begin`/`Complete` run the Authorization Code flow with PKCE S256, state and
+nonce, and `StartLogin`/`HandleCallback` wrap them for `net/http` (binding
+cookie included). `UserInfo` fetches claims whose `sub` must match.
+
+- **Invariants**: the issuer comes from configuration only; every fetch goes
+  through `outbound`; token and UserInfo requests follow no redirect; a
+  login is bound to the user agent by a binding secret from which the nonce
+  and PKCE verifier are derived (the store holds no secret); a transaction
+  is consumed once, in the pinned order of `TransactionStore.Consume`;
+  `Callback.Path` must equal the connection's redirect URI path (mix-up
+  defense — redirect URIs are distinct per connection); nothing is returned
+  before the ID Token is fully validated; every JSON document goes through
+  the strict decoder (`strictjson.go`); errors, `String`, `GoString` and
+  `LogValue` never carry secrets.
+- Every `TransactionStore` (`storage/memory`, `store/sql`, `store/redis`)
+  must pass `oidc/client/storetest.RunConformance`.
+- Tests use the scriptable fake provider of `fakeop_test.go`;
+  `internal/interop/oidcrp` runs the client against zitadel/oidc, and its
+  Chrome test runs with `OIDC_BROWSER_TESTS=1`.
 
 ## Tooling caveats
 

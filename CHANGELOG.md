@@ -125,6 +125,58 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   1.2 or later. Applications widen it explicitly (`AllowedPrefixes`,
   `AllowHTTP`, `MaxRedirects`) and narrow it with the `CheckURL` and
   `CheckAddr` hooks.
+- **OpenID Connect Relying Party** (`oidc/client`, package `oidcclient`):
+  logs users in through an OpenID Provider with the Authorization Code flow
+  and returns a verified `Identity` (connection, issuer, subject, claims,
+  tokens), one `Client` per connection. `New` discovers the provider (the
+  metadata issuer must equal the configured one) through the `outbound`
+  guard; `Begin`/`Complete` — or the net/http helpers `StartLogin`/
+  `HandleCallback` — run the flow with PKCE S256, state and nonce, in the
+  `query` or `form_post` response mode, with `client_secret_basic`,
+  `client_secret_post` or a public client (`none`, which requires the
+  provider to advertise S256). A login is bound to the user agent that
+  started it: a 256-bit binding secret kept in an HttpOnly `__Host-` cookie
+  (SameSite=Lax for `query`, None for `form_post`), from which the nonce and
+  the PKCE verifier are derived, so the transaction store holds no secret.
+  The transaction is also bound to its connection, issuer, client, redirect
+  URI and response mode, expires (10 minutes by default), and is consumed
+  once. `Complete` requires the callback path to be the connection's
+  redirect URI path — a redirect URI distinct per connection is the mix-up
+  defense (RFC 9700 §4.4.2.2) — and checks the RFC 9207 `iss` parameter when
+  the provider advertises it. The ID Token is validated per OpenID Connect
+  Core §3.1.3.7: an allow-listed asymmetric algorithm (RS*, PS*, ES*,
+  EdDSA; HMAC and `none` refused), `typ` absent or JWT, iss, aud (extra
+  audiences only if trusted), azp, exp/iat/nbf with a bounded skew, nonce,
+  auth_time against `max_age`, acr against the requested `acr_values`, and
+  at_hash. Keys come from the issuer's `jwks_uri` only, through a bounded
+  cache (1 h TTL, one rate-limited refresh for an unknown `kid`,
+  single-flight, 24 h stale limit). Every JSON document is parsed strictly
+  (duplicate or case-variant member names refused at every level). Token
+  and UserInfo requests never follow redirects. `UserInfo` returns claims
+  only when their `sub` equals the identity's. Errors are sentinels
+  (`ErrInvalidIDToken` and its causes, `ErrBindingMismatch`,
+  `ErrTransactionNotFound`, `ErrIssuerParameter`, …) wrapping
+  `security.ErrInvalidCredentials` where a credential is refused;
+  `AuthorizationError` and `TokenError` carry the provider's error
+  responses. Secrets never appear in errors, `String`/`GoString` or `slog`
+  output.
+- **OpenID Connect transaction stores**: the `oidcclient.TransactionStore`
+  contract (`Save` never overwrites; `Consume` removes a transaction
+  atomically and decides unknown, then expired, then binding mismatch,
+  which keeps the transaction), with an in-memory store
+  (`oidc/client/storage/memory`), a SQL store (`oidc/client/store/sql`,
+  PostgreSQL/MySQL/SQLite, `PurgeExpired`) and a Redis store
+  (`oidc/client/store/redis`, one Lua script per consumption, Redis Cluster
+  compatible), all validated by the exported conformance suite
+  `oidc/client/storetest`.
+- **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
+  tests only): the Relying Party against the example provider of
+  `github.com/zitadel/oidc/v3`, plus an opt-in browser test
+  (`OIDC_BROWSER_TESTS=1`, headless Chrome) of the binding cookie's
+  SameSite behavior.
+- **Example** `examples/oidc-client`: sign-in through several connections
+  with distinct callback routes, account linking on (connection, issuer,
+  subject), and a local session.
 
 - **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
   takes an `oauth2.Extension` — the contract an OpenID Provider (the
