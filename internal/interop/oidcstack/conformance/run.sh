@@ -143,7 +143,8 @@ case " $plans " in
 	done
 
 	python3 -m venv "$out/venv"
-	"$out/venv/bin/pip" install --quiet httpx==0.28.1 pyparsing==3.2.3
+	"$out/venv/bin/pip" install --quiet --require-hashes --only-binary=:all: \
+		-r "$package/testdata/requirements.txt"
 	"$out/venv/bin/pip" freeze >"$out/venv-freeze.txt"
 
 	(
