@@ -230,6 +230,45 @@ PKCE. Not supported, and refused where a provider could select them:
   only. A provider ignoring `acr_values` fails every login that sends them
   (`ErrIDTokenACR`).
 
+## JWT (`jwtsec`)
+
+- **Token strings are not unique** — an ECDSA signature has a second valid
+  form (s and n − s): the verifier accepts both, since refusing the "high"
+  one would refuse half of the legitimate tokens of other signers. Never key
+  a cache, replay check or deny-list on the token string; use `jti`.
+- **Untyped access tokens** — `BearerVerifier` accepts only access tokens
+  typed `at+jwt` (RFC 9068 §4), or the type named by `WithAccessTokenType`.
+  An authorization server that sends no `typ` cannot be served by it: wrap
+  a `NewVerifier` configured with `WithIssuer` and `WithAudience` in your own
+  `bearer.VerifierFunc`, knowing that its access tokens are then told apart
+  from its ID Tokens by their audience only. `WithAccessTokenType("JWT")`
+  carries the same caveat: it is safe only when the resource server's
+  audience is never the `client_id` of a client of that issuer.
+- **Claims decoding** — claims, `claimsOut` included, are decoded by
+  go-jose's case-sensitive fork of `encoding/json` (Go 1.6): `claimsOut`
+  fields need exact `json` tags (an untagged `Email` field no longer receives
+  `email`), `encoding/json.Number` fields are not supported (use `float64`,
+  `int64` or `json.RawMessage`), and the content of `claimsOut` is
+  unspecified when `Verify` fails. Claim names equal under Unicode case
+  folding are refused, which is stricter than RFC 7519 §4 (that allows
+  `"sub"` next to `"Sub"`).
+- **Key identifiers** — a `kid` shared by several keys designates no key,
+  even keys of different types that RFC 7517 §4.5 allows to share one; a
+  token without `kid` is verified against a single-key set only.
+- **Remote JWK Set policy** — the TTL is configurable (`WithCacheTTL`); the
+  minimum refresh interval (10 s), the back-off cap (5 minutes), the
+  maximum staleness (24 h), the 100-key and 2048–8192-bit RSA bounds, the
+  10 s and 1 MiB fetch bounds are not. An RSA key published without `alg`
+  verifies RS256 when the verifier allows it, otherwise the verifier's only
+  RSA algorithm, otherwise nothing: publish `alg` on RSA keys signing
+  PS256/384/512.
+- **No JWS extension, nested JWT or JWE** — tokens whose header uses `crit`
+  or `b64` are refused, and a nested JWT (`cty: JWT`, RFC 7519 §7.2 step 8)
+  is refused because its payload is not a claims object.
+- **Size bound** — tokens over 16 KiB are refused by default
+  (`WithMaxTokenSize` on a `Verifier`); `VerifySignature` always applies
+  the default bound.
+
 ## Outbound requests
 
 - **No proxy support** — `outbound` clients never use a proxy: the

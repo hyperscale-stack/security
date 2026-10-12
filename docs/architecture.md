@@ -70,7 +70,7 @@ connectrpc/             ← core + otel + connectrpc.com/connect
 basic/                  ← core + password
 bearer/                 ← core
 password/               ← golang.org/x/crypto
-jwt/                    ← core + bearer + oauth2 + go-jose/v4 + otel
+jwt/                    ← core (outbound included) + bearer + oauth2 + go-jose/v4 + otel
 session/                ← core + golang.org/x/crypto + otel
 oauth2/                 ← core + stdlib
 oauth2/store/sql/       ← oauth2 + database/sql

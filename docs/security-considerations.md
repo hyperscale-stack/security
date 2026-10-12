@@ -30,27 +30,94 @@ mirror the detailed cause in the HTTP/gRPC response.
 
 ## JWT
 
-`jwtsec` defends against the two classic JWT attacks:
+`jwtsec` defends against the classic JWT attacks:
 
 - **`alg=none`** — rejected. The verifier parses with an explicit algorithm
-  allowlist, so an unsigned token never reaches key resolution.
+  allowlist, so an unsigned token never reaches key resolution; an
+  algorithm outside the list is refused with `ErrAlgorithmNotAllowed`.
 - **Algorithm confusion** (HS256 forged with an RSA public key) — the
   default allowlist is asymmetric only: `RS256/384/512`, `PS256/384/512`,
   `ES256/384/512`, `EdDSA`. HMAC algorithms are **not** allowed by default;
   enable them with `WithAllowedAlgorithms` only when both ends share a
-  symmetric secret and you understand the trade-off.
+  symmetric secret and you understand the trade-off. Every verification key
+  is bound to one algorithm (RFC 8725 §3.1): its `Algorithm` must equal the
+  token's `alg` — a key without one verifies nothing — and an asymmetric key
+  must pass `PublicKey.Validate` (RSA of at least 2048 bits, the algorithm's
+  curve, a public key: a private key or a `jose.JSONWebKey` wrapper verifies
+  nothing). A `kid` shared by several keys designates none.
+- **Claim smuggling** (RFC 7519 §4, §7.3, §10.1.1) — claims are decoded
+  case-sensitively, by go-jose's decoder, into `StandardClaims` and into the
+  caller's `claimsOut` alike. A claims set whose member names repeat —
+  exactly, through an escape, or under Unicode case folding (`"Sub"`,
+  `"EXP"`, `"ſub"`) — at any depth is refused, so no case-folding consumer
+  (Go's `encoding/json`, .NET's `OrdinalIgnoreCase`, approximately) can read
+  another value than the verifier did. So are invalid UTF-8, unpaired
+  surrogate escapes, a payload that is not one JSON object, and a registered
+  claim of the wrong JSON type — `"nbf": null` does not disable the
+  not-before check.
+- **Oversized and malformed tokens** — a token over
+  `DefaultMaxTokenSize` (16 KiB, `WithMaxTokenSize`) is refused before any
+  decoding (go-jose decodes a header at about 100 times its size before
+  checking the algorithm); only the canonical compact serialization is
+  accepted (unpadded base64url, no whitespace, zero pad bits), with a strict
+  JSON header that uses neither `crit` nor `b64` (RFC 7515 §4.1.11, RFC 7797
+  §7: a JWT never uses `b64: false`). Values copied from a token into errors
+  and span attributes are clipped to 128 bytes. Cap the transports as well:
+  `http.Server.MaxHeaderBytes` (1 MiB by default) and
+  `grpc.MaxHeaderListSize` (16 MiB by default) of about 64 KiB.
+- **Time claims** — `exp` is required unless `WithOptionalExpiry`; the
+  token is expired from `now == exp + skew` on (RFC 7519 §4.1.4: the current
+  time MUST be before `exp`); `nbf` is inclusive; an `iat` in the future is
+  refused. NumericDates outside 1970–9999 are refused, so a year-1 `exp` (a
+  zero `time.Time`) cannot make a token immortal, and no signer can emit
+  one. The skew is at most `MaxClockSkew` (5 minutes).
 
-The verifier also validates `iss`, `aud`, `exp`, `nbf`, and `iat` with a
-configurable clock skew, and resolves keys by `kid` against a JWKS provider
-(static or cached-remote).
+The verifier also validates `iss` and `aud` when configured, and resolves
+keys by `kid` against a JWKS provider (static or remote).
 
 - **Token confusion** (RFC 8725 §3.11–§3.12) — the OAuth2 access tokens
   `NewOAuth2AccessTokenSigner` signs are typed `at+jwt` and carry a `jti`
-  (RFC 9068 §2.1, §2.2); OpenID Connect ID Tokens are typed `JWT`. A resource
-  server verifies with `WithType(TypeAccessToken)` — RFC 9068 §4 requires it
-  to refuse any other `typ` — so an ID Token signed by the same keys is not
-  accepted as an access token. The check is opt-in: verifiers of other JWTs
-  keep accepting any `typ`.
+  (RFC 9068 §2.1, §2.2); OpenID Connect ID Tokens are typed `JWT`.
+  `BearerVerifier`, the resource-server adapter, refuses at construction a
+  verifier without `WithIssuer`, `WithAudience` and
+  `WithType(TypeAccessToken)`, or with `WithOptionalExpiry` — RFC 9068 §4
+  requires the resource server to check `typ`, `iss`, `aud` and `exp` — so an
+  ID Token, or an access token minted for another API, is refused. An
+  authorization server that types its access tokens `JWT` needs
+  `WithAccessTokenType("JWT")` (and the verifier's `WithType("JWT")`): such
+  tokens are told apart from ID Tokens by their audience only, which is safe
+  only when the resource server's audience is never the `client_id` of a
+  client of that issuer. Untyped access tokens are never accepted by
+  `BearerVerifier`. `NewVerifier` keeps these checks opt-in for other JWTs.
+- **Remote key sets** — `NewRemoteJWKS` fetches through
+  [`outbound`](#outbound-requests-ssrf): https only, publicly routable
+  destinations judged at dial time, no redirect, no proxy, 10 s and 1 MiB.
+  An internal JWKS host needs `WithOutboundPolicy` (exempt its subnet in
+  `AllowedPrefixes`); `WithHTTPClient` is an explicit opt-out that keeps the
+  10 s / 1 MiB bounds and still refuses a response that arrived over http
+  for an https URL. The set is refreshed in the background after the TTL
+  (5 minutes by default) and on a token with an unknown `kid` — at most once
+  per `MinKeySetRefreshInterval` (10 s), one fetch shared by every caller,
+  never under a lock, not aborted when a caller gives up; failed fetches
+  back off up to 5 minutes while the cached set keeps serving, until it is
+  older than `MaxKeySetStaleness` (24 h). Each key is validated on its own
+  and an unusable one ignored (private or symmetric material, `use` other
+  than `sig`, `key_ops` without `verify`, unknown `kty` or curve, RSA outside
+  2048–8192 bits, an `alg` the key cannot verify); a valid set without
+  usable keys replaces the previous one. An outage is
+  `ErrKeySetUnavailable`, never an invalid token. The provider prints and
+  reports its URL without userinfo or query.
+- **Signing keys** — `NewSigner` and `NewOAuth2AccessTokenSigner` return an
+  error for a key unfit for its algorithm (RSA under 2048 bits, another
+  curve, a public key, an HMAC secret shorter than its hash); KMS and HSM
+  keys (`jose.OpaqueSigner`) are checked through their public half. The RFC
+  9068 signer refuses claims missing a REQUIRED value — an empty `iss`,
+  `sub`, `aud` or `client_id`, a zero `iat` or `exp` — so an
+  `IssuerResolver` must return a non-empty audience for JWT access tokens.
+- **Token strings are not unique** — an ECDSA signature has a second valid
+  form (RFC 7518 §3.4 has no low-S rule; refusing it would refuse half of
+  the legitimate tokens): never key a cache, replay check or deny-list on
+  the token string — use `jti`.
 
 ## OAuth2
 
@@ -495,8 +562,9 @@ is, never for the protocol rules:
 - **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
   is the client ID, and an access token whose audience equals a client ID is
   refused at issuance; JWT access tokens are typed `at+jwt`. Resource
-  servers should require that type (`jwtsec.WithType(jwtsec.TypeAccessToken)`)
-  so an ID Token is never accepted as an access token.
+  servers require that type — `jwtsec.BearerVerifier` refuses a verifier
+  without `WithType(TypeAccessToken)` — so an ID Token is never accepted as
+  an access token.
 - **Keys.** Key rings are validated on every use (RS256 required, one key
   per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
   bound to algorithms) and fail closed; private and symmetric keys are never
@@ -1252,6 +1320,14 @@ span catalog.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
+- [ ] Build JWT resource servers with `jwtsec.BearerVerifier` over a
+      `NewVerifier(keys, WithIssuer(…), WithAudience(…),
+      WithType(TypeAccessToken))`; fetch the authorization server's keys with
+      `NewRemoteJWKS` and its default outbound policy, exempting only the
+      subnet of an internal JWKS host (`WithOutboundPolicy`).
+- [ ] Cap request headers at the transport (`http.Server.MaxHeaderBytes`,
+      `grpc.MaxHeaderListSize`, about 64 KiB): bearer tokens are bounded by
+      `jwtsec.DefaultMaxTokenSize` (16 KiB) by default.
 - [ ] Use `Profile20BCP` or stricter; do not enable the `implicit` /
       `password` legacy grants without a documented reason.
 - [ ] Give every confidential client that authenticates with a secret a

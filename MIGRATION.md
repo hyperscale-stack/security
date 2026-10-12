@@ -69,7 +69,7 @@ connectrpc/             ← core + otel + connectrpc.com/connect
 basic/                  ← core + password
 bearer/                 ← core
 password/               ← golang.org/x/crypto
-jwt/                    ← core + bearer + oauth2 + go-jose/v4 + otel
+jwt/                    ← core (outbound included) + bearer + oauth2 + go-jose/v4 + otel
 session/                ← core + golang.org/x/crypto + otel
 oauth2/                 ← core + stdlib
 oauth2/store/sql/       ← oauth2 + database/sql
@@ -1532,3 +1532,168 @@ To migrate:
    (or your scheme and realm), or configure the interceptors with
    `connectrpcsec.WithChallengeScheme` / `connectrpcsec.WithRealm`.
 2. Branch on the code, never on the message.
+
+### `jwt`: claims are decoded case-sensitively and strictly
+
+The verifier decoded claims with `encoding/json`, which matches member names
+case-insensitively and keeps the last duplicate: a signed `"Sub"`, `"SCOPE"`,
+`"EXP"`, `"AUD"` or `"ſub"` overrode the registered claim. RFC 7519 §4 requires
+unique claim names, §7.3 and §10.1.1 case-sensitive ones. Claims — into
+`StandardClaims` and into your `claimsOut` — are now decoded by go-jose's
+case-sensitive decoder, after a strict validation of the payload.
+
+| Payload or claims type | Before | After |
+| --- | --- | --- |
+| `"sub"` next to `"Sub"`, `"SUB"` or `"ſub"`, at any depth | the last case-insensitive match won | `ErrMalformedToken` |
+| `"sub"` twice | the last one won | `ErrMalformedToken` |
+| `"SUB"` without `"sub"` | `Subject` = its value | `Subject` empty: `"SUB"` is a private claim |
+| `claimsOut` field `Email string` without tag, payload `"email"` | filled | not filled |
+| `claimsOut` field of type `encoding/json.Number` | filled | `ErrMalformedToken` |
+| `"nbf": null`, `"exp": "123"`, `"aud": [1]`, `"sub": null` | ignored or coerced | `ErrMalformedToken` |
+| invalid UTF-8, an unpaired surrogate escape, a `null` or array payload | accepted | `ErrMalformedToken` |
+
+To migrate:
+
+1. Give every `claimsOut` field the exact claim name as its `json` tag.
+2. Replace `encoding/json.Number` fields with `float64`, `int64` or
+   `json.RawMessage`; do not read `claimsOut` after `Verify` failed.
+3. Make issuers emit claim names that differ by more than case.
+
+### `jwt`: tokens are size-bounded and parsed strictly
+
+go-jose decoded a token's header — about 100 times its size in allocations —
+before any check, whatever the token's length.
+
+| | Before | After |
+| --- | --- | --- |
+| token length | unbounded | at most `DefaultMaxTokenSize` (16 KiB); `WithMaxTokenSize(n)` on a `Verifier`; `VerifySignature` uses the default |
+| encoding | lenient base64url (non-zero pad bits, CR/LF ignored) | canonical unpadded base64url only |
+| header | go-jose's rules | strict JSON (no duplicate or case-variant names, UTF-8); `crit` and `b64` refused, even `null` |
+| algorithm outside the allow-list | `ErrMalformedToken` | `ErrAlgorithmNotAllowed` (`AsAlgorithmName` gives it, clipped) |
+| token values in errors and spans | unbounded | clipped to 128 bytes |
+
+To migrate:
+
+1. If your tokens exceed 16 KiB, raise the bound with
+   `jwtsec.WithMaxTokenSize`.
+2. Match `jwtsec.ErrAlgorithmNotAllowed` where you matched
+   `ErrMalformedToken` for refused algorithms.
+3. Cap request headers at the transport (`http.Server.MaxHeaderBytes`,
+   `grpc.MaxHeaderListSize`).
+
+### `jwt`: every verification key is bound to one algorithm and validated
+
+RFC 8725 §3.1: "each key MUST be used with exactly one algorithm, and this
+MUST be checked". `VerifySignature` checked it; the `Verifier` did not, nor did
+it check the key (RFC 7518 §3.3: RSA keys of 2048 bits or more).
+
+| Static or custom key | Before | After |
+| --- | --- | --- |
+| `Algorithm: RS256`, token RS384 or PS256 | verified | `ErrInvalidSignature` |
+| no `Algorithm` | verified the token's algorithm | verifies nothing |
+| RSA under 2048 bits, a private key, a `jose.JSONWebKey` in `PublicKey.Key` | verified | `ErrInvalidSignature` wrapping `ErrInvalidKey` |
+| two keys with the token's `kid` | the first | none |
+| token without `kid`, several keys | the key without `KeyID` | none |
+
+To migrate:
+
+1. Set `Algorithm` on every `PublicKey` you build.
+2. Replace RSA keys under 2048 bits; pass public keys (`*rsa.PublicKey`,
+   `*ecdsa.PublicKey`, `ed25519.PublicKey`), not private keys or JWKs.
+3. Give every key its own `kid`.
+
+### `jwt`: `exp`, NumericDates and the clock skew are enforced strictly
+
+A year-1 `exp` — what a zero `time.Time` marshalled to, and what the RFC 9068
+signer emitted for a zero `ExpiresAt` — disabled the expiry check.
+
+| | Before | After |
+| --- | --- | --- |
+| `now == exp + skew` | accepted | `ErrTokenExpired` (RFC 7519 §4.1.4) |
+| a NumericDate before 1970 or after 9999-12-31T23:59:59Z, year 1 included | expiry disabled or wrapped around | `ErrMalformedToken` |
+| signing such a date, a zero `time.Time` included | signed | `Sign` fails with `ErrUnsignableClaims` |
+| `WithClockSkew(d)` with `d < 0` or `d > 5 min` | clamped to 0 / accepted | panics (`MaxClockSkew`) |
+
+To migrate:
+
+1. Leave an absent date `nil` (`*NumericDate`) rather than zero.
+2. Keep the skew within `jwtsec.MaxClockSkew`.
+
+### `jwt`: signers validate their key and return errors; RFC 9068 claims are required
+
+`NewSigner` signed with RSA-1024, a public key or a short HMAC secret, and the
+RFC 9068 signer emitted empty `aud`, `iss`, `sub` or `client_id` (for instance
+with `StaticIssuer(iss, "")`).
+
+| | Before | After |
+| --- | --- | --- |
+| `NewSigner(key, opts...) Signer` | panicked on a missing `Algorithm` or `Key`, accepted any other key | `NewSigner(key, opts...) (Signer, error)`: `ErrInvalidKey` for a key unfit for its algorithm; KMS / HSM keys (`jose.OpaqueSigner`) checked through their public half; `jose.JSONWebKey` unwrapped |
+| `NewOAuth2AccessTokenSigner(key) *OAuth2AccessTokenSigner` | same | `(*OAuth2AccessTokenSigner, error)` |
+| `SignAccessToken` with an empty `Issuer`, `Subject`, `Audience` or `ClientID`, a zero `IssuedAt` or `ExpiresAt`, `ExpiresAt` not after `IssuedAt` | signed | `ErrUnsignableClaims` (no security sentinel), nothing signed — the OAuth2 grants answer `server_error` |
+
+To migrate:
+
+1. Handle the error of `NewSigner` and `NewOAuth2AccessTokenSigner`.
+2. Give HMAC secrets at least the hash size (32, 48, 64 bytes).
+3. With JWT access tokens, make the `IssuerResolver` return a non-empty
+   audience for every realm.
+
+### `jwt`: `NewRemoteJWKS` fetches through `outbound` with a bounded refresh
+
+The remote provider fetched outside the `outbound` SSRF guard, held a lock
+across the fetch, re-fetched on every call while the upstream failed, served a
+stale set forever, never refreshed on an unknown `kid`, and trusted every key.
+
+| | Before | After |
+| --- | --- | --- |
+| signature | `NewRemoteJWKS(url, opts...) JWKSProvider` | `NewRemoteJWKS(url, opts...) (JWKSProvider, error)`: the URL must be absolute https with a host and no userinfo (http only with `AllowHTTP` or `WithHTTPClient`) |
+| client | `http.Client{Timeout: 10s}`, default transport | `outbound.NewClient(outbound.Policy{})`, or `WithOutboundPolicy(p)`; `WithHTTPClient` is an explicit opt-out, still bounded (10 s, 1 MiB) |
+| loopback, private, link-local destination; plain http | fetched | refused unless the policy allows it |
+| redirects, environment proxies | followed, used | refused, ignored; a response over http for an https URL is never trusted |
+| refresh | under a lock; on every call while failing; stale set used forever; none on an unknown `kid` | one fetch at a time in the background after the TTL; at most every 10 s; back-off up to 5 min; set unused after 24 h; one refresh on an unknown `kid` |
+| keys | all kept; one unsupported key failed the set | validated one by one, unusable ones ignored; RSA without `alg`: RS256 if allowed, else the verifier's only RSA algorithm |
+| `WithCacheTTL(0)` | fetched on every call | panics: the TTL is in (0, 24 h] |
+| an outage seen by `Verify` | a plain error (401) | `ErrKeySetUnavailable`, which wraps no credential sentinel |
+
+To migrate:
+
+1. Handle the error of `NewRemoteJWKS`.
+2. For a JWKS host on a private network, pass
+   `jwtsec.WithOutboundPolicy(outbound.Policy{AllowedPrefixes: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}})`
+   (and `RootCAs` for a private CA); in tests against `httptest`, use
+   `outbound.Policy{AllowHTTP: true, AllowedPrefixes: outbound.LoopbackPrefixes()}`.
+3. Map `jwtsec.ErrKeySetUnavailable` to 503 if your transport does not.
+
+### `jwt`: `BearerVerifier` requires issuer, audience and `at+jwt`
+
+RFC 9068 §4 requires a resource server to check `typ` (`at+jwt`), `iss`, `aud`
+and `exp`. `BearerVerifier` accepted any verifier — the bundled examples
+checked no `typ` — so an ID Token or another API's access token was accepted.
+
+| | Before | After |
+| --- | --- | --- |
+| `BearerVerifier(v, resolver)` | any `Verifier` | panics unless `v` comes from `NewVerifier` with `WithIssuer`, `WithAudience` and `WithType(TypeAccessToken)`, without `WithOptionalExpiry` |
+| an authorization server typing its access tokens `JWT` | accepted with any verifier | `NewVerifier(…, WithType("JWT"))` and `BearerVerifier(v, nil, WithAccessTokenType("JWT"))` |
+| an untyped access token | accepted | refused (`ErrInvalidType`) |
+| a token without `sub` | an authentication with an empty name | `ErrInvalidClaims` |
+| `WithAudience("")` or `WithAudience("api", "")` | accepted, matched `"aud": ""` | panics |
+
+To migrate:
+
+1. Build the verifier with `jwtsec.WithIssuer(iss)`,
+   `jwtsec.WithAudience(aud)` and `jwtsec.WithType(jwtsec.TypeAccessToken)`;
+   sign access tokens with `NewOAuth2AccessTokenSigner`.
+2. For an authorization server typing access tokens `JWT`, add
+   `WithType("JWT")` to the verifier and `WithAccessTokenType("JWT")` to
+   `BearerVerifier` — only if your audience is never the `client_id` of one of
+   its clients.
+3. For untyped access tokens, wrap your own verifier in a
+   `bearer.VerifierFunc`.
+
+### `jwt`: `PublicKey` encodes only public asymmetric keys
+
+`PublicKey.MarshalJSON` redacted only a `[]byte` HMAC secret: an HMAC secret
+held as a `jose.JSONWebKey`, and a private key placed in a `PublicKey`, were
+written in full. Every key that is not an `*rsa.PublicKey`,
+`*ecdsa.PublicKey` or `ed25519.PublicKey` is now redacted
+(`"Key": "<type> REDACTED"`) in JSON, `fmt` and `slog`. Nothing to migrate.

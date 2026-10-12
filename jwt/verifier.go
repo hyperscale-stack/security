@@ -18,19 +18,23 @@ import (
 )
 
 // Verifier parses and validates a compact-serialized JWT, returning the
-// decoded standard claims plus the raw payload for caller-specific claim
-// decoding.
+// decoded standard claims and decoding the payload into a caller-specific
+// claims type.
 type Verifier interface {
 	// Verify parses token, validates the signature against the JWKS, runs
-	// the iss/aud/exp/nbf checks per the configured Options, and
-	// unmarshals the payload into claimsOut. claimsOut MAY be nil when the
-	// caller only needs the standard claims (returned separately).
+	// the iss/aud/exp/nbf checks per the configured Options, and decodes
+	// the payload into claimsOut — case-sensitively, by go-jose's decoder:
+	// give its fields their exact claim names as json tags, and no
+	// encoding/json.Number field. claimsOut MAY be nil when the caller only
+	// needs the standard claims (returned separately); its content is
+	// unspecified when Verify fails.
 	Verify(ctx context.Context, token string, claimsOut any) (*StandardClaims, error)
 }
 
 // NewVerifier returns a Verifier sourcing keys from provider. Defaults:
-// asymmetric algorithm allowlist (HS* opt-in only), no issuer / audience
-// pinning, no clock skew, wall clock.
+// asymmetric algorithm allowlist (HS* opt-in only), tokens of at most
+// DefaultMaxTokenSize bytes, exp required, no issuer / audience / type
+// pinning (BearerVerifier requires them), no clock skew, wall clock.
 func NewVerifier(provider JWKSProvider, opts ...Option) Verifier {
 	cfg := defaults()
 	for _, o := range opts {
