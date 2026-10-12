@@ -86,7 +86,7 @@ func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowe
 }
 
 // signatureKey returns the one key of keys that may verify a signature by
-// kid with alg.
+// kid with alg (see bindKey).
 func signatureKey(keys []PublicKey, kid string, alg Algorithm) (PublicKey, error) {
 	candidates := keys
 	if kid != "" {
@@ -104,8 +104,8 @@ func signatureKey(keys []PublicKey, kid string, alg Algorithm) (PublicKey, error
 	}
 
 	// A parsed alg is never empty: a key without Algorithm never matches.
-	if candidates[0].Algorithm != alg {
-		return PublicKey{}, fmt.Errorf("%w: the key is bound to another algorithm", ErrInvalidSignature)
+	if err := bindKey(candidates[0], alg); err != nil {
+		return PublicKey{}, err
 	}
 
 	return candidates[0], nil

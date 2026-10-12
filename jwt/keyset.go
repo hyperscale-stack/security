@@ -19,11 +19,16 @@ type PublicKey struct {
 	// KeyID is the JWS "kid" header value identifying this key. Required
 	// when the verifier serves more than one key.
 	KeyID string
-	// Algorithm is the JOSE alg this key was issued for. Required for
-	// signers; verifiers fall back to the token header when it is empty.
+	// Algorithm is the one JOSE alg this key verifies (RFC 8725 §3.1).
+	// Required: a [Verifier] and [VerifySignature] refuse a token whose
+	// alg is another one, so a key without Algorithm verifies nothing.
 	Algorithm Algorithm
-	// Key is the underlying crypto.PublicKey (rsa.PublicKey, ecdsa.PublicKey,
-	// ed25519.PublicKey, or []byte for HMAC).
+	// Key is the underlying crypto.PublicKey: an *rsa.PublicKey (2048 bits
+	// or more), an *ecdsa.PublicKey on the algorithm's curve, an
+	// ed25519.PublicKey — anything else, a private key or a jose.JSONWebKey
+	// included, verifies nothing (see [PublicKey.Validate]) — or, for an
+	// HMAC algorithm, the []byte secret (at least the hash size, RFC 7518
+	// §3.2).
 	Key crypto.PublicKey
 }
 
@@ -41,10 +46,11 @@ type PrivateKey struct {
 // signing key. Implementations are returned by [JWKSProvider.KeySet] and
 // MUST be safe for concurrent use.
 type KeySet interface {
-	// ByKeyID returns the verification key identified by kid, or (zero,
-	// false) when the kid is not present. An empty kid argument MAY match
-	// the single key in a single-key set; verifiers SHOULD always set kid
-	// to remove ambiguity once they rotate.
+	// ByKeyID returns the one verification key identified by kid, or
+	// (zero, false) when no key or several keys carry it (RFC 7517 §4.5: a
+	// kid shared by several keys designates none). An empty kid designates
+	// the key of a single-key set only; signers SHOULD always set kid to
+	// remove ambiguity once they rotate.
 	ByKeyID(kid string) (PublicKey, bool)
 
 	// Active returns the key currently preferred for SIGNING. Verifiers do
@@ -97,17 +103,27 @@ func (s *staticKeySet) ByKeyID(kid string) (PublicKey, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if kid == "" && len(s.publics) == 1 {
-		return s.publics[0], true
+	if kid == "" {
+		if len(s.publics) == 1 {
+			return s.publics[0], true
+		}
+
+		return PublicKey{}, false
 	}
+
+	found, n := PublicKey{}, 0
 
 	for _, k := range s.publics {
 		if k.KeyID == kid {
-			return k, true
+			found, n = k, n+1
 		}
 	}
 
-	return PublicKey{}, false
+	if n != 1 {
+		return PublicKey{}, false
+	}
+
+	return found, true
 }
 
 // Active implements [KeySet].

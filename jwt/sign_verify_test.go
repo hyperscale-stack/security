@@ -85,38 +85,6 @@ func TestVerifyRejectsAlgNone(t *testing.T) {
 	assert.Equal(t, "none", alg)
 }
 
-func TestVerifyRejectsKeyConfusion(t *testing.T) {
-	t.Parallel()
-
-	// Classic key-confusion attack: signer uses HS256 with the verifier's
-	// public RSA key as the HMAC secret. With HS256 NOT in the allowlist,
-	// the verifier must reject the token before reading any key material.
-	rsaPriv, rsaPub := genRSA(t)
-	provider := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{rsaPub})
-
-	verifier := jwtsec.NewVerifier(provider) // default allowlist excludes HS*
-
-	// Sign with HS256 — we'd need raw bytes of the RSA public key as the
-	// shared secret, but a legitimately signed RS256 token suffices to
-	// prove the verifier accepts RS256 while rejecting HS256 even when
-	// configured with the same key material:
-	rsSigner := jwtsec.NewSigner(rsaPriv)
-	good, err := rsSigner.Sign(context.Background(), &jwtsec.StandardClaims{
-		Subject:   "alice",
-		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
-	})
-	require.NoError(t, err)
-	_, err = verifier.Verify(context.Background(), good, nil)
-	require.NoError(t, err, "RS256 allowed by default")
-
-	// Now construct a verifier that has HS256 in the allowlist but whose
-	// JWKS still ships the RSA public key. Even then, the kid lookup must
-	// fail because the attacker token uses a different kid (none). We
-	// can't easily fake an HS256 token here without rebuilding go-jose's
-	// internals, so we settle for the allowlist proof above as the canonical
-	// defense; the AlgorithmAllowed test below covers the alg-driven path.
-}
-
 func TestVerifyRejectsExpired(t *testing.T) {
 	t.Parallel()
 

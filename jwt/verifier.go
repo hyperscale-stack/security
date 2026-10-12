@@ -91,7 +91,7 @@ func (v *verifier) verify(ctx context.Context, span trace.Span, token string, cl
 		return nil, ErrInvalidType
 	}
 
-	pub, err := v.key(ctx, header.KeyID)
+	pub, err := v.key(ctx, header.KeyID, alg)
 	if err != nil {
 		span.SetStatus(codes.Error, "kid")
 
@@ -108,8 +108,9 @@ func (v *verifier) verify(ctx context.Context, span trace.Span, token string, cl
 	return v.claims(span, payload, claimsOut)
 }
 
-// key returns the verification key the token's kid designates.
-func (v *verifier) key(ctx context.Context, kid string) (PublicKey, error) {
+// key returns the verification key the token's kid designates, bound to
+// alg (see bindKey).
+func (v *verifier) key(ctx context.Context, kid string, alg Algorithm) (PublicKey, error) {
 	keys, err := v.provider.KeySet(ctx)
 	if err != nil {
 		return PublicKey{}, fmt.Errorf("jwt: load JWKS: %w", err)
@@ -117,7 +118,11 @@ func (v *verifier) key(ctx context.Context, kid string) (PublicKey, error) {
 
 	pub, ok := keys.ByKeyID(kid)
 	if !ok {
-		return PublicKey{}, fmt.Errorf("%w: unknown kid %q", ErrInvalidSignature, clip(kid))
+		return PublicKey{}, fmt.Errorf("%w: no single key for kid %q", ErrInvalidSignature, clip(kid))
+	}
+
+	if err := bindKey(pub, alg); err != nil {
+		return PublicKey{}, err
 	}
 
 	return pub, nil

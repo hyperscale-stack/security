@@ -51,6 +51,35 @@ func familyOf(alg Algorithm) (keyFamily, elliptic.Curve) {
 	}
 }
 
+// bindKey checks that pub may verify a signature made with alg: the key is
+// bound to exactly that algorithm (RFC 8725 §3.1 — an empty Algorithm
+// verifies nothing) and, for an asymmetric algorithm, is a valid public key
+// for it (PublicKey.Validate: RSA of at least 2048 bits, the algorithm's
+// curve, never a private key, a wrapper or another type — RFC 7518 §3.3 to
+// §3.5). go-jose checks an HMAC secret's length itself (RFC 7518 §3.2).
+// Failures wrap ErrInvalidSignature (and ErrInvalidKey for an invalid key);
+// no key material appears in them.
+func bindKey(pub PublicKey, alg Algorithm) error {
+	if pub.Algorithm != alg {
+		return fmt.Errorf("%w: the key is bound to another algorithm", ErrInvalidSignature)
+	}
+
+	if isHMAC(alg) {
+		return nil
+	}
+
+	if err := pub.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
+	}
+
+	return nil
+}
+
+// isHMAC reports whether alg is a symmetric (HMAC) algorithm.
+func isHMAC(alg Algorithm) bool {
+	return alg == HS256 || alg == HS384 || alg == HS512
+}
+
 // Validate reports, wrapping [ErrInvalidKey], why k cannot verify the
 // signatures of its algorithm: an Algorithm that is not an asymmetric
 // signature algorithm (HMAC keys are secrets, never published), or a Key
