@@ -478,6 +478,62 @@
       }
     },
     {
+      "id": "baseline/xml-namespace-attributes",
+      "category": "baseline",
+      "attack": "xml:lang, xml:space, xml:base and xml:id on a signed Attribute (the names the XML namespace defines)",
+      "file": "baseline/xml-namespace-attributes.xml",
+      "sha256": "67e74ed91fd90728e13c419d2ac798431b3c30fc5cb5ab79efdfeb0e7f03666a",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
       "id": "baseline/rollover-no-keyinfo",
       "category": "baseline",
       "attack": "two trusted keys, signed by the new one without KeyInfo (rollover retry)",
@@ -6186,6 +6242,89 @@
         "outcome": "rejected",
         "sentinel": "ErrMalformedResponse",
         "detail": "prefixed attribute named like a SAML or XML-DSig attribute"
+      }
+    },
+    {
+      "id": "differential/xml-not-before-on-bearer-confirmation",
+      "category": "differential",
+      "attack": "xml:NotBefore on the signed bearer SubjectConfirmationData: encoding/xml reads it as the NotBefore the profile forbids",
+      "refs": [
+        "#87 code review F3 (attribute-name parser differential)",
+        "XML 1.0 §3.1 WFC Unique Att Spec",
+        "Namespaces in XML §6.3",
+        "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id",
+        "SAML Profiles §4.1.4.2"
+      ],
+      "file": "differential/xml-not-before-on-bearer-confirmation.xml",
+      "sha256": "c66fcd410c14cadc06fe48386329f9af8f4a57e5f3787bf69a77ee71fd9cd7a2",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
+      }
+    },
+    {
+      "id": "differential/xml-destination-on-signed-response",
+      "category": "differential",
+      "attack": "xml:Destination instead of Destination on a signed Response (Bindings §3.5.5.2 requires Destination)",
+      "refs": [
+        "#87 code review F3 (attribute-name parser differential)",
+        "XML 1.0 §3.1 WFC Unique Att Spec",
+        "Namespaces in XML §6.3",
+        "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id",
+        "SAML Bindings §3.5.5.2"
+      ],
+      "file": "differential/xml-destination-on-signed-response.xml",
+      "sha256": "d112f87999fcb9bea3cc94088b7a11c937e655361be40448fbf0a42cae9b196d",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
+      }
+    },
+    {
+      "id": "differential/xml-session-not-on-or-after",
+      "category": "differential",
+      "attack": "xml:SessionNotOnOrAfter with a time zone offset: escapes the UTC time-format rule",
+      "refs": [
+        "#87 code review F3 (attribute-name parser differential)",
+        "XML 1.0 §3.1 WFC Unique Att Spec",
+        "Namespaces in XML §6.3",
+        "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id",
+        "SAML Core §1.3.3"
+      ],
+      "file": "differential/xml-session-not-on-or-after.xml",
+      "sha256": "4bf2ce5b5a62a98ba49ba601223ce38a4802bccd80b82882798f99251dcc6a51",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
+      }
+    },
+    {
+      "id": "differential/xml-undefined-attribute",
+      "category": "differential",
+      "attack": "an attribute of the reserved XML namespace that it does not define (xml:evil) on the Status",
+      "refs": [
+        "#87 code review F3 (attribute-name parser differential)",
+        "XML 1.0 §3.1 WFC Unique Att Spec",
+        "Namespaces in XML §6.3",
+        "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id"
+      ],
+      "file": "differential/xml-undefined-attribute.xml",
+      "sha256": "c2409f39dbf151bb0f719e856b96c4976eeca76451799c3390ef5c7e5c5b0203",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
       }
     },
     {

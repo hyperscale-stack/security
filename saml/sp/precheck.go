@@ -177,15 +177,24 @@ var samlAttributeNames = map[string]bool{
 	"NameFormat": true, "FriendlyName": true, "Algorithm": true, "URI": true, "Type": true, "PrefixList": true,
 }
 
+// xmlAttributes are the attributes the XML namespace defines (XML 1.0
+// §2.10 and §2.12, XML Base, xml:id): its other names are reserved.
+var xmlAttributes = map[string]bool{"lang": true, "space": true, "base": true, "id": true}
+
 // checkPrefixedAttributes refuses a prefixed attribute named like a SAML or
-// XML-DSig attribute (xml:* aside). gosaml2 and goxmldsig decode with
-// encoding/xml, which matches attributes by local name: foo:Destination
-// would be read as the Destination, while this pre-check reads unprefixed
-// attributes only (code review F3).
+// XML-DSig attribute, and an xml:-prefixed attribute other than xml:lang,
+// xml:space, xml:base and xml:id. gosaml2 and goxmldsig decode with
+// encoding/xml, which matches attributes by local name: foo:Destination or
+// xml:NotBefore would be read as the Destination or the NotBefore, while
+// this pre-check reads unprefixed attributes only (code review F3, audit
+// SAML-I1). The gate keeps the xml prefix bound to the XML namespace.
 func checkPrefixedAttributes(root *etree.Element) error {
 	return walk(root, func(el *etree.Element) error {
 		for _, a := range el.Attr {
-			if a.Space != "" && a.Space != prefixXMLNS && a.Space != prefixXML && samlAttributeNames[a.Key] {
+			switch {
+			case a.Space == prefixXML && !xmlAttributes[a.Key]:
+				return reject(ErrMalformedResponse, "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id", nil)
+			case a.Space != "" && a.Space != prefixXMLNS && a.Space != prefixXML && samlAttributeNames[a.Key]:
 				return reject(ErrMalformedResponse, "prefixed attribute named like a SAML or XML-DSig attribute", nil)
 			}
 		}

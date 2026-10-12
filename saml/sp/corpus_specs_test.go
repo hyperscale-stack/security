@@ -45,6 +45,7 @@ const (
 	verifyFailed    = "signature verification failed"
 	twoLocalNames   = "two attributes of one local name"
 	prefixedSAML    = "prefixed attribute named like a SAML or XML-DSig attribute"
+	xmlAttribute    = "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
 	duplicateID     = "duplicate identifier"
 	notNSWellFormed = "name not namespace-well-formed"
 )
@@ -62,6 +63,9 @@ var (
 	refPolicy     = "#87 user decision Q1 (algorithm policy)"
 	refNamespaces = "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)"
 	refQ2         = "#87 user decision Q2 (ambiguous shapes refused)"
+	// refXMLNamespace: the xml prefix is reserved and only xml:lang,
+	// xml:space, xml:base and xml:id are defined (audit SAML-I1).
+	refXMLNamespace = "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id"
 )
 
 // chainA composes assertion edits.
@@ -284,6 +288,19 @@ func (g *corpusGen) baselineSpecs() []corpusSpec {
 			id: "baseline/opensaml-prefixlist", attack: "OpenSAML-style InclusiveNamespaces PrefixList on the exc-c14n transform",
 			build: func() []byte {
 				return g.xml("acme", respOpts{assertionSig: sigOpts{inclusivePrefixes: "xs"}})
+			},
+			expect: accepted(base),
+		},
+		{
+			id: "baseline/xml-namespace-attributes", attack: "xml:lang, xml:space, xml:base and xml:id on a signed Attribute (the names the XML namespace defines)",
+			build: func() []byte {
+				return g.xml("acme", onAssertion(func(a *etree.Element) {
+					attr := path(a, "AttributeStatement", "Attribute")
+					attr.CreateAttr("xml:lang", "en")
+					attr.CreateAttr("xml:space", "preserve")
+					attr.CreateAttr("xml:base", "https://idp.example.com/")
+					attr.CreateAttr("xml:id", "_attribute-mail")
+				}))
 			},
 			expect: accepted(base),
 		},
@@ -2008,6 +2025,53 @@ func (g *corpusGen) differentialSpecs() []corpusSpec {
 				})))
 			},
 			expect: rejected("ErrMalformedResponse", prefixedSAML),
+		},
+		corpusSpec{
+			id:     "differential/xml-not-before-on-bearer-confirmation",
+			attack: "xml:NotBefore on the signed bearer SubjectConfirmationData: encoding/xml reads it as the NotBefore the profile forbids",
+			refs:   append(refs, refXMLNamespace, "SAML Profiles §4.1.4.2"),
+			build: func() []byte {
+				return g.xml("acme", compact(onAssertion(func(a *etree.Element) {
+					scd(a).CreateAttr("xml:NotBefore", ts(-time.Minute))
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-destination-on-signed-response",
+			attack: "xml:Destination instead of Destination on a signed Response (Bindings §3.5.5.2 requires Destination)",
+			refs:   append(refs, refXMLNamespace, "SAML Bindings §3.5.5.2"),
+			build: func() []byte {
+				return g.xml("acme", compact(respOpts{signResponse: true, before: func(r, _ *etree.Element) {
+					r.RemoveAttr("Destination")
+					r.CreateAttr("xml:Destination", acsURL)
+				}}))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-session-not-on-or-after",
+			attack: "xml:SessionNotOnOrAfter with a time zone offset: escapes the UTC time-format rule",
+			refs:   append(refs, refXMLNamespace, "SAML Core §1.3.3"),
+			build: func() []byte {
+				return g.xml("acme", compact(onAssertion(func(a *etree.Element) {
+					st := child(a, "AuthnStatement")
+					st.RemoveAttr("SessionNotOnOrAfter")
+					st.CreateAttr("xml:SessionNotOnOrAfter", "2026-10-12T20:00:00+05:00")
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-undefined-attribute",
+			attack: "an attribute of the reserved XML namespace that it does not define (xml:evil) on the Status",
+			refs:   append(refs, refXMLNamespace),
+			build: func() []byte {
+				return g.xml("acme", compact(onResponse(func(r *etree.Element) {
+					child(r, "Status").CreateAttr("xml:evil", "_evil")
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
 		},
 		corpusSpec{
 			id: "differential/lone-prefixed-algorithm", attack: "evil:Algorithm without Algorithm on DigestMethod (re-signed)", refs: refs,
