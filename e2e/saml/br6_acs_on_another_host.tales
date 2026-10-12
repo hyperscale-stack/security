@@ -16,7 +16,6 @@ scenario "BR6 a login started on another host than the ACS fails" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 

@@ -20,7 +20,6 @@ scenario "BR4 a sibling host cannot plant the binding cookie" {
     name = "reset_helper"
     inputs = {
       mode = "hold"
-      gate = false
     }
   }
 

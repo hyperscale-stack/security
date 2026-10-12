@@ -18,7 +18,6 @@ scenario "BE2 hostile return targets never leave the site" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 

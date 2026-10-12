@@ -15,7 +15,6 @@ scenario "BE1 local logout is not Single Logout" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 

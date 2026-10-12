@@ -19,7 +19,6 @@ scenario "BR3 login CSRF into a browser without a binding cookie" {
     name = "reset_helper"
     inputs = {
       mode = "hold"
-      gate = false
     }
   }
 
@@ -133,7 +132,6 @@ scenario "BR3 login CSRF into a browser with its own binding cookie" {
     name = "reset_helper"
     inputs = {
       mode = "hold"
-      gate = false
     }
   }
 

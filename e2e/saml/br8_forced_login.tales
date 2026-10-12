@@ -1,15 +1,15 @@
 version = 1
 
-# BR8: login CSRF by forced login initiation. The SP's browser binding only
-# ties a response to the browser that started the login; it cannot tell
-# whether the user meant to start it. An attacker page that navigates the
-# victim to the login of a connection whose IdP the attacker controls (here
-# the IdP's as-mallory mode: it answers as mallory, unprompted) signs the
-# victim in to the attacker's account. The defense is to start logins only
-# from a same-origin gesture: the helper's proxy plays the documented gate
-# (Sec-Fetch-Site same-origin or none), since the example has none.
+# BR8: login CSRF by forced login initiation. The browser binding ties a
+# response to the browser that started the login; it cannot tell whether
+# the user meant to start it. A page navigating the victim to the login of a
+# connection whose IdP the attacker controls (here the IdP's as-mallory
+# mode: it answers as mallory, unprompted) would sign the victim in to the
+# attacker's account. examples/saml-sp therefore starts a login only when
+# Sec-Fetch-Site is same-origin or none, or absent for browsers without
+# Fetch Metadata.
 
-scenario "BR8 an ungated login can be forced from another site" {
+scenario "BR8 the example refuses a login forced from another site" {
   tags = ["saml", "browser", "br8"]
 
   skip_unless {
@@ -21,7 +21,6 @@ scenario "BR8 an ungated login can be forced from another site" {
     name = "reset_helper"
     inputs = {
       mode = "as-mallory"
-      gate = false
     }
   }
 
@@ -36,73 +35,12 @@ scenario "BR8 an ungated login can be forced from another site" {
 
     expect {
       url {
-        value = "${config.sp}/"
+        value = contains("${config.sp}/login?return=")
       }
 
       text {
-        selector = "p"
-        value    = contains("mallory-pairwise-id")
-      }
-    }
-  }
-
-  step "http" "evidence" {
-    retry {
-      attempts = 20
-      interval = "250ms"
-    }
-
-    request {
-      method = "GET"
-      url    = "${config.control}/state"
-    }
-
-    expect {
-      status = 200
-      json = {
-        signed_in        = 1
-        credential_posts = 0
-        login = {
-          sec_fetch_site = "cross-site"
-          status         = 302
-        }
-      }
-    }
-  }
-}
-
-scenario "BR8 the login-initiation gate refuses a forced login" {
-  tags = ["saml", "browser", "br8"]
-
-  skip_unless {
-    env_set = ["SAMLSP_E2E_SPKI"]
-    reason  = "run through e2e/saml/run.sh"
-  }
-
-  step "keyword" "helper" {
-    name = "reset_helper"
-    inputs = {
-      mode = "as-mallory"
-      gate = true
-    }
-  }
-
-  step "browser" "forced" {
-    target = "victim"
-
-    actions {
-      goto {
-        url = "${config.attacker}/force-login"
-      }
-    }
-
-    expect {
-      visible {
-        selector = "[data-testid='sp.gate']"
-      }
-
-      url {
-        value = contains("${config.sp}/login")
+        selector = "body"
+        value    = contains("sign-in must start from this site")
       }
     }
   }
@@ -121,18 +59,20 @@ scenario "BR8 the login-initiation gate refuses a forced login" {
     expect {
       status = 200
       json = {
-        signed_in     = 0
-        acs_count     = 0
-        gate_refusals = 1
+        signed_in = 0
+        acs_count = 0
         login = {
           sec_fetch_site = "cross-site"
           status         = 403
+        }
+        hits = {
+          "idp.test" = not_exists()
         }
       }
     }
   }
 
-  # The user's own gesture on the site still starts a login.
+  # The user's own click on the site still starts a login.
   step "keyword" "honest_idp" {
     name = "set_idp_mode"
     inputs = {
@@ -194,10 +134,139 @@ scenario "BR8 the login-initiation gate refuses a forced login" {
     expect {
       status = 200
       json = {
-        signed_in     = 1
-        gate_refusals = 1
+        signed_in = 1
         login = {
           sec_fetch_site = "same-origin"
+          status         = 302
+        }
+      }
+    }
+  }
+}
+
+scenario "BR8 the example refuses a login forced from a sibling host" {
+  tags = ["saml", "browser", "br8"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "as-mallory"
+    }
+  }
+
+  # evil.sp.test is same-site with sp.test, but not the same origin.
+  step "browser" "forced" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.evil_sp}/force-login"
+      }
+    }
+
+    expect {
+      url {
+        value = contains("${config.sp}/login?return=")
+      }
+
+      text {
+        selector = "body"
+        value    = contains("sign-in must start from this site")
+      }
+    }
+  }
+
+  step "http" "refused" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in = 0
+        acs_count = 0
+        login = {
+          sec_fetch_site = "same-site"
+          status         = 403
+        }
+      }
+    }
+  }
+}
+
+# BeginLogin itself judges no intent: a browser that sends no Fetch
+# Metadata (played by the helper, which strips the Sec-Fetch-* headers on
+# /_e2e/legacy-login before the example sees the request) passes the
+# example's gate, and the forced login completes as mallory. A strict
+# deployment refuses a missing header or starts logins with a
+# CSRF-protected POST (docs/saml-sp.md §5).
+scenario "BR8 without Fetch Metadata a forced login completes" {
+  tags = ["saml", "browser", "br8"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "as-mallory"
+    }
+  }
+
+  step "browser" "forced" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/force-legacy-login"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/"
+      }
+
+      text {
+        selector = "p"
+        value    = contains("mallory-pairwise-id")
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 1
+        credential_posts = 0
+        login = {
+          path           = "/login"
+          sec_fetch_site = ""
           status         = 302
         }
       }

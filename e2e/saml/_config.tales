@@ -63,11 +63,10 @@ config {
 }
 
 # Resets the helper (evidence, held responses, IdP sessions) and sets the
-# IdP mode and the login-initiation gate; returns the per-run passwords.
+# IdP mode; returns the per-run passwords.
 keyword "reset_helper" {
   inputs {
     mode = string
-    gate = bool
   }
 
   step "http" "reset" {
@@ -78,7 +77,6 @@ keyword "reset_helper" {
       body {
         json = {
           mode = input.mode
-          gate = input.gate
         }
       }
     }
@@ -120,33 +118,6 @@ keyword "set_idp_mode" {
       status = 200
       json = {
         mode = input.mode
-      }
-    }
-  }
-}
-
-# Turns the login-initiation gate on sp.test on or off.
-keyword "set_gate" {
-  inputs {
-    gate = bool
-  }
-
-  step "http" "set_gate" {
-    request {
-      method = "POST"
-      url    = "${config.control}/config"
-
-      body {
-        json = {
-          gate = input.gate
-        }
-      }
-    }
-
-    expect {
-      status = 200
-      json = {
-        gate = input.gate
       }
     }
   }

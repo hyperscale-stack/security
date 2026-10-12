@@ -9,11 +9,12 @@ package samlinterop_test
 // TestE2EHelperProcess alone, with SAMLSP_E2E_SERVE naming the file where
 // the helper reports that it is ready. The helper:
 //   - starts the real examples/saml-sp binary (SAMLSP_E2E_EXAMPLE) on its
-//     fixed :8084, trusting the helper's IdP;
+//     default 127.0.0.1:8084, trusting the helper's IdP;
 //   - serves, on one TLS port and one runtime certificate, the sites the
 //     scenarios browse: sp.test and acs.sp.test (a recording reverse proxy
-//     in front of the example), evil.sp.test (cookie tossing), idp.test (a
-//     stateful crewjam IdP) and attacker.test (cross-site pages);
+//     in front of the example), evil.sp.test (cookie tossing, a forced
+//     login from the same site), idp.test (a stateful crewjam IdP) and
+//     attacker.test (cross-site pages);
 //   - answers a plain-HTTP control API on loopback, which the scenarios use
 //     to reset the helper, switch the IdP behaviour and read the
 //     server-side evidence: the cookies each request carried, its
@@ -98,13 +99,11 @@ type e2eHelper struct {
 	mu              sync.Mutex
 	sp              *saml.EntityDescriptor // the example's SP metadata
 	mode            string                 // IdP behaviour, see deliver
-	gate            bool                   // login-initiation gate on sp.test
 	exchanges       []e2eExchange
 	hits            map[string]int // host and host+path
 	rejections      []string       // the example's "login rejected" log lines
 	failures        []string       // the example's "login error" log lines
 	credentialPosts int
-	gateRefusals    int
 	held            map[string]e2eForm
 	sessions        map[string]string // IdP session → user
 	binding         string            // latest browser-binding value set by the SP
@@ -497,7 +496,8 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 // serveSP proxies to the example and records the exchange; it also serves
-// the control cookies, a pixel, and the login-initiation gate.
+// the control cookies, a pixel, and a login entry point for browsers
+// without Fetch Metadata.
 func (h *e2eHelper) serveSP(w http.ResponseWriter, r *http.Request, host string, proxy http.Handler) {
 	rec := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 
@@ -521,20 +521,14 @@ func (h *e2eHelper) serveSP(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 
-	h.mu.Lock()
-	gated := h.gate && r.Method == http.MethodGet && r.URL.Path == "/login"
-	h.mu.Unlock()
+	// A browser that predates Fetch Metadata sends no Sec-Fetch-* header:
+	// this entry point forwards to the example's login without them.
+	if r.URL.Path == "/_e2e/legacy-login" {
+		r.URL.Path = "/login"
 
-	// The documented gate: a login starts only from this site (a link or
-	// a form on it) or from the address bar, never from another site.
-	if site := r.Header.Get("Sec-Fetch-Site"); gated && site != "same-origin" && site != "none" {
-		h.mu.Lock()
-		h.gateRefusals++
-		h.mu.Unlock()
-
-		page(rec, http.StatusForbidden, "sp.gate", "Sign-in must start on this site", "")
-
-		return
+		for _, name := range []string{"Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User"} {
+			r.Header.Del(name)
+		}
 	}
 
 	proxy.ServeHTTP(rec, r)
@@ -565,7 +559,14 @@ func (h *e2eHelper) record(r *http.Request, host string, status int, setCookies 
 // serveEvilSibling plants cookies for sp.test from its sibling: each
 // carries the latest binding value the SP set (mallory's, in BR4).
 func (h *e2eHelper) serveEvilSibling(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/toss" {
+	switch r.URL.Path {
+	case "/toss":
+	case "/force-login":
+		// Forced login initiation from the same site, another origin.
+		forceLogin(w, "/login")
+
+		return
+	default:
 		http.NotFound(w, r)
 
 		return
@@ -719,8 +720,10 @@ func (h *e2eHelper) serveAttacker(w http.ResponseWriter, r *http.Request) {
 		_ = e2eAutoPost.Execute(w, form)
 	case "/force-login":
 		// Forced login initiation: navigate the visitor to the SP's login.
-		page(w, http.StatusOK, "attacker.force", "redirecting", template.HTML(
-			`<script>location.replace("`+e2eSite("sp.test")+`/login?return=/")</script>`)) //nolint:gosec // constant markup
+		forceLogin(w, "/login")
+	case "/force-legacy-login":
+		// The same, as seen from a browser without Fetch Metadata.
+		forceLogin(w, "/_e2e/legacy-login")
 	case "/pixel":
 		// A cross-site subresource: carries only third-party cookies.
 		page(w, http.StatusOK, "attacker.pixel", "pixel page", template.HTML(
@@ -730,6 +733,13 @@ func (h *e2eHelper) serveAttacker(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// forceLogin answers a page navigating the visitor to path on sp.test, the
+// SP's login entry point, without any user gesture.
+func forceLogin(w http.ResponseWriter, path string) {
+	page(w, http.StatusOK, "force", "redirecting", template.HTML( //nolint:gosec // constant markup
+		`<script>location.replace("`+e2eSite("sp.test")+path+`?return=/")</script>`))
+}
+
 // control serves the control API.
 func (h *e2eHelper) control() http.Handler {
 	mux := http.NewServeMux()
@@ -737,7 +747,6 @@ func (h *e2eHelper) control() http.Handler {
 	mux.HandleFunc("POST /reset", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Mode string `json:"mode"`
-			Gate bool   `json:"gate"`
 		}
 
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
@@ -747,22 +756,21 @@ func (h *e2eHelper) control() http.Handler {
 		}
 
 		h.mu.Lock()
-		h.mode, h.gate = in.Mode, in.Gate
+		h.mode = in.Mode
 		h.exchanges, h.rejections, h.failures = nil, nil, nil
-		h.credentialPosts, h.gateRefusals, h.binding = 0, 0, ""
+		h.credentialPosts, h.binding = 0, ""
 		h.hits, h.held, h.sessions = map[string]int{}, map[string]e2eForm{}, map[string]string{}
 		h.mu.Unlock()
 
 		writeJSON(w, map[string]any{
 			"alice_password": h.passwords["alice"], "mallory_password": h.passwords["mallory"],
-			"mode": in.Mode, "gate": in.Gate,
+			"mode": in.Mode,
 		})
 	})
 
 	mux.HandleFunc("POST /config", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Mode *string `json:"mode"`
-			Gate *bool   `json:"gate"`
 		}
 
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil {
@@ -776,11 +784,7 @@ func (h *e2eHelper) control() http.Handler {
 			h.mode = *in.Mode
 		}
 
-		if in.Gate != nil {
-			h.gate = *in.Gate
-		}
-
-		out := map[string]any{"mode": h.mode, "gate": h.gate}
+		out := map[string]any{"mode": h.mode}
 		h.mu.Unlock()
 
 		writeJSON(w, out)
@@ -885,7 +889,7 @@ func (h *e2eHelper) snapshot() map[string]any {
 	}
 
 	return map[string]any{
-		"mode": h.mode, "gate": h.gate,
+		"mode":      h.mode,
 		"login":     view(last(func(e e2eExchange) bool { return e.method == http.MethodGet && e.path == "/login" })),
 		"acs":       view(acs),
 		"after_acs": view(afterACS),
@@ -894,8 +898,8 @@ func (h *e2eHelper) snapshot() map[string]any {
 		"acs_count": acsCount, "signed_in": signedIn,
 		"rejections": append([]string{}, h.rejections...), "rejection_count": len(h.rejections), "last_rejection": lastRejection,
 		"failures":         append([]string{}, h.failures...),
-		"credential_posts": h.credentialPosts, "gate_refusals": h.gateRefusals,
-		"hits": hits, "attacker_landing": hits["attacker.test/landing"],
+		"credential_posts": h.credentialPosts,
+		"hits":             hits, "attacker_landing": hits["attacker.test/landing"],
 	}
 }
 

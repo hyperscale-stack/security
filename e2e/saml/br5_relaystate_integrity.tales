@@ -17,7 +17,6 @@ scenario "BR5 a tampered RelayState finds no transaction" {
     name = "reset_helper"
     inputs = {
       mode = "tamper"
-      gate = false
     }
   }
 
@@ -122,7 +121,6 @@ scenario "BR5 a response delivered with another transaction's RelayState" {
     name = "reset_helper"
     inputs = {
       mode = "hold-first"
-      gate = false
     }
   }
 
@@ -290,7 +288,6 @@ scenario "BR5 a response without RelayState is unsolicited" {
     name = "reset_helper"
     inputs = {
       mode = "drop"
-      gate = false
     }
   }
 
@@ -368,7 +365,6 @@ scenario "BR5 a URL in RelayState is never followed" {
     name = "reset_helper"
     inputs = {
       mode = "url"
-      gate = false
     }
   }
 

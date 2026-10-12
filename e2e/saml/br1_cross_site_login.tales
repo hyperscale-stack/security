@@ -15,7 +15,6 @@ scenario "BR1 cross-site POST to the ACS carries the binding cookie" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 

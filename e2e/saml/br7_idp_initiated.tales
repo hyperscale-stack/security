@@ -14,7 +14,6 @@ scenario "BR7 an IdP-initiated response is unsolicited" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 

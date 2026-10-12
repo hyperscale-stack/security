@@ -16,7 +16,6 @@ scenario "BR2 the login works with third-party cookies blocked" {
     name = "reset_helper"
     inputs = {
       mode = ""
-      gate = false
     }
   }
 
