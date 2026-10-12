@@ -63,25 +63,35 @@ func (r *recordingStore) SaveTransaction(ctx context.Context, rec *samlsp.Transa
 }
 
 // TestCaptureKeycloakFixture regenerates the pinned fixture from a
-// disposable Keycloak 26.0.7 (it creates a realm, a user and a SAML client):
+// disposable Keycloak 26.0.7: it deletes and recreates the realm "samlsp",
+// with a user and a SAML client, so never point it at a shared instance.
+// The admin credentials come from the environment; none is committed:
 //
+//	export SAMLSP_KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 //	docker run --rm -p 127.0.0.1:18080:8080 \
-//	  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+//	  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+//	  -e KC_BOOTSTRAP_ADMIN_PASSWORD="$SAMLSP_KEYCLOAK_ADMIN_PASSWORD" \
 //	  quay.io/keycloak/keycloak:26.0.7 start-dev
 //	SAMLSP_KEYCLOAK_URL=http://127.0.0.1:18080 go test -run TestCaptureKeycloakFixture ./...
 //
-// It is skipped otherwise.
+// SAMLSP_KEYCLOAK_ADMIN_USER defaults to "admin". The test is skipped
+// unless SAMLSP_KEYCLOAK_URL and SAMLSP_KEYCLOAK_ADMIN_PASSWORD are set.
 func TestCaptureKeycloakFixture(t *testing.T) {
-	base := os.Getenv("SAMLSP_KEYCLOAK_URL")
-	if base == "" {
-		t.Skip("set SAMLSP_KEYCLOAK_URL to a disposable Keycloak 26.0.7 to regenerate " + keycloakDir)
+	base, password := os.Getenv("SAMLSP_KEYCLOAK_URL"), os.Getenv("SAMLSP_KEYCLOAK_ADMIN_PASSWORD")
+	if base == "" || password == "" {
+		t.Skip("set SAMLSP_KEYCLOAK_URL and SAMLSP_KEYCLOAK_ADMIN_PASSWORD (a disposable Keycloak 26.0.7) to regenerate " + keycloakDir)
+	}
+
+	user := os.Getenv("SAMLSP_KEYCLOAK_ADMIN_USER")
+	if user == "" {
+		user = "admin"
 	}
 
 	// Keycloak's realm metadata sets WantAuthnRequestsSigned: the SP signs
 	// with a throwaway key registered on the client.
 	spKey := newKey(t, "sp")
 
-	kc := keycloakAdmin{t: t, base: base, token: keycloakToken(t, base)}
+	kc := keycloakAdmin{t: t, base: base, token: keycloakToken(t, base, user, password)}
 	kc.deleteRealm()
 	kc.post("/admin/realms", map[string]any{"realm": keycloakRealm, "enabled": true})
 	kc.post("/admin/realms/"+keycloakRealm+"/users", map[string]any{
@@ -201,11 +211,11 @@ type keycloakAdmin struct {
 	base, token string
 }
 
-func keycloakToken(t *testing.T, base string) string {
+func keycloakToken(t *testing.T, base, user, password string) string {
 	t.Helper()
 
 	resp, err := http.PostForm(base+"/realms/master/protocol/openid-connect/token", url.Values{
-		"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {"admin"}, "password": {"admin"},
+		"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {user}, "password": {password},
 	})
 	require.NoError(t, err)
 
