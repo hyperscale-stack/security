@@ -6,6 +6,7 @@ package oidcprovider_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -108,6 +109,32 @@ func TestNewRegistersTheProviderAsTheServerExtension(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, op.Server())
 	assert.NotNil(t, op.Server().Config().Extension, "the provider is the server's extension")
+}
+
+// TestNewKeepsItsOwnCopiesOfTheConfiguration: New validates the
+// configuration's slices, then keeps its own copies — a caller changing
+// them afterwards changes nothing the discovery document publishes (and
+// races nothing).
+func TestNewKeepsItsOwnCopiesOfTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	acrs := []string{"urn:example:loa:1"}
+	claims := []string{"tenant"}
+	e := newEnv(t, withConfig(func(c *oidcprovider.Config) { c.ACRValuesSupported, c.ClaimsSupported = acrs, claims }))
+
+	acrs[0], claims[0] = "not visible ascii é \n", "sub"
+
+	rec := serve(e.op.DiscoveryHandler(), get("/.well-known/openid-configuration"))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var doc struct {
+		ACRValues []string `json:"acr_values_supported"`
+		Claims    []string `json:"claims_supported"`
+	}
+
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, []string{"urn:example:loa:1"}, doc.ACRValues)
+	assert.Contains(t, doc.Claims, "tenant")
 }
 
 func TestPaths(t *testing.T) {

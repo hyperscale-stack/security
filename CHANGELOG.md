@@ -901,6 +901,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - Unicode format and line/paragraph separator characters (bidirectional
   overrides, zero-width characters) are stripped from a SAML
   `StatusError.Message`.
+- `oidcprovider.New` keeps its own copies of `Config.ACRValuesSupported`
+  and `Config.ClaimsSupported`, taken before they are validated. It used to
+  keep the caller's `ACRValuesSupported` slice: a later write by the caller
+  reached the discovery document's `acr_values_supported` unvalidated, and
+  raced its handler.
 
 ### Removed
 

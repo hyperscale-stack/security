@@ -143,8 +143,13 @@ type Provider struct {
 // authorization_code grant; register refresh_token for refresh tokens and
 // set grant.Config.RefreshTokenScope to [ScopeOfflineAccess] (see
 // [Config.AllowRefreshWithoutOfflineAccess]). The server's clock (Now) and
-// ErrorHook (OnError) are the provider's.
+// ErrorHook (OnError) are the provider's. New keeps its own copies of
+// cfg's slices: changing them afterwards changes nothing.
 func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
+	// Copied before they are validated: what is checked is what is served.
+	cfg.ClaimsSupported = slices.Clone(cfg.ClaimsSupported)
+	cfg.ACRValuesSupported = slices.Clone(cfg.ACRValuesSupported)
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
