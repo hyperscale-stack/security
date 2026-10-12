@@ -10,11 +10,23 @@ replace github.com/hyperscale-stack/security/oidc/client/store/sql => ../../../o
 
 replace github.com/hyperscale-stack/security/oidc/client/store/redis => ../../../oidc/client/store/redis
 
+replace github.com/hyperscale-stack/security/oidc/provider => ../../../oidc/provider
+
+replace github.com/hyperscale-stack/security/oauth2 => ../../../oauth2
+
+replace github.com/hyperscale-stack/security/jwt => ../../../jwt
+
+replace github.com/hyperscale-stack/security/bearer => ../../../bearer
+
 require (
 	github.com/go-sql-driver/mysql v1.10.1
+	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/jwt v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client/store/redis v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client/store/sql v0.0.0-00010101000000-000000000000
+	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/stretchr/testify v1.12.1
@@ -26,7 +38,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000 // indirect
+	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

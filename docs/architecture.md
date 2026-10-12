@@ -46,7 +46,7 @@ transitive dependencies.
 | `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
 | `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
-| `./internal/interop/oidcstack` | (private)                           | The OIDC stack end to end; opt-in real PostgreSQL/MySQL/Redis store runs      |
+| `./internal/interop/oidcstack` | (private)                           | Our RP against our OP, attacks included; opt-in real PG/MySQL/Redis store runs |
 | `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak, shared stores, e2e helper) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
@@ -88,6 +88,7 @@ internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
 internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
+                           + oidc/provider + oauth2 + jwt
                            + opt-in pgx, go-sql-driver/mysql, go-redis
 internal/interop/saml/  ← (tests only) saml/sp + its stores + crewjam/saml + etree
                           + modernc sqlite + pgx + go-sql-driver/mysql

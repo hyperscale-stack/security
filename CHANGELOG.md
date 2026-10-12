@@ -245,6 +245,21 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a third with a wrong binding — on real PostgreSQL 16, MySQL 8.0 and
   Redis 7.4 (digest-pinned `compose.yaml`), opt-in through
   `OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`, `OIDCCLIENT_REDIS_ADDR`.
+- **End-to-end tests of the OpenID Connect stack** (`internal/interop/oidcstack`,
+  #85, #86): our Relying Party against our Provider over HTTP — every
+  client authentication method (`client_secret_basic` with form-encoded
+  credentials), root and path issuers (with a trailing slash too), the nine
+  ID Token algorithms, `prompt`, `max_age`, `acr_values`, hints, consent
+  denial, granted scope, refresh — and the attacks that must fail: mix-up
+  with an attacker provider and between the issuers of one provider (RFC
+  9207, RFC 9700 §4.4; the residual risk without `iss` is characterized), an
+  issuer-bound client used at another issuer, re-signed or substituted ID
+  Tokens, token and UserInfo responses, code injection, PKCE downgrade,
+  callback and code replay, refresh-token reuse, key rotation and
+  withdrawal windows, concurrent callbacks across replicas (on real
+  PostgreSQL, MySQL and Redis too), and provider, store or network
+  failures. No third-party OpenID Connect or JOSE library is involved
+  (`TestDependencyPolicy`).
 - **Example** `examples/oidc-client`: sign-in through several connections
   with distinct callback routes, account linking on (connection, issuer,
   subject), and a local session.

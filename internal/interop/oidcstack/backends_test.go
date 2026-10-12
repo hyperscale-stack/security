@@ -287,3 +287,24 @@ func TestRealBackendReplicaRace(t *testing.T) {
 		}
 	})
 }
+
+// TestRealBackendCallbackRace delivers one callback of a login with our
+// provider 40 times at once to two replicas of the relying party, each
+// with its own store instance on a real PostgreSQL, MySQL or Redis server
+// and the same transaction keys: exactly one completes the login, and the
+// provider's token endpoint is reached exactly once.
+func TestRealBackendCallbackRace(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, newReplica func() oidcclient.TransactionStore) {
+		o := newOP(t)
+		replicas := []*oidcclient.Client{
+			o.rp(t, o.basic(), func(cfg *oidcclient.Config) { cfg.Store = newReplica() }),
+			o.rp(t, o.basic(), func(cfg *oidcclient.Config) { cfg.Store = newReplica() }),
+		}
+
+		ar, loc := o.begin(t, replicas[0], oidcclient.AuthOptions{})
+
+		ids, errs := raceCallbacks(t, replicas, callbackOf(loc, ar.Binding), 40)
+		requireOneWinner(t, ids, errs)
+		require.Equal(t, 1, o.hits(o.paths(o.base).Token))
+	})
+}

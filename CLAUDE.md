@@ -111,7 +111,7 @@ is intentionally skipped in CI.
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
-| `./internal/interop/oidcstack` | (private, tests only)                 | the OIDC stack end to end; opt-in real-backend store runs |
+| `./internal/interop/oidcstack` | (private, tests only)                 | our RP ↔ our OP end to end, attacks included; opt-in real-backend store runs |
 | `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
