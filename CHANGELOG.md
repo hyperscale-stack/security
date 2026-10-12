@@ -286,7 +286,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   published). Access-token audiences equal to a client ID are refused
   (RFC 9068 §5). [docs/oidc-provider.md](docs/oidc-provider.md) is the exact
   feature matrix; no certification is claimed.
-- **OpenID interoperability tests** (`internal/interop/oidcop`, private and
+- **OpenID Provider interoperability tests** (`internal/interop/oidcop`, private and
   test-only): the provider against `github.com/coreos/go-oidc/v3` and
   `golang.org/x/oauth2` as an independent relying party, over TLS — code
   flow with S256 PKCE, the three client authentication methods, path
