@@ -66,16 +66,19 @@ func WithAudience(aud ...string) Option {
 	return func(c *config) { c.audiences = slices.Clone(aud) }
 }
 
-// WithClockSkew tolerates the given amount of clock drift on `exp` and
-// `nbf` comparisons. Recommended values: 30s–2min for inter-service hops.
-func WithClockSkew(d time.Duration) Option {
-	return func(c *config) {
-		if d < 0 {
-			d = 0
-		}
+// MaxClockSkew bounds [WithClockSkew]: RFC 7519 §4.1.4 and RFC 9068 §4
+// allow "some small leeway, usually no more than a few minutes".
+const MaxClockSkew = 5 * time.Minute
 
-		c.skew = d
+// WithClockSkew tolerates the given amount of clock drift on `exp`, `nbf`
+// and `iat` comparisons (default 0). Recommended values: 30s–2min for
+// inter-service hops. A skew outside [0, MaxClockSkew] panics.
+func WithClockSkew(d time.Duration) Option {
+	if d < 0 || d > MaxClockSkew {
+		panic("jwtsec.WithClockSkew: the skew must be between 0 and MaxClockSkew")
 	}
+
+	return func(c *config) { c.skew = d }
 }
 
 // DefaultMaxTokenSize is the largest token, in bytes of its compact

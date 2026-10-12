@@ -62,6 +62,14 @@ var (
 	// in a JWK Set (see [PublicKey.Validate], [PrivateKey.Validate],
 	// [MarshalJWKS]). The key material never appears in the error.
 	ErrInvalidKey = newJWTError("invalid key", security.ErrInvalidCredentials)
+
+	// ErrUnsignableClaims signals claims a signer refuses to sign: claims
+	// that cannot be encoded — a [NumericDate] before 1970 or after year
+	// 9999, the zero time.Time included — or, for the RFC 9068 access
+	// tokens of [OAuth2AccessTokenSigner], a REQUIRED claim missing or
+	// empty (RFC 9068 §2.2). Nothing is signed. A server-side error, not a
+	// credential failure: it wraps no security sentinel.
+	ErrUnsignableClaims = errors.New("jwt: unsignable claims")
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via

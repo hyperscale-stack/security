@@ -7,7 +7,10 @@ package jwtsec
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
 	josejson "github.com/go-jose/go-jose/v4/json"
@@ -186,9 +189,20 @@ func (a *Audience) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// maxNumericDate is 9999-12-31T23:59:59Z, the last NumericDate the package
+// reads or writes.
+const maxNumericDate = 253402300799
+
+// errNumericDate reports a NumericDate outside the accepted range.
+var errNumericDate = errors.New("NumericDate is not a number between 1970 and year 9999")
+
 // NumericDate wraps a UNIX timestamp encoded as a JSON number per RFC 7519
 // §2. The pointer-wrapped form on StandardClaims lets callers distinguish
-// "no claim" from "claim = 0" (epoch).
+// "no claim" from "claim = 0" (epoch). The package reads and writes the
+// dates from 1970-01-01T00:00:00Z to 9999-12-31T23:59:59Z only: a date
+// outside — the zero time.Time, which encodes as year 1, included — is
+// refused both ways, so that no wrapped-around or sentinel value can make a
+// token immortal.
 type NumericDate time.Time
 
 // NewNumericDate constructs a NumericDate from a time.Time, truncating to
@@ -208,25 +222,38 @@ func (n *NumericDate) Time() time.Time {
 	return time.Time(*n)
 }
 
-// MarshalJSON implements [json.Marshaler]; emits a UNIX integer.
+// MarshalJSON implements [json.Marshaler]: a UNIX integer. A date outside
+// the accepted range fails — and so does signing claims that carry it.
 func (n NumericDate) MarshalJSON() ([]byte, error) {
-	b, err := json.Marshal(time.Time(n).Unix())
-	if err != nil {
-		return nil, fmt.Errorf("jwt: marshal numeric date: %w", err)
+	sec := time.Time(n).Unix()
+	if sec < 0 || sec > maxNumericDate {
+		return nil, fmt.Errorf("jwt: %w", errNumericDate)
 	}
 
-	return b, nil
+	return strconv.AppendInt(nil, sec, 10), nil
 }
 
-// UnmarshalJSON implements [json.Unmarshaler]; accepts integer or float.
+// UnmarshalJSON implements [json.Unmarshaler]: a JSON number of seconds,
+// fractions allowed, within the accepted range. null leaves n unchanged,
+// the encoding/json convention (decoders handle a null pointer field
+// themselves; the claims checks refuse a null registered date).
 func (n *NumericDate) UnmarshalJSON(b []byte) error {
-	var f float64
-	if err := json.Unmarshal(b, &f); err != nil {
-		return err //nolint:wrapcheck // pass-through json error
+	b = bytes.TrimSpace(b)
+	if string(b) == "null" {
+		return nil
 	}
 
-	sec, nsec := int64(f), int64((f-float64(int64(f)))*1e9)
-	*n = NumericDate(time.Unix(sec, nsec).UTC())
+	if !isJSONNumber(b) || !json.Valid(b) {
+		return fmt.Errorf("jwt: %w", errNumericDate)
+	}
+
+	seconds, err := strconv.ParseFloat(string(b), 64)
+	if err != nil || seconds < 0 || seconds > maxNumericDate {
+		return fmt.Errorf("jwt: %w", errNumericDate)
+	}
+
+	whole, frac := math.Modf(seconds)
+	*n = NumericDate(time.Unix(int64(whole), int64(frac*float64(time.Second))).UTC())
 
 	return nil
 }

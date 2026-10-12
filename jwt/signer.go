@@ -78,7 +78,7 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 
 	payload, err := json.Marshal(claims)
 	if err != nil {
-		return "", fmt.Errorf("jwt: marshal claims: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrUnsignableClaims, err)
 	}
 
 	jwk := s.key.toJOSE()

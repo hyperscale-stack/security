@@ -18,6 +18,8 @@ import (
 //
 // An `exp` claim is mandatory unless the verifier opted into
 // [WithOptionalExpiry]: a token that never expires is rejected fail-closed.
+// A present date is always checked: decodeClaims refused null and
+// out-of-range values, so there is no "zero" date meaning "absent".
 func validateStandardClaims(c *config, claims *StandardClaims) error {
 	now := c.clock.Now()
 
@@ -36,25 +38,23 @@ func validateStandardClaims(c *config, claims *StandardClaims) error {
 		if c.requireExpiry {
 			return ErrMissingExpiry
 		}
-	} else {
-		exp := claims.ExpiresAt.Time()
-		if !exp.IsZero() && now.After(exp.Add(c.skew)) {
-			return fmt.Errorf("%w (now=%s exp=%s)", ErrTokenExpired,
-				now.Format(time.RFC3339), exp.Format(time.RFC3339))
-		}
+	} else if exp := claims.ExpiresAt.Time(); !now.Before(exp.Add(c.skew)) {
+		// RFC 7519 §4.1.4: the current time MUST be before exp — expired
+		// from now == exp + skew on.
+		return fmt.Errorf("%w (now=%s exp=%s)", ErrTokenExpired,
+			now.Format(time.RFC3339), exp.Format(time.RFC3339))
 	}
 
 	if claims.NotBefore != nil {
-		nbf := claims.NotBefore.Time()
-		if !nbf.IsZero() && now.Before(nbf.Add(-c.skew)) {
+		// RFC 7519 §4.1.5: valid from nbf on, inclusive.
+		if nbf := claims.NotBefore.Time(); now.Before(nbf.Add(-c.skew)) {
 			return fmt.Errorf("%w (now=%s nbf=%s)", ErrTokenNotYetValid,
 				now.Format(time.RFC3339), nbf.Format(time.RFC3339))
 		}
 	}
 
 	if claims.IssuedAt != nil {
-		iat := claims.IssuedAt.Time()
-		if !iat.IsZero() && iat.After(now.Add(c.skew)) {
+		if iat := claims.IssuedAt.Time(); iat.After(now.Add(c.skew)) {
 			return fmt.Errorf("%w (now=%s iat=%s)", ErrTokenNotYetValid,
 				now.Format(time.RFC3339), iat.Format(time.RFC3339))
 		}
