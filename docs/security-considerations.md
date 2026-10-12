@@ -124,7 +124,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   refused outright under the stricter profile.
 - **Client authentication** — `client_secret_basic` / `client_secret_post`
   compare secrets in constant time and never accept an empty one. Basic
-  answers an empty password or a missing `client_id` with
+  form-decodes the user-id and password (RFC 6749 §2.3.1, Appendix B) after
+  splitting them at the first colon, refuses an invalid escape as a
+  malformed header, and answers an empty decoded password or a missing
+  `client_id` with
   `401 invalid_client` before loading the client, the same answer whether
   or not the client exists; a form with an empty or absent `client_secret`
   is a `none` request, which only public clients may make. Custom

@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -85,6 +86,13 @@ func errInvalid(cause error) error {
 // decodeBasic decodes a "Basic base64(id:secret)" Authorization header.
 // Returns (id, secret, true) on success, ("", "", false) on any malformed
 // input; the caller decides what error to surface.
+//
+// RFC 6749 §2.3.1 encodes the client_id and the client_secret with the
+// application/x-www-form-urlencoded algorithm (Appendix B) before they
+// become the Basic user-id and password (RFC 7617): the credentials split
+// at the first colon — an encoded one ("%3A") belongs to its value — and
+// each part is then form-decoded ("+" is a space, "%XX" a byte). A part
+// that is not valid form encoding makes the header malformed.
 func decodeBasic(header string) (string, string, bool) {
 	const prefix = "Basic "
 	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
@@ -96,12 +104,22 @@ func decodeBasic(header string) (string, string, bool) {
 		return "", "", false
 	}
 
-	colon := strings.IndexByte(string(raw), ':')
-	if colon < 0 {
+	encodedID, encodedSecret, found := strings.Cut(string(raw), ":")
+	if !found {
 		return "", "", false
 	}
 
-	return string(raw[:colon]), string(raw[colon+1:]), true
+	id, err := url.QueryUnescape(encodedID)
+	if err != nil {
+		return "", "", false
+	}
+
+	secret, err := url.QueryUnescape(encodedSecret)
+	if err != nil {
+		return "", "", false
+	}
+
+	return id, secret, true
 }
 
 // errSecretMismatch is the typed error returned by secret-matcher

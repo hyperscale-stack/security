@@ -372,6 +372,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `refresh token reused`. The former `refresh token reused — family
   revoked` claimed a revocation that may have failed, and its em dash lies
   outside the RFC 6749 §5.2 `error_description` charset.
+- `client_secret_basic` (`oauth2/clientauth`) form-decodes the client
+  credentials as RFC 6749 §2.3.1 and Appendix B require: the Basic user-id and
+  password are split at the first colon, then each is
+  `application/x-www-form-urlencoded`-decoded, so a client identifier or
+  secret holding reserved or non-ASCII characters — sent encoded, as
+  `golang.org/x/oauth2` does — authenticates. Breaking for clients sending
+  `%` or `+` unencoded (an unencoded `+` now reads as a space, an invalid
+  escape is a malformed header); credentials made of unreserved characters
+  are unaffected. The empty-credential guard applies to the decoded values.
+  See [MIGRATION.md](MIGRATION.md).
 
 ### Removed
 

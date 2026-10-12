@@ -534,3 +534,35 @@ To migrate:
    `GrantRequest.Extension.ExtendTokenResponse` between minting their tokens
    and persisting them, or answer without its members.
 3. Without an extension, nothing changes on the wire.
+
+### `oauth2`: `client_secret_basic` form-decodes the client credentials (#84)
+
+RFC 6749 §2.3.1 encodes the `client_id` and the `client_secret` with the
+`application/x-www-form-urlencoded` algorithm (Appendix B) before they become
+the HTTP Basic user-id and password. `client_secret_basic` compared them
+undecoded, so a compliant client whose identifier or secret holds a reserved
+or non-ASCII character — e.g. `golang.org/x/oauth2` with `AuthStyleInHeader`,
+which sends `url.QueryEscape(secret)` — was answered `invalid_client`. The
+credentials are now split at the first colon of the decoded header (an
+encoded colon, `%3A`, belongs to its value) and each part is form-decoded:
+
+| Basic credentials (after Base64)                    | Before                             | After                                                   |
+| --------------------------------------------------- | ---------------------------------- | ------------------------------------------------------- |
+| unreserved characters only (`A-Z a-z 0-9 - . _ ~`)  | authenticated                      | unchanged                                               |
+| encoded reserved characters (`p%40ss%2Bw%3Ard`)     | compared encoded: `invalid_client` | decoded (`p@ss+w:rd`): authenticated                    |
+| unencoded `+` in the secret (`a+b`)                 | compared as is                     | decoded as a space (`a b`): `invalid_client`            |
+| invalid escape (`50%zz`, a lone `%`)                | compared as is                     | `401 invalid_client` (`malformed Basic Authorization header`), client not loaded |
+| empty client_id or secret once decoded              | `401 invalid_client` (#94)         | unchanged                                               |
+
+`client_secret_post` is unaffected (the form body was always decoded).
+
+To migrate:
+
+1. Clients authenticating with `client_secret_basic` encode their
+   `client_id` and `client_secret` with `application/x-www-form-urlencoded`
+   before Base64 (RFC 6749 §2.3.1) — `url.QueryEscape` in Go. A client whose
+   credentials only use unreserved characters needs no change: secrets
+   generated as base64url or hex are unaffected.
+2. A client that sends a secret holding `%` or `+` unencoded now fails:
+   encode it, switch it to `client_secret_post`, or rotate it to unreserved
+   characters.
