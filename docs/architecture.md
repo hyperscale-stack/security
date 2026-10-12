@@ -86,6 +86,7 @@ examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/saml/  ← (tests only) saml/sp + crewjam/saml
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,

@@ -504,6 +504,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   holds, private and symmetric keys are never published, an access-token
   audience equal to a client ID is refused (RFC 9068 §5), and UserInfo only
   serves tokens of clients still registered at the issuer.
+- The SAML 2.0 Service Provider (`saml/sp`) trusts only the IdP entity ID
+  and the signing certificates of each connection, and refuses before any
+  signature work what parsers could read differently: DTDs, several
+  assertions, misplaced or repeated signatures, two attributes of one local
+  name, SHA-1 (unless a connection opts in), inclusive C14N and unknown
+  algorithms, encrypted assertions, and documents over the size, element,
+  depth and namespace limits — including SAMLResponse values of a form the
+  application parsed first. Every identity value comes from the verified
+  canonical bytes; responses are bound to the browser, the connection and
+  the request, and consumed once. It requires
+  `github.com/russellhaering/goxmldsig` v1.6.1 or later (CVE-2026-33487,
+  GHSA-qhrp-hfff-vphr) and gosaml2 v0.12.0 or later (GHSA-66r8-42f7-4q74).
+  See [docs/security-considerations.md](docs/security-considerations.md#saml-service-provider).
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

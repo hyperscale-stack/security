@@ -480,6 +480,18 @@ one way.
   of the `Response`, unique `ID`s and the placement of every signature, so
   signature-wrapping attacks have nothing to wrap (see
   `TestCompleteLogin_XMLSignatureWrapping`).
+- **No parser differential on attributes.** The pre-check reads the raw
+  tree with etree, goxmldsig and gosaml2 decode with `encoding/xml`, and
+  the two disagree on attributes that share a local name: etree's
+  `SelectAttr` returns the first in document order whatever its prefix,
+  `encoding/xml` the last, after exclusive C14N has reordered them. An
+  element carrying two attributes of one local name — whatever their
+  prefixes, namespace declarations included — and a prefixed attribute
+  named like a SAML or XML-DSig attribute (`foo:Algorithm`,
+  `foo:Destination`) are therefore refused, and the pre-check reads
+  unprefixed attributes only. Without this, `Algorithm="…sha256"
+  foo:Algorithm="…sha1"` passed the allowlist while goxmldsig digested with
+  SHA-1.
 - **Signed Response or signed Assertion** (Profiles §4.1.3.5/§4.1.4.5 as
   amended by errata E93 and E26): a signed Response covers its single
   assertion. The SP metadata omits `WantAssertionsSigned`.
@@ -520,6 +532,17 @@ IdP to send one assertion carrying a persistent NameID:
 - **Keycloak** — set the client's Name ID format to `persistent` and enable
   *Force name ID format*; signing the documents, the assertions or both
   works (the pinned interoperability fixture signs both).
+- **Google Workspace** — the custom SAML app sends the primary email with
+  the *unspecified* format by default; set the Name ID format to
+  *Persistent* and map the Name ID to an immutable attribute (an employee
+  ID, for instance), since email addresses can be renamed and reassigned.
+- **Shibboleth IdP** — it sends transient NameIDs unless a persistent
+  NameID generator (computed or stored IDs, see `saml-nameid.properties`
+  and `saml-nameid.xml`) is configured, and selects the format from the
+  AuthnRequest's NameIDPolicy, the SP metadata and the relying party's
+  `nameIDFormatPrecedence`. Without a persistent generator, a connection
+  requesting the persistent format gets an error status
+  (`InvalidNameIDPolicy`).
 
 ### Browser binding, CSRF and replay
 
@@ -538,8 +561,13 @@ IdP to send one assertion carrying a persistent NameID:
   its CSRF defense.
 - **RelayState is never a URL.** It is a random handle; the return target
   stays server-side in `LoginOptions.AppState`, and the library never
-  redirects. Applications must still only redirect to local paths (see
-  `examples/saml-sp`).
+  redirects. An application redirecting to its AppState after the login
+  must accept local paths only, with an allowlist rather than a cleanup:
+  one leading `/` and no `//`, RFC 3986 path and query characters only — no
+  control character, white space, `\` or non-ASCII byte — and still a local
+  path once percent-decoded. Browsers drop TAB, LF and CR inside a URL and
+  read `\` as `/`: `/\t/evil.example` is `//evil.example`, another origin.
+  `safeReturn` in `examples/saml-sp` implements this.
 - **Unsolicited responses are refused**: IdP-initiated SSO cannot be bound
   to a browser (Profiles §4.1.5, errata E90).
 - **Single use.** `CompleteLogin` consumes the transaction atomically — one
@@ -578,12 +606,18 @@ collides with another tenant's. Key external accounts on the connection ID
 and the persistent NameID (with the issuer and the NameID qualifiers).
 Never key them on a transient NameID or an email attribute, and never link
 accounts by email automatically: an IdP vouching for an address says nothing
-about the account another tenant's IdP vouches for.
+about the account another tenant's IdP vouches for. Encode the key without
+ambiguity — a connection ID may contain any separator: `examples/saml-sp`
+length-prefixes the connection ID, the issuer, the NameID qualifiers (absent
+ones stand for the issuer and the SP entity ID), the format and the value.
 
 ### Resource limits
 
-A response passes a streaming lexical gate before anything builds a tree:
-at most `MaxResponseSize` bytes (256 KiB by default, 16 KiB to 1 MiB), 450
+`MaxResponseSize` (256 KiB by default, 16 KiB to 1 MiB) bounds the ACS
+request body — or, when the application parsed the form before calling
+`CompleteLogin` (Go's own limit is 10 MB), the SAMLResponse value itself.
+The response then passes a streaming lexical gate before anything builds a
+tree: at most 1 MiB, 450
 elements (`MaxResponseElements`, sized from goxmldsig's 1000-node
 canonicalization budget; gosaml2 verifies up to about 500), 4096 tokens,
 depth 64, 16 attributes and 16 namespace declarations per element, 32
@@ -592,9 +626,12 @@ instruction. Measured on an Apple M-series machine (Go 1.26): a typical
 login costs about 1.1 ms and 1.1 MB; the most expensive response within the
 default limits about 25–33 ms and 21–28 MiB, about 61–69 ms and 33–43 MiB at
 the 1 MiB ceiling; inputs aimed at amplification are refused within 10 ms
-and 9 MiB. A response carrying hundreds of group memberships exceeds the
-element cap (`ErrResponseTooLarge`): filter the groups the IdP releases to
-the application rather than raising limits.
+and 9 MiB. When a signature carries no KeyInfo and the connection trusts
+several certificates, each certificate tried re-runs the whole verification:
+at most the three most recent valid ones are tried, which bounds that case
+to three times the costs above. A response carrying hundreds of group
+memberships exceeds the element cap (`ErrResponseTooLarge`): filter the
+groups the IdP releases to the application rather than raising limits.
 
 ### Dependencies
 

@@ -234,9 +234,16 @@ PKCE. Not supported, and refused where a provider could select them:
   signs AuthnRequests with RSA only.
 - **IdP certificate rollover** — a certificate carried in a signature's
   `KeyInfo` must equal a trusted one: import the IdP's new certificate
-  (refresh its metadata) before the IdP signs with it. Validity is checked
-  at `now − ClockSkew`, so a certificate whose validity starts at the
-  rollover is accepted only `ClockSkew` later.
+  (refresh its metadata) before the IdP signs with it. Without `KeyInfo`,
+  only the three most recent valid certificates of the connection are
+  tried. Validity is checked at `now − ClockSkew`, so a certificate whose
+  validity starts at the rollover is accepted only `ClockSkew` later.
+- **Clock skew cannot be zero** — `ClockSkew: 0` means the 3-minute
+  default; one nanosecond is the strictest setting.
+- **XML attribute names** — an element of a response carrying two
+  attributes of one local name (whatever their prefixes), or a prefixed
+  attribute named like a SAML or XML-DSig attribute, is refused: parsers
+  disagree on such documents. No IdP is known to emit them.
 - **Legacy browsers** that mishandle `SameSite=None` (Safari on iOS 12 and
   macOS 10.14, Chrome 51–66) drop the binding cookie: their logins fail
   with `ErrMissingBrowserBinding`.
