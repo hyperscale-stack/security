@@ -54,6 +54,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"AuthorizationCodeSingleUse", testCodeSingleUse},
 		{"AuthorizationCodeUnknown", testCodeUnknown},
 		{"AuthorizationCodeConcurrentConsume", testCodeConcurrentConsume},
+		{"AuthorizationCodeRedirectURIOmitted", testCodeRedirectURIOmitted},
 		{"AuthorizationCodeReplayRevokesIssuedTokens", testCodeReplayRevokesIssuedTokens},
 		{"AccessTokenSaveLookupRevoke", testAccessLifecycle},
 		{"AccessTokenLookupUnknown", testAccessUnknown},
@@ -172,6 +173,7 @@ func sampleCode(hash string) *oauth2.AuthorizationCode {
 		ClientID:            testClientID,
 		Subject:             testSubject,
 		RedirectURI:         testRedirectURI,
+		RedirectURIOmitted:  true,
 		Scope:               testScope,
 		CodeChallenge:       "challenge-" + hash,
 		CodeChallengeMethod: "S256",
@@ -301,6 +303,27 @@ func testCodeConcurrentConsume(t *testing.T, s oauth2.Storage) {
 	}
 
 	mustEqual(t, wins, 1, "successful consumes")
+}
+
+// testCodeRedirectURIOmitted round-trips both values of RedirectURIOmitted,
+// on consumption and on the replay record — which the Redis store
+// re-encodes: a store dropping the flag relaxes nothing (false requires
+// redirect_uri), but one always reading true would let a token request omit
+// a redirect_uri the authorization request included (RFC 6749 §4.1.3).
+func testCodeRedirectURIOmitted(t *testing.T, s oauth2.Storage) {
+	for _, omitted := range []bool{false, true} {
+		saved := sampleCode(fmt.Sprintf("code-redirect-omitted-%t", omitted))
+		saved.RedirectURIOmitted = omitted
+		mustNoError(t, s.SaveAuthorizationCode(ctx(), saved), "save")
+
+		got, err := s.ConsumeAuthorizationCode(ctx(), saved.CodeHash)
+		mustNoError(t, err, "consume")
+		requireRecord(t, got, saved, "consumed code")
+		mustEqual(t, got.RedirectURIOmitted, omitted, "RedirectURIOmitted")
+
+		got, err = s.ConsumeAuthorizationCode(ctx(), saved.CodeHash)
+		requireReplay(t, got, err, saved, "replayed code")
+	}
 }
 
 // --- access tokens -------------------------------------------------------

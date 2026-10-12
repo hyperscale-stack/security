@@ -35,7 +35,8 @@ func marshalJSON(v any) ([]byte, error) {
 // extension_data fields are plain strings — the only JSON values cjson
 // round-trips byte-exact — and absent from a record written before they
 // existed, which decodes them as "". The rotation script compares them,
-// reading a missing or null field as "".
+// reading a missing or null field as "". The code's redirect_uri_omitted
+// flag is a JSON boolean, which cjson round-trips, absent when false.
 
 type codeDTO struct {
 	ClientID            string `json:"client_id"`
@@ -49,6 +50,9 @@ type codeDTO struct {
 	ExpiresAt           int64  `json:"expires_at"`
 	Issuer              string `json:"issuer,omitempty"`
 	ExtensionData       string `json:"extension_data,omitempty"`
+	// RedirectURIOmitted is absent — false, redirect_uri required — from a
+	// payload written before it existed.
+	RedirectURIOmitted bool `json:"redirect_uri_omitted,omitempty"`
 	// Consumed and ConsumedBy are only written by consumeCodeScript: the
 	// flag of a consumed code and the nonce of the call that consumed it.
 	// A payload without them — or with nulls — is an unconsumed code.
@@ -69,6 +73,7 @@ func encodeCode(c *oauth2.AuthorizationCode) ([]byte, error) {
 		ExpiresAt:           c.ExpiresAt.Unix(),
 		Issuer:              c.Issuer,
 		ExtensionData:       c.ExtensionData,
+		RedirectURIOmitted:  c.RedirectURIOmitted,
 	})
 }
 
@@ -93,6 +98,7 @@ func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, bool, strin
 		ExpiresAt:           time.Unix(d.ExpiresAt, 0),
 		Issuer:              d.Issuer,
 		ExtensionData:       d.ExtensionData,
+		RedirectURIOmitted:  d.RedirectURIOmitted,
 	}, d.Consumed, d.ConsumedBy, nil
 }
 

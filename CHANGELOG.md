@@ -580,6 +580,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `OnError`. New: `oauth2.ClientAllowsGrantType` and the `GrantTypeImplicit`,
   `GrantTypeClientCredentials`, `GrantTypePassword` constants. Every client
   must declare its grant types and scopes. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `AuthorizationCode.RedirectURIOmitted` (storage, breaking for
+  custom stores and SQL schemas)**: codes record whether the authorization
+  request named a `redirect_uri`; every store persists the flag
+  (`store/sql`: a `redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0` column
+  existing databases add with the `ALTER TABLE` of
+  [MIGRATION.md](MIGRATION.md)).
 
 ### Fixed
 
@@ -667,6 +673,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `make generate` works again: `.mockery.yaml` used mockery v3 syntax while
   the pinned tool was v2, and mockery needs a Go 1.27-aware `x/tools` to load
   the packages (v3.8.1).
+- The OAuth2 token endpoint requires `redirect_uri` only when the
+  authorization request included one (RFC 6749 §4.1.3): a client with a
+  single registered redirect URI that omitted it at `/authorize` was refused
+  at `/token` unless it sent the URI anyway. A `redirect_uri` sent at
+  `/token` is still compared with the URI the code was delivered to.
 
 ### Removed
 

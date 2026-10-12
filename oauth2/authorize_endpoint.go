@@ -386,6 +386,9 @@ type authorizeState struct {
 	// fragment reports that responses travel in the redirect fragment (the
 	// implicit flow, RFC 6749 §4.2.2) rather than in the query string.
 	fragment bool
+	// redirectURIOmitted reports that the request named no redirect_uri:
+	// its code may be redeemed without one (RFC 6749 §4.1.3).
+	redirectURIOmitted bool
 }
 
 // authorizeTarget is where and how an authorization response travels: the
@@ -568,7 +571,10 @@ func (s *Server) validateAuthorize(
 	}
 
 	ar.Issuer = issuer
-	st := &authorizeState{ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment}
+	st := &authorizeState{
+		ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment,
+		redirectURIOmitted: in.params.Get(paramRedirectURI) == "",
+	}
 
 	if s.cfg.Extension == nil {
 		return st, true
@@ -888,6 +894,7 @@ func (s *Server) issueAuthorizationCode(
 		ClientID:            st.clientID,
 		Subject:             grant.subject,
 		RedirectURI:         st.ar.RedirectURI,
+		RedirectURIOmitted:  st.redirectURIOmitted,
 		Scope:               grant.scope,
 		CodeChallenge:       st.ar.CodeChallenge,
 		CodeChallengeMethod: st.ar.CodeChallengeMethod,

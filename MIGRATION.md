@@ -1106,3 +1106,46 @@ To migrate:
 3. A custom grant gets `GrantRequest.Form` with the core's parameters
    single-valued and its own as sent; a custom `ClientAuthenticator` reads a
    body parameter as its first non-empty occurrence.
+
+### `oauth2`: `redirect_uri` at `/token` only when `/authorize` received one
+
+RFC 6749 §4.1.3: `redirect_uri` is "REQUIRED, if the `redirect_uri`
+parameter was included in the authorization request". A client with a single
+registered redirect URI may omit it from its authorization request, but its
+token request was then refused (`invalid_grant`, `redirect_uri mismatch`)
+unless it sent the URI anyway. Codes now record whether the authorization
+request named a redirect URI:
+
+| Authorization request | Token request | Before | After |
+| --------------------- | ------------- | ------ | ----- |
+| named `redirect_uri` | the same URI | issued | unchanged |
+| named `redirect_uri` | none, or another | `invalid_grant` | unchanged |
+| omitted it (single registered URI) | none | `invalid_grant` | issued |
+| omitted it | the registered URI | issued | unchanged |
+| omitted it | another URI | `invalid_grant` | unchanged |
+
+`oauth2.AuthorizationCode` gains `RedirectURIOmitted`; its zero value —
+codes written before the upgrade included — keeps requiring `redirect_uri`.
+
+To migrate:
+
+1. **SQL.** `oauth2_auth_codes` gains a `redirect_uri_omitted` column, which
+   `Migrate` does not add to an existing table. Until it exists, every code
+   write and redemption fails with `server_error`. Apply, through your
+   migration tool and before the new build serves traffic — the same
+   statement on PostgreSQL, MySQL and SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes ADD COLUMN redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0;
+   ```
+
+   Existing rows read `0`: their token requests keep requiring
+   `redirect_uri`, as before.
+2. **Redis and memory** need nothing: a code payload without the flag
+   requires `redirect_uri`.
+3. **Custom stores** persist and return `RedirectURIOmitted` — on the record
+   of a `*oauth2.CodeReplayError` too — and pass `storetest.RunConformance`.
+4. **Rollout.** Instances may be upgraded one at a time once the column
+   exists: an earlier build writes the column default (required) and
+   requires `redirect_uri` itself, which only refuses what it refused
+   before.

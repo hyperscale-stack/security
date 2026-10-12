@@ -114,6 +114,7 @@ func TestRedisLegacyPayloadsReadEmptyContext(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, code.Issuer)
 			assert.Empty(t, code.ExtensionData)
+			assert.False(t, code.RedirectURIOmitted, "a legacy code keeps requiring redirect_uri")
 
 			_, err = b.store.ConsumeAuthorizationCode(ctx, "legacy")
 
@@ -122,6 +123,7 @@ func TestRedisLegacyPayloadsReadEmptyContext(t *testing.T) {
 			require.ErrorAs(t, err, &replay)
 			assert.Empty(t, replay.Record.Issuer)
 			assert.Empty(t, replay.Record.ExtensionData)
+			assert.False(t, replay.Record.RedirectURIOmitted)
 
 			at, err := b.store.LookupAccessToken(ctx, "at-legacy")
 			require.NoError(t, err)

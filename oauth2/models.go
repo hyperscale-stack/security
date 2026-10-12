@@ -25,9 +25,18 @@ type AuthorizationCode struct {
 	ClientID string
 	// Subject is the resource-owner subject (`sub` claim equivalent).
 	Subject string
-	// RedirectURI is the redirect_uri sent to /authorize; the matching
-	// /token call MUST present the same URI.
+	// RedirectURI is the redirect URI the code was delivered to: the
+	// redirect_uri sent to /authorize, or the client's sole registered URI
+	// when the request named none. A token request carrying redirect_uri
+	// MUST present this URI (RFC 6749 §4.1.3).
 	RedirectURI string
+	// RedirectURIOmitted reports that the authorization request named no
+	// redirect_uri: the token request may then omit it too (RFC 6749
+	// §4.1.3: redirect_uri is REQUIRED "if the redirect_uri parameter was
+	// included in the authorization request"). Its zero value — a record
+	// written before it existed included — requires it. Every store
+	// persists it.
+	RedirectURIOmitted bool
 	// Scope is the granted (post-consent) scope.
 	Scope string
 	// CodeChallenge is the PKCE challenge (RFC 7636 §4.2). Required for

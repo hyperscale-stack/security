@@ -28,7 +28,9 @@ import (
 //     and issuer (code.Issuer MUST match the issuer resolved for the
 //     request: a code is redeemed in the realm that authorized it, OIDC
 //     Core §16.15).
-//  4. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
+//  4. Re-bind redirect_uri (RFC 6749 §4.1.3): required when the
+//     authorization request included it, and identical to the URI the code
+//     was delivered to whenever sent.
 //  5. Verify PKCE when present / required, then check that the client may
 //     use the grant. A code issued without code_challenge is refused when
 //     the request carries a code_verifier, under every profile: the PKCE
@@ -138,7 +140,7 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 		return oauth2.ErrInvalidGrant.WithDescription("authorization code issued by another issuer")
 	}
 
-	if redirect := req.Form.Get("redirect_uri"); redirect != code.RedirectURI {
+	if !redirectURIMatches(req.Form.Get("redirect_uri"), code) {
 		return oauth2.ErrInvalidGrant.WithDescription("redirect_uri mismatch")
 	}
 
@@ -147,6 +149,20 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 	}
 
 	return checkGrantType(req.Client, oauth2.GrantTypeAuthorizationCode)
+}
+
+// redirectURIMatches applies RFC 6749 §4.1.3 to the redirect_uri a token
+// request sent ("" when it omitted it): it is required when the
+// authorization request included one — a record without the flag included
+// — and, whenever present, it must be the URI the code was delivered to
+// (§5.2 invalid_grant: "does not match the redirection URI used in the
+// authorization request").
+func redirectURIMatches(sent string, code *oauth2.AuthorizationCode) bool {
+	if sent == "" {
+		return code.RedirectURIOmitted
+	}
+
+	return sent == code.RedirectURI
 }
 
 // revokeReplayed answers the replay of a consumed code (RFC 6749 §4.1.2).

@@ -40,8 +40,9 @@ future refactor phases.
   locking semantics, not tested.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
-  `consumed`, #83's `issuer` and `extension_data`) are added with the
-  statements MIGRATION.md lists, through your migration tool.
+  `consumed`, #83's `issuer` and `extension_data`, the codes'
+  `redirect_uri_omitted`) are added with the statements MIGRATION.md lists,
+  through your migration tool.
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels

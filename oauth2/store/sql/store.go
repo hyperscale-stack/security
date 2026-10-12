@@ -78,14 +78,14 @@ func (s *Store) SaveAuthorizationCode(ctx context.Context, code *oauth2.Authoriz
 	const q = `INSERT INTO oauth2_auth_codes
 		(code_hash, client_id, subject, redirect_uri, scope,
 		 code_challenge, code_challenge_method, nonce, issued_at, expires_at,
-		 issuer, extension_data)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 issuer, extension_data, redirect_uri_omitted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.exec(ctx, q,
 		code.CodeHash, code.ClientID, code.Subject, code.RedirectURI, code.Scope,
 		code.CodeChallenge, code.CodeChallengeMethod, code.Nonce,
 		code.IssuedAt.Unix(), code.ExpiresAt.Unix(),
-		code.Issuer, code.ExtensionData)
+		code.Issuer, code.ExtensionData, flag(code.RedirectURIOmitted))
 	if err != nil {
 		return fmt.Errorf("sqlstore: save authorization code: %w", err)
 	}
@@ -143,18 +143,19 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, codeHash string) (
 func (s *Store) selectCode(ctx context.Context, tx *sql.Tx, codeHash string) (*oauth2.AuthorizationCode, error) {
 	const sel = `SELECT client_id, subject, redirect_uri, scope,
 		code_challenge, code_challenge_method, nonce, issued_at, expires_at,
-		COALESCE(issuer, ''), COALESCE(extension_data, '')
+		COALESCE(issuer, ''), COALESCE(extension_data, ''), redirect_uri_omitted
 		FROM oauth2_auth_codes WHERE code_hash = ?`
 
 	var (
 		code              = &oauth2.AuthorizationCode{CodeHash: codeHash}
 		issuedAt, expires int64
+		redirectOmitted   int64
 	)
 
 	err := tx.QueryRowContext(ctx, s.dialect.rebind(sel), codeHash).Scan(
 		&code.ClientID, &code.Subject, &code.RedirectURI, &code.Scope,
 		&code.CodeChallenge, &code.CodeChallengeMethod, &code.Nonce,
-		&issuedAt, &expires, &code.Issuer, &code.ExtensionData,
+		&issuedAt, &expires, &code.Issuer, &code.ExtensionData, &redirectOmitted,
 	)
 
 	switch {
@@ -166,6 +167,7 @@ func (s *Store) selectCode(ctx context.Context, tx *sql.Tx, codeHash string) (*o
 
 	code.IssuedAt = time.Unix(issuedAt, 0)
 	code.ExpiresAt = time.Unix(expires, 0)
+	code.RedirectURIOmitted = redirectOmitted != 0
 
 	return code, nil
 }
@@ -561,6 +563,15 @@ type grantRow struct {
 	familyID      string
 	issuer        string
 	extensionData string
+}
+
+// flag is the SMALLINT a boolean column stores: 1 for true, 0 for false.
+func flag(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
 }
 
 // familyActive reports whether a token of familyID may be used: it is

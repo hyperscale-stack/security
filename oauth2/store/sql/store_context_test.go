@@ -193,6 +193,7 @@ func TestSQLDocumentedUpgradeKeepsLegacyRows(t *testing.T) {
 	execAll(t, db, pre83Schema...)
 	seedLegacyRows(t, db)
 	execAll(t, db, upgrade83...)
+	execAll(t, db, upgradeRedirectURIOmitted...)
 
 	store, err := sqlstore.New(db, sqlstore.SQLite)
 	require.NoError(t, err)
@@ -221,6 +222,7 @@ func TestSQLDocumentedBackfillBindsLegacyRows(t *testing.T) {
 	execAll(t, db, pre83Schema...)
 	seedLegacyRows(t, db)
 	execAll(t, db, upgrade83...)
+	execAll(t, db, upgradeRedirectURIOmitted...)
 	execAll(t, db, backfill83...)
 
 	store, err := sqlstore.New(db, sqlstore.SQLite)
@@ -253,4 +255,66 @@ func TestSQLContextColumnsAreNullableText(t *testing.T) {
 			assert.Equal(t, 0, notNull, table+"."+column+" is nullable")
 		}
 	}
+}
+
+// upgradeRedirectURIOmitted is the statement MIGRATION.md tells an existing
+// deployment to apply for the redirect_uri flag of codes — keep it
+// identical.
+var upgradeRedirectURIOmitted = []string{
+	`ALTER TABLE oauth2_auth_codes ADD COLUMN redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0`,
+}
+
+// TestSQLDocumentedUpgradeAddsRedirectURIOmitted applies the documented
+// statement to a database of the previous schema holding a code: the code
+// reads RedirectURIOmitted false — its token request keeps requiring
+// redirect_uri, as it did — and a new code records the flag.
+func TestSQLDocumentedUpgradeAddsRedirectURIOmitted(t *testing.T) {
+	t.Parallel()
+
+	db := openRawSQLite(t)
+	execAll(t, db, pre83Schema...)
+	execAll(t, db, upgrade83...)
+	seedLegacyRows(t, db)
+	execAll(t, db, upgradeRedirectURIOmitted...)
+
+	store, err := sqlstore.New(db, sqlstore.SQLite)
+	require.NoError(t, err)
+
+	code, err := store.ConsumeAuthorizationCode(t.Context(), "legacy-code")
+	require.NoError(t, err)
+	assert.False(t, code.RedirectURIOmitted)
+
+	now := time.Now()
+	fresh := &oauth2.AuthorizationCode{
+		CodeHash: "fresh", ClientID: "c", Subject: "s", RedirectURI: "https://app.example/cb", RedirectURIOmitted: true,
+		Scope: "r", IssuedAt: now, ExpiresAt: now.Add(time.Minute), Issuer: "https://auth.example",
+	}
+	require.NoError(t, store.SaveAuthorizationCode(t.Context(), fresh))
+
+	got, err := store.ConsumeAuthorizationCode(t.Context(), "fresh")
+	require.NoError(t, err)
+	assert.True(t, got.RedirectURIOmitted)
+}
+
+// TestSQLRedirectURIOmittedColumn pins the column Schema adds: a SMALLINT
+// NOT NULL DEFAULT 0 — the form every engine accepts in an ALTER TABLE …
+// ADD COLUMN on a populated table, whose default (0) keeps requiring
+// redirect_uri for the rows written before it.
+func TestSQLRedirectURIOmittedColumn(t *testing.T) {
+	t.Parallel()
+
+	_, db := openSQLite(t)
+
+	var (
+		typ      string
+		notNull  int
+		dfltValu sql.NullString
+	)
+
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT type, "notnull", dflt_value FROM pragma_table_info('oauth2_auth_codes') WHERE name = 'redirect_uri_omitted'`,
+	).Scan(&typ, &notNull, &dfltValu))
+	assert.Equal(t, "SMALLINT", typ)
+	assert.Equal(t, 1, notNull)
+	assert.Equal(t, "0", dfltValu.String)
 }
