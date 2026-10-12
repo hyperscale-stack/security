@@ -1430,7 +1430,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   matching names case-insensitively — Go's `encoding/json`, so go-oidc, last
   member winning — read the victim's subject from her ID Token and UserInfo
   response (account takeover). Names are now compared ignoring case (simple
-  and full case mappings) and the `_` and `-` delimiters: case variants of
+  and full case mappings), every ASCII character but letters, digits and
+  `#`, and Unicode white space: case variants of
   protocol claims are never asked for nor released, known claims (standard
   claims, `roles`, `groups`, `entitlements`, `Config.ClaimsSupported`) only
   under their exact spelling, names that are case variants of one another

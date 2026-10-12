@@ -84,6 +84,8 @@ func TestNewValidatesItsConfiguration(t *testing.T) {
 		{"supported delimiter variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant-id"} }},
 		{"supported tagged case variants", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"name#fr", "name#FR"} }},
 		{"supported tagged names of variant bases", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"x#fr", "X#de"} }},
+		{"supported separator variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant.id"} }},
+		{"supported separator variant of email_verified", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"email verified"} }},
 		{"empty acr value", nil, func(c *oidcprovider.Config) { c.ACRValuesSupported = []string{""} }},
 		{"acr value with a space", nil, func(c *oidcprovider.Config) { c.ACRValuesSupported = []string{"loa 1"} }},
 		{"extension already set", func(s *oauth2.ServerConfig) { s.Extension = noopExtension{} }, nil},

@@ -1718,8 +1718,11 @@ and UserInfo response (account takeover). The same held for any claim
 as one duplicated member.
 
 The provider now compares claim names under a key that ignores case (simple
-and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…) and the `_` and `-`
-delimiters, and drops — dropping is never an error (Core §5.3.2, §5.5):
+and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…), every ASCII
+character but letters, digits and `#` (`email.verified`, `auth time` and
+`e_mail` are case variants of `email_verified`, `auth_time` and `email`),
+and Unicode white space, and drops — dropping is never an error (Core
+§5.3.2, §5.5):
 
 | Released claim | Before | After |
 | --- | --- | --- |

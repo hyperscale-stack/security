@@ -235,12 +235,15 @@ escapes or parameterizes them, or maps them through its own list.
 but relying parties often match them case-insensitively: Go's
 `encoding/json` — go-oidc and most Go relying parties — reads `"SUB"` or
 `"ſub"` (U+017F) as `sub`, the last member winning. The provider compares
-names under the key relying parties use, whatever their rule — simple case
-folding (`ſ`, the Kelvin sign), simple upper- and lower-case mappings (`İ`,
-`ı`: Java's `equalsIgnoreCase`), full case mappings (`ß` as `ss`, the `ﬁ`
-ligatures: upper-casing in JavaScript, Java, Python), and ignoring `_` and
-`-` (`encoding/json/v2` with `case:ignore`) — and never releases, nor asks
-the source for:
+names under a key that covers the rules of common relying parties — simple
+case folding (`ſ`, the Kelvin sign), simple upper- and lower-case mappings
+(`İ`, `ı`: Java's `equalsIgnoreCase`), full case mappings (`ß` as `ss`, the
+`ﬁ` ligatures: upper-casing in JavaScript, Java, Python), and ignoring every
+ASCII character but letters, digits and `#`, and Unicode white space
+(`encoding/json/v2` with `case:ignore` ignores `_` and `-`; camelCase key
+normalizers — lodash `camelCase`, `camelcase-keys`, humps — read
+`email.verified` or `email verified` as `emailVerified`) — and never
+releases, nor asks the source for:
 
 - a case variant of a protocol claim, or of a claim reserved to another
   protocol (`azp`, `jti`, `sid`, `scope`, …);

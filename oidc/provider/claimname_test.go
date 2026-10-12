@@ -234,6 +234,43 @@ func TestKnownClaimsAreReleasedUnderTheirExactSpellingOnly(t *testing.T) {
 		"the interaction is shown the releasable requests only")
 }
 
+// TestSeparatorVariantsAreCaseVariants: relying parties that normalize claim
+// names to camelCase (lodash camelCase, camelcase-keys, humps) split words
+// on any ASCII punctuation or white space, and read "email.verified" or
+// "auth time" as emailVerified or authTime: such spellings of known and
+// protocol claims are dropped like other case variants.
+func TestSeparatorVariantsAreCaseVariants(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	e.claims.setUser("eve", map[string]any{
+		"email_verified": true, "given_name": "Eve",
+		"email.verified": false, "email verified": false, "Email~Verified": false,
+		"given name": "Victim", "given.name": "Victim", "@given$name!": "Victim",
+		"auth time": 1, "at~hash": "x", "s.u.b": "alice",
+	})
+	e.approveAs("eve")
+
+	requested := []string{
+		"email_verified", "given_name", "email.verified", "email verified", "Email~Verified",
+		"given name", "given.name", "@given$name!", "auth time", "at~hash", "s.u.b",
+	}
+	resp := e.flow(with(authorizeQuery(), "scope", "openid", "claims", claimsParameter(t, requested, requested)))
+
+	_, claims := e.idToken(resp.IDToken)
+	userInfo := userInfoClaims(t, e.userinfo(bearerGET(resp.AccessToken)))
+
+	for target, got := range map[string]map[string]any{"ID Token": claims, "UserInfo": userInfo} {
+		assert.Equal(t, true, got["email_verified"], target)
+		assert.Equal(t, "Eve", got["given_name"], target)
+		assert.Equal(t, "eve", got["sub"], target)
+
+		for _, name := range requested[2:] {
+			assert.NotContains(t, got, name, "%s: a separator variant", target)
+		}
+	}
+}
+
 // TestClaimNamesCollidingUnderCaseFoldingAreDropped: claims the provider
 // does not know whose names are case variants of one another — a
 // language tag spelled twice included — are all dropped: which one a

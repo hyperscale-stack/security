@@ -19,18 +19,22 @@ func TestClaimKey(t *testing.T) {
 	t.Parallel()
 
 	same := [][]string{
-		{"sub", "SUB", "Sub", "\u017fub", "\u017fUB", "s_ub", "S-U-B", "s__u--b"},   // long s (EqualFold), delimiters (json/v2)
-		{"iss", "ISS", "\u0131ss", "\u0130SS", "i\u00df", "I\u1e9e", "i-s-s"},       // dotless and dotted i, sharp s
-		{"nickname", "NICKNAME", "nic\u212aname"},                                   // Kelvin sign
-		{"profile", "PROFILE", "pro\ufb01le"},                                       // fi ligature
-		{"address", "ADDRESS", "addre\u00df"},                                       // sharp s
-		{"email_verified", "EmailVerified", "email-verified", "email_veri\ufb01ed"}, // delimiters, fi ligature
-		{"office", "o\ufb03ce", "O\ufb00ICE"},                                       // ffi, ff ligatures
-		{"waffle", "wa\ufb04e"},                                                     // ffl ligature
-		{"flow", "\ufb02ow"},                                                        // fl ligature
-		{"stable", "\ufb06able", "\ufb05able"},                                      // st, long s t ligatures
-		{"name#fr", "NAME#FR", "name#Fr", "na_me#fr"},                               // language tags
-		{"a\xff", "a\xfe", "a\ufffd"},                                               // invalid UTF-8: U+FFFD
+		{"sub", "SUB", "Sub", "\u017fub", "\u017fUB", "s_ub", "S-U-B", "s__u--b"},                      // long s (EqualFold), delimiters (json/v2)
+		{"iss", "ISS", "\u0131ss", "\u0130SS", "i\u00df", "I\u1e9e", "i-s-s"},                          // dotless and dotted i, sharp s
+		{"nickname", "NICKNAME", "nic\u212aname"},                                                      // Kelvin sign
+		{"profile", "PROFILE", "pro\ufb01le"},                                                          // fi ligature
+		{"address", "ADDRESS", "addre\u00df"},                                                          // sharp s
+		{"email_verified", "EmailVerified", "email-verified", "email_veri\ufb01ed"},                    // delimiters, fi ligature
+		{"office", "o\ufb03ce", "O\ufb00ICE"},                                                          // ffi, ff ligatures
+		{"waffle", "wa\ufb04e"},                                                                        // ffl ligature
+		{"flow", "\ufb02ow"},                                                                           // fl ligature
+		{"stable", "\ufb06able", "\ufb05able"},                                                         // st, long s t ligatures
+		{"name#fr", "NAME#FR", "name#Fr", "na_me#fr"},                                                  // language tags
+		{"a\xff", "a\xfe", "a\ufffd"},                                                                  // invalid UTF-8: U+FFFD
+		{"email_verified", "email.verified", "email verified", "Email~Verified", "e.m.a.i.l/verified"}, // camelCase normalizers
+		{"email_verified", "email\u00a0verified", "email\u3000verified", "email\tverified"},            // white space
+		{"auth_time", "auth~time", "auth.time", "auth time", "AUTH\x00TIME", "auth\x7ftime"},           // punctuation, controls
+		{"given_name", "givenName", "given-name", "given name", "Given.Name", "@given$name!"},
 	}
 
 	for _, group := range same {
@@ -40,8 +44,8 @@ func TestClaimKey(t *testing.T) {
 	}
 
 	different := [][2]string{
-		{"sub", "subs"}, {"email", "e.mail"}, {"name#fr", "name#de"}, {"name", "name#"},
-		{"s", "\u00df"}, {"name", "n\u00e1me"}, {"st", "st\u0301"},
+		{"sub", "subs"}, {"name#fr", "name#de"}, {"name", "name#"}, {"name#fr", "name.fr"}, {"a#b", "ab"}, {"claim1", "claim2"},
+		{"s", "\u00df"}, {"name", "n\u00e1me"}, {"st", "st\u0301"}, {"email", "email\u200b"},
 	}
 
 	for _, pair := range different {

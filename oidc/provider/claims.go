@@ -47,10 +47,11 @@ const (
 //
 // Claim names are case-sensitive (Core §5.1, RFC 7519 §4), but relying
 // parties often match them case-insensitively — Go's encoding/json reads
-// "SUB" or "ſub" as sub, the last one winning. Under that comparison (a
-// "case variant": the same name ignoring case — simple and full case
-// mappings — and the "_" and "-" delimiters), the provider never releases,
-// and never asks for:
+// "SUB" or "ſub" as sub, the last one winning — or normalize them
+// ("email.verified" to emailVerified). Under that comparison (a "case
+// variant": the same name ignoring case — simple and full case mappings —,
+// every ASCII character but letters, digits and "#", and Unicode white
+// space), the provider never releases, and never asks for:
 //   - a case variant of a protocol claim, or of a claim reserved to another
 //     protocol (azp, jti, sid, scope, …);
 //   - a case variant of a claim it knows — the standard claims of Core
@@ -158,10 +159,10 @@ var scopeClaims = map[string][]string{
 	ScopePhone:   {"phone_number", "phone_number_verified"},
 }
 
-// reserved reports whether name — or its untagged name — is a reserved
-// claim or a case variant of one: "SUB", "ſub" and "Sub#fr" are sub.
-func reserved(name string) bool {
-	_, ok := reservedKeys[claimKey(untagged(name))]
+// reserved reports whether the untagged claim name base is a reserved
+// claim or a case variant of one: "SUB" and "ſub" are sub.
+func reserved(base string) bool {
+	_, ok := reservedKeys[claimKey(base)]
 
 	return ok
 }

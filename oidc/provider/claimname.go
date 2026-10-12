@@ -23,17 +23,21 @@ var fullCaseExpansions = map[rune]string{
 
 // claimKey returns the case-insensitive key of a claim name: two names are
 // "case variants" of each other — in this package's documentation — when
-// their keys are equal. The key ignores the ASCII "_" and "-", expands the
-// nine code points of fullCaseExpansions and maps every other rune to the
-// smallest rune among the simple case-folding orbits of itself, of its
-// simple uppercase and of its simple lowercase mapping. It therefore
-// equates what relying parties matching names case-insensitively equate:
-// Go's encoding/json (strings.EqualFold, so ſ with s and K with k),
-// encoding/json/v2 with case:ignore (EqualFold, "_" and "-" ignored), Java's
-// equalsIgnoreCase and Turkic-locale lowercasing (İ and ı with i), .NET's
-// OrdinalIgnoreCase and Jackson's case-insensitive mode (ASCII case, and K
-// for Jackson), and full-mapping upper-casing (ß with ss). An invalid UTF-8
-// byte keys as U+FFFD, which encoding/json writes in its place.
+// their keys are equal. The key ignores every ASCII character but letters,
+// digits and "#" (the language-tag delimiter) and Unicode white space,
+// expands the nine code points of fullCaseExpansions and maps every other
+// rune to the smallest rune among the simple case-folding orbits of
+// itself, of its simple uppercase and of its simple lowercase mapping. It
+// therefore equates what relying parties matching names case-insensitively
+// equate: Go's encoding/json (strings.EqualFold, so ſ with s and K with k),
+// encoding/json/v2 with case:ignore (EqualFold, "_" and "-" ignored),
+// camelCase key normalizers — lodash camelCase, camelcase-keys, humps —
+// splitting words on punctuation and white space ("email.verified" read as
+// emailVerified), Java's equalsIgnoreCase and Turkic-locale lowercasing (İ
+// and ı with i), .NET's OrdinalIgnoreCase and Jackson's case-insensitive
+// mode (ASCII case, and K for Jackson), and full-mapping upper-casing (ß
+// with ss). An invalid UTF-8 byte keys as U+FFFD, which encoding/json
+// writes in its place.
 //
 // It is wider than the strings.EqualFold key of the oidc/client and jwt
 // verifiers on purpose: a verifier is safe when its own decoder cannot be
@@ -54,15 +58,20 @@ func asciiClaimKey(name string) (string, bool) {
 		switch c := name[i]; {
 		case c >= utf8.RuneSelf:
 			return "", false
-		case c == '_' || c == '-':
 		case 'a' <= c && c <= 'z':
 			key = append(key, c-('a'-'A'))
-		default:
+		case keyed(rune(c)):
 			key = append(key, c)
 		}
 	}
 
 	return string(key), true
+}
+
+// keyed reports whether an ASCII rune counts in a claim key: a letter, a
+// digit or "#".
+func keyed(r rune) bool {
+	return 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '#'
 }
 
 // unicodeClaimKey is claimKey for any name.
@@ -72,7 +81,7 @@ func unicodeClaimKey(name string) string {
 	key.Grow(len(name))
 
 	for _, r := range name {
-		if r == '_' || r == '-' {
+		if r < utf8.RuneSelf && !keyed(r) || unicode.IsSpace(r) {
 			continue
 		}
 
