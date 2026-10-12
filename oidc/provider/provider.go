@@ -122,6 +122,8 @@ type Provider struct {
 	now  func() time.Time
 	hook oauth2.ErrorHook
 	ttl  time.Duration
+	// tokens is the server's storage, where UserInfo looks bearer tokens up.
+	tokens oauth2.AccessTokenStore
 	// refresh reports that a refresh_token grant is registered.
 	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
@@ -163,7 +165,7 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	}
 
 	sc := srv.Config()
-	p.server, p.now, p.hook = srv, sc.Now, sc.OnError
+	p.server, p.now, p.hook, p.tokens = srv, sc.Now, sc.OnError, sc.Storage
 	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
 

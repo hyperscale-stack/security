@@ -30,6 +30,7 @@
 // feature matrix. No conformance or certification is claimed.
 //
 // Allowed dependencies:
+//   - github.com/hyperscale-stack/security (the core: error sentinels)
 //   - github.com/hyperscale-stack/security/oauth2
 //   - github.com/hyperscale-stack/security/jwt (go-jose stays behind it)
 //   - stdlib only
