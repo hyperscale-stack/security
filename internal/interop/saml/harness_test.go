@@ -246,6 +246,7 @@ type serviceProvider struct {
 
 	mu       sync.Mutex
 	conns    map[string]samlsp.Connection
+	sources  map[string]*samlsp.MetadataSource // connections whose IdP comes from a source
 	outcomes []outcome
 }
 
@@ -269,7 +270,7 @@ type spOptions struct {
 func newServiceProvider(t testing.TB, o spOptions) *serviceProvider {
 	t.Helper()
 
-	s := &serviceProvider{conns: map[string]samlsp.Connection{}}
+	s := &serviceProvider{conns: map[string]samlsp.Connection{}, sources: map[string]*samlsp.MetadataSource{}}
 	s.configure(t, o)
 
 	mux := http.NewServeMux()
@@ -331,16 +332,41 @@ func (s *serviceProvider) pick() *samlsp.ServiceProvider {
 	return s.instances[(s.next.Add(1)-1)%uint64(len(s.instances))]
 }
 
-func (s *serviceProvider) resolve(_ context.Context, id string) (*samlsp.Connection, error) {
+func (s *serviceProvider) resolve(ctx context.Context, id string) (*samlsp.Connection, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	c, ok := s.conns[id]
+	src := s.sources[id]
+	s.mu.Unlock()
+
 	if !ok {
 		return nil, samlsp.ErrUnknownConnection
 	}
 
+	if src != nil {
+		// The documented pattern: the connection trusts what the source
+		// currently holds for its pinned IdP.
+		idp, err := src.IdentityProvider(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("connection %s: %w", id, err)
+		}
+
+		c.IdentityProvider = *idp
+	}
+
 	return &c, nil
+}
+
+// addSourcedConnection resolves connection id's IdP through src on every
+// use; the SP entity ID and ACS URL derive as in addConnection.
+func (s *serviceProvider) addSourcedConnection(id string, src *samlsp.MetadataSource) samlsp.Connection {
+	c := samlsp.Connection{ID: id, SPEntityID: s.srv.URL + "/saml/" + id, ACSURL: s.srv.URL + "/saml/" + id + "/acs"}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.conns[id], s.sources[id] = c, src
+
+	return c
 }
 
 // addConnection (re)imports the IdP metadata under connection id; the SP
