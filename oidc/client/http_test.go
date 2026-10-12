@@ -170,6 +170,57 @@ func TestStartLoginCapsCookies(t *testing.T) {
 		"the three oldest of six go, leaving three plus the new one")
 }
 
+// TestStartLoginLeavesApplicationCookies checks that only binding cookies —
+// the prefix followed by 16 lowercase hex digits — are counted and expired
+// by the cap: the application's own cookies sharing the prefix are never
+// touched, whether the cookies are __Host- or, with InsecureCookies, plain.
+func TestStartLoginLeavesApplicationCookies(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		insecure bool
+		prefix   string
+		app      []string // the application's cookies, oldest first
+	}{
+		"secure": {prefix: "__Host-oidc-", app: []string{
+			"__Host-oidc-session", "__Host-oidc-0123456789ABCDEF", "__Host-oidc-0123456789abcde", "__Host-oidc-0123456789abcdef0",
+		}},
+		"insecure": {insecure: true, prefix: "oidc-", app: []string{"oidc-session", "oidc-provider", "oidc-0123456789ABCDEF"}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t, func(cfg *oidcclient.Config) { cfg.InsecureCookies = tc.insecure })
+
+			var cookies, bindings []*http.Cookie
+
+			for _, name := range tc.app {
+				cookies = append(cookies, &http.Cookie{Name: name, Value: "app"})
+			}
+
+			for i := range 4 {
+				bindings = append(bindings, &http.Cookie{Name: tc.prefix + strings.Repeat(string(rune('a'+i)), 16), Value: "v"})
+			}
+
+			rec := startLogin(t, c, append(cookies, bindings...)...)
+
+			expired := map[string]bool{}
+
+			for _, ck := range rec.Result().Cookies() {
+				if ck.MaxAge < 0 {
+					expired[ck.Name] = true
+				}
+			}
+
+			assert.Equal(t, map[string]bool{bindings[0].Name: true}, expired,
+				"the oldest binding cookie goes, so that four remain with the new one; the application's stay")
+		})
+	}
+}
+
 // callbackRequest is the request a user agent sends to the callback.
 func callbackRequest(method, target string, body io.Reader, cookies ...*http.Cookie) *http.Request {
 	req := httptest.NewRequest(method, target, body)
@@ -533,6 +584,9 @@ func TestHandleCallbackContext(t *testing.T) {
 	cancel()
 
 	req := callbackRequest(http.MethodGet, testRedirectURL+"?"+url.Values{"code": {code}, "state": {state}}.Encode(), nil, binding)
-	_, err := c.HandleCallback(httptest.NewRecorder(), req.WithContext(ctx))
-	require.Error(t, err, "the request context reaches the token request")
+	id, err := c.HandleCallback(httptest.NewRecorder(), req.WithContext(ctx))
+	require.ErrorIs(t, err, context.Canceled, "the request context reaches the token request")
+	require.ErrorIs(t, err, oidcclient.ErrTokenEndpoint)
+	assert.Nil(t, id)
+	op.set(func(op *fakeOP) { assert.Empty(t, op.tokenRequests, "the cancelled request is never sent") })
 }

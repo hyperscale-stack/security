@@ -547,6 +547,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Fixed
 
+- `oidcclient.Client.StartLogin` capped the binding cookies at four by
+  expiring the oldest cookies whose name started with the binding prefix —
+  `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could
+  delete the application's own `oidc-session`. Only names of the binding
+  cookie's shape (the prefix and 16 lowercase hex digits) are now counted
+  and expired.
 - The v0 authentication `Handler` no longer iterates past a successful
   authentication and no longer swallows provider errors — the `Manager`
   short-circuits on first success and aggregates failures.

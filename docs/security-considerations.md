@@ -830,7 +830,9 @@ are attacker-influenced.
 - **Cookies** — binding cookies are `__Host-` (Secure, Path=/, no Domain:
   a sibling subdomain cannot plant one), HttpOnly, named after the state so
   parallel logins coexist, capped at four per browser, and deleted by the
-  callback. SameSite is Lax for the `query` response mode — the callback
+  callback. The cap counts and expires only names of their shape — the
+  prefix and 16 lowercase hex digits — never the application's own cookies
+  sharing the prefix. SameSite is Lax for the `query` response mode — the callback
   is a top-level GET — and None for `form_post`, whose cross-site POST
   carries no Lax cookie; an opt-in headless-Chrome test checks both.
   `InsecureCookies` drops Secure for local http development only, and is

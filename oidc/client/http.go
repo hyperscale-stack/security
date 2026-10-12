@@ -44,6 +44,9 @@ const (
 // oldest are expired, so a page firing login starts cannot grow the Cookie
 // header without bound — still, start logins on a user action (POST with
 // CSRF protection, or a same-site check) when several connections exist.
+// Only cookies named like binding cookies — the prefix and 16 lowercase hex
+// digits — are counted and expired: the application's own cookies sharing
+// the prefix are never touched.
 //
 // Nothing is written when StartLogin returns an error.
 func (c *Client) StartLogin(w http.ResponseWriter, r *http.Request, opts AuthOptions) error {
@@ -167,6 +170,16 @@ func (c *Client) cookieName(state string) string {
 	return c.cookiePrefix() + stateHashFor(state)[:cookieNameHashLength]
 }
 
+// isBindingCookie reports whether name is shaped like a binding cookie of
+// this Client: its prefix followed by cookieNameHashLength lowercase hex
+// digits. The application's own cookies sharing the prefix (oidc-session)
+// are not.
+func (c *Client) isBindingCookie(name string) bool {
+	hash, ok := strings.CutPrefix(name, c.cookiePrefix())
+
+	return ok && isLowerHex(hash, cookieNameHashLength)
+}
+
 // bindingCookie builds a binding cookie; maxAge < 0 expires it.
 func (c *Client) bindingCookie(name, value string, maxAge int) *http.Cookie {
 	sameSite := http.SameSiteLaxMode
@@ -187,12 +200,13 @@ func (c *Client) bindingCookie(name, value string, maxAge int) *http.Cookie {
 
 // expireOldCookies expires the oldest binding cookies so that, with the one
 // being set, at most maxLoginCookies remain. Cookies of equal paths come
-// oldest first in the Cookie header (RFC 6265 §5.4).
+// oldest first in the Cookie header (RFC 6265 §5.4). Only cookies named like
+// a binding cookie count, and only they are expired.
 func (c *Client) expireOldCookies(w http.ResponseWriter, r *http.Request) {
 	var names []string
 
 	for _, ck := range r.Cookies() {
-		if strings.HasPrefix(ck.Name, c.cookiePrefix()) && !slices.Contains(names, ck.Name) {
+		if c.isBindingCookie(ck.Name) && !slices.Contains(names, ck.Name) {
 			names = append(names, ck.Name)
 		}
 	}
