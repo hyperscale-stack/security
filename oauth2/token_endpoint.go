@@ -17,7 +17,10 @@ import (
 // TokenHandler returns the http.Handler for the RFC 6749 §3.2 /token
 // endpoint. The handler:
 //
-//  1. Enforces POST + application/x-www-form-urlencoded.
+//  1. Requires POST, and reads the parameters from the
+//     application/x-www-form-urlencoded body (RFC 6749 §3.2): a body of
+//     another type is not parsed, so the request carries no parameter and
+//     fails as such (invalid_client or invalid_request).
 //  2. Resolves the issuer and authenticates the client at it via the
 //     configured ClientAuthenticators (a client bound to other issuers is
 //     unknown, see [IssuerBoundClient]).

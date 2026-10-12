@@ -23,7 +23,9 @@ const FamilyRevocationRetention = 24 * time.Hour
 const MaxFamilyIDLength = 64
 
 // AuthorizationCodeStore persists single-use authorization codes (RFC 6749
-// §4.1.2, §10.5). A code is stored under its hash,
+// §4.1.2, §10.5). The grant consumes a code before validating it — see
+// grant.AuthorizationCode for why — so the one atomic consumption is the
+// single-use guarantee. A code is stored under its hash,
 // [AuthorizationCode.CodeHash], which the issuer sets: implementations MUST
 // NOT persist the raw [AuthorizationCode.Code]. Consuming a code does not
 // delete it: the record is kept, flagged consumed, at least until its

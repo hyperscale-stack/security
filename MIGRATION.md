@@ -1004,7 +1004,9 @@ To migrate:
 ### `oauth2`: a client gets only what it declares and what it asked for
 
 The authorization server granted more than a client declared or a request
-asked for. It now enforces a fail-closed client policy:
+asked for. It now enforces a fail-closed client policy, and **every client
+must declare the grant types it uses and the scopes it may request** (step
+3 below):
 
 | | Before | After |
 | --- | --- | --- |

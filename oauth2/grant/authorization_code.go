@@ -44,6 +44,19 @@ import (
 //     extension extend the response (an OpenID Connect id_token, with the
 //     code's nonce), persist both atomically and return the pair.
 //
+// The code is consumed before it is validated (step 1): a party holding a
+// leaked code can burn it — presenting it with a wrong verifier, or as
+// another client — and the legitimate exchange then fails closed with
+// invalid_grant. This is deliberate. Single use (RFC 6749 §4.1.2, §10.5)
+// rests on one atomic ConsumeAuthorizationCode; validating first would need
+// a non-consuming lookup and a conditional consumption, a new
+// [oauth2.Storage] contract for every store, to prevent a nuisance, not a
+// breach: the party gets nothing — client, issuer, redirect URI and PKCE
+// still bind the code — and a code presented by someone else has leaked,
+// so refusing the legitimate exchange too, which RFC 6749 §4.1.2 requires
+// of a reused code, is the conservative outcome; the user starts the
+// authorization again.
+//
 // A replay — the store still retains the consumed code — is refused with
 // invalid_grant. When the replay passes steps 2-5 itself, proving
 // possession of the code the way its first exchange had to, the code's

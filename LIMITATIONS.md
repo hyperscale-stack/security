@@ -43,6 +43,11 @@ future refactor phases.
   `consumed`, #83's `issuer` and `extension_data`, the codes'
   `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) are added
   with the statements MIGRATION.md lists, through your migration tool.
+- **A leaked code can be burned** — codes are consumed before they are
+  validated, so a party holding a code (but not its client's credentials or
+  PKCE verifier) can make the legitimate exchange fail with
+  `invalid_grant`; it obtains nothing. A deliberate trade-off, see
+  [docs/security-considerations.md](docs/security-considerations.md).
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels

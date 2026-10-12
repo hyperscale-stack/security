@@ -139,10 +139,20 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   §4.14.2); a `refresh_token` grant without a `RefreshTokens` generator then
   fails their refresh with `server_error`, which `NewServer` cannot detect.
 - **Token storage** — access tokens, refresh tokens, and authorization
-  codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
-  store never sees cleartext, so a database compromise does not yield
-  usable tokens. Tokens carry ≥ 128 bits of entropy, so the bare hash is
-  preimage- and brute-force-resistant.
+  codes are stored **hashed only** (HMAC-SHA256 with an empty key, via
+  `oauth2.HashToken`). The store never sees cleartext, so a database
+  compromise does not yield usable tokens. Tokens carry ≥ 128 bits of
+  entropy, so the unkeyed hash is preimage- and brute-force-resistant.
+- **Codes are consumed before they are validated** — a party holding a
+  leaked code can burn it (presenting it with a wrong verifier, or as
+  another client): it obtains nothing — client, issuer, redirect URI and
+  PKCE still bind the code — but the legitimate exchange then fails with
+  `invalid_grant` and the user authorizes again. This is deliberate:
+  single use rests on one atomic consumption, validating first would need
+  a non-consuming lookup in every store, and refusing a code that has
+  leaked is the conservative outcome (RFC 6749 §4.1.2 requires refusing a
+  reused code). Keep codes out of logs and `Referer` headers, and
+  short-lived (`AuthorizeConfig.CodeTTL`).
 - **Atomic single-use** — `ConsumeAuthorizationCode` is atomic in every
   `Storage` implementation, and so are the token writes: `SaveTokenPair`
   and `RotateRefreshToken` persist a whole pair or nothing, gated by the
@@ -182,9 +192,9 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   §4.1.2). Access tokens validated offline are out of reach, see [Offline
   JWT access tokens](#offline-jwt-access-tokens).
 - **Profiles** — `Profile20BCP` (the default) follows the OAuth 2.0
-  Security BCP: it refuses the `implicit` grant. `Profile21Draft`
-  additionally refuses the `password` grant. Legacy grants are opt-in and
-  refused outright under the stricter profile.
+  Security BCP and `Profile21Draft` the OAuth 2.1 draft: both refuse the
+  legacy `implicit` and `password` grants, which only `Profile20` allows —
+  opt-in, never by default.
 - **Client authentication** — one method per request (RFC 6749 §2.3): an
   `Authorization` header with a body `client_secret`, several
   `Authorization` fields, or a repeated `client_id` / `client_secret` are

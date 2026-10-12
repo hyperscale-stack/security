@@ -13,13 +13,14 @@ import (
 // HashToken returns the canonical one-way hash used by the storage layer to
 // look tokens up without ever persisting the raw value.
 //
-// pepper is an optional HMAC key. The shipped token machinery — the
-// generators in oauth2/token and every server lookup path (grants,
-// /introspect, /revoke) — calls HashToken with a nil pepper: OAuth2 tokens
-// and codes carry ≥ 128 bits of entropy, so a bare SHA-256 is already
-// preimage- and brute-force-resistant. Pass a non-nil pepper only if you
-// hash some lower-entropy value AND every party that looks it up uses the
-// exact same key.
+// It is HMAC-SHA256 keyed by pepper, hex-encoded. The shipped token
+// machinery — the generators in oauth2/token and every server lookup path
+// (grants, /introspect, /revoke) — calls HashToken with a nil pepper: an
+// HMAC with an empty key, which for OAuth2 tokens and codes, carrying ≥ 128
+// bits of entropy, is as preimage- and brute-force-resistant as a bare
+// SHA-256 (it is not one: the values differ). Pass a non-nil pepper only if
+// you hash some lower-entropy value AND every party that looks it up uses
+// the exact same key.
 func HashToken(pepper []byte, token string) string {
 	mac := hmac.New(sha256.New, pepper)
 	mac.Write([]byte(token))

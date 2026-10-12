@@ -689,6 +689,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   single registered redirect URI that omitted it at `/authorize` was refused
   at `/token` unless it sent the URI anyway. A `redirect_uri` sent at
   `/token` is still compared with the URI the code was delivered to.
+- OAuth2 documentation matches the code: `HashToken` is an HMAC-SHA256 —
+  with an empty key for the shipped token machinery — not a bare SHA-256;
+  the token endpoint reads the parameters of an
+  `application/x-www-form-urlencoded` body and does not check the content
+  type; client grant types are compared exactly, not case-insensitively; and
+  `Profile20BCP` refuses the legacy `password` grant as well as `implicit`.
 
 ### Removed
 
