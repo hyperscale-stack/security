@@ -150,7 +150,7 @@ func TestCapacityConcurrentSaves(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 
 	var (
-		wg         sync.WaitGroup
+		wg          sync.WaitGroup
 		saved, full atomic.Int64
 	)
 

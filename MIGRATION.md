@@ -949,3 +949,22 @@ To migrate:
 3. None of the six providers of the pinned discovery corpus has a query in
    its authorization endpoint; a provider whose query `New` now refuses has
    to fix its metadata.
+
+### `oidc/client/storage/memory`: `New` takes options
+
+`memory.New()` became `memory.New(opts ...memory.Option)`, to accept
+`memory.WithCapacity(n)`, which bounds the pending logins the store keeps
+(see CHANGELOG, Added). Calls compile and behave as before: without the
+option, the store stays unbounded.
+
+| | Before | After |
+| --- | --- | --- |
+| `memory.New()` | an unbounded store | unchanged |
+| `memory.New` used as a `func() *memory.Store` value | compiles | does not compile: its type is `func(...memory.Option) *memory.Store` |
+
+To migrate:
+
+1. Wrap such a use in a closure: `func() *memory.Store { return memory.New() }`.
+2. Login starts are unauthenticated: consider
+   `memory.New(memory.WithCapacity(n))`, sized as LIMITATIONS.md explains,
+   together with rate limiting.

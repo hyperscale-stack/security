@@ -942,12 +942,12 @@ network:
   host check in `CheckURL` sees the name actually dialed.
 - **Redirects** are not followed unless `MaxRedirects` allows it; every
   hop is re-checked, and https→http is always refused. Credential-bearing
-  requests (token, UserInfo) never follow redirects. Requests whose answer
-  is trusted because of the origin it comes from — OpenID Connect
-  discovery and JWK Sets, SAML metadata — never follow a redirect to
-  another origin (scheme, host and port), whatever `MaxRedirects` allows:
-  after such a hop another server would only have to write the expected
-  issuer to get its keys trusted.
+  requests (token, UserInfo) never follow redirects. `oidc/client`'s
+  discovery and JWK Set requests and `saml/sp`'s metadata requests, whose
+  answers are trusted because of the origin they come from, never follow
+  a redirect to another origin (scheme, host and port), whatever
+  `MaxRedirects` allows: after such a hop another server would only have
+  to write the expected issuer to get its keys trusted.
 - **Resources** are bounded: one timeout for the whole exchange (10 s by
   default), a size cap on every body (1 MiB by default) counted after
   transparent decompression — a gzip bomb fails — and a 64 KiB header cap.
