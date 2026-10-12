@@ -367,6 +367,8 @@ func (op *fakeOP) serve(w http.ResponseWriter, r *http.Request) {
 		op.serveDiscovery(w, r)
 	case r.URL.Path == "/jwks":
 		op.serveJWKS(w)
+	case r.URL.Path == "/authorize":
+		op.serveAuthorize(w, r)
 	case r.URL.Path == "/token":
 		op.mu.Lock()
 		h := op.tokenHandler
@@ -491,6 +493,38 @@ func (op *fakeOP) authorize(t *testing.T, authURL string) string {
 	}
 
 	return code
+}
+
+// serveAuthorize is the authorization endpoint of a user who is already
+// logged in and consents: it answers with the code in the query (302) or
+// with an auto-submitted form (form_post).
+func (op *fakeOP) serveAuthorize(w http.ResponseWriter, r *http.Request) {
+	code := op.authorize(op.t, r.URL.String())
+	q := r.URL.Query()
+
+	if q.Get("response_mode") == "form_post" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, `<form method="post" action="`+q.Get("redirect_uri")+`">`+
+			`<input type="hidden" name="code" value="`+code+`">`+
+			`<input type="hidden" name="state" value="`+q.Get("state")+`"></form>`)
+
+		return
+	}
+
+	target, err := url.Parse(q.Get("redirect_uri"))
+	if err != nil {
+		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
+
+		return
+	}
+
+	params := target.Query()
+	params.Set("code", code)
+	params.Set("state", q.Get("state"))
+	target.RawQuery = params.Encode()
+
+	http.Redirect(w, r, target.String(), http.StatusFound)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
