@@ -156,6 +156,10 @@ PKCE. Not supported, and refused where a provider could select them:
   body fails `UserInfo` (the conformance suite's
   `oidcc-client-test-userinfo-bearer-body`).
 - **WebFinger** (Discovery §2) — not supported: configure the issuer.
+- **`ExtraParams`** cannot override a parameter of the authorization
+  endpoint's own query (RFC 6749 §3.1: no parameter twice), nor use another
+  spelling — case, `.` for `_` — of a parameter the client sends or does not
+  support.
 - **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
   mTLS; DPoP. `client_secret_basic`, `client_secret_post` and `none` are
   supported.

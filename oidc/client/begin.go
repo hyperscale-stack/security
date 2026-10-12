@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -56,9 +57,14 @@ type AuthOptions struct {
 	Display string
 	// ExtraParams are other request parameters (domain_hint, hd,
 	// kc_idp_hint…): at most 20, names of letters, digits, '.', '_' or '-'.
-	// The parameters the Client sends or does not support are refused —
-	// request and request_uri included, which could override state, nonce
-	// or PKCE.
+	// No parameter is ever sent twice (RFC 6749 §3.1), and names that
+	// differ only by case, or by '.' for '_', are one parameter: servers
+	// that ignore case (ASP.NET) or rewrite names (PHP) read them so.
+	// Refused, in any such spelling: the parameters the Client sends or
+	// does not support — request and request_uri included, which could
+	// override state, nonce or PKCE — the parameters of the authorization
+	// endpoint's own query, which the request keeps, and two entries that
+	// are one parameter.
 	ExtraParams map[string]string
 	// AppState is application data stored with the transaction and
 	// returned in Identity (at most 4096 bytes of UTF-8). It is not sent to
@@ -122,7 +128,7 @@ func (r AuthRequest) MarshalJSON() ([]byte, error) {
 // key (Config.TransactionKeys). Nothing is returned when the store fails.
 // Begin writes to the store on every call: rate-limit login starts.
 func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, error) {
-	if err := opts.validate(); err != nil {
+	if err := opts.validate(c.md.authParams); err != nil {
 		return nil, err
 	}
 
@@ -215,8 +221,9 @@ func setNonEmpty(params url.Values, name, value string) {
 	}
 }
 
-// validate checks the options before anything is stored.
-func (o AuthOptions) validate() error {
+// validate checks the options before anything is stored; endpointParams
+// are the paramKeys of the authorization endpoint's query.
+func (o AuthOptions) validate(endpointParams map[string]struct{}) error {
 	if err := validatePrompt(o.Prompt); err != nil {
 		return err
 	}
@@ -245,7 +252,7 @@ func (o AuthOptions) validate() error {
 		return fmt.Errorf("%w: AppState must be at most 4096 bytes of UTF-8", ErrInvalidAuthRequest)
 	}
 
-	return validateExtraParams(o.ExtraParams)
+	return validateExtraParams(o.ExtraParams, endpointParams)
 }
 
 // validatePrompt checks the prompt values (Core §3.1.2.1: none with any
@@ -262,20 +269,36 @@ func validatePrompt(prompt []string) error {
 	return nil
 }
 
-func validateExtraParams(params map[string]string) error {
+// validateExtraParams checks AuthOptions.ExtraParams, in name order: the
+// names and values, and no parameter twice (RFC 6749 §3.1) — none the
+// Client sends or does not support, none of the authorization endpoint's
+// query (endpointParams), no two entries — names compared by paramKey.
+func validateExtraParams(params map[string]string, endpointParams map[string]struct{}) error {
 	if len(params) > maxExtraParams {
 		return fmt.Errorf("%w: at most %d ExtraParams", ErrInvalidAuthRequest, maxExtraParams)
 	}
 
-	for name, value := range params {
+	seen := make(map[string]struct{}, len(params))
+
+	for _, name := range slices.Sorted(maps.Keys(params)) {
+		key := paramKey(name)
+		_, inEndpoint := endpointParams[key]
+		_, repeated := seen[key]
+
 		switch {
 		case !isParamName(name):
 			return fmt.Errorf("%w: invalid ExtraParams name %q", ErrInvalidAuthRequest, name)
-		case slices.Contains(reservedRequestParams, name):
+		case isReservedParam(key):
 			return fmt.Errorf("%w: ExtraParams cannot set %q", ErrInvalidAuthRequest, name)
-		case !validText(value, maxExtraValueLength):
+		case inEndpoint:
+			return fmt.Errorf("%w: ExtraParams cannot set %q, which the authorization endpoint's query sets", ErrInvalidAuthRequest, name)
+		case repeated:
+			return fmt.Errorf("%w: ExtraParams name %q repeats another one", ErrInvalidAuthRequest, name)
+		case !validText(params[name], maxExtraValueLength):
 			return fmt.Errorf("%w: invalid ExtraParams value for %q", ErrInvalidAuthRequest, name)
 		}
+
+		seen[key] = struct{}{}
 	}
 
 	return nil

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"net/url"
@@ -28,12 +29,51 @@ const authorizationEndpoint = "authorization_endpoint"
 
 // reservedRequestParams are the authorization request parameters the
 // Client sends or does not support: an authorization endpoint query or an
-// AuthOptions.ExtraParams entry may not use them (RFC 6749 §3.1: no
-// parameter twice; a request object could override state, nonce or PKCE).
+// AuthOptions.ExtraParams entry may not use them, in any spelling paramKey
+// equates (RFC 6749 §3.1: no parameter twice; a request object could
+// override state, nonce or PKCE).
 var reservedRequestParams = []string{
 	paramResponseType, paramClientID, paramRedirectURI, paramScope, paramState, paramNonce, paramCodeChallenge,
 	paramCodeChallengeMethod, paramResponseMode, "request", "request_uri", "claims", "registration",
 	"id_token_hint", "login_hint", "max_age", "prompt", "acr_values", "ui_locales", "display",
+}
+
+// reservedParamKeys are the paramKeys of reservedRequestParams.
+var reservedParamKeys = paramKeys(reservedRequestParams)
+
+// paramKey is the comparison key of a request parameter name: two names
+// with one key are one parameter to some server. Case is folded (Unicode
+// simple folding: ASP.NET compares names case-insensitively, and .NET
+// upper-cases 'ſ' to 'S'), and '.', ' ' and '[' read as '_', the characters
+// PHP rewrites so in parameter names. ExtraParams names cannot hold a space
+// or '[' (isParamName); a provider's endpoint query can.
+func paramKey(name string) string {
+	return foldKey(strings.Map(func(r rune) rune {
+		switch r {
+		case '.', ' ', '[':
+			return '_'
+		default:
+			return r
+		}
+	}, name))
+}
+
+// paramKeys returns the set of the paramKeys of names.
+func paramKeys(names []string) map[string]struct{} {
+	keys := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		keys[paramKey(name)] = struct{}{}
+	}
+
+	return keys
+}
+
+// isReservedParam reports whether key is the paramKey of a parameter the
+// Client sends or does not support.
+func isReservedParam(key string) bool {
+	_, ok := reservedParamKeys[key]
+
+	return ok
 }
 
 // providerMetadata holds the members of the discovery document the Client
@@ -53,8 +93,10 @@ type providerMetadata struct {
 	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported"`
 	AuthorizationResponseIssParameterSupported bool     `json:"authorization_response_iss_parameter_supported"`
 
-	// authURL is AuthorizationEndpoint, parsed by validate.
-	authURL *url.URL
+	// authURL is AuthorizationEndpoint, parsed by validate, and authParams
+	// the paramKeys of its query.
+	authURL    *url.URL
+	authParams map[string]struct{}
 }
 
 // discover retrieves and validates the metadata of issuer: one terminating
@@ -117,7 +159,14 @@ func (md *providerMetadata) validate(allowHTTP bool) error {
 		return fmt.Errorf("%w: subject_types_supported missing", ErrInvalidMetadata)
 	}
 
-	return checkEndpointQuery(md.authURL)
+	params, err := endpointParams(md.authURL)
+	if err != nil {
+		return err
+	}
+
+	md.authParams = params
+
+	return nil
 }
 
 // validateEndpoint checks an endpoint URL — absolute https (Discovery §3),
@@ -153,21 +202,34 @@ func validateEndpoint(name, raw string, required, allowHTTP bool) (*url.URL, err
 	return u, nil
 }
 
-// checkEndpointQuery refuses an authorization endpoint whose query uses a
-// parameter the Client sends (RFC 6749 §3.1).
-func checkEndpointQuery(u *url.URL) error {
+// endpointParams returns the paramKeys of the authorization endpoint's
+// query. The Client keeps that query (RFC 6749 §3.1), so it refuses one
+// that uses a parameter the Client sends, or uses one name twice — in any
+// spelling paramKey equates: the request would include a parameter more
+// than once, which §3.1 forbids.
+func endpointParams(u *url.URL) (map[string]struct{}, error) {
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return fmt.Errorf("%w: authorization_endpoint query: %w", ErrInvalidMetadata, err)
+		return nil, fmt.Errorf("%w: authorization_endpoint query: %w", ErrInvalidMetadata, err)
 	}
 
-	for name := range query {
-		if slices.Contains(reservedRequestParams, name) {
-			return fmt.Errorf("%w: authorization_endpoint query sets %q", ErrInvalidMetadata, name)
+	keys := make(map[string]struct{}, len(query))
+
+	for _, name := range slices.Sorted(maps.Keys(query)) {
+		key := paramKey(name)
+		_, repeated := keys[key]
+
+		switch {
+		case isReservedParam(key):
+			return nil, fmt.Errorf("%w: authorization_endpoint query sets %q", ErrInvalidMetadata, name)
+		case repeated || len(query[name]) > 1:
+			return nil, fmt.Errorf("%w: authorization_endpoint query repeats %q", ErrInvalidMetadata, name)
 		}
+
+		keys[key] = struct{}{}
 	}
 
-	return nil
+	return keys, nil
 }
 
 // negotiate checks that the provider offers what cfg needs and returns the

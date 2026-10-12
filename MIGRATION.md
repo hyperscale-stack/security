@@ -916,3 +916,33 @@ To migrate:
    still write the binding secret: do not use them on these types.
 5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
    in another logged value, `slog`'s JSON handler writes their tokens.
+
+### `oidc/client`: an authorization request never repeats a parameter
+
+RFC 6749 §3.1: "Request and response parameters MUST NOT be included more
+than once", and the authorization endpoint's own query "MUST be retained".
+`AuthOptions.ExtraParams` names were compared with the parameters the client
+sends exactly, and not at all with the endpoint's query, so `Request`,
+`STATE` or `request.uri` passed — read as `request`, `state`, `request_uri`
+by a provider that ignores case (ASP.NET) or rewrites `.` as `_` (PHP) — and
+an entry could repeat a parameter of the endpoint's query. Names are now
+compared case-insensitively, with `.` (and, in a provider's query, space and
+`[`) read as `_`:
+
+| | Before | After |
+| --- | --- | --- |
+| `ExtraParams` spelling a parameter the client sends or does not support (`Nonce`, `STATE`, `Request`, `request.uri`, `Redirect.Uri`…) | sent | `Begin` fails with `ErrInvalidAuthRequest`, nothing stored |
+| `ExtraParams` naming a parameter of the endpoint's query (`tenant`, `Tenant`, `tenant.id` for `?tenant_id=`) | sent twice | `Begin` fails with `ErrInvalidAuthRequest` |
+| two `ExtraParams` that are one parameter (`tenant` and `TENANT`, `a.b` and `a_b`) | both sent | `Begin` fails with `ErrInvalidAuthRequest` |
+| an authorization endpoint whose query spells a reserved parameter (`?State=`, `?request.uri=`) or repeats a name (`?tenant=a&TENANT=b`) | used | `New` fails with `ErrInvalidMetadata` |
+
+To migrate:
+
+1. Nothing for `ExtraParams` with distinct, non-reserved names, which are
+   sent as before.
+2. Remove the entries `Begin` now refuses; a value the provider's
+   authorization endpoint already sets in its query cannot be changed per
+   login.
+3. None of the six providers of the pinned discovery corpus has a query in
+   its authorization endpoint; a provider whose query `New` now refuses has
+   to fix its metadata.

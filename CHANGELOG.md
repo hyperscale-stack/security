@@ -698,6 +698,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   data) with `%s` and `%q`; it now prints and logs its subject only.
   `Identity` and `Tokens` still encode their tokens, deliberately, so that
   applications can persist them (see MIGRATION.md).
+- `oidcclient.AuthOptions.ExtraParams` compared its names with the
+  reserved parameters exactly: `Request`, `STATE`, `Nonce`, `request.uri`…
+  passed, and a provider that ignores case (ASP.NET) or rewrites `.` as `_`
+  (PHP) read them as the reserved parameter — a request object or a nonce
+  the godoc promised to refuse. They also repeated the parameters of the
+  authorization endpoint's own query (`?tenant=acme` then `tenant=evil`),
+  which RFC 6749 §3.1 forbids. Names are now compared by a key folding case
+  and reading `.`, space and `[` as `_`: `Begin` refuses an entry equivalent
+  to a parameter the client sends or does not support, to one of the
+  endpoint's query, or to another entry (`ErrInvalidAuthRequest`), and
+  `New` refuses an authorization endpoint whose query does the same
+  (`ErrInvalidMetadata`).
 - `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
   or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
   `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key
