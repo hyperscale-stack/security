@@ -80,6 +80,15 @@ type ServerConfig struct {
 	// lets any authenticated confidential client introspect any token. See
 	// [IntrospectionPolicy].
 	IntrospectionPolicy IntrospectionPolicy
+	// MaxRequestBytes bounds every request the server parses: the query
+	// string and the body of /authorize, /token, /revoke and /introspect —
+	// net/http alone reads up to 10 MB of form. A longer request is refused
+	// with invalid_request (a bare 400 at /authorize) before any parameter
+	// is read, its declared length checked before the body is. Zero or
+	// negative selects [DefaultMaxRequestBytes] (64 KiB); raise it only for
+	// custom grants carrying large assertions. A ConsentFunc reading the
+	// body of a POST /authorize itself reads it within the same bound.
+	MaxRequestBytes int64
 	// Extension, when set, plugs a protocol extension — an OpenID Connect
 	// provider — into /authorize and into the authorization_code and
 	// refresh_token exchanges of /token: see [Extension]. Optional: without

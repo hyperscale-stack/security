@@ -66,8 +66,6 @@ future refactor phases.
   by issuer.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
-- **The `nonce` parameter is not bounded by the core** — `/authorize` records
-  it as sent; `oidc/provider` bounds it in OpenID requests (512 bytes).
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
   `refresh_token` exchanges; the implicit flow runs its authorization hooks
   and records their context, but its fragment members are fixed (RFC 6749

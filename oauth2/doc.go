@@ -13,7 +13,9 @@
 //   - Endpoints: AuthorizeHandler runs the RFC 6749 §3.1 authorization
 //     endpoint (authorization_code, and the opt-in legacy implicit flow);
 //     TokenHandler, RevokeHandler, IntrospectHandler and MetadataHandler
-//     cover the remaining RFC endpoints.
+//     cover the remaining RFC endpoints. Every request is bounded
+//     (ServerConfig.MaxRequestBytes, 64 KiB by default), and so are the
+//     state, nonce and client_id the server echoes, records or looks up.
 //   - IntrospectHandler answers confidential clients only (a public
 //     client's client_id is no credential), and the optional
 //     ServerConfig.IntrospectionPolicy decides which active tokens each

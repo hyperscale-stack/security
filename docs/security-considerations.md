@@ -353,6 +353,21 @@ keys by `kid` against a JWKS provider (static or remote).
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Request bounds** — RFC 6749 bounds no parameter, and `net/http` alone
+  reads 10 MB of form. Every endpoint bounds the query and the body it
+  parses to `ServerConfig.MaxRequestBytes` (64 KiB by default) —
+  `invalid_request`, a bare 400 at `/authorize`, before any parameter is
+  read; a declared `Content-Length` over the bound is refused before the
+  body is. The values the server keeps or echoes are bounded too: the
+  `state` echoed in every authorization response (at most 4096 bytes of
+  VSCHAR, RFC 6749 Appendix A.5 — refused without echoing it), the `nonce`
+  recorded with the code (512 bytes of UTF-8 without NUL, for every request
+  — so no store is handed a multi-megabyte value to persist and re-encode),
+  the scope (100 tokens, 4096 bytes) and the `client_id` (255 bytes: a longer
+  one is unknown, never looked up). A 4 KiB `state` keeps the redirect URL
+  within the usual 8 KiB request-line limits, but an authorization server
+  behind a proxy whose response-header buffer is smaller (nginx's
+  `proxy_buffer_size` defaults to 4 KiB) needs that buffer raised.
 - **Mix-up defense (RFC 9207)** — every authorization response, code and
   implicit, success and redirected error, carries `iss`, the issuer the
   request resolved to, and the RFC 8414 metadata sets

@@ -275,6 +275,11 @@ func withProfile(p oauth2.Profile) envOption {
 	return func(s *oauth2.ServerConfig, _ *grant.Config) { s.Profile = p }
 }
 
+// withMaxRequestBytes bounds the server's requests to n bytes.
+func withMaxRequestBytes(n int64) envOption {
+	return func(s *oauth2.ServerConfig, _ *grant.Config) { s.MaxRequestBytes = n }
+}
+
 // newExtensionEnv builds a server — authorization_code, refresh_token and
 // client_credentials over a memory store, a confidential client allowed
 // "openid read write", StaticIssuer("https://auth.example", "api"), a

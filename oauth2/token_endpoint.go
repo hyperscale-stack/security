@@ -32,6 +32,9 @@ import (
 //     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
 //     (error).
 //
+// Its query and body are bounded by [ServerConfig.MaxRequestBytes]
+// (invalid_request beyond), like those of /revoke and /introspect.
+//
 // The parameters of RFC 6749 and RFC 7636 the endpoint and the shipped
 // grants read — grant_type, code, redirect_uri, code_verifier,
 // refresh_token, scope, username, password, client_id, client_secret — are
@@ -55,8 +58,8 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithCause(err))
+	if err := s.parseRequestForm(w, r); err != nil {
+		s.writeOAuthError(r.Context(), w, formRefusal(err))
 
 		return
 	}

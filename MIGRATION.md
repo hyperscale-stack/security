@@ -1810,3 +1810,27 @@ separator, and the three hint lists are bounded:
 To migrate: nothing for clients sending ordinary values. A client sending
 more than 2048 bytes in one of these hints sends fewer: they never fail a
 request (OIDC Core §3.1.2.1, §15.1).
+### `oauth2`: request sizes and parameters are bounded
+
+The endpoints parsed requests of any size up to the 10 MB `net/http` form
+limit, echoed any `state` in their redirects and recorded any `nonce` with
+the code — persisted by every store and re-encoded by the Redis scripts.
+
+| | Before | After |
+| --- | --- | --- |
+| query or body over `ServerConfig.MaxRequestBytes` (default 64 KiB) | parsed (up to 10 MB of body) | `invalid_request` "request too large" — a bare 400 at `/authorize` — before anything is read |
+| `nonce` over 512 bytes, invalid UTF-8 or holding NUL | recorded with the code (OpenID requests through `oidc/provider` excepted) | redirected `invalid_request`, every request |
+| `state` over 4096 bytes or outside VSCHAR (`%x20-7E`) | echoed in every redirect | redirected `invalid_request`, without `state` |
+| `client_id` over 255 bytes | looked up | an unknown client, never looked up |
+| `code_challenge` / `code_challenge_method` of an implicit request | handed to the `ConsentFunc` | ignored |
+| `code_challenge_method` without `code_challenge` (`Profile20`) | recorded with the code | ignored |
+
+To migrate:
+
+1. Grants carrying large assertions (a custom SAML or JWT bearer grant) set
+   `ServerConfig.MaxRequestBytes` to what they need.
+2. Clients sending a non-ASCII `state`, or one over 4 KiB, encode a shorter
+   value — a random key to their own state, as RFC 6749 §10.12 suggests.
+3. Extensions relying on the core's `nonce` (`AuthorizeRequest.Nonce`,
+   `TokenIssuance.Nonce`) may drop their own bound: the core applies the one
+   `oidc/provider` applies.

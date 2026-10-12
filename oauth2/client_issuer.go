@@ -15,10 +15,14 @@ import (
 
 // issuerClients is the [ClientStore] a request sees at its issuer: a
 // client bound to other issuers ([IssuerBoundClient]) does not exist
-// there. One instance serves one request.
+// there, and neither does an identifier longer than [MaxClientIDLength],
+// which is never looked up. One instance serves one request.
 type issuerClients struct {
 	store  ClientStore
 	issuer string
+	// anyIssuer reports that the issuer is unknown — the IssuerResolver
+	// failed — so the binding cannot be checked: the request fails anyway.
+	anyIssuer bool
 	// hidden records that a client bound to other issuers was hidden: the
 	// cause of the refusal that follows.
 	hidden bool
@@ -26,8 +30,12 @@ type issuerClients struct {
 
 // LoadClient implements [ClientStore].
 func (c *issuerClients) LoadClient(ctx context.Context, id string) (Client, error) {
+	if len(id) > MaxClientIDLength {
+		return nil, nil
+	}
+
 	client, err := c.store.LoadClient(ctx, id)
-	if err != nil || client == nil {
+	if err != nil || client == nil || c.anyIssuer {
 		return client, err //nolint:wrapcheck // the store's own answer, unchanged
 	}
 

@@ -469,6 +469,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `security.ErrUnavailable`); a
   `jwtsec.RemoteJWKS.Fetch` span; fuzz targets for the verifier, the claims
   decoder and NumericDate. See Security and Changed.
+- **OAuth2 request bounds**: `oauth2.ServerConfig.MaxRequestBytes` (default
+  `oauth2.DefaultMaxRequestBytes`, 64 KiB) bounds the query and the body of
+  every endpoint; `oauth2.MaxNonceLength` (512), `oauth2.MaxStateLength`
+  (4096) and `oauth2.MaxClientIDLength` (255) document the bounds of the
+  values the server keeps, echoes or looks up.
 
 ### Changed
 
@@ -761,6 +766,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   provider may release, and a grant records only those; the values of a
   voluntary `acr` request join `Request.ACRValues`, which now holds each
   value once. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 requests and parameters are bounded (breaking)**: a query or
+  body over `ServerConfig.MaxRequestBytes` (64 KiB by default) is refused
+  with `invalid_request` (a bare 400 at `/authorize`) before it is parsed; a
+  `nonce` over 512 bytes, not UTF-8 or holding NUL, and a `state` over 4096
+  bytes or outside VSCHAR are refused with a redirected `invalid_request` —
+  the state not echoed; a `client_id` over 255 bytes is an unknown client;
+  the PKCE parameters of an implicit request, and a `code_challenge_method`
+  without `code_challenge`, are ignored. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1482,3 +1495,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   without their raw value. The `oauth2/storetest` conformance suite now
   checks that no lookup returns a raw token and that a store leaves the
   caller's pair untouched: a custom store keeping raw tokens fails it.
+- OAuth2 requests can no longer make the server parse, echo or persist
+  megabytes. Every endpoint read up to 10 MB of form; `/authorize` echoed any
+  `state` in its redirects and recorded any `nonce` with the code — persisted
+  by every store, re-encoded by the Redis consume script (tens of
+  milliseconds of a blocked server per redemption, about 100 such codes
+  filling 1 GB of a `noeviction` Redis, whose writes — revocations included
+  — then fail). `oidc/provider` bounded the nonce of OpenID requests only.
+  Requests are now bounded to 64 KiB, and the state and the nonce of every
+  authorization request to 4096 and 512 bytes.

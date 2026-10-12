@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/grant"
 	"github.com/hyperscale-stack/security/oauth2/token"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
@@ -369,20 +370,27 @@ func TestOversizedListParametersAreIgnored(t *testing.T) {
 	}
 }
 
-// TestPromptIsReadWhole: prompt has no length bound — truncating or
-// ignoring it could turn "none … login" into a valid prompt=none, or skip a
-// required re-authentication — and is read whole, without allocating per
-// separator.
+// withMaxRequestBytes sets the server's request bound
+// (oauth2.ServerConfig.MaxRequestBytes).
+func withMaxRequestBytes(n int64) envOption {
+	return func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) { s.MaxRequestBytes = n }
+}
+
+// TestPromptIsReadWhole: prompt has no length bound of its own — only the
+// request's (oauth2.ServerConfig.MaxRequestBytes, raised here above the
+// value) — since truncating or ignoring it could turn "none … login" into a
+// valid prompt=none, or skip a required re-authentication; and it is read
+// whole, without allocating per separator.
 func TestPromptIsReadWhole(t *testing.T) {
 	t.Parallel()
 
 	spaces := strings.Repeat(" ", 1<<20)
 
-	e := newEnv(t)
+	e := newEnv(t, withMaxRequestBytes(4<<20))
 	require.NotEmpty(t, redirect(t, e.authorize(with(authorizeQuery(), "prompt", spaces+"login"))).Get("code"))
 	assert.Equal(t, oidcprovider.Prompt{Login: true}, e.lastRequest().Prompt)
 
-	refused := newEnv(t)
+	refused := newEnv(t, withMaxRequestBytes(4<<20))
 	params := redirect(t, refused.authorize(with(authorizeQuery(), "prompt", "none"+spaces+"login")))
 	assert.Equal(t, oauth2.CodeInvalidRequest, params.Get("error"), "none with another value, however far")
 
@@ -427,12 +435,14 @@ func TestRequestReportsOfflineAccessForEveryRequest(t *testing.T) {
 
 // TestPlainOAuth2RequestKeepsOAuth2Semantics: without openid the request
 // is an OAuth 2.0 one: OpenID parameters are not parsed, the interaction
-// is always interactive, and the token response carries no id_token.
+// is always interactive, and the token response carries no id_token. (The
+// nonce is a parameter of the oauth2 core, which bounds it in every
+// request.)
 func TestPlainOAuth2RequestKeepsOAuth2Semantics(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	q := with(authorizeQuery(), "scope", "read", "prompt", "none login", "nonce", strings.Repeat("n", 600), "request", "x")
+	q := with(authorizeQuery(), "scope", "read", "prompt", "none login", "request", "x")
 
 	resp := e.flow(q)
 	assert.Empty(t, resp.IDToken)

@@ -50,8 +50,8 @@ func (s *Server) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithCause(err))
+	if err := s.parseRequestForm(w, r); err != nil {
+		s.writeOAuthError(r.Context(), w, formRefusal(err))
 
 		return
 	}

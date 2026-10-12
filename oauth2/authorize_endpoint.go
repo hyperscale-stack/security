@@ -116,17 +116,19 @@ type AuthorizeRequest struct {
 	// allowed scopes, in canonical form: its RFC 6749 §3.3 tokens joined by
 	// a single SP, duplicates dropped.
 	Scope string
-	// State is the opaque client state echoed back on the redirect.
+	// State is the opaque client state echoed back on the redirect: at most
+	// [MaxStateLength] bytes of VSCHAR (RFC 6749 Appendix A.5).
 	State string
 	// CodeChallenge / CodeChallengeMethod carry the PKCE parameters
-	// (RFC 7636). Empty when the request carries no PKCE; unused by the
-	// implicit flow. For the code flow they are validated before the
-	// ConsentFunc runs: the method is allowed by the profile and the
-	// challenge is well-formed for it (RFC 7636 §4.2).
+	// (RFC 7636) of a code request. Both are empty when the request carries
+	// no code_challenge, and for the implicit flow, which records none. For
+	// the code flow they are validated before the ConsentFunc runs: the
+	// method is allowed by the profile and the challenge is well-formed for
+	// it (RFC 7636 §4.2).
 	CodeChallenge       string
 	CodeChallengeMethod string
-	// Nonce echoes the OIDC nonce parameter, when present. The core does not
-	// bound it: an extension relying on it MUST bound it (see LIMITATIONS).
+	// Nonce echoes the OIDC nonce parameter, when present: at most
+	// [MaxNonceLength] bytes of valid UTF-8 without NUL.
 	Nonce string
 	// Issuer is the issuer the IssuerResolver returned for the request: the
 	// realm the authorization code — or implicit access token — is bound
@@ -247,6 +249,14 @@ type AuthorizeConfig struct {
 // the one repeated (the flow is ambiguous). A repeated state is not echoed.
 // Other parameters are left to the extension and the ConsentFunc.
 //
+// Requests are bounded: their query and body by
+// [ServerConfig.MaxRequestBytes] (a bare 400 beyond), the client_id by
+// [MaxClientIDLength] (an unknown client beyond), the state by
+// [MaxStateLength] and VSCHAR (RFC 6749 Appendix A.5) and the nonce by
+// [MaxNonceLength], valid UTF-8 without NUL — both refused with a redirected
+// invalid_request, the state not echoed. The PKCE parameters of an implicit
+// request are ignored.
+//
 // The scope is parsed strictly (RFC 6749 §3.3): tokens of printable ASCII
 // but the double quote and the backslash, separated by SP — runs of SP are
 // tolerated, any other whitespace is not — at most 100 tokens, repetitions
@@ -305,9 +315,8 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		s.notifyError(r.Context(), ErrInvalidRequest.WithCause(err))
-		http.Error(w, "oauth2: malformed authorization request", http.StatusBadRequest)
+	if err := s.parseRequestForm(w, r); err != nil {
+		s.refuseUnparsable(w, r, err)
 
 		return
 	}
@@ -368,6 +377,22 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	s.authorize(cfg, consent, w, r, st)
+}
+
+// refuseUnparsable answers an authorization request parseRequestForm
+// refused, with a bare 400: nothing of it can be trusted, its redirect URI
+// included.
+func (s *Server) refuseUnparsable(w http.ResponseWriter, r *http.Request, err error) {
+	oe := formRefusal(err)
+	s.notifyError(r.Context(), oe)
+
+	if errors.Is(err, errRequestTooLarge) {
+		http.Error(w, "oauth2: authorization request too large", http.StatusBadRequest)
+
+		return
+	}
+
+	http.Error(w, "oauth2: malformed authorization request", http.StatusBadRequest)
 }
 
 // authorizeState is a validated /authorize request: the snapshot the
@@ -470,8 +495,7 @@ func (s *Server) refuseModified(w http.ResponseWriter, r *http.Request, st *auth
 type authorizeIssuer struct {
 	issuer, audience string
 	err              error
-	// scoped is the request's view of the ClientStore at the issuer; nil
-	// when the resolver failed.
+	// scoped is the request's view of the ClientStore at the issuer.
 	scoped *issuerClients
 }
 
@@ -484,13 +508,10 @@ func (s *Server) resolveAuthorizeIssuer(r *http.Request) *authorizeIssuer {
 }
 
 // clients returns store as the request sees it: the clients of other
-// issuers hidden, unless the issuer is unknown.
+// issuers hidden, unless the issuer is unknown, and over-long identifiers
+// unknown in every case.
 func (a *authorizeIssuer) clients(store ClientStore) ClientStore {
-	if a.err != nil {
-		return store
-	}
-
-	a.scoped = &issuerClients{store: store, issuer: a.issuer}
+	a.scoped = &issuerClients{store: store, issuer: a.issuer, anyIssuer: a.err != nil}
 
 	return a.scoped
 }
@@ -525,12 +546,17 @@ func (s *Server) validateAuthorize(
 	resolved *authorizeIssuer,
 ) (*authorizeState, bool) {
 	// An unsupported — or repeated — response type is answered in the query
-	// string, and a repeated state is not echoed.
+	// string, and a repeated or invalid state is not echoed.
 	flow, flowErr := resolveFlow(cfg, in.params.Get("response_type"))
+	state := in.params.Get("state")
+	stateValid := validState(state)
 	target := authorizeTarget{
 		redirectURI: in.redirectURI,
-		state:       in.params.Get("state"),
 		fragment:    flowErr == nil && flow == flowImplicit,
+	}
+
+	if stateValid {
+		target.state = state
 	}
 
 	// Without an issuer the answer cannot name one (RFC 9207 §2): the
@@ -548,6 +574,12 @@ func (s *Server) validateAuthorize(
 	// once".
 	if in.repeated != "" {
 		s.redirectAuthorizeError(w, r, target, repeatedParameter(in.repeated))
+
+		return nil, false
+	}
+
+	if !stateValid {
+		s.redirectAuthorizeError(w, r, target, errMalformedState)
 
 		return nil, false
 	}
@@ -801,22 +833,23 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 	}
 }
 
-// parseAuthorizeRequest validates the scope and (for the code flow) the
-// PKCE parameters, returning the [AuthorizeRequest] or an [*Error].
+// parseAuthorizeRequest validates the scope, (for the code flow) the PKCE
+// parameters and the nonce, returning the [AuthorizeRequest] or an
+// [*Error].
 func (s *Server) parseAuthorizeRequest(in authorizeInput, flow authorizeFlow) (*AuthorizeRequest, *Error) {
 	scope, oerr := authorizeScope(in.params.Get(paramScope), in.client.Scopes())
 	if oerr != nil {
 		return nil, oerr
 	}
 
-	challenge := in.params.Get("code_challenge")
-	method := in.params.Get("code_challenge_method")
+	challenge, method, perr := s.authorizePKCE(in, flow)
+	if perr != nil {
+		return nil, ErrInvalidRequest.WithDescription(perr.Error())
+	}
 
-	// PKCE applies to the authorization-code flow only.
-	if flow == flowCode {
-		if perr := s.validateAuthorizePKCE(in.client, challenge, method); perr != nil {
-			return nil, ErrInvalidRequest.WithDescription(perr.Error())
-		}
+	nonce := in.params.Get("nonce")
+	if !validNonce(nonce) {
+		return nil, errMalformedNonce
 	}
 
 	return &AuthorizeRequest{
@@ -827,8 +860,32 @@ func (s *Server) parseAuthorizeRequest(in authorizeInput, flow authorizeFlow) (*
 		State:               in.params.Get("state"),
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: method,
-		Nonce:               in.params.Get("nonce"),
+		Nonce:               nonce,
 	}, nil
+}
+
+// authorizePKCE returns the PKCE parameters the request records, or why
+// they are refused. PKCE belongs to the authorization-code flow (RFC
+// 7636): an implicit request records none, whatever it carries, and a
+// code_challenge_method means nothing without a code_challenge (§4.3), so
+// it is not recorded alone.
+func (s *Server) authorizePKCE(in authorizeInput, flow authorizeFlow) (string, string, error) {
+	if flow != flowCode {
+		return "", "", nil
+	}
+
+	challenge := in.params.Get("code_challenge")
+	method := in.params.Get("code_challenge_method")
+
+	if err := s.validateAuthorizePKCE(in.client, challenge, method); err != nil {
+		return "", "", err
+	}
+
+	if challenge == "" {
+		return "", "", nil
+	}
+
+	return challenge, method, nil
 }
 
 // validateAuthorizePKCE enforces the PKCE policy and the RFC 7636 §4.2

@@ -90,9 +90,10 @@ type Extension interface {
 	// received: the core refused it when it repeats a parameter the core
 	// reads, but r.Form still holds the empty occurrences — which RFC 6749
 	// §3.1 omits: read the core's parameters from ar, never r.FormValue,
-	// which an empty occurrence can hide them from — the extension's own
-	// parameters as sent, repeated or not (refuse your own repetitions), and
-	// the nonce unbounded: bound it.
+	// which an empty occurrence can hide them from — and the extension's own
+	// parameters as sent, repeated or not (refuse your own repetitions),
+	// within [ServerConfig.MaxRequestBytes]. ar.State and ar.Nonce are
+	// bounded already ([MaxStateLength], [MaxNonceLength]).
 	ValidateAuthorizeRequest(ctx context.Context, r *http.Request, ar *AuthorizeRequest) (any, error)
 
 	// CompleteAuthorization decides what an approved authorization records.
@@ -156,8 +157,8 @@ type TokenIssuance struct {
 	Access AccessToken
 	// Nonce is the nonce the authorization code recorded: set at the code
 	// exchange only, always empty on a refresh (OpenID Connect Core §12.2).
-	// The core does not bound it: an extension bounds it when it validates
-	// the authorization request.
+	// The authorization endpoint bounded it: at most [MaxNonceLength] bytes
+	// of valid UTF-8 without NUL.
 	Nonce string
 	// RefreshTokenIssued reports whether a refresh token is persisted with
 	// the access token — minted at a code exchange (a RefreshTokens
