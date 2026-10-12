@@ -83,9 +83,6 @@ func (c Carrier) String() string {
 	return fmt.Sprintf("connectrpcsec.Carrier{Incoming: %d keys, Staged: %d keys}", len(c.in), len(c.out))
 }
 
-// GoString implements fmt.GoStringer like String.
-func (c Carrier) GoString() string { return c.String() }
-
 // Format implements fmt.Formatter like String, for every verb: without it,
 // fmt prints the header maps. fmt handles %p of a non-pointer value before
 // any method: no type can redact that one.

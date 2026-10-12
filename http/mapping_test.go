@@ -281,3 +281,18 @@ func TestMiddlewareWithoutCredentialsSendsNoErrorCode(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Equal(t, []string{bearerAPI}, rec.Header().Values("WWW-Authenticate"))
 }
+
+// An engine without any extractor is a misconfiguration (500), tolerated
+// only under the anonymous fallback.
+func TestMiddlewareEngineWithoutExtractor(t *testing.T) {
+	t.Parallel()
+
+	engine := security.NewEngine(security.NewManager())
+
+	rec := serve(httpsec.Middleware(engine)(next204()), httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Values("WWW-Authenticate"))
+
+	rec = serve(httpsec.Middleware(engine, httpsec.WithAnonymousFallback(true))(next204()), httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}

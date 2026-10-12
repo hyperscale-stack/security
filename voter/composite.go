@@ -28,7 +28,9 @@ import (
 //
 // And panics if it is given no voter or a nil one.
 func And(voters ...security.Voter) security.Voter {
-	return newComposite("And", composeAnd, voters)
+	return newComposite("And", voters, func(votes []security.Decision, _ security.Authentication) security.Decision {
+		return and(votes)
+	})
 }
 
 // Or combines voters with disjunction semantics:
@@ -39,7 +41,9 @@ func And(voters ...security.Voter) security.Voter {
 //
 // Or panics if it is given no voter or a nil one.
 func Or(voters ...security.Voter) security.Voter {
-	return newComposite("Or", composeOr, voters)
+	return newComposite("Or", voters, func(votes []security.Decision, _ security.Authentication) security.Decision {
+		return or(votes)
+	})
 }
 
 // Not inverts an inner voter: Grant becomes Deny and Deny becomes Grant — but
@@ -48,23 +52,22 @@ func Or(voters ...security.Voter) security.Voter {
 // does not admit anonymous callers (use [Anonymous] with
 // security.IsAnonymous). Abstain stays Abstain. Not panics on a nil voter.
 func Not(inner security.Voter) security.Voter {
-	return newComposite("Not", composeNot, []security.Voter{inner})
+	return newComposite("Not", []security.Voter{inner}, func(votes []security.Decision, auth security.Authentication) security.Decision {
+		return not(votes[0], auth)
+	})
 }
-
-type composeMode int
-
-const (
-	composeAnd composeMode = iota
-	composeOr
-	composeNot
-)
 
 type compositeVoter struct {
 	voters []security.Voter
-	mode   composeMode
+	// combine folds the inner votes into the composite's decision.
+	combine func(votes []security.Decision, auth security.Authentication) security.Decision
 }
 
-func newComposite(constructor string, mode composeMode, voters []security.Voter) compositeVoter {
+func newComposite(
+	constructor string,
+	voters []security.Voter,
+	combine func([]security.Decision, security.Authentication) security.Decision,
+) compositeVoter {
 	if len(voters) == 0 {
 		panic("voter: " + constructor + ": no voter")
 	}
@@ -75,7 +78,7 @@ func newComposite(constructor string, mode composeMode, voters []security.Voter)
 		}
 	}
 
-	return compositeVoter{voters: slices.Clone(voters), mode: mode}
+	return compositeVoter{voters: slices.Clone(voters), combine: combine}
 }
 
 // Supports returns true when at least one inner voter does.
@@ -89,28 +92,15 @@ func (c compositeVoter) Supports(a security.Attribute) bool {
 	return false
 }
 
-// Vote combines the inner votes according to the composite's mode.
+// Vote combines the inner votes.
 func (c compositeVoter) Vote(ctx context.Context, auth security.Authentication, attrs []security.Attribute) security.Decision {
-	switch c.mode {
-	case composeNot:
-		return not(c.voters[0].Vote(ctx, auth, attrs), auth)
-	case composeAnd:
-		return and(c.votes(ctx, auth, attrs))
-	case composeOr:
-		return or(c.votes(ctx, auth, attrs))
-	}
-
-	return security.DecisionDeny
-}
-
-func (c compositeVoter) votes(ctx context.Context, auth security.Authentication, attrs []security.Attribute) []security.Decision {
-	out := make([]security.Decision, len(c.voters))
+	votes := make([]security.Decision, len(c.voters))
 
 	for i, v := range c.voters {
-		out[i] = v.Vote(ctx, auth, attrs)
+		votes[i] = v.Vote(ctx, auth, attrs)
 	}
 
-	return out
+	return c.combine(votes, auth)
 }
 
 // and is the strict conjunction: Grant only when every vote is a Grant. An

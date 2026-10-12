@@ -15,10 +15,6 @@ import (
 // isToken reports whether s is an RFC 9110 §5.6.2 token — the syntax of an
 // auth-scheme.
 func isToken(s string) bool {
-	if s == "" {
-		return false
-	}
-
 	for i := range len(s) {
 		c := s[i]
 
@@ -30,7 +26,7 @@ func isToken(s string) bool {
 		}
 	}
 
-	return true
+	return s != "" // token = 1*tchar
 }
 
 // quoteString renders s as an RFC 9110 §5.6.4 quoted-string: DQUOTE and
