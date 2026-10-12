@@ -20,5 +20,6 @@ use (
 	./oidc/client/store/sql
 	./oidc/provider
 	./password
+	./saml/sp
 	./session
 )
