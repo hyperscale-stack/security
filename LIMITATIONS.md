@@ -66,6 +66,88 @@ than future refactor phases.
   advertises — and `fragment` only for an enabled implicit flow; `form_post`
   is refused.
 
+## OpenID Connect client
+
+`oidc/client` is a Relying Party for the Authorization Code flow with
+PKCE. Not supported, and refused where a provider could select them:
+
+- **Other flows and response modes** — implicit and hybrid flows, the
+  `fragment` response mode, JARM.
+- **Request objects and pushed requests** — `request` / `request_uri`
+  (JAR), PAR (RFC 9126), the `claims` request parameter.
+- **ID Token formats** — encrypted ID Tokens (JWE), HMAC-signed ones
+  (HS256/384/512), `alg=none`, and the fully-specified `Ed25519` algorithm
+  identifier of RFC 9864 (go-jose v4.1.5 knows `EdDSA` only).
+- **RSA keys without `alg`** — one algorithm per key (RFC 8725 §3.1): an
+  RSA JWK without `alg` verifies RS256 only, or the single RSA algorithm of
+  `Config.Algorithms`. A provider signing with PS256/384/512, RS384 or
+  RS512 and publishing such keys needs `Config.Algorithms` set to that one
+  algorithm.
+- **Signed or encrypted UserInfo responses** (`application/jwt`):
+  `UserInfo` returns `ErrUserInfoUnsupported`.
+- **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
+  mTLS; DPoP. `client_secret_basic`, `client_secret_post` and `none` are
+  supported.
+- **Token lifecycle** — no refresh-token helper (refresh tokens are
+  returned to the application, which redeems them itself), no logout
+  (RP-initiated, front- or back-channel), no dynamic client registration.
+- **Claims** — aggregated and distributed claims are left unresolved in
+  `Identity.Claims`.
+- **Provider metadata** — discovery is required: no static metadata. The
+  metadata issuer must equal the configured issuer byte for byte, so
+  templated multi-tenant issuers (Microsoft Entra `common` /
+  `organizations`) are refused: configure the tenant's own issuer.
+- **Discovery defaults** — the defaults of OpenID Connect Discovery §3 are
+  not used to refuse a provider: a capability the provider lacks fails at
+  run time. One exception: a public client (`none`) requires the provider
+  to advertise S256 in `code_challenge_methods_supported`, which some
+  providers omit although they support it.
+- **`acr_values` makes `acr` required** — when sent, the ID Token must
+  carry one of the requested values; list every acceptable level.
+- **No OpenTelemetry spans** — `oidc/client` and `outbound` return errors
+  to the caller and emit no spans.
+- **Reverse proxies** — `HandleCallback` takes the host of the received
+  URL from the Host header and its scheme from the redirect URI: a proxy
+  must preserve the Host header, and one rewriting hosts or paths needs
+  `Complete` with the public URL. Forwarded headers (`X-Forwarded-Host`,
+  RFC 7239) are never read: only the application knows which proxy to
+  trust.
+- **Transaction stores** — the integrity MAC of a transaction is keyed by
+  its binding secret, which the user agent of the login holds: an attacker
+  with write access to the store can still relax the `max_age` and
+  `acr_values` checks of logins it runs itself (a server-held key would
+  close this; not implemented). Protect the store's integrity when relying
+  on step-up authentication. `oidc/client/storage/memory` keeps transactions
+  in the process: use the SQL or Redis store when several instances serve
+  callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
+  unbatched `DELETE` the operator schedules (index `expires_at`, see its
+  package documentation), and its PostgreSQL and MySQL guarantees are not
+  exercised in CI (SQLite only). On Redis, a consumption acknowledged by a
+  primary that fails before replicating it can be lost in a failover,
+  making the transaction consumable again: single use then rests on the
+  provider's single-use authorization code and on the binding secret only
+  the user agent holds. The browser test of the binding cookie
+  (`internal/interop/oidcrp`, headless Chrome) is opt-in
+  (`OIDC_BROWSER_TESTS=1`) and does not run in CI.
+
+## Outbound requests
+
+- **No proxy support** — `outbound` clients never use a proxy: the
+  connect-time address check would judge the proxy, not the destination.
+  Deployments whose egress must go through a proxy cannot use them yet.
+- **Ports are not restricted** by default — restrict them in
+  `Policy.CheckURL`.
+- **Private networks** need an explicit `AllowedPrefixes` exemption.
+- **NAT64** — only the well-known prefix (`64:ff9b::/96`) is decoded and
+  judged on its embedded IPv4 address. A network-specific prefix (RFC 6052
+  §2.2) is carved from global unicast space, so its addresses pass as
+  ordinary global IPv6 and reach whatever IPv4 address they embed, private
+  ones included: a network translating such a prefix must refuse it in
+  `Policy.CheckAddr`.
+- **Error text** — a refused destination is never named, but the errors of
+  allowed destinations (refused connection, timeout, TLS failure) come
+  from the standard library and may name the resolved address and port.
+
 ## Transports
 
 - Only `net/http` and gRPC adapters are shipped. Other transports can be

@@ -107,6 +107,85 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,
   `oauth2.IsCode` and the wire, and carries the retained record for
   `errors.As`.
+- **Outbound HTTP guard** (`outbound`, a stdlib-only sub-package of the
+  core): `outbound.NewClient(outbound.Policy)` returns the `*http.Client`
+  the federation modules use for server-side requests to URLs that come
+  from configuration or remote metadata (discovery documents, JWK Sets,
+  token and UserInfo endpoints, SAML metadata), against server-side
+  request forgery. Its zero-value policy allows https only (http is an
+  opt-in, an https→http redirect is always refused), judges the address
+  actually connected to — after DNS resolution, so DNS rebinding cannot
+  bypass it — and refuses loopback, private (RFC 1918, RFC 4193), shared
+  (RFC 6598), link-local and cloud-metadata, multicast, reserved,
+  documentation and benchmarking space, IPv4-mapped and NAT64 addresses
+  being judged on their IPv4 and IPv6 being limited to `2000::/3` minus
+  its special-purpose blocks; it requires ASCII host names and refuses
+  those ending in a number (`127.1`, `0x7f.1`, which resolvers read as
+  IPv4 addresses) before the `CheckURL` hook, never names a refused
+  address in an error, follows no redirect, uses no proxy and no cookie
+  jar, bounds the exchange (10 s), the response headers (64 KiB) and every
+  body (1 MiB, counted after decompression), and requires TLS 1.2 or
+  later. Applications widen it explicitly (`AllowedPrefixes`,
+  `AllowHTTP`, `MaxRedirects`) and narrow it with the `CheckURL` and
+  `CheckAddr` hooks.
+- **OpenID Connect Relying Party** (`oidc/client`, package `oidcclient`):
+  logs users in through an OpenID Provider with the Authorization Code flow
+  and returns a verified `Identity` (connection, issuer, subject, claims,
+  tokens), one `Client` per connection. `New` discovers the provider (the
+  metadata issuer must equal the configured one) through the `outbound`
+  guard; `Begin`/`Complete` — or the net/http helpers `StartLogin`/
+  `HandleCallback` — run the flow with PKCE S256, state and nonce, in the
+  `query` or `form_post` response mode, with `client_secret_basic`,
+  `client_secret_post` or a public client (`none`, which requires the
+  provider to advertise S256). A login is bound to the user agent that
+  started it: a 256-bit binding secret kept in an HttpOnly `__Host-` cookie
+  (SameSite=Lax for `query`, None for `form_post`), from which the nonce and
+  the PKCE verifier are derived, so the transaction store holds no secret,
+  and which keys an integrity MAC over every field of the transaction
+  (`Transaction.Integrity`, verified before any field is used: a
+  transaction altered in the store fails with `ErrTransactionIntegrity`).
+  The transaction is also bound to its connection, issuer, client, redirect
+  URI and response mode, expires (10 minutes by default), and is consumed
+  once. `Complete` requires the URL the response was received on
+  (`Callback.URL`) to be the connection's redirect URI — scheme, host,
+  port, path and the redirect URI's query parameters; a redirect URI
+  distinct per connection is the mix-up defense (RFC 9700 §4.4.2.2) — and
+  checks the RFC 9207 `iss` parameter when the provider advertises it;
+  `HandleCallback` takes the host from the Host header and the scheme from
+  the redirect URI, so that a TLS-terminating proxy preserving Host works. The ID Token is validated per OpenID Connect
+  Core §3.1.3.7: an allow-listed asymmetric algorithm (RS*, PS*, ES*,
+  EdDSA; HMAC and `none` refused), `typ` absent or JWT, iss, aud (extra
+  audiences only if trusted), azp, exp/iat/nbf with a bounded skew, nonce,
+  auth_time against `max_age`, acr against the requested `acr_values`, and
+  at_hash. Keys come from the issuer's `jwks_uri` only, through a bounded
+  cache (1 h TTL, one rate-limited refresh for an unknown `kid`,
+  single-flight, 24 h stale limit). Every JSON document is parsed strictly
+  (duplicate or case-variant member names refused at every level). Token
+  and UserInfo requests never follow redirects. `UserInfo` returns claims
+  only when their `sub` equals the identity's. Errors are sentinels
+  (`ErrInvalidIDToken` and its causes, `ErrBindingMismatch`,
+  `ErrTransactionNotFound`, `ErrIssuerParameter`, …) wrapping
+  `security.ErrInvalidCredentials` where a credential is refused;
+  `AuthorizationError` and `TokenError` carry the provider's error
+  responses. Secrets never appear in errors, `String`/`GoString` or `slog`
+  output.
+- **OpenID Connect transaction stores**: the `oidcclient.TransactionStore`
+  contract (`Save` never overwrites; `Consume` removes a transaction
+  atomically and decides unknown, then expired, then binding mismatch,
+  which keeps the transaction), with an in-memory store
+  (`oidc/client/storage/memory`), a SQL store (`oidc/client/store/sql`,
+  PostgreSQL/MySQL/SQLite, `PurgeExpired`) and a Redis store
+  (`oidc/client/store/redis`, one Lua script per consumption, Redis Cluster
+  compatible), all validated by the exported conformance suite
+  `oidc/client/storetest`.
+- **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
+  tests only): the Relying Party against the example provider of
+  `github.com/zitadel/oidc/v3`, plus an opt-in browser test
+  (`OIDC_BROWSER_TESTS=1`, headless Chrome) of the binding cookie's
+  SameSite behavior.
+- **Example** `examples/oidc-client`: sign-in through several connections
+  with distinct callback routes, account linking on (connection, issuer,
+  subject), and a local session.
 
 - **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
   takes an `oauth2.Extension` — the contract an OpenID Provider (the

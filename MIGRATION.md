@@ -21,12 +21,22 @@ released on its own cadence.
 | `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          |
 | `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 |
 | `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          |
+| `./oidc/client`           | `github.com/hyperscale-stack/security/oidc/client`              | `oidcclient` — OpenID Connect Relying Party (Authorization Code + PKCE) |
+| `./oidc/client/store/sql` | `github.com/hyperscale-stack/security/oidc/client/store/sql`    | OIDC transaction store on `database/sql`                             |
+| `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                      |
 | `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos (one sub-package per scenario)               |
 | `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              |
+| `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
-and tests.
+and tests. Likewise `outbound` is a sub-package of the core module: the
+SSRF-safe `*http.Client` factory the federation modules use to fetch
+configuration-supplied URLs. It depends on the standard library only and
+is the only networking code of the core. `oidc/client/storage/memory`
+(in-memory transaction store) and `oidc/client/storetest` (the conformance
+suite every transaction store passes) are sub-packages of the
+`oidc/client` module.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
@@ -38,6 +48,7 @@ own tests).
 
 ```
 core (.)                ← stdlib + go.opentelemetry.io/otel
+                           (outbound/ is a stdlib-only sub-package of the core)
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 connectrpc/             ← core + otel + connectrpc.com/connect
@@ -49,10 +60,22 @@ session/                ← core + golang.org/x/crypto + otel
 oauth2/                 ← core + stdlib
 oauth2/store/sql/       ← oauth2 + database/sql
 oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
+oidc/client/            ← core + github.com/go-jose/go-jose/v4
+oidc/client/store/sql/  ← oidc/client + database/sql
+oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
 examples/               ← may depend on every module above
+internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/v3
+                           + github.com/chromedp/chromedp
 
-(`oauth2/storage/memory` is a sub-package of the `oauth2` module.)
+(`oauth2/storage/memory` is a sub-package of the `oauth2` module;
+`oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
+of the `oidc/client` module.)
 ```
+
+`oidc/client` depends on neither `oauth2` nor `jwt`: the Relying Party
+validates ID Tokens itself on top of go-jose. `github.com/coreos/go-oidc`
+and `golang.org/x/oauth2` are not dependencies of any module (see the
+package documentation of `oidc/client` for the evaluation).
 
 The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
 SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly

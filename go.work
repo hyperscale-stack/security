@@ -9,10 +9,14 @@ use (
 	./grpc
 	./http
 	./internal/integrations
+	./internal/interop/oidcrp
 	./jwt
 	./oauth2
 	./oauth2/store/redis
 	./oauth2/store/sql
+	./oidc/client
+	./oidc/client/store/redis
+	./oidc/client/store/sql
 	./password
 	./session
 )

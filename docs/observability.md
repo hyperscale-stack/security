@@ -28,6 +28,14 @@ event per candidate. OAuth2 HTTP endpoints are observable through the host
 server's HTTP instrumentation (e.g. `otelhttp`) and, for their errors,
 through the OAuth2 error hook described below.
 
+The OpenID Connect client (`oidc/client`, its stores) and the core's
+`outbound` package open no spans either: every failure is returned to the
+caller as a sentinel error (`errors.Is`) that carries no secret.
+`Callback`, `AuthRequest` and `Tokens` redact their secrets in `String`,
+`GoString` and `slog` output, and `Identity` and `UserInfo` log their
+identifiers only (`LogValue`). Log the error of `Complete` or
+`HandleCallback`.
+
 ## OAuth2 error hook
 
 An RFC 6749 §5.2 response carries a code, a description and a URI — never

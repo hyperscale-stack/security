@@ -354,6 +354,163 @@ session store to compromise or scale.
 - **Size** — the whole session is JSON-encoded into the cookie; browsers
   cap a cookie near 4 KiB. Keep `Values` small.
 
+## OpenID Connect client
+
+`oidc/client` logs users in through external OpenID Providers. The
+provider is trusted for what it asserts about its own users only; the
+callback request, the browser and — in a SaaS — the provider's metadata
+are attacker-influenced.
+
+- **Browser binding** — a login is bound to the user agent that started
+  it: `Begin` draws a 256-bit binding secret the user agent keeps (an
+  HttpOnly `__Host-` cookie with `StartLogin`), and the callback must
+  present it. The nonce and the PKCE verifier are HMAC-SHA256 values of
+  that secret (OpenID Connect Core §15.5.2), so the transaction store holds
+  only a hash of the state and of the binding: reading the store yields
+  nothing that completes a login, and a stolen state alone cannot be
+  replayed from another browser (login CSRF, RFC 9700 §4.7).
+- **Store integrity** — every transaction carries an integrity MAC over all
+  its fields, keyed by a value derived from the binding secret, which
+  `Complete` verifies before using any stored field: a transaction altered
+  in the store — a stripped `max_age` or `acr_values`, a rewritten
+  `AppState` or redirect URI — fails its login
+  (`ErrTransactionIntegrity`). The user agent of a login holds its binding
+  secret, though: an attacker who can write to the store can still relax
+  the `max_age` and `acr_values` checks of logins it runs with its own
+  browser. When step-up authentication matters, protect the store's
+  integrity (authentication, network isolation), not only its availability.
+- **Single use** — `TransactionStore.Consume` removes the transaction
+  atomically, unknown first, then expired whatever the binding, then a
+  binding mismatch, which keeps the transaction so that a leaked state
+  cannot burn the victim's login. A replayed callback finds nothing and
+  never reaches the token endpoint.
+- **Mix-up attacks** (RFC 9700 §4.4) — give every connection its own
+  redirect URI, distinct from every other connection's (by scheme, host,
+  port, path or query parameter): `Complete` refuses a response received on
+  another URL than the connection's redirect URI, and a transaction of
+  another connection, issuer, client, redirect URI or response mode. A
+  provider advertising RFC 9207 must also send the `iss` parameter,
+  compared with its issuer. Never route callbacks by the state value.
+  Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names — an
+  attacker registering, at the honest provider, a client with the redirect
+  URI of its own connection; RFC 9207 closes it, so prefer providers that
+  support it. Behind a reverse proxy, `HandleCallback` compares the Host
+  header the proxy forwards: preserve it, or give `Complete` the public
+  URL.
+- **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
+  is returned: asymmetric algorithms only (HMAC and `none` refused), `typ`
+  absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from
+  the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk`, `x5c`
+  ignored) through a bounded cache that refetches once, rate limited, for
+  an unknown key, and never on a bad signature from a known one; `iss`,
+  `aud` (further audiences only when trusted), `azp`, `exp`/`iat`/`nbf`
+  within a bounded skew, `nonce`, `auth_time` against `max_age`, `acr`
+  against the requested `acr_values`, and `at_hash` when present. Every
+  JSON document is decoded strictly: duplicate member names, names that
+  differ only by case, invalid UTF-8 and unpaired surrogates are refused,
+  so an application decoding claims itself never reads another member than
+  the one validated.
+- **Identity** — the verified identity is the issuer and subject pair
+  (Core §5.7). Link accounts on (connection or tenant, issuer, subject);
+  never on email, phone or username, which another subject or provider can
+  assert. For Microsoft Entra ID, configure the tenant's own issuer: the
+  templated multi-tenant issuers are refused.
+- **Cookies** — binding cookies are `__Host-` (Secure, Path=/, no Domain:
+  a sibling subdomain cannot plant one), HttpOnly, named after the state so
+  parallel logins coexist, capped at four per browser, and deleted by the
+  callback. SameSite is Lax for the `query` response mode — the callback
+  is a top-level GET — and None for `form_post`, whose cross-site POST
+  carries no Lax cookie; an opt-in headless-Chrome test checks both.
+  `InsecureCookies` drops Secure for local http development only, and is
+  refused with `form_post`.
+- **CSRF** — exempt the callback route from CSRF middleware in `form_post`
+  mode: the cross-site POST is the protocol, the binding cookie its
+  defense. Start logins on a user action from the application's own
+  origin (a POST behind `http.CrossOriginProtection` or a CSRF token) and
+  rate limit them: each start writes a transaction.
+- **Redirect targets** — `AppState` comes back from the store verbatim;
+  validate it before using it as a redirect target. After a successful
+  callback, create a fresh session and answer 303 to a clean URL, so the
+  code leaves the browser history (RFC 9700 §4.3.1).
+- **Account linking** — linking an external identity to an account that
+  is already signed in is a login started on the victim's behalf if it can
+  be forged: on a hostile tenant's connection, a forged link start would
+  silently attach the attacker's identity to the victim's account. Start a
+  link only with a CSRF-protected POST after a recent re-authentication,
+  put a random value bound to the local session in `AppState`, and after
+  `Complete` link only when it matches the current session's value — never
+  link on an identity whose `AppState` does not prove the link was started
+  by that session.
+- **Provider errors** — `AuthorizationError` and `TokenError` carry the
+  provider's `error`, `error_description` and `error_uri`: untrusted text,
+  their `Error()` prints the code only. Never render the description or the
+  URI. The errors of `New` (discovery) may name the resolved address of an
+  allowed destination: when tenants configure issuers, log them and show a
+  generic message.
+- **Tokens** — token and UserInfo requests never follow redirects;
+  `UserInfo` sends an identity's access token only to the UserInfo
+  endpoint of the connection that issued it, and returns claims only when
+  their `sub` is the identity's. `String`, `GoString` and `LogValue` redact
+  secrets, but `json.Marshal` of an `Identity` serializes its tokens.
+- **Caveats** — sending `acr_values` makes `acr` required, among the
+  requested values; a public client (`none`) requires the provider to
+  advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:
+  its verifier skips nonce, azp, iat, `typ`, auth_time and acr, and its key
+  set refetches on every failure without rate limit (see the package
+  documentation of `oidc/client`).
+
+## Outbound requests (SSRF)
+
+Modules that fetch URLs from configuration or remote metadata (OpenID
+Connect discovery, JWK Sets, token and UserInfo endpoints, SAML metadata)
+use `outbound.NewClient`. In a multi-tenant deployment those URLs are
+attacker-influenced — a tenant administrator types an issuer, a discovery
+document names its own endpoints — so the client defends the server's own
+network:
+
+- **Destinations** are judged on the address actually connected to, in
+  `net.Dialer.ControlContext`, after DNS resolution: a name that resolves
+  to a public address when vetted and to an internal one when dialed (DNS
+  rebinding) is still refused. Refused by default: loopback, private
+  (RFC 1918, RFC 4193 unique-local), shared (RFC 6598, CGNAT), link-local
+  (including `169.254.169.254` and the other cloud metadata endpoints),
+  multicast, unspecified, reserved, documentation and benchmarking space,
+  and any scoped (zoned) address. IPv4-mapped IPv6 addresses and NAT64
+  (`64:ff9b::/96`) addresses are judged on the IPv4 address they reach;
+  IPv6 is limited to `2000::/3` minus its special-purpose blocks (Teredo,
+  6to4, documentation), so an unknown or future reservation is refused.
+- **URLs** must be https (http only with `AllowHTTP`, for development), carry
+  no userinfo, and name an ASCII host: non-ASCII names (which `net/http`
+  would map to another name before dialing), percent-encoded or
+  underscore characters, empty labels and trailing dots are refused, so a
+  host check in `CheckURL` sees the name actually dialed.
+- **Redirects** are not followed unless `MaxRedirects` allows it; every
+  hop is re-checked, and https→http is always refused. Credential-bearing
+  requests (token, UserInfo) never follow redirects.
+- **Resources** are bounded: one timeout for the whole exchange (10 s by
+  default), a size cap on every body (1 MiB by default) counted after
+  transparent decompression — a gzip bomb fails — and a 64 KiB header cap.
+- **No ambient authority**: no proxy (an environment proxy would be
+  judged instead of the destination), no cookie jar, TLS 1.2 or later with
+  verified certificates.
+
+Exemptions are explicit: `AllowedPrefixes` for an on-premises identity
+provider's subnet (or `outbound.LoopbackPrefixes()` in tests). Any port
+is allowed by default; restrict ports and hosts in `CheckURL`, and deny
+specific public addresses in `CheckAddr`. Only the well-known NAT64 prefix
+is decoded: on a network translating a network-specific prefix (RFC 6052),
+refuse that prefix in `CheckAddr`, or its addresses reach the private IPv4
+addresses they embed.
+
+Host names ending in a number (`127.1`, `2130706433`, `0x7f.1`) are refused
+before `CheckURL`: resolvers read them as IPv4 addresses, so a host check
+would vet another name than the one dialed. A refused destination is never
+named in an error, but the errors of allowed destinations may name their
+resolved address and port, and every error tells whether a name is
+refused: when tenants supply URLs ("test this connection"), log the error
+and show them a generic message, or the error text becomes an oracle on
+the internal network.
+
 ## Transport error mapping
 
 Error mappers return terse, code-first responses. HTTP emits a status code
@@ -403,3 +560,16 @@ span catalog.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
+- [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
+      subnets of on-premises identity providers in `AllowedPrefixes`, and
+      restrict hosts and ports in `CheckURL` when tenants configure URLs.
+- [ ] Give every OpenID Connect connection its own redirect URI
+      (`/oidc/{connection}/callback`), registered exactly at its provider.
+- [ ] Use a shared `TransactionStore` (`oidc/client/store/sql` or
+      `store/redis`) when several instances serve callbacks, and schedule
+      `PurgeExpired` with the SQL store; restrict write access to it when
+      you rely on `max_age` or `acr_values`.
+- [ ] Link accounts on (connection, issuer, subject), never on email;
+      create a fresh session after each login.
+- [ ] Start logins with a same-origin POST and rate limit them; exempt only
+      the `form_post` callback routes from CSRF middleware.
