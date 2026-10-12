@@ -73,7 +73,13 @@ func newPolicyEnv(t *testing.T, profile oauth2.Profile, clients ...oauth2.Client
 // token posts form to /token, with HTTP Basic credentials when secret is
 // set (client_secret_basic), the form alone otherwise.
 func (env *policyEnv) token(form url.Values, id, secret string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	return env.postRaw(env.srv.TokenHandler(), form.Encode(), id, secret)
+}
+
+// postRaw posts the raw form body to h, with HTTP Basic credentials when
+// secret is set.
+func (env *policyEnv) postRaw(h http.Handler, body, id, secret string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/oauth2/endpoint", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	if secret != "" {
@@ -81,7 +87,7 @@ func (env *policyEnv) token(form url.Values, id, secret string) *httptest.Respon
 	}
 
 	rec := httptest.NewRecorder()
-	env.srv.TokenHandler().ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 
 	return rec
 }

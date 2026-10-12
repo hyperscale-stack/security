@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/hyperscale-stack/security/oauth2/pkce"
 )
@@ -95,7 +96,9 @@ type OpaqueTokenGenerator interface {
 // AuthorizeRequest is the parsed and validated /authorize request handed to
 // a [ConsentFunc]. By the time the ConsentFunc sees it, the client, the
 // redirect URI, the response type, the scope and the PKCE parameters are
-// verified and the issuer is resolved. It is a read-only copy of the
+// verified and the issuer is resolved. It holds the values the server
+// uses — an empty occurrence of a parameter omitted (RFC 6749 §3.1) — the
+// ones to show the resource owner. It is a read-only copy of the
 // request the handler validated: a callback changing any field but
 // ExtensionRequest, or the identity of the Client it shares with the server,
 // fails the authorization with server_error ([ErrAuthorizeRequestModified]).
@@ -195,7 +198,9 @@ type Consent struct {
 //
 // ar is read-only: a decision returned after changing it is answered with
 // a server_error ([ErrAuthorizeRequestModified]); narrow the grant with
-// Consent.Scope instead.
+// Consent.Scope instead. Render the request from ar, never from r.FormValue:
+// r is the request as received, and an empty occurrence of a parameter —
+// omitted per RFC 6749 §3.1 — can precede the value the server used.
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -232,6 +237,14 @@ type AuthorizeConfig struct {
 // The library owns the protocol plumbing — request validation, code /
 // token minting, the redirect — while the application owns the login and
 // consent UI through the [ConsentFunc].
+//
+// The parameters the handler reads are single-valued (RFC 6749 §3.1): an
+// empty occurrence is omitted, and one included more than once with a value
+// is refused — client_id, redirect_uri and response_mode with a bare 400
+// that is never redirected (the client, the target or the encoding of the
+// answer are ambiguous), any other with a redirected invalid_request; a
+// repeated state is not echoed. Other parameters are left to the extension
+// and the ConsentFunc.
 //
 // The scope is parsed strictly (RFC 6749 §3.3): tokens of printable ASCII
 // but the double quote and the backslash, separated by SP — runs of SP are
@@ -298,6 +311,18 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
+	// The core reads its parameters single-valued, an empty occurrence
+	// omitted (RFC 6749 §3.1). A repeated client_id, redirect_uri or
+	// response_mode leaves the client, the target or the encoding of any
+	// answer ambiguous: refused here, never redirected.
+	params, repeated := param.SingleValued(r.Form, authorizeParameters)
+	if slices.Contains(unredirectableParameters, repeated) {
+		s.notifyError(r.Context(), repeatedParameter(repeated))
+		http.Error(w, "oauth2: repeated request parameter", http.StatusBadRequest)
+
+		return
+	}
+
 	// The issuer comes before the client: a client bound to other issuers
 	// (IssuerBoundClient) is unknown at this one. When the resolver fails,
 	// the binding cannot be checked: the request then fails with a
@@ -307,7 +332,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	// Client and redirect URI come first: a failure here MUST NOT redirect
 	// (the redirect target is not yet trusted). The refusal is deliberately
 	// opaque on the wire, so the hook is the only place the cause shows up.
-	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), r.FormValue("client_id"))
+	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), params.Get(paramClientID))
 	if err != nil || client == nil {
 		s.notifyError(r.Context(), resolved.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)
@@ -315,7 +340,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	redirectURI, ok := resolveRedirectURI(client, r.FormValue("redirect_uri"))
+	redirectURI, ok := resolveRedirectURI(client, params.Get(paramRedirectURI))
 	if !ok {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri"))
 		http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
@@ -325,7 +350,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// The response mode decides how every later answer travels: one the
 	// handler cannot honor leaves no way to answer the client at all.
-	if !responseModeSupported(cfg, r) {
+	if !responseModeSupported(cfg, params) {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("unsupported response_mode"))
 		http.Error(w, "oauth2: unsupported response_mode", http.StatusBadRequest)
 
@@ -334,7 +359,9 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI, resolved)
+	in := authorizeInput{client: client, redirectURI: redirectURI, params: params, repeated: repeated}
+
+	st, ok := s.validateAuthorize(cfg, w, r, in, resolved)
 	if !ok {
 		return
 	}
@@ -470,23 +497,35 @@ func (a *authorizeIssuer) explain(oe *Error) *Error {
 	return a.scoped.explain(oe)
 }
 
+// authorizeInput is an /authorize request behind a trusted redirect URI:
+// its client, the redirect URI resolved for it, and its parameters as the
+// core reads them — single-valued, an empty occurrence omitted — with the
+// first one it includes more than once (RFC 6749 §3.1).
+type authorizeInput struct {
+	client      Client
+	redirectURI string
+	params      url.Values
+	repeated    string
+}
+
 // validateAuthorize validates the request behind a trusted redirect URI:
-// the issuer it resolved to, the flow, the scope and the PKCE parameters,
-// and answers the first failure with a redirect. The issuer comes first,
-// so every later redirect is answered within the realm of the request.
+// the issuer it resolved to, a repeated parameter, the flow, the scope and
+// the PKCE parameters, and answers the first failure with a redirect. The
+// issuer comes first, so every later redirect is answered within the realm
+// of the request.
 func (s *Server) validateAuthorize(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	client Client,
-	redirectURI string,
+	in authorizeInput,
 	resolved *authorizeIssuer,
 ) (*authorizeState, bool) {
-	// An unsupported response type is answered in the query string.
-	flow, flowErr := resolveFlow(cfg, r.FormValue("response_type"))
+	// An unsupported — or repeated — response type is answered in the query
+	// string, and a repeated state is not echoed.
+	flow, flowErr := resolveFlow(cfg, in.params.Get("response_type"))
 	target := authorizeTarget{
-		redirectURI: redirectURI,
-		state:       r.FormValue("state"),
+		redirectURI: in.redirectURI,
+		state:       in.params.Get("state"),
 		fragment:    flowErr == nil && flow == flowImplicit,
 	}
 
@@ -501,19 +540,27 @@ func (s *Server) validateAuthorize(
 	issuer, audience := resolved.issuer, resolved.audience
 	target.issuer = issuer
 
+	// RFC 6749 §4.1.2.1: invalid_request "includes a parameter more than
+	// once".
+	if in.repeated != "" {
+		s.redirectAuthorizeError(w, r, target, repeatedParameter(in.repeated))
+
+		return nil, false
+	}
+
 	if flowErr != nil {
 		s.redirectAuthorizeError(w, r, target, flowErr)
 
 		return nil, false
 	}
 
-	if oerr := flowRefusal(client, flow); oerr != nil {
+	if oerr := flowRefusal(in.client, flow); oerr != nil {
 		s.redirectAuthorizeError(w, r, target, oerr)
 
 		return nil, false
 	}
 
-	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
+	ar, oerr := s.parseAuthorizeRequest(in, flow)
 	if oerr != nil {
 		s.redirectAuthorizeError(w, r, target, oerr)
 
@@ -521,7 +568,7 @@ func (s *Server) validateAuthorize(
 	}
 
 	ar.Issuer = issuer
-	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: target.fragment}
+	st := &authorizeState{ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment}
 
 	if s.cfg.Extension == nil {
 		return st, true
@@ -716,13 +763,13 @@ func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *aut
 // honored, and the answer could not even be encoded as the client
 // expects: OIDC Core 1.0 incorporating errata set 2, §3.1.2.6, answers it
 // with a bare 400 Bad Request.
-func responseModeSupported(cfg AuthorizeConfig, r *http.Request) bool {
-	mode := r.FormValue("response_mode")
+func responseModeSupported(cfg AuthorizeConfig, params url.Values) bool {
+	mode := params.Get(paramResponseMode)
 	if mode == "" {
 		return true
 	}
 
-	if cfg.AllowImplicit && r.FormValue("response_type") == responseTypeToken {
+	if cfg.AllowImplicit && params.Get("response_type") == responseTypeToken {
 		return mode == responseModeFragment
 	}
 
@@ -749,31 +796,31 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 
 // parseAuthorizeRequest validates the scope and (for the code flow) the
 // PKCE parameters, returning the [AuthorizeRequest] or an [*Error].
-func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectURI string, flow authorizeFlow) (*AuthorizeRequest, *Error) {
-	scope, oerr := authorizeScope(r.FormValue("scope"), client.Scopes())
+func (s *Server) parseAuthorizeRequest(in authorizeInput, flow authorizeFlow) (*AuthorizeRequest, *Error) {
+	scope, oerr := authorizeScope(in.params.Get(paramScope), in.client.Scopes())
 	if oerr != nil {
 		return nil, oerr
 	}
 
-	challenge := r.FormValue("code_challenge")
-	method := r.FormValue("code_challenge_method")
+	challenge := in.params.Get("code_challenge")
+	method := in.params.Get("code_challenge_method")
 
 	// PKCE applies to the authorization-code flow only.
 	if flow == flowCode {
-		if perr := s.validateAuthorizePKCE(client, challenge, method); perr != nil {
+		if perr := s.validateAuthorizePKCE(in.client, challenge, method); perr != nil {
 			return nil, ErrInvalidRequest.WithDescription(perr.Error())
 		}
 	}
 
 	return &AuthorizeRequest{
-		Client:              client,
-		ResponseType:        r.FormValue("response_type"),
-		RedirectURI:         redirectURI,
+		Client:              in.client,
+		ResponseType:        in.params.Get("response_type"),
+		RedirectURI:         in.redirectURI,
 		Scope:               scope,
-		State:               r.FormValue("state"),
+		State:               in.params.Get("state"),
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: method,
-		Nonce:               r.FormValue("nonce"),
+		Nonce:               in.params.Get("nonce"),
 	}, nil
 }
 

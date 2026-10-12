@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // ClientAuthenticator authenticates the OAuth2 client behind an HTTP
@@ -120,6 +121,21 @@ func decodeBasic(header string) (string, string, bool) {
 	}
 
 	return id, secret, true
+}
+
+// formValue returns the value of the body parameter name: its first
+// non-empty occurrence — an empty one is omitted (RFC 6749 §3.1, §3.2) and
+// never hides the value that follows; the server refuses a parameter
+// repeated with values before any method runs. Like
+// http.Request.PostFormValue, it parses the form when the caller has not.
+func formValue(r *http.Request, name string) string {
+	if r.PostForm == nil {
+		if err := r.ParseForm(); err != nil {
+			return ""
+		}
+	}
+
+	return param.Value(r.PostForm, name)
 }
 
 // errSecretMismatch is the typed error returned by secret-matcher

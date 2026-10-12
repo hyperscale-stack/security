@@ -86,8 +86,13 @@ type Extension interface {
 	// ConsentFunc, which gets its result as AuthorizeRequest.ExtensionRequest
 	// (nil: nothing to add, e.g. a request outside the extension's
 	// protocol). ar is a read-only copy: changing it fails the request with
-	// server_error ([ErrAuthorizeRequestModified]). r.Form holds every
-	// parameter, duplicates included, and the nonce unbounded: bound it.
+	// server_error ([ErrAuthorizeRequestModified]). r is the request as
+	// received: the core refused it when it repeats a parameter the core
+	// reads, but r.Form still holds the empty occurrences — which RFC 6749
+	// §3.1 omits: read the core's parameters from ar, never r.FormValue,
+	// which an empty occurrence can hide them from — the extension's own
+	// parameters as sent, repeated or not (refuse your own repetitions), and
+	// the nonce unbounded: bound it.
 	ValidateAuthorizeRequest(ctx context.Context, r *http.Request, ar *AuthorizeRequest) (any, error)
 
 	// CompleteAuthorization decides what an approved authorization records.

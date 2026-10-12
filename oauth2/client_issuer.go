@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // issuerClients is the [ClientStore] a request sees at its issuer: a
@@ -71,6 +73,12 @@ func (s *Server) authenticateClientAt(ctx context.Context, r *http.Request) (Cli
 // An authenticator that does not load the client through the store it is
 // handed is checked again on its result.
 func (s *Server) authenticateClient(ctx context.Context, r *http.Request, issuer string) (Client, error) {
+	// A repeated client_id or client_secret "includes multiple credentials"
+	// (RFC 6749 §5.2): refused before any client is loaded.
+	if _, repeated := param.SingleValued(r.PostForm, clientAuthParameters); repeated != "" {
+		return nil, repeatedParameter(repeated)
+	}
+
 	clients := &issuerClients{store: s.cfg.ClientStore, issuer: issuer}
 
 	for _, m := range s.cfg.ClientAuth {

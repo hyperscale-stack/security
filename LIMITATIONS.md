@@ -60,11 +60,6 @@ future refactor phases.
   by issuer.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
-- **Duplicated request parameters are not refused** — `/authorize` and
-  `/token` read the first value of a repeated parameter, while RFC 6749 §3.1
-  says request parameters MUST NOT be included more than once. An
-  `oauth2.Extension` sees every value in `r.Form` and can refuse its own:
-  `oidc/provider` refuses them in OpenID authentication requests.
 - **The `nonce` parameter is not bounded by the core** — `/authorize` records
   it as sent; `oidc/provider` bounds it in OpenID requests (512 bytes).
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
@@ -103,11 +98,12 @@ matrix. Not supported, and never advertised:
   parameter. Consumers that only read the ID Token (e.g. an API server's
   `--oidc-username-claim=email`) need that request until an opt-in lands.
 - **`redirect_uri` rules after the core's checks** — an OpenID request
-  without `redirect_uri`, or with a repeated one, is refused with a bare
-  400 (Core §3.1.2.1) once the oauth2 core accepted it; an error of the
-  core's own checks (response type, scope, PKCE) comes first and is
-  redirected, as for any OAuth 2.0 request, to the client's sole registered
-  redirect URI or to the first, registered, occurrence of a repeated one.
+  without `redirect_uri` is refused with a bare 400 (Core §3.1.2.1) once the
+  oauth2 core accepted it; an error of the core's own checks (response
+  type, scope, PKCE) comes first and is redirected, as for any OAuth 2.0
+  request, to the client's sole registered redirect URI. A repeated
+  `redirect_uri` is refused by the core itself, with a bare 400, before any
+  other check.
 - **Freshness to the second** — `prompt=login` and `max_age` are enforced
   at the second of `auth_time`: an authentication earlier in the same
   second as the request passes. An `Interaction` that must re-authenticate

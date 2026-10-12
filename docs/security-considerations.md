@@ -92,6 +92,15 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   7591 §2, an empty grant-type list implies nothing, and scopes outside the
   registration are refused rather than ignored (OpenID Connect Core
   §3.1.2.1 says unknown scope values SHOULD be ignored).
+- **Request parameters** — the parameters each endpoint reads are
+  single-valued (RFC 6749 §3.1, §3.2): an empty occurrence is omitted, and
+  one included more than once with a value is refused — at `/authorize` a
+  repeated `client_id`, `redirect_uri` or `response_mode` with a bare `400`,
+  any other with `invalid_request`; at `/token`, `/revoke` and
+  `/introspect` with `invalid_request`, before the grant or the lookup
+  runs. Callbacks get the request as received: a `ConsentFunc` or an
+  `Extension` reads the core's parameters from the `AuthorizeRequest`, never
+  with `r.FormValue`, which an empty occurrence can mislead.
 - **Scope values** — every scope a client or a callback sends (the `scope`
   of `/authorize` and `/token`, `Consent.Scope`, `ExtensionGrant.Scope`) is
   parsed strictly as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`

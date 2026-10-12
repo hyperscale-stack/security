@@ -14,7 +14,12 @@ import (
 // server unpacks the HTTP request once and feeds this struct to whichever
 // Grant matches the grant_type parameter.
 type GrantRequest struct {
-	Client   Client
+	Client Client
+	// Form holds the request body. The parameters the server reads (see
+	// [Server.TokenHandler]) are single-valued — an empty occurrence
+	// omitted, a repeated one refused before the grant runs (RFC 6749
+	// §3.2) — any other as sent: a custom grant refuses its own repeated
+	// parameters.
 	Form     url.Values
 	Issuer   string
 	Audience string

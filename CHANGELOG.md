@@ -1015,3 +1015,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   without `RotateRefreshTokens`, a public — or untyped — client's refresh
   token stayed reusable until it expired, so a stolen one could be replayed
   undetected. Confidential clients keep the opt-in.
+- OAuth2 endpoints refuse repeated request parameters (RFC 6749 §3.1,
+  §3.2: they "MUST NOT be included more than once"). `/authorize`, `/token`,
+  `/revoke` and `/introspect` used the first value of a repeated parameter —
+  a `redirect_uri`, a `code`, a `client_id`… — while callbacks and other
+  components could read another. A repeated `client_id`, `redirect_uri` or
+  `response_mode` at `/authorize` is now a bare `400`, any other repeated
+  parameter the server reads an `invalid_request`; an empty occurrence is
+  omitted and never hides the value that follows. The `unsupported_grant_type`
+  description no longer echoes the request. See [MIGRATION.md](MIGRATION.md).

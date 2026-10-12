@@ -7,6 +7,8 @@ package oauth2
 import (
 	"context"
 	"net/http"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // errRevocationUnavailable answers a revocation that may not have taken
@@ -31,6 +33,11 @@ var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation 
 // reported again. A 503 hints that the token exists only when the backend
 // fails while the caller presents it, a caller that already holds the
 // token.
+//
+// token and token_type_hint, like the client credentials, are
+// single-valued: a request including one more than once with a value is
+// answered invalid_request (RFC 6749 §5.2) — which token it would revoke is
+// ambiguous.
 func (s *Server) RevokeHandler() http.Handler {
 	return http.HandlerFunc(s.serveRevoke)
 }
@@ -55,7 +62,16 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken := r.PostFormValue("token")
+	// RFC 7009 §2.1: which token a request carrying two would revoke is
+	// ambiguous.
+	form, repeated := param.SingleValued(r.PostForm, tokenLookupParameters)
+	if repeated != "" {
+		s.writeOAuthError(r.Context(), w, repeatedParameter(repeated))
+
+		return
+	}
+
+	rawToken := form.Get("token")
 	if rawToken == "" {
 		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("missing token"))
 

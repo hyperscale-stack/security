@@ -40,12 +40,12 @@ func (noneAuth) Match(r *http.Request) bool {
 		return false
 	}
 
-	return r.PostFormValue("client_id") != "" && r.PostFormValue("client_secret") == ""
+	return formValue(r, "client_id") != "" && formValue(r, "client_secret") == ""
 }
 
 // Authenticate implements [ClientAuthenticator].
 func (noneAuth) Authenticate(ctx context.Context, r *http.Request, store oauth2.ClientStore) (oauth2.Client, error) {
-	id := r.PostFormValue("client_id")
+	id := formValue(r, "client_id")
 	if id == "" {
 		return nil, oauth2.ErrInvalidClient.WithDescription("missing client_id")
 	}

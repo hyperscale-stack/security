@@ -1069,3 +1069,35 @@ To migrate:
    such clients refresh.
 8. No storage change: the policy applies per request, and instances may be
    upgraded one at a time.
+
+### `oauth2`: repeated parameters and several client authentication methods are refused
+
+RFC 6749 §3.1 and §3.2: "Request and response parameters MUST NOT be
+included more than once". The server read the first value of a repeated
+parameter, so a request carrying `redirect_uri` twice — the registered one,
+then another — or a client and a request disagreeing on which value counts
+were not refused. The parameters each endpoint reads are now single-valued:
+
+| Request | Before | After |
+| ------- | ------ | ----- |
+| `/authorize` repeating `client_id`, `redirect_uri` or `response_mode` | the first value used | bare `400`, never redirected (the client, the target or the encoding of the answer are ambiguous); `OnError` gets `invalid_request` |
+| `/authorize` repeating `response_type`, `scope`, `state`, `code_challenge`, `code_challenge_method` or `nonce` — a POST carrying one in the query and in the body included | the first value used | redirected `invalid_request` (`repeated <name>`); a repeated `state` is not echoed |
+| `/token` repeating `grant_type`, `code`, `redirect_uri`, `code_verifier`, `refresh_token`, `scope`, `username`, `password`, `client_id` or `client_secret` | the first value used | `400 invalid_request` before the grant runs: a code presented stays redeemable |
+| `/revoke`, `/introspect` repeating `token`, `token_type_hint`, `client_id` or `client_secret` | the first value used | `400 invalid_request` |
+| a parameter repeated with an empty first occurrence (`scope=&scope=read`) | the empty first value used | the value: an empty occurrence is omitted (RFC 6749 §3.1) |
+| an unrecognized parameter repeated | ignored | unchanged |
+| `unsupported_grant_type` description | echoed the `grant_type` sent | a fixed text |
+
+To migrate:
+
+1. Clients send each parameter once. A consent form posting back to
+   `/authorize` must not repeat in its body a parameter the query already
+   carries.
+2. A `ConsentFunc` or an `Extension` reads the core's parameters from the
+   `*oauth2.AuthorizeRequest`, never with `r.FormValue`: `r` is the request
+   as received, where an empty occurrence can precede the value the server
+   used. An extension refuses its own repeated parameters, as
+   `oidc/provider` does.
+3. A custom grant gets `GrantRequest.Form` with the core's parameters
+   single-valued and its own as sent; a custom `ClientAuthenticator` reads a
+   body parameter as its first non-empty occurrence.
