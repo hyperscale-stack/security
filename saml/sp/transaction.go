@@ -87,10 +87,15 @@ func bindingHash(cookie string) string {
 	return digest("samlsp-v1/binding", cookie)
 }
 
-// replayKey derives the replay-cache key of an assertion: assertion IDs are
-// unique per issuer (Profiles §4.1.4.5).
-func replayKey(issuer, assertionID string) string {
-	return digest("samlsp-v1/assertion", issuer, assertionID)
+// replayKey derives the replay-cache key of an assertion accepted at a
+// connection: assertion IDs are unique per issuer (Profiles §4.1.4.5), and
+// the key is scoped by the connection, because an issuer is a claim of the
+// connection: a connection whose IdP claims another tenant's entity ID
+// must not share that tenant's replay namespace. Scoping loses nothing:
+// Audience, Recipient and InResponseTo bind an assertion to one transaction
+// of one connection.
+func replayKey(connectionID, issuer, assertionID string) string {
+	return digest("samlsp-v2/assertion", connectionID, issuer, assertionID)
 }
 
 // payloadVersion is the version of the transaction payload encoding.

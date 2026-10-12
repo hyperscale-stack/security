@@ -2342,6 +2342,14 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 			expect: corpusExpect{Outcome: outcomeRejected, Sentinel: "ErrAssertionReplayed", Consumed: true},
 		},
 		{
+			id:     "replay/assertion-consumed-at-another-connection",
+			attack: "the same issuer and assertion ID already consumed at initech, whose IdP squats acme's entity ID (no shared replay namespace)",
+			refs:   append(refs, "#87 decision D1 (identities unique within a connection)"),
+			knobs:  corpusKnobs{PreMarked: &corpusReplayKey{Connection: "initech", Issuer: idpEntity, AssertionID: assertionID}},
+			build:  baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
 			id: "replay/without-relay-state", attack: "IdP-initiated style POST without RelayState", refs: append(refs, "SAML Profiles §4.1.5"),
 			knobs: corpusKnobs{RelayState: "none"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrUnsolicitedResponse", "RelayState is not a handle issued by BeginLogin"),

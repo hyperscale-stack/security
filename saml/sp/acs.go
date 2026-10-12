@@ -405,7 +405,9 @@ func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *C
 		return nil, fmt.Errorf("samlsp: consume transaction: %w", err)
 	}
 
-	if err := sp.cfg.ReplayCache.MarkAssertionUsed(ctx, replayKey(identity.Issuer, identity.AssertionID), replayExpiry); err != nil {
+	key := replayKey(conn.ID, identity.Issuer, identity.AssertionID)
+
+	if err := sp.cfg.ReplayCache.MarkAssertionUsed(ctx, key, replayExpiry); err != nil {
 		if errors.Is(err, ErrRejected) {
 			return nil, reject(err, "", nil)
 		}

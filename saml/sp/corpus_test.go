@@ -122,6 +122,9 @@ type corpusKnobs struct {
 
 // corpusReplayKey names a replay-cache entry.
 type corpusReplayKey struct {
+	// Connection is the connection the assertion was consumed at (default:
+	// the posted connection).
+	Connection  string `json:"connection,omitempty"`
 	Issuer      string `json:"issuer"`
 	AssertionID string `json:"assertionID"`
 }
@@ -363,7 +366,8 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 	require.NoError(t, store.SaveTransaction(ctx, &tx.Record))
 
 	if pk := f.Knobs.PreMarked; pk != nil {
-		require.NoError(t, store.Store.MarkAssertionUsed(ctx, replayKeyHex(pk.Issuer, pk.AssertionID), m.Instant.Add(time.Hour)))
+		require.NoError(t, store.Store.MarkAssertionUsed(ctx, replayKeyHex(cmpOr(pk.Connection, postTo), pk.Issuer, pk.AssertionID),
+			m.Instant.Add(time.Hour)))
 	}
 
 	now := m.Instant

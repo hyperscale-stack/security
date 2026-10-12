@@ -6,6 +6,7 @@ package samlsp_test
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func replayKeyHex(issuer, id string) string { return digestHex("samlsp-v1/assertion", issuer, id) }
+func replayKeyHex(conn, issuer, id string) string {
+	return digestHex("samlsp-v2/assertion", conn, issuer, id)
+}
 
 // requireRejected asserts err matches target and ErrRejected, and that the
 // transaction of lr was not consumed.
@@ -84,7 +87,7 @@ func TestCompleteLogin_Success(t *testing.T) {
 	// The transaction is consumed and the assertion recorded.
 	_, err = e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
 	require.ErrorIs(t, err, samlsp.ErrTransactionConsumed)
-	require.ErrorIs(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(idpEntity, assertionID), t0.Add(time.Hour)),
+	require.ErrorIs(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(connID, idpEntity, assertionID), t0.Add(time.Hour)),
 		samlsp.ErrAssertionReplayed)
 }
 
@@ -210,7 +213,7 @@ func TestCompleteLogin_ReplayCacheKeyAndRetention(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Len(t, spy.keys, 1)
-			assert.Equal(t, replayKeyHex(idpEntity, assertionID), spy.keys[0], "keyed per issuer (Profiles §4.1.4.5)")
+			assert.Equal(t, replayKeyHex(connID, idpEntity, assertionID), spy.keys[0], "keyed per connection and issuer (Profiles §4.1.4.5)")
 			assert.True(t, spy.exps[0].Equal(tc.wantExp), "got %s, want %s", spy.exps[0], tc.wantExp)
 		})
 	}
@@ -220,7 +223,7 @@ func TestCompleteLogin_ReplayedAssertionRejected(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	require.NoError(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(idpEntity, assertionID), t0.Add(time.Hour)))
+	require.NoError(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(connID, idpEntity, assertionID), t0.Add(time.Hour)))
 
 	lr := begin(t, e, samlsp.LoginOptions{})
 	_, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
@@ -942,4 +945,74 @@ func TestCompleteLogin_ACSLocation(t *testing.T) {
 			assert.Equal(t, nameIDValue, res.Identity.NameID.Value)
 		})
 	}
+}
+
+// TestCompleteLogin_ReplayCacheIsPerConnection: a tenant may configure a
+// connection whose IdP claims another tenant's IdP entity ID (identities
+// are unique within a connection only). Before the replay cache was scoped
+// by connection, an assertion ID consumed at the squatting connection was
+// then refused as a replay at the victim's (audit SAML-I2). An assertion
+// cannot be accepted at two connections anyway: its Audience, Recipient
+// and InResponseTo bind it to one transaction of one connection.
+func TestCompleteLogin_ReplayCacheIsPerConnection(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t) // connection acme trusts idpA for idpEntity
+	k := keys(t)
+
+	const evilID, evilSP, evilACS = "evil", "https://sp.example.com/saml/evil", "https://sp.example.com/saml/evil/acs"
+
+	e.resolver.set(&samlsp.Connection{
+		ID: evilID, SPEntityID: evilSP, ACSURL: evilACS,
+		IdentityProvider: samlsp.IdentityProvider{
+			EntityID: idpEntity, // collides with acme's IdP entity ID
+			SSOURL:   "https://attacker.example/sso", SigningCertificates: []*x509.Certificate{k.attacker.cert},
+		},
+	})
+
+	// The squatter signs in at her connection with an assertion whose ID is
+	// the one acme's IdP uses next (here the fixture's fixed assertion ID).
+	rec := httptest.NewRecorder()
+	redirect, err := e.sp.BeginLogin(context.Background(), rec, httptest.NewRequest(http.MethodGet, "/login", nil), evilID,
+		samlsp.LoginOptions{})
+	require.NoError(t, err)
+
+	u, err := url.Parse(redirect)
+	require.NoError(t, err)
+
+	evil := loginResult{url: u, relayState: u.Query().Get("RelayState"), cookie: rec.Result().Cookies()[0]}
+	evil.request = decodeAuthnRequest(t, u)
+	evil.requestID = evil.request.SelectAttrValue("ID", "")
+
+	body := respond(t, evil.requestID, respOpts{
+		assertionSig: sigOpts{signer: k.attacker},
+		before: func(r, _ *etree.Element) {
+			r.RemoveAttr("Destination")
+			r.CreateAttr("Destination", evilACS)
+		},
+		beforeAssertion: func(a *etree.Element) {
+			scd(a).CreateAttr("Recipient", evilACS)
+			path(a, "Conditions", "AudienceRestriction", "Audience").SetText(evilSP)
+		},
+	})
+
+	form := url.Values{"SAMLResponse": {body}, "RelayState": {evil.relayState}}
+	post := httptest.NewRequest(http.MethodPost, evilACS, strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.AddCookie(&http.Cookie{Name: samlsp.DefaultCookieName, Value: evil.cookie.Value})
+
+	res, err := e.sp.CompleteLogin(context.Background(), post, evilID)
+	require.NoError(t, err)
+	require.Equal(t, assertionID, res.Identity.AssertionID)
+
+	// The victim's genuine login at acme, signed by acme's IdP key.
+	victim := begin(t, e, samlsp.LoginOptions{})
+	res, err = complete(e, victim, respond(t, victim.requestID, respOpts{}))
+	require.NoError(t, err, "the squatter's consumption does not burn acme's assertion IDs")
+	assert.Equal(t, assertionID, res.Identity.AssertionID)
+
+	// The same assertion at the same connection is still a replay.
+	again := begin(t, e, samlsp.LoginOptions{})
+	_, err = complete(e, again, respond(t, again.requestID, respOpts{}))
+	require.ErrorIs(t, err, samlsp.ErrAssertionReplayed)
 }
