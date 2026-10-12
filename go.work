@@ -9,6 +9,7 @@ use (
 	./grpc
 	./http
 	./internal/integrations
+	./internal/interop/oidcop
 	./internal/interop/oidcrp
 	./jwt
 	./oauth2
@@ -17,6 +18,7 @@ use (
 	./oidc/client
 	./oidc/client/store/redis
 	./oidc/client/store/sql
+	./oidc/provider
 	./password
 	./session
 )

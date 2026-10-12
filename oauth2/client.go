@@ -7,6 +7,7 @@ package oauth2
 import (
 	"context"
 	"crypto/subtle"
+	"slices"
 )
 
 // ClientType describes whether an OAuth2 client is capable of safely keeping
@@ -67,8 +68,50 @@ type SecretMatcher interface {
 // ClientStore loads client records by ID. Implementations are responsible
 // for caching policy; the Server invokes LoadClient once per request that
 // needs client authentication.
+//
+// One store serving an [IssuerResolver] with several issuers makes every
+// client known at every issuer: a deployment where each client belongs to
+// one realm (tenant) gives its clients the [IssuerBoundClient] capability,
+// or scopes its store by issuer itself.
 type ClientStore interface {
 	LoadClient(ctx context.Context, id string) (Client, error)
+}
+
+// IssuerBoundClient is an optional capability of a [Client] registered at
+// some issuers only — the realms an [IssuerResolver] serves from one
+// [ClientStore]. Without it a client of one realm can use every other one:
+// send the end-users of realm B to B's login page, and obtain their codes
+// and tokens.
+//
+// The server checks it at every issuer it resolves, before trusting
+// anything the client presents: at another issuer the client does not
+// exist. /authorize answers it as it answers an unknown client_id — a bare
+// 400 that is never redirected (RFC 6749 §4.1.2.1: the client identifier is
+// invalid here, and so are its redirect URIs) — and /token, /revoke and
+// /introspect fail its authentication as they fail an unknown client's —
+// 401 invalid_client, "unknown client" (RFC 6749 §5.2), whatever the
+// secret presented — so another realm's clients can be neither enumerated
+// nor their secrets checked. unauthorized_client is not used: it would
+// confirm an authenticated, existing client. The [ErrorHook] gets
+// [ErrClientNotAtIssuer] as the cause. A server whose IssuerResolver fails
+// cannot check it: the request then fails with server_error, nothing
+// issued.
+type IssuerBoundClient interface {
+	// AllowsIssuer reports whether the client is registered at issuer, the
+	// identifier the IssuerResolver returned — compared exactly (OpenID
+	// Connect Core §16.15: issuers are compared as strings). It MUST be
+	// fast and safe for concurrent use.
+	AllowsIssuer(issuer string) bool
+}
+
+// ClientAllowsIssuer reports whether c may be used at issuer: what its
+// [IssuerBoundClient] capability says, true without the capability.
+func ClientAllowsIssuer(c Client, issuer string) bool {
+	if bound, ok := c.(IssuerBoundClient); ok {
+		return bound.AllowsIssuer(issuer)
+	}
+
+	return true
 }
 
 // DefaultClient is a minimal in-memory [Client] implementation handy for
@@ -90,6 +133,9 @@ type DefaultClient struct {
 	GrantTypeValues   []string
 	ScopeValues       []string
 	AuthMethodValues  []string
+	// IssuerValues lists the issuers the client is registered at (see
+	// [IssuerBoundClient]); empty: every issuer the server resolves.
+	IssuerValues []string
 }
 
 // ID implements [Client].
@@ -123,8 +169,15 @@ func (c *DefaultClient) SecretMatches(secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(c.Secret), []byte(secret)) == 1
 }
 
+// AllowsIssuer implements [IssuerBoundClient]: the issuers listed in
+// IssuerValues, compared exactly — every issuer when none is listed.
+func (c *DefaultClient) AllowsIssuer(issuer string) bool {
+	return len(c.IssuerValues) == 0 || slices.Contains(c.IssuerValues, issuer)
+}
+
 // Compile-time interface checks.
 var (
-	_ Client        = (*DefaultClient)(nil)
-	_ SecretMatcher = (*DefaultClient)(nil)
+	_ Client            = (*DefaultClient)(nil)
+	_ SecretMatcher     = (*DefaultClient)(nil)
+	_ IssuerBoundClient = (*DefaultClient)(nil)
 )

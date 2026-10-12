@@ -44,6 +44,14 @@ The verifier also validates `iss`, `aud`, `exp`, `nbf`, and `iat` with a
 configurable clock skew, and resolves keys by `kid` against a JWKS provider
 (static or cached-remote).
 
+- **Token confusion** (RFC 8725 §3.11–§3.12) — the OAuth2 access tokens
+  `NewOAuth2AccessTokenSigner` signs are typed `at+jwt` and carry a `jti`
+  (RFC 9068 §2.1, §2.2); OpenID Connect ID Tokens are typed `JWT`. A resource
+  server verifies with `WithType(TypeAccessToken)` — RFC 9068 §4 requires it
+  to refuse any other `typ` — so an ID Token signed by the same keys is not
+  accepted as an access token. The check is opt-in: verifiers of other JWTs
+  keep accepting any `typ`.
+
 ## OAuth2
 
 - **PKCE** — `authorization_code` requires PKCE under `Profile20BCP` and
@@ -124,7 +132,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   refused outright under the stricter profile.
 - **Client authentication** — `client_secret_basic` / `client_secret_post`
   compare secrets in constant time and never accept an empty one. Basic
-  answers an empty password or a missing `client_id` with
+  form-decodes the user-id and password (RFC 6749 §2.3.1, Appendix B) after
+  splitting them at the first colon, refuses an invalid escape as a
+  malformed header, and answers an empty decoded password or a missing
+  `client_id` with
   `401 invalid_client` before loading the client, the same answer whether
   or not the client exists; a form with an empty or absent `client_secret`
   is a `none` request, which only public clients may make. Custom
@@ -157,8 +168,8 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
 - **Issuer binding (realms)** — a subject is only meaningful within its
-  issuer (OIDC Core §16.15). `/authorize` resolves the issuer of the request
-  through the `IssuerResolver` right after the redirect URI is trusted;
+  issuer (OIDC Core §16.15). Every endpoint resolves the issuer of the
+  request through the `IssuerResolver` before it loads the client;
   the code and every token record it, and the `authorization_code` and
   `refresh_token` grants refuse, with `invalid_grant`, a code or refresh
   token issued under another issuer than the one resolved at `/token` — so a
@@ -173,6 +184,20 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `AuthorizeRequest.Issuer` — a session of another realm is no
   authentication. `IntrospectedToken.Issuer` lets an `IntrospectionPolicy`
   enforce the same boundary.
+- **Clients and realms** — one `ClientStore` behind several issuers makes
+  every client known at every issuer: a client of realm A could send realm
+  B's end-users to B's genuine login page and obtain their codes and
+  tokens once they consent. A client implementing `IssuerBoundClient`
+  (`DefaultClient.IssuerValues`) exists at its issuers only: elsewhere
+  `/authorize` answers the bare 400 of an unknown `client_id`, never
+  redirected (RFC 6749 §4.1.2.1), and `/token`, `/revoke` and `/introspect`
+  fail its authentication as an unknown client's (`401 invalid_client`,
+  "unknown client"), whatever the secret — the same bytes in both cases, so
+  realm B can neither be used by A's clients nor enumerate them or check
+  their secrets. The binding is checked before the client's secret and
+  redirect URI, and again on the client an authenticator returns. A
+  multi-issuer deployment binds every client, or scopes its `ClientStore`
+  by issuer.
 - **Authorization responses** — a `response_mode` other than the one the
   server answers in (`query` for the code flow, `fragment` for an enabled
   implicit flow) gets a bare 400, never redirected: the answer could not be
@@ -186,6 +211,24 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Mix-up defense (RFC 9207)** — every authorization response, code and
+  implicit, success and redirected error, carries `iss`, the issuer the
+  request resolved to, and the RFC 8414 metadata sets
+  `authorization_response_iss_parameter_supported`: a client talking to
+  several authorization servers — or to several realms of one
+  `IssuerResolver` — compares it with the issuer it sent the request to and
+  aborts on a mismatch (RFC 9700 §4.4.2.1), the defense RFC 9700 prefers to
+  distinct redirect URIs. The issuer must therefore be a stable https URL
+  without query or fragment (RFC 9207 §2): the server sends it as the
+  resolver returns it. The one response without `iss` is the `server_error`
+  answering an `IssuerResolver` failure — no issuer is known then. RFC 9207
+  §2 asks for `iss` in error responses too, and §2.4 has RFC 9207 clients
+  reject a response without it, so the independent code review of #84
+  recommended a bare 500 instead; the redirect is kept so that RFC 6749
+  clients learn of the failure (RFC 6749 §4.1.2.1 `server_error`), and RFC
+  9207 clients discard it as they discard any response they cannot
+  attribute — a documented deviation on a server-failure path that issues
+  nothing.
 
 ### Protocol extensions
 
@@ -319,8 +362,8 @@ signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
 until its `exp`, whatever happened to its family — including the tokens
 revoked after an authorization-code replay: deleting or flagging store
 records never invalidates a signature. The RFC 9068 payload the
-`jwtsec` signer emits carries no family or token identifier (`jti`), so it
-cannot be deny-listed today either. RFC 7009 §2.1 acknowledges such a
+`jwtsec` signer emits carries a token identifier (`jti`) but no family, and
+no deny-list is shipped. RFC 7009 §2.1 acknowledges such a
 propagation delay and asks implementations to minimize it; its §3 leaves
 immediate revocation of self-contained tokens to non-standardized backend
 interaction, and suggests short-lived access tokens instead. To bound the
@@ -331,6 +374,85 @@ window:
   server — RFC 7662 introspection, or `LookupAccessToken` when the resource
   server shares the store — rather than offline;
 - or issue opaque access tokens, which only the store can validate.
+
+## OpenID Provider
+
+`oidc/provider` trusts the application's `Interaction` for who the end-user
+is, never for the protocol rules:
+
+- **Requests are checked before any interaction.** A repeated `client_id`,
+  `redirect_uri` or `response_mode`, or a missing `redirect_uri`, answers a
+  bare `400` that is never redirected; request objects and `registration`
+  are refused; `nonce`, `claims`, `max_age` and hints are bounded; an
+  `id_token_hint` must be an ID Token this issuer issued to this client,
+  signed by a key it publishes.
+- **Every approval is re-checked.** Before a code is issued, the provider
+  checks the approval against the request — realm, `prompt=login` and
+  `max_age` freshness, designated end-user, essential `acr` — and the
+  authentication event itself (a subject of 1 to 255 printable ASCII
+  characters, a time at most 5 s in the future, bounded `acr` and `amr`),
+  and requires `openid` in the granted scope. A violation issues nothing.
+  Freshness is compared at the second of `auth_time`; an application that
+  must re-authenticate on `prompt=login` shows its login page itself.
+- **`prompt=none` shows no UI**: `AuthorizeSilently` gets no
+  `ResponseWriter`, and an OpenID request served outside
+  `Provider.AuthorizeHandler` is refused before any `ConsentFunc` runs.
+- **Realm-bound authentications.** An authentication counts in the realm
+  (issuer) it was established in only. The realm is the issuer: where
+  tenancy is finer — one issuer, several organizations — the `Interaction`
+  must also check the session's tenant against `Request.Client`. Separate
+  issuers isolate sessions, not clients: with one `ClientStore`, bind every
+  client to its issuers (`oauth2.IssuerBoundClient`, see "Clients and
+  realms" above) — a tenant-A client could otherwise send tenant B's
+  end-users to B's genuine login page and obtain their identity and B's
+  tokens once they consent. UserInfo refuses a token whose client is no
+  longer registered at the issuer.
+- **`prompt=none` reveals no session.** The provider's refusals — a
+  session of another realm, of another end-user, a stale one, an unmet
+  essential `acr` — carry the sentinels' fixed descriptions: on the wire
+  they read as no session at all, so a client cannot probe the browser.
+  The reason reaches the `ErrorHook` only; an `Interaction` refusing with
+  its own description must not describe the session either.
+- **`InteractionStartedAt`** must come from server-side state bound to the
+  authorization request, never from the session or the request parameters:
+  a forged value makes a stale session look fresh. The provider bounds it to
+  `[ReceivedAt − 15 min, ReceivedAt + 5 s]` and ignores it under
+  `prompt=none`.
+- **Offline access needs consent** (OIDC Core §11): `offline_access` is
+  dropped unless the end-user consented, and a refresh token issued without
+  that consent fails closed. Wire `grant.Config.RefreshTokenScope =
+  oidcprovider.ScopeOfflineAccess`.
+- **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
+  is the client ID, and an access token whose audience equals a client ID is
+  refused at issuance; JWT access tokens are typed `at+jwt`. Resource
+  servers should require that type (`jwtsec.WithType(jwtsec.TypeAccessToken)`)
+  so an ID Token is never accepted as an access token.
+- **Keys.** Key rings are validated on every use (RS256 required, one key
+  per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
+  bound to algorithms) and fail closed; private and symmetric keys are never
+  published. The keys of JWT access tokens belong in `KeyRing.Published`:
+  one `jwks_uri` serves both (RFC 9068 §4).
+- **Claims and accounts.** Only the claims the request and the end-user
+  allow are released, and a `ClaimsSource` cannot override a protocol claim.
+  `ErrUnknownSubject` stops an OpenID grant at its next exchange; plain
+  OAuth 2.0 grants carry no context and are not checked, so disabling an
+  end-user must also revoke their token families.
+- **UserInfo serves personal data** to bearer tokens of OpenID grants of the
+  request's issuer only, with `Cache-Control: no-store`. Allow browser
+  origins (CORS) deliberately.
+- **Issuers.** The issuer is an https URL without query or fragment
+  (`http` only for an explicit loopback development opt-in). Discovery and
+  the JWK Set are cacheable (`max-age=300`): an `IssuerResolver` must never
+  derive the issuer from an unvalidated `Host` header.
+- **The application's pages.** Login and consent pages need CSRF tokens and
+  anti-framing headers (`X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`), must validate the URL
+  they return to after a login (open redirect), and must never redirect with
+  `307` — it would replay the posted credentials (OIDC Core §16.22).
+  `examples/oidc-provider` does all of this.
+- **Errors.** Refusals reach the `ErrorHook` with their cause; causes never
+  carry a token, an `id_token_hint`, a `nonce`, a `login_hint` or a claim
+  value.
 
 ## Sessions
 
@@ -527,7 +649,8 @@ span catalog.
 ## Operator checklist
 
 - [ ] Pick a password hasher and review its cost against current hardware.
-- [ ] Rotate JWT signing keys; expose them through a JWKS endpoint.
+- [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
+      (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
 - [ ] Use `Profile20BCP` or stricter; do not enable the `implicit` /
       `password` legacy grants without a documented reason.
@@ -549,13 +672,25 @@ span catalog.
       revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
-- [ ] Make the `IssuerResolver` return the same issuer for `/authorize` and
-      `/token` of a realm, and authenticate users within
-      `AuthorizeRequest.Issuer` in the `ConsentFunc`.
+- [ ] Make the `IssuerResolver` return the same issuer for every endpoint
+      of a realm (`/authorize`, `/token`, `/revoke`, `/introspect`), and
+      authenticate users within `AuthorizeRequest.Issuer` in the
+      `ConsentFunc`. With several issuers and one `ClientStore`, register
+      every client at its issuers (`IssuerBoundClient`,
+      `DefaultClient.IssuerValues`) or scope the store by issuer.
 - [ ] With `store/sql`, apply the `ALTER TABLE` statements of each release
       (MIGRATION.md) before deploying it; keep PostgreSQL databases in
       `UTF8` and MySQL tables in `utf8mb4` with a strict `sql_mode` — a
       non-strict MySQL truncates an over-long value instead of refusing it.
+- [ ] With `oidc/provider`: an https issuer the `IssuerResolver` never takes
+      from an unvalidated `Host`; a `KeySource` backed by your key store,
+      rotated through `KeyRing.Published` (publish, sign, retire once the ID
+      Tokens it signed have expired); access-token audiences that are never
+      client IDs; `RefreshTokenScope = offline_access`; sessions scoped to
+      their realm (and tenant), and clients to their issuers
+      (`IssuerBoundClient`); CSRF tokens and anti-framing headers on the
+      login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
+      for disabled end-users, whose token families you also revoke.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

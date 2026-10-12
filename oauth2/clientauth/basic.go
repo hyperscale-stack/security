@@ -13,9 +13,12 @@ import (
 
 // NewBasic returns a client_secret_basic authenticator. The client_id and
 // client_secret are read from the HTTP Basic Authorization header per
-// RFC 6749 §2.3.1.
+// RFC 6749 §2.3.1: each is form-urlencoded by the client (Appendix B) and
+// form-decoded here — "+" is a space, "%XX" a byte — so a client sending a
+// secret holding "%" or "+" unencoded is answered invalid_client, and
+// malformed encoding is refused before the client is loaded.
 //
-// A header without a client_id or with an empty client_secret, such as
+// A header whose decoded client_id or client_secret is empty, such as
 // Basic base64("<client_id>:"), is refused with invalid_client before the
 // client is loaded, as [NewPost] refuses an empty client_secret. A public
 // client authenticates with [NewNone] instead (RFC 7591 §2: "none" is the

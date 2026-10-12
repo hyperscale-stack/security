@@ -23,7 +23,9 @@ const introspectionCallerRefused = "introspection requires confidential client a
 // client cannot authenticate: its client_id is no secret, and no credential
 // it presents can be relied on to identify it (RFC 6749 §2.2, §2.3). The
 // caller authenticates through the configured [ServerConfig.ClientAuth]
-// methods and must be a [ClientConfidential] client; a public client —
+// methods at the issuer the request resolves to — one bound to other
+// issuers is unknown there ([IssuerBoundClient]) — and must be a
+// [ClientConfidential] client; a public client —
 // whatever the method, "none" included — or an untyped one gets 401
 // invalid_client.
 //
@@ -78,7 +80,7 @@ func (s *Server) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 // only: a public client's credentials prove nothing (RFC 6749 §2.2, §2.3),
 // and an untyped client cannot be told apart from one.
 func (s *Server) authenticateIntrospectionCaller(ctx context.Context, r *http.Request) (Client, error) {
-	caller, err := s.authenticateClient(ctx, r)
+	caller, _, _, err := s.authenticateClientAt(ctx, r)
 	if err != nil {
 		return nil, err
 	}

@@ -230,6 +230,70 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
   `offline_access` (OIDC Core §11). Opt-in; rotation is unaffected.
+- **JWT key publication and signature-only verification** (`jwtsec`):
+  `MarshalJWKS` serializes an RFC 7517 JWK Set of public signature keys —
+  every key with a unique `kid`, its `alg` and `use: sig` — and refuses
+  private or symmetric material, publishing nothing (OIDC Discovery §3);
+  `PublicKey.Validate`, `PrivateKey.Validate` and `PrivateKey.Public` bind a
+  key to its algorithm (RSA of at least 2048 bits for RS*/PS*, the matching
+  curve for ES*, Ed25519 for EdDSA — RFC 7518 §3.3–§3.5, RFC 8725 §3.1);
+  `VerifySignature` verifies a compact JWS against a key list (allowlisted
+  `alg`, key selected by `kid` and bound to that `alg`) and returns its
+  header and payload without validating any claim, for callers applying
+  their own claim rules. `ErrInvalidKey` reports an unfit key.
+- **JWT explicit typing** (`jwtsec`): `WithType` sets the `typ` header a
+  `Signer` writes (`TypeJWT` by default) and makes a `Verifier` require it,
+  compared as RFC 7515 §4.1.9 prescribes (case-insensitive, `application/`
+  implied) — `ErrInvalidType` otherwise; opt-in on verifiers.
+- **OAuth2 issuer identification in authorization responses** (RFC 9207):
+  every authorization response — code and implicit, success and redirected
+  error — carries `iss`, the issuer the request resolved to, and the RFC 8414
+  metadata publishes `authorization_response_iss_parameter_supported: true`,
+  so a client talking to several authorization servers or realms can detect
+  a mix-up (RFC 9700 §4.4.2.1). The `server_error` answering an
+  `IssuerResolver` failure is the one response without it.
+- **OAuth2 client ↔ issuer binding**: `oauth2.IssuerBoundClient`
+  (`AllowsIssuer`), an optional client capability — implemented by
+  `DefaultClient` through `IssuerValues` — for deployments whose
+  `IssuerResolver` serves several issuers from one `ClientStore`. At an
+  issuer it is not registered at, a client does not exist: `/authorize`
+  answers the bare 400 of an unknown client, never redirected, and `/token`,
+  `/revoke` and `/introspect` fail its authentication as an unknown
+  client's (`401 invalid_client`), whatever the secret — so another realm's
+  clients can be neither used nor enumerated. `oauth2.ClientAllowsIssuer`
+  applies the rule; `oauth2.ErrClientNotAtIssuer` is the cause `OnError`
+  gets. The server now resolves the issuer before it loads the client, at
+  every endpoint `/revoke` and `/introspect` included (see
+  [MIGRATION.md](MIGRATION.md)).
+- **OpenID Provider** (`oidc/provider`, package `oidcprovider`): OpenID
+  Connect Core 1.0 (errata set 2) on the `oauth2` extension points — the
+  Authorization Code flow with PKCE, signed ID Tokens at the code exchange
+  and at every refresh (Core §12.2: the original `auth_time`, `acr` and
+  `amr`, no `nonce`), UserInfo (Core §5.3, RFC 6750 errors), Discovery
+  (path issuers, only what is served, consistent with RFC 8414) and the
+  issuer's public JWK Set. `New` builds the `oauth2.Server` it extends,
+  `Paths` tells where to mount each handler. The provider validates
+  authentication requests — `prompt`, `max_age`, `nonce`, the `claims`
+  parameter, `id_token_hint`; `request`, `request_uri` and `registration`
+  refused with their Core §3.1.2.6 codes — and re-checks every approval
+  itself: realm, `prompt=login` and `max_age` freshness, designated
+  end-user, essential `acr`, `offline_access` consent (Core §11). The
+  application keeps the end-user side through typed interfaces:
+  `Interaction` (login and consent UI; `prompt=none` gets no
+  `ResponseWriter`), `ClaimsSource` (released claims only;
+  `ErrUnknownSubject` stops a grant) and `KeySource` (rings validated on
+  every use: RS256 required, RSA of at least 2048 bits, private keys never
+  published). Access-token audiences equal to a client ID are refused
+  (RFC 9068 §5). [docs/oidc-provider.md](docs/oidc-provider.md) is the exact
+  feature matrix; no certification is claimed.
+- **OpenID Provider interoperability tests** (`internal/interop/oidcop`, private and
+  test-only): the provider against `github.com/coreos/go-oidc/v3` and
+  `golang.org/x/oauth2` as an independent relying party, over TLS — code
+  flow with S256 PKCE, the three client authentication methods, path
+  issuers, refresh, key rotation, `prompt=none` and the advertised URLs.
+- **Example** `examples/oidc-provider`: a runnable OpenID Provider with its
+  own login and consent pages (CSRF tokens, anti-framing headers),
+  cookie sessions, `prompt` handling and offline access.
 
 ### Changed
 
@@ -294,6 +358,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   [MIGRATION.md](MIGRATION.md) (an optional single-issuer backfill keeps users
   signed in); `store/redis` adds optional payload fields. Every instance must
   be upgraded at once.
+- **JWT access tokens follow RFC 9068 (breaking)**:
+  `jwtsec.NewOAuth2AccessTokenSigner` takes the `PrivateKey` and builds its own
+  signer, so every access token is typed `at+jwt` (RFC 9068 §2.1) — a resource
+  server verifying with `WithType(TypeAccessToken)` refuses an OpenID Connect
+  ID Token signed by the same keys — and carries a random 128-bit `jti`
+  (§2.2). It used to wrap any `Signer` and emit `typ: JWT` without `jti`. See
+  [MIGRATION.md](MIGRATION.md).
 - **OAuth2 `GrantResponse.ExtraParams` removed (breaking)**: it was never
   serialized. `GrantResponse.IDToken` is the typed member a token response
   may add (`id_token`).
@@ -372,6 +443,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `refresh token reused`. The former `refresh token reused — family
   revoked` claimed a revocation that may have failed, and its em dash lies
   outside the RFC 6749 §5.2 `error_description` charset.
+- `client_secret_basic` (`oauth2/clientauth`) form-decodes the client
+  credentials as RFC 6749 §2.3.1 and Appendix B require: the Basic user-id and
+  password are split at the first colon, then each is
+  `application/x-www-form-urlencoded`-decoded, so a client identifier or
+  secret holding reserved or non-ASCII characters — sent encoded, as
+  `golang.org/x/oauth2` does — authenticates. Breaking for clients sending
+  `%` or `+` unencoded (an unencoded `+` now reads as a space, an invalid
+  escape is a malformed header); credentials made of unreserved characters
+  are unaffected. The empty-credential guard applies to the decoded values.
+  See [MIGRATION.md](MIGRATION.md).
 
 ### Removed
 
@@ -381,6 +462,25 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- Multi-issuer deployments can keep each client in its realm: with the
+  `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
+  can no longer send another issuer's end-users to that issuer's login page
+  and obtain their codes, tokens and ID Tokens, nor be told apart from an
+  unknown client there. Clients without the capability keep being known at
+  every issuer of a shared `ClientStore`.
+- Authorization responses name their issuer (RFC 9207, see Added): a client
+  of several authorization servers or realms can detect a mix-up attack
+  (RFC 9700 §4.4).
+- RFC 9068 access tokens are typed `at+jwt` (see Changed), so a verifier
+  requiring that type never accepts an OpenID Connect ID Token signed by the
+  same keys as an access token (RFC 8725 §3.11).
+- The OpenID Provider (see Added) enforces the protocol itself rather than
+  trusting the application: `prompt=login`, `max_age` and essential `acr`
+  are re-checked on every approval, an authentication counts in its realm
+  only, `prompt=none` refusals read the same whatever sessions the browser
+  holds, private and symmetric keys are never published, an access-token
+  audience equal to a client ID is refused (RFC 9068 §5), and UserInfo only
+  serves tokens of clients still registered at the issuer.
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

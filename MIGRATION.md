@@ -7,26 +7,28 @@ released on its own cadence.
 
 ## Modules
 
-| Path                      | Module                                                          | Purpose                                                              |
-| ------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) |
-| `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       |
-| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           |
-| `./connectrpc`            | `github.com/hyperscale-stack/security/connectrpc`               | `connectrpcsec` — ConnectRPC auth + authorize interceptors           |
-| `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 |
-| `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               |
-| `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            |
-| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`                      | `jwtsec` — JWT signer/verifier + JWKS                                |
-| `./session`               | `github.com/hyperscale-stack/security/session`                  | Stateless encrypted cookie sessions + CSRF                           |
-| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          |
-| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 |
-| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          |
-| `./oidc/client`           | `github.com/hyperscale-stack/security/oidc/client`              | `oidcclient` — OpenID Connect Relying Party (Authorization Code + PKCE) |
-| `./oidc/client/store/sql` | `github.com/hyperscale-stack/security/oidc/client/store/sql`    | OIDC transaction store on `database/sql`                             |
-| `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                      |
-| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos (one sub-package per scenario)               |
-| `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              |
-| `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only) |
+| Path                        | Module                                                         | Purpose                                                                              |
+| --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `.`                         | `github.com/hyperscale-stack/security`                         | Core: transport-agnostic primitives (Authentication, Engine, Voter…)                 |
+| `./http`                    | `github.com/hyperscale-stack/security/http`                    | `httpsec` — `net/http` adapter                                                       |
+| `./grpc`                    | `github.com/hyperscale-stack/security/grpc`                    | `grpcsec` — gRPC unary/stream interceptors                                           |
+| `./connectrpc`              | `github.com/hyperscale-stack/security/connectrpc`              | `connectrpcsec` — ConnectRPC auth + authorize interceptors                           |
+| `./basic`                   | `github.com/hyperscale-stack/security/basic`                   | HTTP Basic extractor + authenticator                                                 |
+| `./bearer`                  | `github.com/hyperscale-stack/security/bearer`                  | Bearer extractor + `TokenVerifier`-based authenticator                               |
+| `./password`                | `github.com/hyperscale-stack/security/password`                | BCrypt + Argon2id hashers                                                            |
+| `./jwt`                     | `github.com/hyperscale-stack/security/jwt`                     | `jwtsec` — JWT signer/verifier + JWKS                                                |
+| `./session`                 | `github.com/hyperscale-stack/security/session`                 | Stateless encrypted cookie sessions + CSRF                                           |
+| `./oauth2`                  | `github.com/hyperscale-stack/security/oauth2`                  | OAuth2 server (profiles, grants, endpoints)                                          |
+| `./oauth2/store/sql`        | `github.com/hyperscale-stack/security/oauth2/store/sql`        | Production storage on `database/sql`                                                 |
+| `./oauth2/store/redis`      | `github.com/hyperscale-stack/security/oauth2/store/redis`      | Production storage on Redis (Lua atomicity)                                          |
+| `./oidc/client`             | `github.com/hyperscale-stack/security/oidc/client`             | `oidcclient` — OpenID Connect Relying Party (Authorization Code + PKCE)              |
+| `./oidc/client/store/sql`   | `github.com/hyperscale-stack/security/oidc/client/store/sql`   | OIDC transaction store on `database/sql`                                             |
+| `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                                      |
+| `./oidc/provider`           | `github.com/hyperscale-stack/security/oidc/provider`           | `oidcprovider` — OpenID Provider on the `oauth2` extension points                    |
+| `./examples`                | `github.com/hyperscale-stack/security/examples`                | Runnable use-case demos (one sub-package per scenario)                               |
+| `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
+| `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
+| `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -63,9 +65,12 @@ oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 oidc/client/            ← core + github.com/go-jose/go-jose/v4
 oidc/client/store/sql/  ← oidc/client + database/sql
 oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
+oidc/provider/          ← core + oauth2 + jwt (go-jose stays behind jwt)
 examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/v3
                            + github.com/chromedp/chromedp
+internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
+                           + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
 
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module;
 `oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
@@ -74,13 +79,17 @@ of the `oidc/client` module.)
 
 `oidc/client` depends on neither `oauth2` nor `jwt`: the Relying Party
 validates ID Tokens itself on top of go-jose. `github.com/coreos/go-oidc`
-and `golang.org/x/oauth2` are not dependencies of any module (see the
-package documentation of `oidc/client` for the evaluation).
+and `golang.org/x/oauth2` are not dependencies of any production module
+(see the package documentation of `oidc/client` for the evaluation).
 
 The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
 SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly
 stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify` scoped to its own
-tests). The policy is enforced by review.
+tests). The policy is enforced by review. `oauth2` never imports OIDC or JOSE:
+`oidc/provider` plugs into its extension points, and imports no relying-party
+library, store driver or template engine (`TestDependencyPolicy`). go-oidc
+and x/oauth2 are confined to the test-only `internal/interop/oidcop` module,
+as an independent relying party.
 
 ## Local development
 
@@ -109,9 +118,10 @@ pushed.
 ## Replace directives
 
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
-(or `=> ../../` for the SQL/Redis sub-modules) so local development and CI
-work without published versions. Releases are cut per module with
-`module/vX.Y.Z` tags.
+(`=> ../../` for `oidc/provider` and `internal/integrations`, `=> ../../../`
+for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
+for the OIDC client stores), plus one for each in-repo module of its graph,
+so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
 
 ## Breaking changes before the first v2 release
 
@@ -534,3 +544,122 @@ To migrate:
    `GrantRequest.Extension.ExtendTokenResponse` between minting their tokens
    and persisting them, or answer without its members.
 3. Without an extension, nothing changes on the wire.
+
+### `oauth2`: `client_secret_basic` form-decodes the client credentials (#84)
+
+RFC 6749 §2.3.1 encodes the `client_id` and the `client_secret` with the
+`application/x-www-form-urlencoded` algorithm (Appendix B) before they become
+the HTTP Basic user-id and password. `client_secret_basic` compared them
+undecoded, so a compliant client whose identifier or secret holds a reserved
+or non-ASCII character — e.g. `golang.org/x/oauth2` with `AuthStyleInHeader`,
+which sends `url.QueryEscape(secret)` — was answered `invalid_client`. The
+credentials are now split at the first colon of the decoded header (an
+encoded colon, `%3A`, belongs to its value) and each part is form-decoded:
+
+| Basic credentials (after Base64)                    | Before                             | After                                                   |
+| --------------------------------------------------- | ---------------------------------- | ------------------------------------------------------- |
+| unreserved characters only (`A-Z a-z 0-9 - . _ ~`)  | authenticated                      | unchanged                                               |
+| encoded reserved characters (`p%40ss%2Bw%3Ard`)     | compared encoded: `invalid_client` | decoded (`p@ss+w:rd`): authenticated                    |
+| unencoded `+` in the secret (`a+b`)                 | compared as is                     | decoded as a space (`a b`): `invalid_client`            |
+| invalid escape (`50%zz`, a lone `%`)                | compared as is                     | `401 invalid_client` (`malformed Basic Authorization header`), client not loaded |
+| empty client_id or secret once decoded              | `401 invalid_client` (#94)         | unchanged                                               |
+
+`client_secret_post` is unaffected (the form body was always decoded).
+
+To migrate:
+
+1. Clients authenticating with `client_secret_basic` encode their
+   `client_id` and `client_secret` with `application/x-www-form-urlencoded`
+   before Base64 (RFC 6749 §2.3.1) — `url.QueryEscape` in Go. A client whose
+   credentials only use unreserved characters needs no change: secrets
+   generated as base64url or hex are unaffected.
+2. A client that sends a secret holding `%` or `+` unencoded now fails:
+   encode it, switch it to `client_secret_post`, or rotate it to unreserved
+   characters.
+
+### `oauth2`: authorization responses name the issuer (RFC 9207, #84)
+
+A client talking to several authorization servers — or to several realms of
+one `IssuerResolver` — could not tell which one answered its authorization
+request, the precondition of a mix-up attack (RFC 9700 §4.4). Every
+authorization response now carries `iss`, the issuer identifier the request
+resolved to (RFC 9207 §2), and the RFC 8414 metadata publishes
+`authorization_response_iss_parameter_supported: true` (§3):
+
+| Response                                              | Before                  | After                                   |
+| ----------------------------------------------------- | ----------------------- | --------------------------------------- |
+| code (query)                                          | `code`, `state`         | `code`, `state`, `iss`                  |
+| implicit (fragment)                                   | token members, `state`  | token members, `state`, `iss`           |
+| redirected error (consent, extension, core checks)    | `error`…, `state`       | `error`…, `state`, `iss`                |
+| `server_error` when the `IssuerResolver` fails        | `error`, `state`        | unchanged (no issuer is known)          |
+| bare 400 answers (client, redirect URI, response mode) | not redirected          | unchanged                               |
+
+To migrate:
+
+1. Nothing for clients that do not know RFC 9207: RFC 6749 §4.1.2 requires
+   them to ignore unrecognized response parameters.
+2. RFC 9207 clients compare `iss` with the issuer of the authorization server
+   they sent the request to (simple string comparison) and reject a mismatch
+   — the issuer the `IssuerResolver` returns must be exactly the one the
+   metadata publishes, an https URL without query or fragment.
+
+### `jwt`: RFC 9068 access tokens are typed `at+jwt` and carry a `jti` (#84)
+
+`jwtsec.NewOAuth2AccessTokenSigner` claimed RFC 9068 but signed with
+`typ: JWT` and without `jti`, although RFC 9068 §2.1 requires `typ: at+jwt` —
+the explicit type that keeps an OpenID Connect ID Token from being accepted
+as an access token (RFC 9068 §4, RFC 8725 §3.11) — and §2.2 makes `jti`
+REQUIRED. It also wrapped any `Signer`, so nothing guaranteed the header.
+
+| Before | After |
+| ------ | ----- |
+| `NewOAuth2AccessTokenSigner(signer Signer)` | `NewOAuth2AccessTokenSigner(key PrivateKey)`: builds its own signer, typed `at+jwt`; panics on a key without `Algorithm` or `Key`, like `NewSigner` |
+| access tokens `typ: JWT`, no `jti` | `typ: at+jwt`, a random 128-bit base64url `jti` per token |
+| `NewSigner(key, opts...)` ignored every option | honours `WithType` (the `typ` it writes, `JWT` by default); still ignores verifier options |
+| no `typ` check | `WithType(t)` on a verifier requires `typ` ≡ `t` (RFC 7515 §4.1.9: case-insensitive, `application/` implied) — `ErrInvalidType` otherwise; opt-in |
+
+To migrate:
+
+1. Pass the `jwtsec.PrivateKey` to `NewOAuth2AccessTokenSigner` instead of a
+   `Signer` built from it. A custom `Signer` (e.g. KMS-backed) implements
+   `token.AccessTokenSigner` itself, typing its tokens `at+jwt` and adding a
+   `jti`.
+2. Resource servers verifying these access tokens add
+   `jwtsec.WithType(jwtsec.TypeAccessToken)` to their verifier (RFC 9068 §4).
+   A verifier that compared `typ` with `JWT` must accept `at+jwt` now.
+
+### `oauth2`: clients can be bound to the issuers they are registered at (#84)
+
+With one `ClientStore` behind an `IssuerResolver` that serves several
+issuers (realms, tenants), every client was known at every issuer: a client
+of realm A could send the end-users of realm B to B's login page and obtain
+their codes and tokens, and an ID Token of B for its own audience. A client
+can now be registered at some issuers only: `oauth2.IssuerBoundClient`
+(`AllowsIssuer(issuer string) bool`), implemented by `DefaultClient` through
+`IssuerValues` — an empty list keeps the client at every issuer. At any other
+issuer the client does not exist:
+
+| Request at an issuer the client is not registered at | Before | After |
+| ---------------------------------------------------- | ------ | ----- |
+| `/authorize` | served like at its own issuer | bare `400` "unknown or invalid client", never redirected — the same bytes as for a `client_id` that exists nowhere (RFC 6749 §4.1.2.1) |
+| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client` "unknown client", whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2) |
+| any of them | — | `OnError` gets the refusal with `oauth2.ErrClientNotAtIssuer` as its cause |
+
+The server now resolves the issuer of a request before it loads its client:
+
+| Endpoint | Before | After |
+| -------- | ------ | ----- |
+| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted |
+| `/token` | client authentication and `grant_type` checks before the resolver | the resolver first: when it fails, `server_error` wins over every other error |
+| `/revoke`, `/introspect` | no `IssuerResolver` call | the resolver runs before client authentication; a failure answers `500 server_error` |
+
+To migrate:
+
+1. Nothing for clients that do not implement `IssuerBoundClient`, nor for a
+   `DefaultClient` without `IssuerValues`: they keep working at every issuer.
+2. Make your `IssuerResolver` answer every endpoint of a realm — `/revoke`
+   and `/introspect` included — with the issuer of that realm.
+3. In a deployment serving several issuers from one `ClientStore`, give
+   every client the issuers it is registered at: implement `AllowsIssuer` on
+   your client type (issuers compared exactly), or fill
+   `DefaultClient.IssuerValues` — or scope your `ClientStore` by issuer.

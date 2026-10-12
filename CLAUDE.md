@@ -19,7 +19,7 @@ phases. Source-of-truth docs:
 - `CHANGELOG.md` — what the v2 stack ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
-- `docs/` — `architecture.md`, `observability.md`,
+- `docs/` — `architecture.md`, `oidc-provider.md`, `observability.md`,
   `security-considerations.md`, `migration-from-v0.md`.
 
 ## Working rules
@@ -100,8 +100,10 @@ is intentionally skipped in CI.
 | `./oidc/client/storetest` | `.../oidc/client/storetest`                | Store conformance suite — **package of `oidc/client`** |
 | `./oidc/client/store/sql` | `.../oidc/client/store/sql` → `sqlstore`    | Transaction store on `database/sql` (PG/MySQL/SQLite) |
 | `./oidc/client/store/redis` | `.../oidc/client/store/redis` → `redisstore` | Transaction store on Redis (Lua atomicity)       |
-| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2, oidc-client |
+| `./oidc/provider`         | `.../oidc/provider` → `oidcprovider`        | OpenID Provider on the `oauth2` extension points     |
+| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2, oidc-client, oidc-provider |
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
+| `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
@@ -120,14 +122,19 @@ routers, or concrete loggers. Adapters depend on the core, never the reverse. Th
 wired via an adapter (`jwt` depends on `oauth2`, not the other way).
 `oidc/client` depends on the core and go-jose only — neither `oauth2` nor
 `jwt`; `coreos/go-oidc` and `golang.org/x/oauth2` are not dependencies (see
-the evaluation in `oidc/client/doc.go`). When adding code, check the
-allowed-dependency list in `MIGRATION.md` before adding an import.
+the evaluation in `oidc/client/doc.go`). `oidc/provider` depends on core +
+`oauth2` + `jwt` only (go-jose stays behind `jwt`; `TestDependencyPolicy`
+enforces it); go-oidc and x/oauth2 are allowed only in the test-only
+`internal/interop/oidcop` module, as an independent relying party. When
+adding code, check the allowed-dependency list in `MIGRATION.md` before
+adding an import.
 
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
-(`=> ../../../` for the OAuth2 SQL/Redis stores and the interop module,
-`=> ../../../../` for the OIDC client stores, which also replace
-`oidc/client => ../../`) so local dev works without published versions.
-New modules declare `go 1.26.5`, like the core.
+(`=> ../../` for `oidc/provider` and `internal/integrations`, `=> ../../../`
+for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
+for the OIDC client stores, which also replace `oidc/client => ../../`) plus
+one per in-repo module of its graph, so local dev works without published
+versions. New modules declare `go 1.26.5`, like the core.
 
 ## Core architecture
 
@@ -198,9 +205,11 @@ configurable via `ServerConfig.RoutePrefix`).
   `clientauth/` (`client_secret_basic` / `_post` / `none`), `token/` (opaque +
   JWT generators), `pkce/`.
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
-- Every authorization is **bound to its issuer**: `/authorize` resolves it
-  (the `IssuerResolver` is the realm), codes and tokens record it, and the
-  `authorization_code` / `refresh_token` grants refuse it elsewhere.
+- Every authorization is **bound to its issuer**: every endpoint resolves it
+  first (the `IssuerResolver` is the realm), codes and tokens record it, and
+  the `authorization_code` / `refresh_token` grants refuse it elsewhere. A
+  client implementing `IssuerBoundClient` (`DefaultClient.IssuerValues`) is
+  unknown at other issuers — same bytes as an unknown `client_id`.
 - **Extension points** (`ServerConfig.Extension`, `oauth2.Extension`): the
   contract `oidc/provider` builds on — `ValidateAuthorizeRequest` after the
   core checks, `CompleteAuthorization` turning `Consent.ExtensionResult` into
@@ -216,9 +225,32 @@ configurable via `ServerConfig.RoutePrefix`).
   only creates tables — schema additions ship as `ALTER` statements in
   `MIGRATION.md`.
 
+## OpenID Provider (`oidc/provider/`)
+
+`oidcprovider.New(oauth2.ServerConfig{...}, oidcprovider.Config{Keys, Claims,
+Interaction})` builds the `oauth2.Server` with the provider as its
+`Extension` and owns its `ConsentFunc`; `Provider.Paths(issuer)` gives the
+mount path of every handler (`AuthorizeHandler`, `UserInfoHandler`,
+`DiscoveryHandler`, `JWKSHandler`, plus the server's own).
+
+- The application implements `Interaction` (login/consent UI; `prompt=none`
+  goes to `AuthorizeSilently`, without a `ResponseWriter`), `ClaimsSource`
+  (`ErrUnknownSubject` stops a grant) and `KeySource` (per-issuer
+  `KeyRing`, validated on every use, RS256 required).
+- The provider enforces the protocol itself: request validation (OIDC Core
+  §3.1.2), `Request.Check` on every approval (realm, `prompt=login`,
+  `max_age`, designated subject, essential `acr`), `offline_access` consent
+  (Core §11), ID Tokens at code exchange and refresh (Core §12.2),
+  UserInfo with RFC 6750 errors.
+- The grant context (authentication event + released claims) travels in the
+  core's `ExtensionData` — no storage of its own.
+- `docs/oidc-provider.md` is the exact feature matrix (no certification
+  claimed); `internal/interop/oidcop` checks interop with go-oidc.
+
 `examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
-`examples/` also has `basic-http`, `bearer-jwt`, `grpc-bearer`,
-`connectrpc-bearer`, `session-web`, and `oidc-client` demos.
+`examples/oidc-provider` the one for the OpenID Provider (login and consent
+pages, CSRF, sessions); `examples/` also has `basic-http`, `bearer-jwt`,
+`grpc-bearer`, `connectrpc-bearer`, `session-web`, and `oidc-client` demos.
 
 ## OpenID Connect client (`oidc/client/`)
 

@@ -30,9 +30,11 @@ type Signer interface {
 }
 
 // NewSigner returns a Signer using the supplied PrivateKey. The key's
-// Algorithm MUST be non-empty; the function panics otherwise to refuse a
-// silently-misconfigured signer.
-func NewSigner(active PrivateKey, _ ...Option) Signer {
+// Algorithm and Key MUST be set; the function panics otherwise to refuse a
+// silently-misconfigured signer. Of the options, a signer honors
+// [WithType] only — the "typ" header it writes, [TypeJWT] by default; the
+// others configure verifiers and are ignored.
+func NewSigner(active PrivateKey, opts ...Option) Signer {
 	if active.Algorithm == "" {
 		panic("jwtsec.NewSigner: PrivateKey.Algorithm is required")
 	}
@@ -41,11 +43,17 @@ func NewSigner(active PrivateKey, _ ...Option) Signer {
 		panic("jwtsec.NewSigner: PrivateKey.Key is required")
 	}
 
-	return &signer{key: active}
+	cfg := &config{typ: TypeJWT}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	return &signer{key: active, typ: cfg.typ}
 }
 
 type signer struct {
 	key PrivateKey
+	typ string
 }
 
 // Algorithm implements [Signer].
@@ -77,7 +85,7 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 
 	jws, err := jose.NewSigner(
 		jose.SigningKey{Algorithm: s.key.Algorithm.joseAlg(), Key: jwk},
-		(&jose.SignerOptions{}).WithType("JWT"),
+		(&jose.SignerOptions{}).WithType(jose.ContentType(s.typ)),
 	)
 	if err != nil {
 		return "", fmt.Errorf("jwt: new signer: %w", err)

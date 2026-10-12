@@ -6,6 +6,7 @@ package jwtsec
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -15,6 +16,9 @@ import (
 type Option func(*config)
 
 type config struct {
+	// typ is the "typ" header: written by a signer, required by a
+	// verifier (see WithType).
+	typ           string
 	allowed       []Algorithm
 	issuer        string
 	audiences     []string
@@ -96,4 +100,47 @@ func WithOptionalExpiry() Option {
 // algorithmAllowed reports whether alg appears in the allowlist.
 func (c *config) algorithmAllowed(alg Algorithm) bool {
 	return slices.Contains(c.allowed, alg)
+}
+
+// The "typ" header values this package knows (RFC 7515 §4.1.9).
+const (
+	// TypeJWT is the generic JWT type (RFC 7519 §5.1): the default of
+	// [NewSigner], and the type OpenID Connect ID Tokens carry.
+	TypeJWT = "JWT"
+	// TypeAccessToken is the explicit type of an RFC 9068 JWT access token
+	// (RFC 9068 §2.1): it tells an access token apart from an ID Token,
+	// which a resource server MUST refuse (RFC 9068 §4, RFC 8725 §3.11).
+	TypeAccessToken = "at+jwt"
+)
+
+// WithType sets the JWT's explicit type — the "typ" header (RFC 7515
+// §4.1.9, RFC 8725 §3.11). On a [Signer] it is the value written (default
+// [TypeJWT]). On a [Verifier] it is required: a token whose typ is absent
+// or another type is refused with [ErrInvalidType]; the comparison follows
+// RFC 7515 §4.1.9 — media types are case-insensitive, and a value without
+// "/" reads as if "application/" were prepended — so a verifier requiring
+// [TypeAccessToken] accepts "at+jwt" and "application/at+jwt" (RFC 9068
+// §4). Without it, a verifier ignores typ. An empty typ panics.
+func WithType(typ string) Option {
+	if typ == "" {
+		panic("jwtsec.WithType: empty type")
+	}
+
+	return func(c *config) { c.typ = typ }
+}
+
+// typeMatches reports whether the typ header got denotes the media type
+// want (RFC 7515 §4.1.9). An absent typ matches nothing.
+func typeMatches(want, got string) bool {
+	return got != "" && normalizeType(want) == normalizeType(got)
+}
+
+// normalizeType returns the full, lower-cased media type of a typ value.
+func normalizeType(typ string) string {
+	typ = strings.ToLower(typ)
+	if !strings.Contains(typ, "/") {
+		typ = "application/" + typ
+	}
+
+	return typ
 }

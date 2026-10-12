@@ -8,29 +8,30 @@ Hyperscale security [![Last release](https://img.shields.io/github/release/hyper
 | master  | [![Build Status](https://github.com/hyperscale-stack/security/workflows/Go/badge.svg?branch=master)](https://github.com/hyperscale-stack/security/actions?query=workflow%3AGo) | [![Coveralls](https://img.shields.io/coveralls/hyperscale-stack/security/master.svg)](https://coveralls.io/github/hyperscale-stack/security?branch=master) |
 
 A transport-agnostic authentication and authorization toolkit for Go —
-HTTP, gRPC and ConnectRPC, OAuth2, OpenID Connect login, JWT, sessions, and a composable
-Voter-based access model. It is shipped as a multi-module workspace so you
-import only what you need.
+HTTP, gRPC and ConnectRPC, OAuth2, OpenID Connect login and an OpenID
+Provider, JWT, sessions, and a composable Voter-based access model. It is
+shipped as a multi-module workspace so you import only what you need.
 
 ## Modules
 
-| Module                                              | Purpose                                                         |
-| --------------------------------------------------- | --------------------------------------------------------------- |
-| `github.com/hyperscale-stack/security`              | Core: `Authentication`, `Engine`, `Manager`, `Voter`, ADM       |
-| `…/security/http`                                   | `httpsec` — `net/http` middleware + authorization               |
-| `…/security/grpc`                                   | `grpcsec` — unary/stream interceptors                           |
-| `…/security/connectrpc`                             | `connectrpcsec` — ConnectRPC auth + authorize interceptors      |
-| `…/security/basic`                                  | HTTP Basic extractor + authenticator                            |
-| `…/security/bearer`                                 | Bearer extractor + `TokenVerifier` authenticator                |
-| `…/security/password`                               | BCrypt + Argon2id hashers (`NeedsRehash`)                       |
-| `…/security/jwt`                                    | `jwtsec` — JWT signer/verifier, JWKS                            |
-| `…/security/session`                                | Stateless encrypted cookie sessions + CSRF                      |
-| `…/security/oauth2`                                 | OAuth2 server: profiles, grants, endpoints, extension points    |
-| `…/security/oauth2/store/sql`                       | Production OAuth2 storage on `database/sql`                     |
-| `…/security/oauth2/store/redis`                     | Production OAuth2 storage on Redis                              |
-| `…/security/oidc/client`                            | `oidcclient` — OpenID Connect Relying Party (code flow + PKCE)  |
-| `…/security/oidc/client/store/sql`                  | OIDC login-transaction store on `database/sql`                  |
-| `…/security/oidc/client/store/redis`                | OIDC login-transaction store on Redis                           |
+| Module                                 | Purpose                                                          |
+| -------------------------------------- | ---------------------------------------------------------------- |
+| `github.com/hyperscale-stack/security` | Core: `Authentication`, `Engine`, `Manager`, `Voter`, ADM        |
+| `…/security/http`                      | `httpsec` — `net/http` middleware + authorization                |
+| `…/security/grpc`                      | `grpcsec` — unary/stream interceptors                            |
+| `…/security/connectrpc`                | `connectrpcsec` — ConnectRPC auth + authorize interceptors       |
+| `…/security/basic`                     | HTTP Basic extractor + authenticator                             |
+| `…/security/bearer`                    | Bearer extractor + `TokenVerifier` authenticator                 |
+| `…/security/password`                  | BCrypt + Argon2id hashers (`NeedsRehash`)                        |
+| `…/security/jwt`                       | `jwtsec` — JWT signer/verifier, JWKS                             |
+| `…/security/session`                   | Stateless encrypted cookie sessions + CSRF                       |
+| `…/security/oauth2`                    | OAuth2 server: profiles, grants, endpoints, extension points     |
+| `…/security/oauth2/store/sql`          | Production OAuth2 storage on `database/sql`                      |
+| `…/security/oauth2/store/redis`        | Production OAuth2 storage on Redis                               |
+| `…/security/oidc/client`               | `oidcclient` — OpenID Connect Relying Party (code flow + PKCE)   |
+| `…/security/oidc/client/store/sql`     | OIDC login-transaction store on `database/sql`                   |
+| `…/security/oidc/client/store/redis`   | OIDC login-transaction store on Redis                            |
+| `…/security/oidc/provider`             | `oidcprovider` — OpenID Provider: ID Tokens, UserInfo, Discovery |
 
 The core module also ships `…/security/outbound`, an SSRF-safe
 `*http.Client` factory for requests to configuration-supplied URLs.
@@ -87,6 +88,7 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 - [docs/architecture.md](docs/architecture.md) — modules, pipelines, design.
 - [docs/observability.md](docs/observability.md) — OpenTelemetry span catalog.
 - [docs/security-considerations.md](docs/security-considerations.md) — defaults and threat model.
+- [docs/oidc-provider.md](docs/oidc-provider.md) — OpenID Provider feature matrix and integration guide.
 - [docs/migration-from-v0.md](docs/migration-from-v0.md) — upgrading from the v0 stack.
 - [MIGRATION.md](MIGRATION.md) — workspace layout and dependency policy.
 - [LIMITATIONS.md](LIMITATIONS.md) — known gaps.

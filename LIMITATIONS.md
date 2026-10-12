@@ -1,9 +1,9 @@
 # Known limitations
 
 The v2 stack covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
-password hashing, JWT, OAuth2 (issuer + resource server), production
-storage backends, and stateless cookie sessions. This document tracks what
-is **not** yet covered. Remaining items are tracked as GitHub issues rather
+password hashing, JWT, OAuth2 (issuer + resource server), OpenID Connect
+(provider and relying party), production storage backends, and stateless
+cookie sessions. This document tracks what is **not** yet covered. Remaining items are tracked as GitHub issues rather
 than future refactor phases.
 
 ## OAuth2 server
@@ -15,15 +15,17 @@ than future refactor phases.
   public clients (authenticated with `none`), and an empty
   `GrantTypeValues` allows every grant: restrict `GrantTypeValues` for
   public clients.
-- **`/.well-known/jwks.json` endpoint** — not exposed. JWKS publication
-  depends on a server-side public-key store; the `jwtsec` module already
-  provides the building blocks (`NewStaticJWKS`).
+- **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
+  none, although its RFC 8414 metadata advertises `jwks_uri`: mount the
+  `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
+  publish your own with `jwtsec.MarshalJWKS` (it refuses private and
+  symmetric keys).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
   JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload
-  carries no family or `jti` claim to deny-list, so such a token stays
-  valid until it expires. Keep their lifetime short, or validate against
-  the store. See
+  carries a `jti` but no family, and no deny-list is shipped, so such a token
+  stays valid until it expires. Keep their lifetime short, or validate
+  against the store. See
   [docs/security-considerations.md](docs/security-considerations.md#offline-jwt-access-tokens).
 - **Redis Cluster** — not supported by `oauth2/store/redis`: its Lua
   scripts touch keys of several hash slots. Use a standalone server or a
@@ -44,20 +46,31 @@ than future refactor phases.
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`) are added with the
   statements MIGRATION.md lists, through your migration tool.
-- **No RFC 9207 `iss` authorization-response parameter** — `/authorize` does
-  not tell the client which issuer answered. A client talking to several
-  authorization servers (or to several realms of one `IssuerResolver`) must
-  defend against mix-up attacks with a distinct redirect URI per issuer
-  (RFC 9700 §4.4.2.2) until it is added; the issuer is already resolved
-  before any redirected answer, so adding it is local to `/authorize`.
+- **RFC 9207 `iss` needs a resolved issuer** — every authorization response
+  names its issuer, except the `server_error` redirected when the
+  `IssuerResolver` itself fails: no issuer is known then, so it travels
+  without `iss`, and an RFC 9207 client rejects it (RFC 9207 §2.4) — the
+  outcome a failed request has anyway. This deviates from RFC 9207 §2
+  ("including error responses") on purpose; a bare 500 was the reviewed
+  alternative (see
+  [docs/security-considerations.md](docs/security-considerations.md)).
+- **The issuer is not validated by the core** — `iss` carries what the
+  `IssuerResolver` returns; RFC 9207 §2 wants an https URL without query or
+  fragment. `oidc/provider` refuses any other issuer (`server_error`), but
+  that refusal still names it.
+- **Clients span every issuer by default** — with one `ClientStore` behind
+  several issuers, a client is known at every issuer unless it implements
+  `IssuerBoundClient` (`DefaultClient.IssuerValues`) or the store is scoped
+  by issuer.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
 - **Duplicated request parameters are not refused** — `/authorize` and
   `/token` read the first value of a repeated parameter, while RFC 6749 §3.1
   says request parameters MUST NOT be included more than once. An
-  `oauth2.Extension` sees every value in `r.Form` and can refuse its own.
+  `oauth2.Extension` sees every value in `r.Form` and can refuse its own:
+  `oidc/provider` refuses them in OpenID authentication requests.
 - **The `nonce` parameter is not bounded by the core** — `/authorize` records
-  it as sent; an OpenID provider extension bounds it.
+  it as sent; `oidc/provider` bounds it in OpenID requests (512 bytes).
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
   `refresh_token` exchanges; the implicit flow runs its authorization hooks
   and records their context, but its fragment members are fixed (RFC 6749
@@ -65,6 +78,53 @@ than future refactor phases.
   Response modes: `query` for the code flow — the only one the metadata
   advertises — and `fragment` only for an enabled implicit flow; `form_post`
   is refused.
+
+## OpenID Provider
+
+`oidc/provider` serves the Authorization Code flow of OpenID Connect Core
+1.0; [docs/oidc-provider.md](docs/oidc-provider.md) is the exact feature
+matrix. Not supported, and never advertised:
+
+- **Other flows and response modes** — the implicit and hybrid flows
+  (`unsupported_response_type`), `form_post`, `fragment` and JARM response
+  modes (refused by the core with a bare 400).
+- **Request objects and registration** — `request` and `request_uri` are
+  refused (`request_not_supported`, `request_uri_not_supported`), and so is
+  the `registration` parameter; clients are static (`oauth2.ClientStore`),
+  without dynamic registration.
+- **Subjects and token formats** — pairwise subjects, encrypted ID Tokens,
+  signed or encrypted UserInfo responses, aggregated and distributed claims;
+  `EdDSA`, `HS*` and `none` ID Token algorithms.
+- **Sessions and logout** — Session Management, Front-Channel and
+  Back-Channel Logout, RP-Initiated Logout (no `sid`, no
+  `end_session_endpoint`); Self-Issued OP; WebFinger issuer discovery.
+- **Client authentication** — `client_secret_jwt`, `private_key_jwt` and
+  mTLS (the core's `client_secret_basic`, `client_secret_post` and `none`
+  are).
+- **Scope claims in the ID Token** — the claims of `profile`, `email`,
+  `address` and `phone` are released at UserInfo only (OIDC Core §5.4); a
+  client wanting them in the ID Token requests them through the `claims`
+  parameter. Consumers that only read the ID Token (e.g. an API server's
+  `--oidc-username-claim=email`) need that request until an opt-in lands.
+- **`redirect_uri` rules after the core's checks** — an OpenID request
+  without `redirect_uri`, or with a repeated one, is refused with a bare
+  400 (Core §3.1.2.1) once the oauth2 core accepted it; an error of the
+  core's own checks (response type, scope, PKCE) comes first and is
+  redirected, as for any OAuth 2.0 request, to the client's sole registered
+  redirect URI or to the first, registered, occurrence of a repeated one.
+- **Freshness to the second** — `prompt=login` and `max_age` are enforced
+  at the second of `auth_time`: an authentication earlier in the same
+  second as the request passes. An `Interaction` that must re-authenticate
+  shows its login page itself.
+- **Account checks of plain OAuth 2.0 grants** — the `ClaimsSource` stops an
+  OpenID grant whose end-user is gone (`ErrUnknownSubject`), but a grant
+  without `openid` carries no provider context and is not checked: revoke
+  the end-user's token families too.
+- **No UI, directory or CORS** — no login or consent pages, tenant
+  directory or identity linking (the application's `Interaction`), and no
+  built-in CORS.
+- **No certification** — the OpenID Foundation conformance suite is run
+  separately (#86); no certification is claimed.
 
 ## OpenID Connect client
 

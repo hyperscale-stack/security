@@ -186,16 +186,19 @@ type AuthorizeConfig struct {
 // authorization endpoint. It serves the authorization-code flow and,
 // when [AuthorizeConfig.AllowImplicit] is set, the legacy implicit flow.
 //
-// The handler validates the request (client, redirect URI, response type,
-// scope, PKCE), resolves its issuer through the [IssuerResolver] — the
-// realm the code, or implicit token, is bound to — and then calls consent.
+// The handler resolves the issuer of the request through the
+// [IssuerResolver] — the realm the code, or implicit token, is bound to —
+// validates the request (client — known at that issuer, see
+// [IssuerBoundClient] —, redirect URI, response type, scope, PKCE), and
+// then calls consent.
 // The library owns the protocol plumbing — request validation, code /
 // token minting, the redirect — while the application owns the login and
 // consent UI through the [ConsentFunc].
 //
-// Errors that occur before the redirect URI is trusted (unknown client,
-// unregistered redirect URI) are returned directly with a 400 status and
-// are NOT redirected, per RFC 6749 §4.1.2.1 (open-redirector protection).
+// Errors that occur before the redirect URI is trusted (a client unknown
+// at the issuer, an unregistered redirect URI) are returned directly with a
+// 400 status and are NOT redirected, per RFC 6749 §4.1.2.1
+// (open-redirector protection).
 // So is a response_mode other than the one the handler answers in —
 // fragment for an enabled implicit flow, query otherwise (OAuth 2.0
 // Multiple Response Type Encoding Practices §2.1; OIDC Core 1.0
@@ -250,12 +253,18 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
+	// The issuer comes before the client: a client bound to other issuers
+	// (IssuerBoundClient) is unknown at this one. When the resolver fails,
+	// the binding cannot be checked: the request then fails with a
+	// redirected server_error once the redirect URI is trusted.
+	resolved := s.resolveAuthorizeIssuer(r)
+
 	// Client and redirect URI come first: a failure here MUST NOT redirect
 	// (the redirect target is not yet trusted). The refusal is deliberately
 	// opaque on the wire, so the hook is the only place the cause shows up.
-	client, err := s.cfg.ClientStore.LoadClient(r.Context(), r.FormValue("client_id"))
+	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), r.FormValue("client_id"))
 	if err != nil || client == nil {
-		s.notifyError(r.Context(), ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err))
+		s.notifyError(r.Context(), resolved.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)
 
 		return
@@ -280,7 +289,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI)
+	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI, resolved)
 	if !ok {
 		return
 	}
@@ -305,6 +314,48 @@ type authorizeState struct {
 	// fragment reports that responses travel in the redirect fragment (the
 	// implicit flow, RFC 6749 §4.2.2) rather than in the query string.
 	fragment bool
+}
+
+// authorizeTarget is where and how an authorization response travels: the
+// trusted redirect URI, the state to echo, the issuer to name, and the
+// encoding — the fragment for the implicit flow, the query otherwise.
+type authorizeTarget struct {
+	redirectURI string
+	state       string
+	// issuer is the issuer identifier the request resolved to; empty when
+	// the IssuerResolver failed.
+	issuer   string
+	fragment bool
+}
+
+// responseParams returns the parameters every authorization response to t
+// carries: state, echoed when the request carried one (RFC 6749 §4.1.2,
+// §4.1.2.1), and iss, the issuer identifier, whenever it is known (RFC 9207
+// §2: a server supporting it names itself in every authorization response,
+// error responses included).
+func (t authorizeTarget) responseParams() url.Values {
+	params := url.Values{}
+	if t.state != "" {
+		params.Set("state", t.state)
+	}
+
+	if t.issuer != "" {
+		params.Set("iss", t.issuer)
+	}
+
+	return params
+}
+
+// redirect sends the authorization response params to t.
+func (t authorizeTarget) redirect(w http.ResponseWriter, r *http.Request, params url.Values) {
+	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
+	http.Redirect(w, r, authorizeRedirectTarget(t.redirectURI, params, t.fragment), http.StatusFound)
+}
+
+// target returns the authorization-response target of the validated
+// request.
+func (st *authorizeState) target() authorizeTarget {
+	return authorizeTarget{redirectURI: st.ar.RedirectURI, state: st.ar.State, issuer: st.ar.Issuer, fragment: st.fragment}
 }
 
 // request returns a copy of the validated request for a callback.
@@ -338,45 +389,88 @@ func (s *Server) refuseModified(w http.ResponseWriter, r *http.Request, st *auth
 	s.refuseAuthorize(w, r, st, ErrServerError.WithCause(errors.Join(ErrAuthorizeRequestModified, err)))
 }
 
+// authorizeIssuer is the outcome of resolving the issuer of an
+// authorization request.
+type authorizeIssuer struct {
+	issuer, audience string
+	err              error
+	// scoped is the request's view of the ClientStore at the issuer; nil
+	// when the resolver failed.
+	scoped *issuerClients
+}
+
+// resolveAuthorizeIssuer resolves the issuer of r once, for the client
+// lookup and the response.
+func (s *Server) resolveAuthorizeIssuer(r *http.Request) *authorizeIssuer {
+	issuer, audience, err := s.cfg.IssuerResolver.Resolve(r.Context(), r)
+
+	return &authorizeIssuer{issuer: issuer, audience: audience, err: err}
+}
+
+// clients returns store as the request sees it: the clients of other
+// issuers hidden, unless the issuer is unknown.
+func (a *authorizeIssuer) clients(store ClientStore) ClientStore {
+	if a.err != nil {
+		return store
+	}
+
+	a.scoped = &issuerClients{store: store, issuer: a.issuer}
+
+	return a.scoped
+}
+
+// explain adds [ErrClientNotAtIssuer] to the cause of oe when the client
+// was hidden.
+func (a *authorizeIssuer) explain(oe *Error) *Error {
+	return a.scoped.explain(oe)
+}
+
 // validateAuthorize validates the request behind a trusted redirect URI:
-// it resolves the issuer, the flow, the scope and the PKCE parameters, and
-// answers the first failure with a redirect. The issuer comes first, so
-// every later redirect is answered within the realm of the request.
+// the issuer it resolved to, the flow, the scope and the PKCE parameters,
+// and answers the first failure with a redirect. The issuer comes first,
+// so every later redirect is answered within the realm of the request.
 func (s *Server) validateAuthorize(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
 	client Client,
 	redirectURI string,
+	resolved *authorizeIssuer,
 ) (*authorizeState, bool) {
-	state := r.FormValue("state")
-
 	// An unsupported response type is answered in the query string.
 	flow, flowErr := resolveFlow(cfg, r.FormValue("response_type"))
-	fragment := flowErr == nil && flow == flowImplicit
+	target := authorizeTarget{
+		redirectURI: redirectURI,
+		state:       r.FormValue("state"),
+		fragment:    flowErr == nil && flow == flowImplicit,
+	}
 
-	issuer, audience, err := s.cfg.IssuerResolver.Resolve(r.Context(), r)
-	if err != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, state, ErrServerError.WithCause(err), fragment)
+	// Without an issuer the answer cannot name one (RFC 9207 §2): the
+	// server_error travels without iss.
+	if resolved.err != nil {
+		s.redirectAuthorizeError(w, r, target, ErrServerError.WithCause(resolved.err))
 
 		return nil, false
 	}
 
+	issuer, audience := resolved.issuer, resolved.audience
+	target.issuer = issuer
+
 	if flowErr != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, state, flowErr, false)
+		s.redirectAuthorizeError(w, r, target, flowErr)
 
 		return nil, false
 	}
 
 	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
 	if oerr != nil {
-		s.redirectAuthorizeError(w, r, redirectURI, state, oerr, fragment)
+		s.redirectAuthorizeError(w, r, target, oerr)
 
 		return nil, false
 	}
 
 	ar.Issuer = issuer
-	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: fragment}
+	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: target.fragment}
 
 	if s.cfg.Extension == nil {
 		return st, true
@@ -559,7 +653,7 @@ func (s *Server) completeAuthorization(
 // refuseAuthorize redirects oerr back to the client of the validated
 // request st, in the flow's response mode.
 func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *authorizeState, oerr *Error) {
-	s.redirectAuthorizeError(w, r, st.ar.RedirectURI, st.ar.State, oerr, st.fragment)
+	s.redirectAuthorizeError(w, r, st.target(), oerr)
 }
 
 // responseModeSupported reports whether the request's response_mode is
@@ -708,13 +802,11 @@ func (s *Server) issueAuthorizationCode(
 		return
 	}
 
-	params := url.Values{"code": {raw}}
-	if st.ar.State != "" {
-		params.Set("state", st.ar.State)
-	}
+	target := st.target()
+	params := target.responseParams()
+	params.Set("code", raw)
 
-	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, false), http.StatusFound)
+	target.redirect(w, r, params)
 }
 
 // issueImplicitToken mints an access token, persists it, and redirects it
@@ -753,21 +845,17 @@ func (s *Server) issueImplicitToken(
 		return
 	}
 
-	params := url.Values{
-		"access_token": {raw},
-		"token_type":   {TokenTypeBearer},
-		"expires_in":   {strconv.Itoa(int(cfg.ImplicitTTL.Seconds()))},
-	}
+	target := st.target()
+	params := target.responseParams()
+	params.Set("access_token", raw)
+	params.Set("token_type", TokenTypeBearer)
+	params.Set("expires_in", strconv.Itoa(int(cfg.ImplicitTTL.Seconds())))
+
 	if grant.scope != "" {
 		params.Set("scope", grant.scope)
 	}
 
-	if st.ar.State != "" {
-		params.Set("state", st.ar.State)
-	}
-
-	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(st.ar.RedirectURI, params, true), http.StatusFound)
+	target.redirect(w, r, params)
 }
 
 // grantedScope resolves the scope to grant: the consent value when it
@@ -829,20 +917,17 @@ func authorizeScope(requested string, allowed []string) (string, error) {
 // response by redirecting back to the client's redirect URI. Only a code
 // the authorization endpoint defines travels (authorizeErrorCodes), any
 // other is answered server_error; a description or error_uri outside the
-// RFC 6749 charset is left out. The envelope — cause included — is handed
-// to the configured [ErrorHook] first: the redirect carries only the code,
-// the description and the URI.
-func (s *Server) redirectAuthorizeError(
-	w http.ResponseWriter,
-	r *http.Request,
-	redirectURI, state string,
-	oerr *Error,
-	useFragment bool,
-) {
+// RFC 6749 charset is left out. Like every authorization response, it
+// echoes the state and names the issuer (RFC 9207 §2). The envelope — cause
+// included — is handed to the configured [ErrorHook] first: the redirect
+// carries only the code, the description and the URI.
+func (s *Server) redirectAuthorizeError(w http.ResponseWriter, r *http.Request, target authorizeTarget, oerr *Error) {
 	oerr = authorizeWireError(oerr)
 	s.notifyError(r.Context(), oerr)
 
-	params := url.Values{"error": {oerr.Code}}
+	params := target.responseParams()
+	params.Set("error", oerr.Code)
+
 	if desc := wireDescription(oerr.Description); desc != "" {
 		params.Set("error_description", desc)
 	}
@@ -851,12 +936,7 @@ func (s *Server) redirectAuthorizeError(
 		params.Set("error_uri", uri)
 	}
 
-	if state != "" {
-		params.Set("state", state)
-	}
-
-	//nolint:gosec // G710: redirectURI is exact-matched against the client's registered URIs by resolveRedirectURI
-	http.Redirect(w, r, authorizeRedirectTarget(redirectURI, params, useFragment), http.StatusFound)
+	target.redirect(w, r, params)
 }
 
 // authorizeRedirectTarget builds the redirect URL: params land in the

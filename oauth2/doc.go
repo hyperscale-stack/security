@@ -40,7 +40,9 @@
 //   - Every authorization is bound to the issuer the IssuerResolver
 //     returned at /authorize: the code and every token record it, and the
 //     authorization_code and refresh_token grants refuse them at another
-//     issuer.
+//     issuer. Every authorization response names that issuer in its iss
+//     parameter (RFC 9207), errors included. A client implementing
+//     IssuerBoundClient is unknown at the issuers it is not registered at.
 //   - ServerConfig.Extension plugs an optional protocol extension — the
 //     oidc/provider module's OpenID Provider — into the authorization-code
 //     flow: it validates its own /authorize parameters after the core

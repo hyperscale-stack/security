@@ -20,8 +20,7 @@ func TestOAuth2AccessTokenSignerProducesRFC9068Token(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
-	adapter := jwtsec.NewOAuth2AccessTokenSigner(signer)
+	adapter := jwtsec.NewOAuth2AccessTokenSigner(priv)
 
 	issued := time.Now().Truncate(time.Second)
 	expires := issued.Add(time.Hour)
@@ -55,10 +54,4 @@ func TestOAuth2AccessTokenSignerProducesRFC9068Token(t *testing.T) {
 	assert.Equal(t, "alice", got.Subject)
 	assert.Equal(t, "my-client", got.ClientID)
 	assert.Equal(t, "read:mail", got.Scope)
-}
-
-func TestNewOAuth2AccessTokenSignerPanicsOnNilSigner(t *testing.T) {
-	t.Parallel()
-
-	assert.Panics(t, func() { jwtsec.NewOAuth2AccessTokenSigner(nil) })
 }

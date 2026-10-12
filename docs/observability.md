@@ -19,8 +19,8 @@ Each module reports under a stable instrumentation scope (the tracer name):
 | `jwtsec`        | `github.com/hyperscale-stack/security/jwt`        |
 | `session`       | `github.com/hyperscale-stack/security/session`    |
 
-The `basic`, `bearer`, `password` and `oauth2` modules do not open spans of
-their own — keeping them free of a direct `go.opentelemetry.io/otel`
+The `basic`, `bearer`, `password`, `oauth2` and `oidc/provider` modules do
+not open spans of their own — keeping them free of a direct `go.opentelemetry.io/otel`
 dependency. Basic/Bearer authentication is still observable: the core
 `security.Manager.Authenticate` span records which authenticator ran via
 the `security.authenticator.name` attribute and an `authenticator.try`
@@ -94,6 +94,17 @@ The hook fires for:
 - at `/token`, an `ExtendTokenResponse` failure: its `invalid_grant` as
   returned, anything else as a `server_error` carrying it.
 
+The `oidc/provider` OpenID Provider reports through the same
+`ServerConfig.OnError`: its `/authorize` and `/token` refusals travel as the
+extension errors above — a contract violation by the application's
+`Interaction`, a key source or claims source failure, an invalid issuer, all
+as a `server_error` carrying the cause — and its own handlers report theirs
+directly: every UserInfo refusal as an `*oauth2.Error` with its RFC 6750 code
+(`invalid_request`, `invalid_token`, `insufficient_scope`) and cause, and a
+discovery, JWK Set or UserInfo failure as a `server_error`. A UserInfo request
+without a token is not reported. Causes never carry a token, an
+`id_token_hint`, a `nonce`, a `login_hint` or a claim value.
+
 `grant.Config.OnError` is the same hook for the errors a grant swallows
 before returning — today, a family revocation that failed after a
 refresh-token reuse (RFC 9700 §4.14.2), whether the grant found the
@@ -165,7 +176,8 @@ to `otelconnect`, which you compose alongside these interceptors.
 | Span                  | When               | Attributes                                              | Error status                                                        |
 | --------------------- | ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | `jwtsec.Signer.Sign`  | `Signer.Sign`      | `jwt.alg` (string), `jwt.kid` (string)                  | —                                                                     |
-| `jwtsec.Verifier.Verify` | `Verifier.Verify` | `jwt.alg` (string), `jwt.kid` (string), `jwt.iss` (string) | parse, multi-signature, disallowed alg, unknown kid, bad signature, malformed payload, claim validation |
+| `jwtsec.Verifier.Verify` | `Verifier.Verify` | `jwt.alg` (string), `jwt.kid` (string), `jwt.iss` (string) | parse, multi-signature, disallowed alg, typ, unknown kid, bad signature, malformed payload, claim validation |
+| `jwtsec.VerifySignature` | `VerifySignature` | `jwt.alg` (string), `jwt.kid` (string)                  | parse (disallowed alg included), multi-signature, kid (no single key, key bound to another alg), bad signature |
 
 ### Session — `github.com/hyperscale-stack/security/session`
 
