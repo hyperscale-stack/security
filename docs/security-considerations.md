@@ -576,7 +576,15 @@ is, never for the protocol rules:
   published. The keys of JWT access tokens belong in `KeyRing.Published`:
   one `jwks_uri` serves both (RFC 9068 §4).
 - **Claims and accounts.** Only the claims the request and the end-user
-  allow are released, and a `ClaimsSource` cannot override a protocol claim.
+  allow are released, and a `ClaimsSource` cannot override a protocol claim
+  — not even under a case variant (`SUB`, `ſub`, `s_ub`, `iß`) that a
+  relying party matching names case-insensitively (Go's `encoding/json`
+  among them) would read as `sub` or `iss`. Other spellings of known claims
+  (`Email`, `Roles`), names that are case variants of one another, invalid
+  names and values whose member names would alias are dropped too; declare
+  every application claim relying parties decide on in
+  `Config.ClaimsSupported`, and keep the claim names end-users choose apart
+  from them (see [oidc-provider.md](oidc-provider.md#claims)).
   `ErrUnknownSubject` stops an OpenID grant at its next exchange; plain
   OAuth 2.0 grants carry no context and are not checked, so disabling an
   end-user must also revoke their token families.
@@ -1377,7 +1385,10 @@ span catalog.
       their realm (and tenant), and clients to their issuers
       (`IssuerBoundClient`); CSRF tokens and anti-framing headers on the
       login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
-      for disabled end-users, whose token families you also revoke.
+      for disabled end-users, whose token families you also revoke; every
+      application claim relying parties decide on declared in
+      `Config.ClaimsSupported`, and the claim names end-users choose kept
+      apart from them.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

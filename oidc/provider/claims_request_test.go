@@ -20,13 +20,16 @@ func raw(s string) json.RawMessage { return json.RawMessage(s) }
 
 // TestClaimsParameterParsing pins OIDC Core §5.5 and §5.5.1: the userinfo
 // and id_token members, null or object per claim, essential, value and
-// values, unknown members ignored, member names case-sensitive.
+// values, unknown members ignored, member names case-sensitive. The
+// protocol claims requested (auth_time, acr) are parsed — acr values make
+// an essential acr — but never shown: the provider sets them itself.
 func TestClaimsParameterParsing(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
 	claims := `{
-		"id_token": {"auth_time": {"essential": true}, "acr": {"values": ["urn:a", "urn:b"]}, "email": null},
+		"id_token": {"auth_time": {"essential": true}, "acr": {"values": ["urn:a", "urn:b"]}, "email": null,
+			"website": {"values": ["https://a.example", "https://b.example"]}, "nickname": {"essential": true}},
 		"userinfo": {"email": null, "name#fr": {"value": "Alice", "extension": 1}, "picture": {"essential": false}},
 		"other": {"x": [1, 2]}
 	}`
@@ -35,9 +38,9 @@ func TestClaimsParameterParsing(t *testing.T) {
 
 	assert.Equal(t, oidcprovider.ClaimsRequest{
 		IDToken: []oidcprovider.ClaimRequest{
-			{Name: "auth_time", Essential: true},
-			{Name: "acr", Values: []json.RawMessage{raw(`"urn:a"`), raw(`"urn:b"`)}},
 			{Name: "email"},
+			{Name: "website", Values: []json.RawMessage{raw(`"https://a.example"`), raw(`"https://b.example"`)}},
+			{Name: "nickname", Essential: true},
 		},
 		UserInfo: []oidcprovider.ClaimRequest{
 			{Name: "email"},

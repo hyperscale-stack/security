@@ -142,6 +142,11 @@ func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oau
 		return nil, err
 	}
 
+	// What the Interaction is shown and the grant records: the claim
+	// requests the provider may release. Subjects and EssentialACR were
+	// derived from the exact sub and acr requests.
+	view.claims = p.names.filter(view.claims)
+
 	return view, nil
 }
 

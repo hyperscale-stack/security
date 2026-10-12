@@ -61,7 +61,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | `max_age`                                   | Core §3.1.2.1, §2                  | Enforced (`auth_time + max_age` ≥ request time, to the second); `1*DIGIT`, longer values clamped to 2³¹−1 s, anything else → `invalid_request`; `auth_time` always in the ID Token                                                | `TestMaxAgeParsing`, `TestFreshnessIsEnforcedByTheProvider`, `TestIDTokenCarriesTheAuthenticationEvent`, interop: `TestInteropReauthentication` |
 | `id_token_hint`                             | Core §3.1.2.1, §3.1.2.2            | Verified: signed by a key the issuer publishes, `iss` the issuer, the client among its audiences, a `sub`, typed `JWT` or untyped (an `at+jwt` is refused); its expiry is not checked. It designates the end-user (another one → `login_required`). Invalid → `invalid_request` | `TestIDTokenHint`, `TestIDTokenHintOfARetiredKey`, `TestIDTokenHintDesignatesTheEndUser`, interop: `TestInteropIDTokenHint` |
 | `login_hint`, `display`, `ui_locales`, `claims_locales`, `acr_values` | Core §3.1.2.1, §5.2, §15.1 | Passed to the `Interaction`, bounded; never fail a request; `acr_values` is voluntary. `ui_locales`, `claims_locales`, `acr_values`: the first 32 values of at most 2048 bytes of UTF-8 — a longer value is ignored; `login_hint` at most 1024 bytes, `display` 255 | `TestPassthroughParameters`, `TestOversizedListParametersAreIgnored`, `TestVoluntaryACRIsNotEnforced` |
-| `claims` parameter                          | Core §5.5, §5.5.1                  | Supported (advertised): strict JSON, bounded; a requested claim is released only when the end-user agrees (`Decision.Claims`) and its value matches a `value`/`values` constraint                                                  | `TestClaimsParameterParsing`, `TestClaimsParameterRefusals`, `TestReleasedClaims`, `TestValueConstraintsMatchScalarsOnly`, interop: `TestInteropClaimsParameter` |
+| `claims` parameter                          | Core §5.5, §5.5.1                  | Supported (advertised): strict JSON, bounded; a requested claim is released only when the end-user agrees (`Decision.Claims`) and its value matches a `value`/`values` constraint; protocol claims, their case variants and other spellings of known claims are never shown nor released (see [Claims](#claims)) | `TestClaimsParameterParsing`, `TestClaimsParameterRefusals`, `TestReleasedClaims`, `TestValueConstraintsMatchScalarsOnly`, `TestTheInteractionIsShownReleasableClaimRequestsOnly`, interop: `TestInteropClaimsParameter` |
 | Essential `acr`                             | Core §5.5.1.1                      | Enforced: unmet → `access_denied`, `login_required` under `prompt=none`; an authentication without acr never meets it. `acr` and `sub` values must be non-empty strings (`null` or `""` → `invalid_request`). Without `value`/`values`, an essential acr is not enforced (Core §5.5.1) | `TestEssentialACRIsEnforced`, `TestRequestCheck`, `TestClaimsParameterRefusals` |
 | `sub` claim request                         | Core §5.5.1                        | Designates the end-user, like a hint; conflicting designations → `invalid_request`                                                                                                                                                  | `TestClaimsParameterDerivedRequirements`, `TestIDTokenHintDesignatesTheEndUser`                                         |
 | `request`, `request_uri`                    | Core §6                            | Not supported: `request_not_supported`, `request_uri_not_supported`; advertised as unsupported                                                                                                                                      | `TestRequestObjectParametersRefused`, `TestDiscoveryDocument`                                                           |
@@ -76,7 +76,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | -------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | ID Token claims                  | Core §2, §3.1.3.6                    | `iss`, `sub`, `aud` (the client ID, a string), `exp`, `iat`, `auth_time` (always), `nonce` (code exchange), `acr` and `amr` (from the event), `at_hash`; no `azp` (one audience)              | `TestIDTokenClaims`, `TestIDTokenCarriesTheAuthenticationEvent`                                     |
 | Signing algorithms               | Core §15.1, §16.14; Registration §2  | RS256 (mandatory, default), RS384/512, PS256/384/512, ES256/384/512 per client (`IDTokenSigningClient`); never `none`, HS* or EdDSA. No key for the client's algorithm → `server_error` before any interaction | `TestIDTokenSigningAlgorithms`, `TestClientWithoutAnAlgorithmGetsRS256`, `TestClientAlgorithmWithoutAKey`, interop: `TestInteropSigningAlgorithms` |
-| Application claims               | Core §5.4, §5.5                      | Only the claims requested through `claims` and released; protocol claims never come from the source; null and empty strings dropped. Scope claims (`profile`, `email`, …) go to UserInfo only | `TestIDTokenClaimsFromTheClaimsParameter`, `TestValueConstraintsMatchScalarsOnly`                   |
+| Application claims               | Core §5.4, §5.5                      | Only the claims requested through `claims` and released; protocol claims never come from the source, nor their case variants; other spellings of known claims, case variants of one another, invalid names, malformed values, null and empty strings dropped (see [Claims](#claims)). Scope claims (`profile`, `email`, …) go to UserInfo only | `TestIDTokenClaimsFromTheClaimsParameter`, `TestValueConstraintsMatchScalarsOnly`, `TestProtocolClaimsCannotBeAliasedByCaseVariants`, `TestKnownClaimsAreReleasedUnderTheirExactSpellingOnly`, `TestClaimNamesCollidingUnderCaseFoldingAreDropped`, `TestReleasedClaimNamesAreValidAndUnique`, `TestReleasedClaimValuesAreWellFormed`, interop: `TestInteropCaseVariantClaimsNeverReachTheRP` |
 | Code issued for OpenID           | Core §3.1.3.2                        | An `openid` code without the provider's context → `invalid_grant`                                                                                                                            | `TestOpenIDCodeWithoutContextIsRefused`                                                             |
 | Account validity                 | —                                    | `ClaimsSource` queried on every exchange of an OpenID grant: `ErrUnknownSubject` → `invalid_grant`                                                                                          | `TestCodeExchangeFailures`, `TestRefreshChecksTheAccountEvenWithoutOpenID`                          |
 | Token confusion                  | RFC 9068 §5, RFC 8725 §3.12          | An access-token audience equal to the client ID → `server_error`; JWT access tokens are typed `at+jwt`                                                                                      | `TestCodeExchangeFailures`, jwt: `TestOAuth2AccessTokenSignerFollowsRFC9068`, interop: `TestInteropJWTAccessTokenIsNotAnIDToken`, stack: `TestIDTokenUsedAsAnotherToken` |
@@ -90,7 +90,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | Transport                        | Core §5.3.1; RFC 6750 §2          | GET and POST; bearer token in the `Authorization` header or a form-encoded POST body; a URI query token is not supported (ignored alone, a second method otherwise)                                  | `TestUserInfoMethods`, `TestUserInfoTokenMethods`                                         |
 | Token validation                 | Core §5.3; RFC 6750 §3.1          | b64token syntax, known and outside a revoked family, unexpired, issued under the request's issuer to an OpenID grant of a client still registered at that issuer, scope holding `openid` | `TestUserInfoErrors`, `TestUserInfoRefusesUnusableRecords`, `TestUserInfoRefusesTokensOfClientsNotAtTheIssuer` |
 | Errors                           | RFC 6750 §3, §3.1; Core §5.3.3    | `WWW-Authenticate: Bearer realm="<issuer>"`: no error information without a token, `invalid_request` (400), `invalid_token` (401), `insufficient_scope` (403, `scope="openid"`); server failures 500 | `TestUserInfoErrors`, `TestUserInfoTokenMethods`, `TestUserInfoErrorsReachTheHook`        |
-| Claims                           | Core §5.3.2, §5.4, §5.5           | The access token's scope claims and the released `userinfo` claim requests; `sub` is the token's — the ID Token's; JSON, `Cache-Control: no-store`                                                 | `TestUserInfoScopeClaims`, `TestUserInfoClaimsParameter`, `TestUserInfoSubMatchesIDToken`, `TestUserInfoHeaders` |
+| Claims                           | Core §5.3.2, §5.4, §5.5           | The access token's scope claims and the released `userinfo` claim requests, under the rules of the ID Token's (see [Claims](#claims)); `sub` is the token's — the ID Token's, never a case variant from the source; JSON, `Cache-Control: no-store` | `TestUserInfoScopeClaims`, `TestUserInfoClaimsParameter`, `TestUserInfoSubMatchesIDToken`, `TestUserInfoHeaders`, `TestProtocolClaimsCannotBeAliasedByCaseVariants` |
 | Signed or encrypted UserInfo     | Core §5.3.2                       | Not supported, not advertised                                                                                                                                                                          | —                                                                                         |
 | Aggregated and distributed claims | Core §5.6.2                      | Not supported                                                                                                                                                                                          | —                                                                                         |
 
@@ -211,6 +211,49 @@ sign in stops the grant — `invalid_grant` at `/token`, `invalid_token` at
 UserInfo; any other error answers `server_error`. Disabling an end-user
 must also revoke their token families: plain OAuth 2.0 grants carry no
 OpenID context, and the source is not consulted for them.
+
+`ClaimsQuery.Names` holds names the client chose in its `claims` parameter:
+untrusted input, only known to be 1 to 255 bytes of UTF-8 without control
+characters. A source that looks them up in a directory or a database
+escapes or parameterizes them, or maps them through its own list.
+
+**Case variants.** Claim names are case-sensitive (Core §5.1, RFC 7519 §4),
+but relying parties often match them case-insensitively: Go's
+`encoding/json` — go-oidc and most Go relying parties — reads `"SUB"` or
+`"ſub"` (U+017F) as `sub`, the last member winning. The provider compares
+names under the key relying parties use, whatever their rule — simple case
+folding (`ſ`, the Kelvin sign), simple upper- and lower-case mappings (`İ`,
+`ı`: Java's `equalsIgnoreCase`), full case mappings (`ß` as `ss`, the `ﬁ`
+ligatures: upper-casing in JavaScript, Java, Python), and ignoring `_` and
+`-` (`encoding/json/v2` with `case:ignore`) — and never releases, nor asks
+the source for:
+
+- a case variant of a protocol claim, or of a claim reserved to another
+  protocol (`azp`, `jti`, `sid`, `scope`, …);
+- another spelling of a claim it knows: the standard claims (Core §5.1),
+  `roles`, `groups` and `entitlements` (RFC 9068 §2.2.3.1), and
+  `Config.ClaimsSupported` — `Email`, `e_mail` and `EMAIL#fr` are dropped,
+  `email#fr` is released;
+- claims whose names are case variants of one another in one response: all
+  of them, since which one a relying party would read is unknowable;
+- a name that is not 1 to 255 bytes of UTF-8 without control characters
+  (two invalid names would be written as the same member twice);
+- a value holding, at any depth, an object with two member names that are
+  case variants of each other (exact duplicates included) or with a member
+  name in invalid UTF-8, or nested more than 31 levels: strict relying
+  parties — `oidc/client` among them — refuse a whole token holding one.
+
+Dropping a claim is never an error (Core §5.3.2, §5.5). The `Interaction` is
+only shown the claim requests the provider may release (`Request.Claims`),
+and the grant records only those; the rules apply again at every exchange
+and at UserInfo, so a grant recorded earlier follows the current
+configuration. Declare every application claim relying parties make
+decisions on in `Config.ClaimsSupported`: an undeclared claim requested
+alone under another spelling is released under that spelling (a relying
+party may read it as the claim it expects), and requested together with a
+variant it is dropped (an end-user can suppress it). `New` refuses a
+`ClaimsSupported` entry the provider never releases or that is a case
+variant of a protocol, standard or other entry's claim.
 
 ### Keys and rotation
 

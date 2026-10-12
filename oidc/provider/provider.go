@@ -40,7 +40,13 @@ type Config struct {
 	// IDTokenTTL is the ID Token lifetime; zero means [DefaultIDTokenTTL].
 	IDTokenTTL time.Duration
 	// ClaimsSupported lists application claim names Discovery publishes in
-	// claims_supported, after the protocol claims (Discovery §3).
+	// claims_supported, after the protocol claims (Discovery §3). Their
+	// spelling becomes the only one the provider releases: a case variant
+	// of one (see [ClaimsSource]) is never released, so declare every claim
+	// relying parties make decisions on. New refuses an entry that is a
+	// claim the provider never releases (azp, jti, sid, scope, …) or a case
+	// variant of a protocol, standard or other entry's claim; a protocol or
+	// standard claim spelled exactly is accepted, and published once.
 	ClaimsSupported []string
 	// ACRValuesSupported is published as Discovery acr_values_supported —
 	// omitted when empty. The provider enforces nothing about them: an acr
@@ -77,16 +83,57 @@ func (c *Config) validate() error {
 		return errors.New("oidcprovider: New: Config.IDTokenTTL is negative")
 	}
 
-	for _, name := range c.ClaimsSupported {
-		if !validClaimName(name) {
-			return errors.New("oidcprovider: New: Config.ClaimsSupported holds an invalid claim name")
-		}
+	if err := checkClaimsSupported(c.ClaimsSupported); err != nil {
+		return err
 	}
 
 	for _, acr := range c.ACRValuesSupported {
 		if acr == "" || len(acr) > maxConfigValueLength || !visibleASCII(acr) {
 			return errors.New("oidcprovider: New: Config.ACRValuesSupported holds an invalid acr value")
 		}
+	}
+
+	return nil
+}
+
+// Why New refuses Config.ClaimsSupported.
+var (
+	errSupportedInvalid  = errors.New("oidcprovider: New: Config.ClaimsSupported holds an invalid claim name")
+	errSupportedReserved = errors.New("oidcprovider: New: Config.ClaimsSupported holds a claim the provider never releases")
+	errSupportedVariant  = errors.New("oidcprovider: New: Config.ClaimsSupported holds a case variant of another claim")
+)
+
+// checkClaimsSupported refuses, in supported, an invalid claim name, a
+// reserved claim — or a case variant of one — other than a protocol claim
+// spelled exactly, and a case variant of a known claim or of another entry
+// other than its exact spelling, untagged (its untagged name) or tagged.
+func checkClaimsSupported(supported []string) error {
+	known := newClaimNames(nil)
+	entries := map[string]string{}
+
+	for _, name := range supported {
+		base := untagged(name)
+
+		switch {
+		case !validClaimName(name):
+			return errSupportedInvalid
+		case reserved(base) && slices.Contains(protocolClaims, name):
+			continue // published once among the protocol claims
+		case reserved(base):
+			return errSupportedReserved
+		}
+
+		key, fullKey := claimKey(base), claimKey(name)
+
+		if exact, ok := known[key]; ok && exact != base {
+			return errSupportedVariant
+		}
+
+		if exact, ok := entries[fullKey]; ok && exact != name {
+			return errSupportedVariant
+		}
+
+		known[key], entries[fullKey] = base, name
 	}
 
 	return nil
@@ -133,6 +180,8 @@ type Provider struct {
 	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
 	claimsSupported []string
+	// names are the claims the provider knows, by claimKey.
+	names claimNames
 }
 
 // New builds an OpenID Provider on a new oauth2.Server made of server: the
@@ -178,6 +227,7 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	p.server, p.now, p.hook, p.tokens, p.clients = srv, sc.Now, sc.OnError, sc.Storage, sc.ClientStore
 	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
+	p.names = newClaimNames(cfg.ClaimsSupported)
 
 	return p, nil
 }

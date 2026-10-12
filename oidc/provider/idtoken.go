@@ -65,7 +65,7 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 
 	var allowed map[string][]json.RawMessage
 	if openID {
-		allowed = releasable(gc.IDToken, nil)
+		allowed = p.names.releaseSet(gc.IDToken, nil)
 	}
 
 	claims, err := p.cfg.Claims.Claims(ctx, ClaimsQuery{
@@ -82,7 +82,12 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 		return oauth2.TokenResponseExtension{}, nil
 	}
 
-	idToken, err := p.signIDToken(ctx, iss, gc, releaseClaims(claims, allowed))
+	released, err := releaseClaims(claims, allowed)
+	if err != nil {
+		return oauth2.TokenResponseExtension{}, err
+	}
+
+	idToken, err := p.signIDToken(ctx, iss, gc, released)
 	if err != nil {
 		return oauth2.TokenResponseExtension{}, err
 	}

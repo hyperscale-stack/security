@@ -1702,3 +1702,49 @@ held as a `jose.JSONWebKey`, and a private key placed in a `PublicKey`, were
 written in full. Every key that is not an `*rsa.PublicKey`,
 `*ecdsa.PublicKey` or `ed25519.PublicKey` is now redacted
 (`"Key": "<type> REDACTED"`) in JSON, `fmt` and `slog`. Nothing to migrate.
+
+### `oidc/provider`: claim names that differ only by case are never released
+
+Claim names are case-sensitive (OIDC Core §5.1, RFC 7519 §4), and the
+provider compared them byte for byte: an end-user whose `ClaimsSource`
+attributes she names herself (custom profile attributes, attributes passed
+through from an upstream directory) could add to her own authorization
+request a `claims` parameter naming one `"SUB"` or `"ſub"` (U+017F). It was
+released next to the genuine `sub`, and relying parties matching names
+case-insensitively — Go's `encoding/json`, so go-oidc and most Go relying
+parties, last member winning — read the victim's subject from her ID Token
+and UserInfo response (account takeover). The same held for any claim
+(`"Roles"` read as `roles`), and source names with invalid UTF-8 were written
+as one duplicated member.
+
+The provider now compares claim names under a key that ignores case (simple
+and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…) and the `_` and `-`
+delimiters, and drops — dropping is never an error (Core §5.3.2, §5.5):
+
+| Released claim | Before | After |
+| --- | --- | --- |
+| `SUB`, `ſub`, `s_ub`, `Iss`, `iß`, `authtime`, `SUB#fr`… (case variants of protocol claims) | released next to the protocol claims | never asked of the source, never shown to the `Interaction`, never released |
+| `Email`, `e_mail`, `EMAIL#fr`, `Roles`, `roleſ`… (other spellings of standard claims, of `roles`/`groups`/`entitlements`, of `ClaimsSupported`) | released | dropped; `email`, `email#fr`, `roles` are released |
+| `team` and `teaM`, `name#fr` and `name#FR` (case variants of one another) | both released | both dropped |
+| a source name with invalid UTF-8, a control character or over 255 bytes (a tagged variant) | released, invalid UTF-8 as U+FFFD | dropped |
+| a value with case-variant or invalid member names at any depth, or nested over 31 levels | released | dropped |
+| a `claims` request for a name never released | shown in `Request.Claims`, recorded with the grant | left out of both (`Subjects`, `EssentialACR` unchanged) |
+| `Config.ClaimsSupported` with `azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`, `c_hash`, `s_hash`, `_claim_names`, `_claim_sources`, a case variant of a protocol or standard claim (`SUB`, `Email`) or of another entry (`tenant`, `Tenant`) | accepted (published, never emitted) | `New` fails |
+| `Config.ClaimsSupported` with a protocol or standard claim spelled exactly (`sub`, `email`) | published | unchanged (published once) |
+
+To migrate:
+
+1. Remove from `Config.ClaimsSupported` the claims the provider never
+   releases (`azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`,
+   `c_hash`, `s_hash`, `_claim_names`, `_claim_sources`) and every case
+   variant of a protocol, standard or other entry's claim.
+2. Declare there every application claim relying parties make decisions on:
+   its spelling becomes the only one released. An undeclared claim is still
+   released under another spelling when requested alone, and dropped when
+   requested together with such a variant.
+3. A `ClaimsSource` exposing attribute names end-users choose keeps them
+   apart from the names relying parties consume — a collision-resistant
+   prefix (Core §5.1.2), or out of the release set — and treats
+   `ClaimsQuery.Names` as untrusted input in directory or database lookups.
+4. Relying parties key accounts on (`iss`, `sub`) only (Core §5.7), and
+   decode tokens strictly (`oidc/client` refuses case-variant member names).

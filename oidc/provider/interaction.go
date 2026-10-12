@@ -106,7 +106,10 @@ type Request struct {
 	// requested sub claim (Core §3.1.2.2, §5.5.1).
 	Subjects []string
 	// Claims are the individually requested claims (claims parameter, Core
-	// §5.5); release them through Decision.Claims.
+	// §5.5) the provider may release — protocol claims, their case variants
+	// and other spellings of the claims it knows are left out (see
+	// [ClaimsSource]); release them through Decision.Claims. Subjects and
+	// EssentialACR hold what the sub and acr requests require.
 	Claims ClaimsRequest
 	// LoginHint, Display, UILocales and ClaimsLocales are passed through
 	// (Core §3.1.2.1, §5.2, §15.1): use them or ignore them, they never
@@ -187,7 +190,9 @@ type Decision struct {
 	// Claims lists the individually requested claims (Request.Claims) the
 	// end-user agreed to release; nil releases none. A name releases the
 	// requested claim of that name and its language-tagged variants
-	// ("name" releases "name#fr"), a tagged name only itself.
+	// ("name" releases "name#fr"), a tagged name only itself. One list
+	// serves both targets: a name releases its ID Token and its UserInfo
+	// requests alike. A name Request.Claims does not hold releases nothing.
 	Claims []string
 	// OfflineAccess grants a requested offline_access scope (see
 	// OfflineAccessConsent).

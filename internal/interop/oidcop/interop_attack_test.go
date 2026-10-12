@@ -5,10 +5,12 @@
 package oidcop_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	xoauth2 "golang.org/x/oauth2"
@@ -114,4 +116,56 @@ func TestInteropRefreshReuse(t *testing.T) {
 
 	_, err = r.provider.UserInfo(r.ctx, xoauth2.StaticTokenSource(rotated))
 	require.ErrorContains(t, err, "401", "the family is revoked")
+}
+
+// attributeClaims is a ClaimsSource exposing attributes whose names the
+// end-user chooses (custom profile attributes, attributes passed through
+// from an upstream directory): mallory named some after other claims,
+// spelled differently.
+type attributeClaims struct{}
+
+func (attributeClaims) Claims(_ context.Context, q oidcprovider.ClaimsQuery) (map[string]any, error) {
+	if q.Subject != "mallory" {
+		return nil, oidcprovider.ErrUnknownSubject
+	}
+
+	return map[string]any{
+		"name": "Mallory", "email": "mallory@example.com", "groups": []string{"users"},
+		"\u017fub": endUser, "SUB": endUser, "Email": "alice@example.com", "group\u017f": []string{"admins"},
+	}, nil
+}
+
+// TestInteropCaseVariantClaimsNeverReachTheRP: go-oidc decodes ID Tokens
+// and UserInfo responses with encoding/json, which matches claim names
+// case-insensitively (strings.EqualFold, the last match winning). mallory
+// adds to her own authorization request a claims parameter naming her
+// attributes "ſub" (U+017F, long s), "SUB", "Email" and "groupſ": none of
+// them is released, so go-oidc reads her own sub — in the ID Token it
+// verified and at UserInfo — no email, and the genuine groups.
+func TestInteropCaseVariantClaimsNeverReachTheRP(t *testing.T) {
+	t.Parallel()
+
+	o := newOP(t, withClaimsSource(attributeClaims{}))
+	o.login.set(func(a *autoLogin) { a.subject = "mallory" })
+	r := newRP(t, o, o.issuer, basicClient)
+
+	claims := `{"id_token": {"\u017fub": null, "SUB": null, "Email": null, "groups": null, "group\u017f": null},
+		"userinfo": {"\u017fub": null, "SUB": null, "Email": null}}`
+	tok, _, idToken := r.flow(t, xoauth2.SetAuthURLParam("claims", claims))
+
+	assert.Equal(t, "mallory", idToken.Subject, "go-oidc reads the authenticated end-user")
+
+	var released struct {
+		Email  string   `json:"email"`
+		Groups []string `json:"groups"`
+	}
+
+	require.NoError(t, idToken.Claims(&released))
+	assert.Empty(t, released.Email, "another spelling of email is never read as email")
+	assert.Equal(t, []string{"users"}, released.Groups, "the genuine groups")
+
+	info, err := r.provider.UserInfo(r.ctx, xoauth2.StaticTokenSource(tok))
+	require.NoError(t, err)
+	assert.Equal(t, "mallory", info.Subject, "UserInfo sub equals the ID Token's (Core §5.3.2)")
+	assert.Equal(t, "mallory@example.com", info.Email, "the email scope's genuine email (Core §5.4)")
 }

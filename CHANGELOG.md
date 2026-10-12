@@ -752,6 +752,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrOriginMismatch`, `Connection.ResponseOrigins`,
   `MinTransactionKeySize`, `MaxTransactionKeys`, the span attribute
   `samlsp.transaction_consumed`. See [MIGRATION.md](MIGRATION.md).
+- **`oidcprovider.Config.ClaimsSupported` is validated against the release
+  rules** (breaking): `New` refuses the claims the provider never releases
+  (`azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`, `c_hash`,
+  `s_hash`, `_claim_names`, `_claim_sources`) and case variants of a
+  protocol, standard or other entry's claim; its names become the only
+  spelling released. `Request.Claims` only holds the claim requests the
+  provider may release, and a grant records only those. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1414,3 +1422,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   while `ui_locales`, `claims_locales` and `acr_values` over 2048 bytes are
   now ignored, like an oversized `display` or `login_hint`; they never fail
   a request (OIDC Core §3.1.2.1, §15.1).
+- `oidc/provider` no longer releases claim names that relying parties read
+  as other claims. Its protocol-claim protection compared names byte for
+  byte: an end-user whose attribute names she chooses could request, in her
+  own authorization request, an attribute named `"ſub"` (U+017F) or
+  `"SUB"`; it was released next to the genuine `sub`, and relying parties
+  matching names case-insensitively — Go's `encoding/json`, so go-oidc, last
+  member winning — read the victim's subject from her ID Token and UserInfo
+  response (account takeover). Names are now compared ignoring case (simple
+  and full case mappings) and the `_` and `-` delimiters: case variants of
+  protocol claims are never asked for nor released, known claims (standard
+  claims, `roles`, `groups`, `entitlements`, `Config.ClaimsSupported`) only
+  under their exact spelling, names that are case variants of one another
+  never, nor invalid names or values whose member names alias at any depth
+  (OIDC Core §2, §5.3.2; RFC 7519 §4). See [MIGRATION.md](MIGRATION.md).

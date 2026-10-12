@@ -202,7 +202,7 @@ func parseClaimsMember(doc json.RawMessage) ([]ClaimRequest, error) {
 func parseClaimRequest(name string, doc json.RawMessage) (ClaimRequest, error) {
 	c := ClaimRequest{Name: name}
 
-	if string(doc) == "null" {
+	if string(doc) == jsonNull {
 		return c, nil
 	}
 

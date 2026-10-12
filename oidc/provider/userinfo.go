@@ -185,7 +185,7 @@ func (p *Provider) userInfo(ctx context.Context, issuer, token string) (map[stri
 		return nil, err
 	}
 
-	allowed := releasable(gc.UserInfo, strings.Fields(at.Scope))
+	allowed := p.names.releaseSet(gc.UserInfo, strings.Fields(at.Scope))
 
 	src, err := p.cfg.Claims.Claims(ctx, ClaimsQuery{
 		Issuer: issuer, Subject: at.Subject, ClientID: at.ClientID, Target: ClaimsForUserInfo, Names: queryNames(allowed),
@@ -194,7 +194,11 @@ func (p *Provider) userInfo(ctx context.Context, issuer, token string) (map[stri
 		return nil, sourceFailure(err, func(e error) error { return refuse(errBearerToken, e) })
 	}
 
-	claims := releaseClaims(src, allowed)
+	claims, err := releaseClaims(src, allowed)
+	if err != nil {
+		return nil, err
+	}
+
 	claims[claimSub] = at.Subject
 
 	return claims, nil

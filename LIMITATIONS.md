@@ -119,6 +119,14 @@ matrix. Not supported, and never advertised:
   at the second of `auth_time`: an authentication earlier in the same
   second as the request passes. An `Interaction` that must re-authenticate
   shows its login page itself.
+- **Claim-name aliasing beyond case variants** — the provider compares claim
+  names ignoring case (simple and full case mappings) and the `_` and `-`
+  delimiters; a relying party comparing them under compatibility
+  normalization (NFKC: fullwidth `ｓｕｂ`) or locale-sensitive collation is
+  not covered. An application claim missing from `Config.ClaimsSupported` is
+  released under another spelling when requested alone, and dropped together
+  with such a variant — an end-user can suppress it: declare every claim
+  relying parties decide on.
 - **Account checks of plain OAuth 2.0 grants** — the `ClaimsSource` stops an
   OpenID grant whose end-user is gone (`ErrUnknownSubject`), but a grant
   without `openid` carries no provider context and is not checked: revoke
