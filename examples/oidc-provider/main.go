@@ -17,8 +17,9 @@
 // client demo-spa (PKCE only), both registered with the redirect URI
 // http://localhost:9000/oidc/demo/callback — the callback of the "demo"
 // connection of examples/oidc-client served at http://localhost:9000 — and
-// sign in as alice / alice-secret. Request offline_access with
-// prompt=consent to get a refresh token.
+// sign in as alice / alice-secret. A refresh token comes with
+// offline_access — requested with prompt=consent by an OpenID request —
+// when the end-user ticks "Keep access while I am away".
 //
 // The environment overrides the defaults: OIDC_PROVIDER_ISSUER (https, or
 // http on a loopback host), OIDC_PROVIDER_ADDR (the listen address) and
@@ -37,14 +38,18 @@
 // The demo cuts corners a deployment must not: an http issuer
 // (AllowInsecureLoopbackIssuer — production issuers are https), a key
 // generated at startup (production keys come from a KMS-backed KeySource
-// and rotate through KeyRing.Published), in-memory storage, and consent
-// remembered per client rather than per scope.
+// and rotate through KeyRing.Published), and in-memory storage. Consent is
+// remembered in memory, per end-user and client, for the scopes and claims
+// the end-user last allowed — offline access never: it is asked for every
+// time (OpenID Connect Core §11).
 package main
 
 import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"log"
@@ -134,6 +139,13 @@ func (p principal) Subject() string { return p.subject }
 // authorization request.
 type consentAnswer struct{ allow, offline bool }
 
+// consentRecord is what an end-user last allowed a client: the scopes —
+// offline_access excepted, never remembered (OpenID Connect Core §11: "a
+// previously saved user consent is not always sufficient to grant offline
+// access") — and the names of the requested claims. Each consent replaces
+// it: it never grows.
+type consentRecord struct{ scopes, claims []string }
+
 // app is the application side of the provider — what oidc/provider leaves
 // to it through Interaction and ClaimsSource: end-user sessions, the login
 // and consent pages, consent records and end-user claims.
@@ -145,8 +157,9 @@ type app struct {
 	accounts map[string]account
 
 	mu sync.Mutex
-	// consents remembers, by subject and client, a consent given.
-	consents map[string]bool
+	// consents remembers, by subject and client, what the end-user last
+	// allowed the client.
+	consents map[string]consentRecord
 	// started records when the login of an authorization request began,
 	// by browser session and request: server-side state bound to this
 	// browser and this request (Decision.InteractionStartedAt), carried over
@@ -255,7 +268,7 @@ func newApp(issuer string) (*app, error) {
 			"name": "Alice Liddell", "given_name": "Alice", "family_name": "Liddell",
 			"email": "alice@example.com", "email_verified": true,
 		}}},
-		consents: map[string]bool{},
+		consents: map[string]consentRecord{},
 		started:  map[string]map[string]time.Time{},
 		answers:  map[string]consentAnswer{},
 	}, nil
@@ -347,6 +360,16 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 		return nil, renderLogin(w, login, resume, http.StatusOK, "")
 	}
 
+	return a.consentTo(w, s, *ev, req, key, resume)
+}
+
+// consentTo ends the authorization request of key once ev authenticated
+// the end-user: the consent page when the request needs one — prompt=consent,
+// offline access to choose, or a request the remembered consent does not
+// cover — or the decision.
+func (a *app) consentTo(
+	w http.ResponseWriter, s *session.Session, ev oidcprovider.AuthenticationEvent, req *oidcprovider.Request, key, resume string,
+) (*oidcprovider.Decision, error) {
 	answer, answered := a.answerOf(s, key)
 
 	switch {
@@ -354,18 +377,32 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 		a.done(s, key)
 
 		return &oidcprovider.Decision{}, nil // the end-user denied: access_denied
-	case !answered && (req.Prompt.Consent || !a.consented(ev.Subject, req.Client.ID())):
+	case !answered && (req.Prompt.Consent || offlineChoice(req) || !a.covered(ev.Subject, req)):
 		return nil, a.renderConsent(w, s, req, resume)
 	}
 
-	d := a.decision(*ev, req, a.startedAt(s, key))
-	if answered && answer.offline && req.OfflineAccess && req.Prompt.Consent {
+	if answered {
+		a.remember(ev.Subject, req)
+	}
+
+	d := a.decision(ev, req, a.startedAt(s, key))
+	if answered && answer.offline && offlineChoice(req) {
+		// Otherwise the provider drops offline_access from the grant — and
+		// denies a request that asked for nothing else.
 		d.OfflineAccess = oidcprovider.OfflineAccessPrompted
 	}
 
 	a.done(s, key)
 
 	return d, nil
+}
+
+// offlineChoice reports whether the consent page offers offline access:
+// requested, and grantable on the end-user's choice — an OpenID request
+// only with prompt=consent (OpenID Connect Core §11), a plain OAuth 2.0
+// request always.
+func offlineChoice(req *oidcprovider.Request) bool {
+	return req.OfflineAccess && (req.Prompt.Consent || !req.OpenID)
 }
 
 // AuthorizeSilently implements oidcprovider.Interaction for prompt=none:
@@ -381,7 +418,7 @@ func (a *app) AuthorizeSilently(r *http.Request, req *oidcprovider.Request) (*oi
 		return refusal(err)
 	}
 
-	if !a.consented(ev.Subject, req.Client.ID()) {
+	if !a.covered(ev.Subject, req) {
 		return refusal(oauth2.ErrConsentRequired)
 	}
 
@@ -438,15 +475,9 @@ func (a *app) signedInSince(ev oidcprovider.AuthenticationEvent, s *session.Sess
 }
 
 // decision approves req for ev, releasing every individually requested
-// claim: the consent page listed them.
+// claim: the consent page listed them, or a remembered consent covers them.
 func (a *app) decision(ev oidcprovider.AuthenticationEvent, req *oidcprovider.Request, started time.Time) *oidcprovider.Decision {
-	d := &oidcprovider.Decision{Authentication: &ev, InteractionStartedAt: started}
-
-	for _, c := range append(slices.Clone(req.Claims.IDToken), req.Claims.UserInfo...) {
-		d.Claims = append(d.Claims, c.Name)
-	}
-
-	return d
+	return &oidcprovider.Decision{Authentication: &ev, InteractionStartedAt: started, Claims: claimNames(req)}
 }
 
 // login signs the end-user in and sends the browser back to the
@@ -510,14 +541,12 @@ func (a *app) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The answer applies to the request the page showed; Authorize
+	// remembers an allowed consent from that request once it resumes.
 	allow := r.PostFormValue("decision") == "allow"
 
 	a.mu.Lock()
 	a.answers[s.ID+"\x00"+requestKey(form)] = consentAnswer{allow: allow, offline: allow && r.PostFormValue("offline_access") == "on"}
-
-	if allow {
-		a.consents[ev.Subject+"\x00"+form.Get("client_id")] = true
-	}
 	a.mu.Unlock()
 
 	//nolint:gosec // G710: resume is a relative URL of the authorization endpoint (authorizationRequest)
@@ -548,11 +577,15 @@ func (a *app) authorizationRequest(resume string) (url.Values, bool) {
 	return u.Query(), true
 }
 
-// requestKey identifies an authorization request across its resumptions.
+// requestKey identifies an authorization request across its resumptions:
+// the digest of all its parameters, in their canonical encoding — what a
+// login started or a consent page showed applies to that very request,
+// never to another one sharing its client_id, state, nonce or
+// code_challenge.
 func requestKey(form url.Values) string {
-	return strings.Join([]string{
-		form.Get("client_id"), form.Get("state"), form.Get("nonce"), form.Get("code_challenge"),
-	}, "\x00")
+	sum := sha256.Sum256([]byte(form.Encode()))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // begin records when the login of an authorization request began in the
@@ -613,12 +646,51 @@ func (a *app) answerOf(s *session.Session, key string) (consentAnswer, bool) {
 	return answer, ok
 }
 
-// consented reports a consent the end-user gave the client before.
-func (a *app) consented(subject, clientID string) bool {
+// covered reports whether the consent the end-user last gave the client of
+// req covers req: its scopes — offline_access aside — and its claims.
+func (a *app) covered(subject string, req *oidcprovider.Request) bool {
+	a.mu.Lock()
+	record, ok := a.consents[subject+"\x00"+req.Client.ID()]
+	a.mu.Unlock()
+
+	if !ok {
+		return false
+	}
+
+	for _, scope := range req.Scopes {
+		if scope != oidcprovider.ScopeOfflineAccess && !slices.Contains(record.scopes, scope) {
+			return false
+		}
+	}
+
+	for _, name := range claimNames(req) {
+		if !slices.Contains(record.claims, name) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// remember records that the end-user allowed req, offline access aside.
+func (a *app) remember(subject string, req *oidcprovider.Request) {
+	scopes := slices.DeleteFunc(slices.Clone(req.Scopes), func(s string) bool { return s == oidcprovider.ScopeOfflineAccess })
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return a.consents[subject+"\x00"+clientID]
+	a.consents[subject+"\x00"+req.Client.ID()] = consentRecord{scopes: scopes, claims: claimNames(req)}
+}
+
+// claimNames returns the names of the claims req requests, the ID Token's
+// then UserInfo's.
+func claimNames(req *oidcprovider.Request) []string {
+	names := make([]string, 0, len(req.Claims.IDToken)+len(req.Claims.UserInfo))
+	for _, c := range append(slices.Clone(req.Claims.IDToken), req.Claims.UserInfo...) {
+		names = append(names, c.Name)
+	}
+
+	return names
 }
 
 // done forgets the state of a completed authorization request.
@@ -638,8 +710,8 @@ func (a *app) done(s *session.Session, key string) {
 type pageData struct {
 	CSRF, Resume, Problem, Client string
 	Scopes, Claims                []string
-	// Offline offers offline access: requested with the consent dialog
-	// (OpenID Connect Core §11).
+	// Offline offers offline access: requested, and grantable on the
+	// end-user's choice (see offlineChoice).
 	Offline bool
 }
 
@@ -692,14 +764,9 @@ func renderLogin(w http.ResponseWriter, s *session.Session, resume string, statu
 
 // renderConsent renders the consent form of req.
 func (a *app) renderConsent(w http.ResponseWriter, s *session.Session, req *oidcprovider.Request, resume string) error {
-	claims := make([]string, 0, len(req.Claims.IDToken)+len(req.Claims.UserInfo))
-	for _, c := range append(slices.Clone(req.Claims.IDToken), req.Claims.UserInfo...) {
-		claims = append(claims, c.Name)
-	}
-
 	return render(w, http.StatusOK, consentPage, pageData{
-		CSRF: session.CSRFToken(s), Resume: resume, Client: req.Client.ID(), Scopes: req.Scopes, Claims: claims,
-		Offline: req.OfflineAccess && req.Prompt.Consent,
+		CSRF: session.CSRFToken(s), Resume: resume, Client: req.Client.ID(), Scopes: req.Scopes, Claims: claimNames(req),
+		Offline: offlineChoice(req),
 	})
 }
 

@@ -177,8 +177,7 @@ func (h *harness) signIn(authorizeURL string) (*http.Response, string) {
 
 	resp, page := h.do(h.browser, http.MethodGet, authorizeURL, nil)
 	require.Equal(h.t, http.StatusOK, resp.StatusCode, page)
-	assert.Equal(h.t, "DENY", resp.Header.Get("X-Frame-Options"))
-	assert.Equal(h.t, "frame-ancestors 'none'", resp.Header.Get("Content-Security-Policy"))
+	assertPageHeaders(h.t, resp)
 
 	fields := formFields(h.t, page)
 	fields.Set("username", "alice")
@@ -188,7 +187,22 @@ func (h *harness) signIn(authorizeURL string) (*http.Response, string) {
 	require.Equal(h.t, http.StatusSeeOther, resp.StatusCode)
 	require.Equal(h.t, fields.Get("return_to"), resp.Header.Get("Location"))
 
-	return h.do(h.browser, http.MethodGet, h.issuer+resp.Header.Get("Location"), nil)
+	resp, page = h.do(h.browser, http.MethodGet, h.issuer+resp.Header.Get("Location"), nil)
+	if resp.StatusCode == http.StatusOK {
+		assertPageHeaders(h.t, resp) // the consent page
+	}
+
+	return resp, page
+}
+
+// assertPageHeaders asserts the headers of the login and consent pages:
+// never framed (clickjacking), never cached.
+func assertPageHeaders(t *testing.T, resp *http.Response) {
+	t.Helper()
+
+	assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"))
+	assert.Equal(t, "frame-ancestors 'none'", resp.Header.Get("Content-Security-Policy"))
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
 }
 
 // consent answers the consent page.
@@ -529,4 +543,198 @@ func TestConfiguredRedirectURI(t *testing.T) {
 	refused := authorize(defaultRedirectURI)
 	assert.Equal(t, http.StatusBadRequest, refused.Code)
 	assert.Empty(t, refused.Header().Get("Location"))
+}
+
+// plainURL is a plain OAuth 2.0 authorization request (no openid) of the
+// confidential client.
+func (h *harness) plainURL(challenge, scope string) string {
+	q := url.Values{
+		"response_type": {"code"}, "client_id": {rpClientID}, "redirect_uri": {defaultRedirectURI},
+		"scope": {scope}, "state": {"st-plain"},
+		"code_challenge": {challenge}, "code_challenge_method": {"S256"},
+	}
+
+	return h.doc.AuthorizationEndpoint + "?" + q.Encode()
+}
+
+// exchange redeems the code of a redirect with verifier.
+func (h *harness) exchange(resp *http.Response, verifier string) tokenResponse {
+	h.t.Helper()
+
+	return h.token(url.Values{
+		"grant_type": {"authorization_code"}, "code": {redirected(h.t, resp).Get("code")},
+		"redirect_uri": {defaultRedirectURI}, "code_verifier": {verifier},
+	})
+}
+
+// offersOffline reports whether a consent page offers offline access.
+func offersOffline(page string) bool { return strings.Contains(page, `name="offline_access"`) }
+
+// TestOfflineAccessNeedsTheEndUsersChoice: the example grants offline
+// access — a 30-day refresh token — on the end-user's explicit choice
+// only, for OpenID and plain OAuth 2.0 requests alike: the consent page
+// offers it whenever it can be granted, never from a consent remembered
+// earlier (OIDC Core §11), and an unticked box drops offline_access.
+func TestOfflineAccessNeedsTheEndUsersChoice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("declined, then requested by a plain request", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		verifier, challenge := pkce()
+		_, page := h.signIn(h.authorizeURL(challenge, "n-1", "scope", "openid profile offline_access", "prompt", "consent"))
+		require.True(t, offersOffline(page))
+
+		first := h.exchange(h.consent(page, "allow", false), verifier)
+		assert.Empty(t, first.RefreshToken, "offline access declined")
+
+		verifier, challenge = pkce()
+		resp, page := h.do(h.browser, http.MethodGet, h.plainURL(challenge, "profile offline_access"), nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "the consent page, not a silent code")
+		require.True(t, offersOffline(page))
+
+		second := h.exchange(h.consent(page, "allow", false), verifier)
+		assert.Equal(t, "profile", second.Scope)
+		assert.Empty(t, second.RefreshToken)
+	})
+
+	t.Run("granted by a plain request, then asked again", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		verifier, challenge := pkce()
+		resp, page := h.signIn(h.plainURL(challenge, "profile offline_access"))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.True(t, offersOffline(page), "a plain request is offered the choice")
+
+		tokens := h.exchange(h.consent(page, "allow", true), verifier)
+		assert.Equal(t, "profile offline_access", tokens.Scope)
+		assert.NotEmpty(t, tokens.RefreshToken, "offline access ticked")
+
+		_, challenge = pkce()
+		resp, page = h.do(h.browser, http.MethodGet, h.plainURL(challenge, "profile offline_access"), nil)
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "offline access is never remembered")
+		assert.True(t, offersOffline(page))
+	})
+
+	t.Run("only offline access requested, declined", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		_, challenge := pkce()
+		_, page := h.signIn(h.plainURL(challenge, "offline_access"))
+
+		assert.Equal(t, "access_denied", redirected(t, h.consent(page, "allow", false)).Get("error"))
+	})
+
+	t.Run("OpenID request without prompt=consent", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		verifier, challenge := pkce()
+		_, page := h.signIn(h.authorizeURL(challenge, "n-1", "scope", "openid offline_access"))
+		assert.False(t, offersOffline(page), "Core §11: prompt=consent is required")
+
+		tokens := h.exchange(h.consent(page, "allow", true), verifier)
+		assert.Empty(t, tokens.RefreshToken, "a box the page did not offer grants nothing")
+	})
+}
+
+// TestRememberedConsentCoversOnlyWhatWasShown: a consent is remembered for
+// the scopes and claims the end-user saw — a later request of the client
+// asking for more shows the page again (or, under prompt=none, answers
+// consent_required); prompt=consent always shows it.
+func TestRememberedConsentCoversOnlyWhatWasShown(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	_, challenge := pkce()
+	_, page := h.signIn(h.authorizeURL(challenge, "n-1", "scope", "openid"))
+	require.NotEmpty(t, redirected(t, h.consent(page, "allow", false)).Get("code"))
+
+	moreClaims := []string{"scope", "openid", "claims", `{"id_token":{"name":null}}`}
+
+	verifier, challenge := pkce()
+	resp, page := h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-2", moreClaims...), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "new claims: the consent page")
+	assert.Contains(t, page, "name")
+
+	claims := h.verifyIDToken(h.exchange(h.consent(page, "allow", false), verifier).IDToken)
+	assert.Equal(t, "Alice Liddell", claims.Name)
+
+	_, challenge = pkce()
+	resp, _ = h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-3", moreClaims...), nil)
+	assert.NotEmpty(t, redirected(t, resp).Get("code"), "what was shown is remembered")
+
+	_, challenge = pkce()
+	resp, _ = h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-4", "scope", "openid email"), nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "a new scope: the consent page")
+
+	_, challenge = pkce()
+	resp, _ = h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-5", "scope", "openid", "prompt", "none",
+		"claims", `{"userinfo":{"email":null}}`), nil)
+	assert.Equal(t, "consent_required", redirected(t, resp).Get("error"))
+
+	_, challenge = pkce()
+	resp, _ = h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-6", "scope", "openid", "prompt", "consent"), nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "prompt=consent always shows the page")
+}
+
+// TestConsentAnswerAppliesToTheRequestShown: the answer given on a consent
+// page applies to the very request it showed — not to another request of
+// the client that shares its client_id, state, nonce and code_challenge
+// but asks for more.
+func TestConsentAnswerAppliesToTheRequestShown(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	_, challenge := pkce()
+	_, page := h.signIn(h.authorizeURL(challenge, "n-1", "scope", "openid"))
+
+	fields := formFields(t, page)
+	fields.Set("decision", "allow")
+	resp, _ := h.do(h.browser, http.MethodPost, h.issuer+"/consent", fields)
+	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
+
+	resp, page = h.do(h.browser, http.MethodGet, h.authorizeURL(challenge, "n-1", "scope", "openid email"), nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "the consent page, not a code: %s", page)
+}
+
+// TestConsentEndpointRefusals: the consent endpoint refuses a forged CSRF
+// token — recording nothing — and a return address that is not this
+// provider's authorization endpoint (no open redirect).
+func TestConsentEndpointRefusals(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	_, challenge := pkce()
+	_, page := h.signIn(h.authorizeURL(challenge, "n"))
+	fields := formFields(t, page)
+	fields.Set("decision", "allow")
+
+	forged := url.Values{}
+	for k, v := range fields {
+		forged[k] = v
+	}
+
+	forged.Set("csrf_token", "forged")
+	resp, _ := h.do(h.browser, http.MethodPost, h.issuer+"/consent", forged)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	resp, _ = h.do(h.browser, http.MethodGet, h.issuer+fields.Get("return_to"), nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "nothing was recorded: the consent page again")
+
+	for _, target := range []string{
+		"https://evil.example/oauth2/authorize?x=1", "//evil.example/oauth2/authorize", "/login?x=1",
+	} {
+		elsewhere := url.Values{}
+		for k, v := range fields {
+			elsewhere[k] = v
+		}
+
+		elsewhere.Set("return_to", target)
+		resp, _ := h.do(h.browser, http.MethodPost, h.issuer+"/consent", elsewhere)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, target)
+	}
 }

@@ -1447,3 +1447,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   request, `OfflineAccessByPolicy` keeps the former behaviour, and an
   approval left without any scope answers `access_denied` (breaking, see
   [MIGRATION.md](MIGRATION.md)).
+- `examples/oidc-provider` grants offline access only on the end-user's
+  explicit choice — the consent page offers it to every request that can
+  get it, plain OAuth 2.0 ones included, and never from a remembered
+  consent — and remembers a consent for the scopes and claims the end-user
+  saw: a consent given once to a client silently approved any later
+  request of that client, new claims included. A consent answer applies to
+  the very request its page showed, no longer to another one sharing its
+  `client_id`, `state`, `nonce` and `code_challenge`.
