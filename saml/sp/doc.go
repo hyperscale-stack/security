@@ -84,7 +84,9 @@
 //   - Signatures: the Response or its Assertion must be signed (errata E93
 //     and E26), each signature enveloped in its parent, referencing its ID,
 //     with exactly the enveloped-signature and exclusive C14N transforms and
-//     no ds:Object. Signature methods RSA or ECDSA with SHA-256/384/512,
+//     no ds:Object; a KeyInfo without certificate counts as absent (it is
+//     cut from the verified bytes where no digest covers it, Core §5.4.5).
+//     Signature methods RSA or ECDSA with SHA-256/384/512,
 //     SHA-256/384/512 digests; SHA-1 only for a connection that sets
 //     [Connection].InsecureAllowSHA1; inclusive C14N, HMAC and unknown
 //     algorithms never. IdP keys are RSA of 2048 to 8192 bits or ECDSA

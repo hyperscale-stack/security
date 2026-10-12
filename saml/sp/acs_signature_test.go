@@ -60,14 +60,6 @@ func TestCompleteLogin_SignatureFailures(t *testing.T) {
 		{"KeyInfo carries an untrusted certificate", respOpts{after: func(r *etree.Element) {
 			path(assertionSignature(r), "KeyInfo", "X509Data", "X509Certificate").SetText(certB64(k.attacker.cert))
 		}}},
-		{"KeyInfo without certificate (KeyName only)", respOpts{after: func(r *etree.Element) {
-			ki := path(assertionSignature(r), "KeyInfo")
-			for _, c := range ki.ChildElements() {
-				ki.RemoveChild(c)
-			}
-
-			ki.CreateElement("ds:KeyName").SetText("idp-key-1")
-		}}},
 	}
 
 	for _, tc := range cases {

@@ -5,6 +5,7 @@
 package samlsp
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -47,17 +48,17 @@ func invalidSignature(detail string) error { return reject(ErrInvalidSignature, 
 func unsupportedAlgorithm() error { return reject(ErrUnsupportedAlgorithm, "", nil) }
 
 // checkSignatures enforces the SAML XML-DSig profile (Core §5.4 and errata
-// E91) on every signature of the document and reports whether one lacks
-// KeyInfo. Signatures may only be enveloped in the Response or in its single
-// Assertion (one each), their content must be in the XML-DSig namespace,
-// carry exactly one Reference to their parent's ID, the transforms
-// [enveloped, exclusive C14N] in that order, and allowed algorithms. An
-// element named Signature in another namespace is refused so that no
-// namespace trick hides a signature from these checks.
-func checkSignatures(root, assertion *etree.Element, allowSHA1 bool) (bool, error) {
+// E91) on every signature of the document and records in raw whether the
+// Response is signed, whether a signature lacks KeyInfo, and the KeyInfo of
+// each signature. Signatures may only be enveloped in the Response or in its
+// single Assertion (one each), their content must be in the XML-DSig
+// namespace, carry exactly one Reference to their parent's ID, the
+// transforms [enveloped, exclusive C14N] in that order, and allowed
+// algorithms. An element named Signature in another namespace is refused so
+// that no namespace trick hides a signature from these checks.
+func checkSignatures(root, assertion *etree.Element, allowSHA1 bool, raw *rawResponse) error {
 	policy := signaturePolicy{allowSHA1: allowSHA1}
 	signed := map[*etree.Element]bool{}
-	keyInfoMissing := false
 
 	err := walk(root, func(el *etree.Element) error {
 		if el.Tag != tagSignature {
@@ -75,21 +76,48 @@ func checkSignatures(root, assertion *etree.Element, allowSHA1 bool) (bool, erro
 
 		signed[parent] = true
 
-		missing, err := checkSignature(el, attrValue(parent, "ID"), policy)
-		keyInfoMissing = keyInfoMissing || missing
+		keyInfo, err := checkSignature(el, attrValue(parent, "ID"), policy)
+		if err != nil {
+			return err
+		}
 
-		return err
+		pos := keyInfoAssertion
+		if parent == root {
+			pos, raw.responseSigned = keyInfoResponse, true
+		}
+
+		raw.keyInfo[pos] = keyInfoState{present: keyInfo != nil, certless: keyInfo != nil && !holdsCertificate(keyInfo)}
+		raw.keyInfoMissing = raw.keyInfoMissing || keyInfo == nil
+
+		return nil
 	})
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	if len(signed) == 0 {
-		return false, invalidSignature("neither the Response nor the Assertion is signed")
+		return invalidSignature("neither the Response nor the Assertion is signed")
 	}
 
-	return keyInfoMissing, nil
+	return nil
 }
+
+// holdsCertificate reports whether a KeyInfo holds an element named
+// X509Certificate, in any namespace: wider than the XML-DSig namespace
+// goxmldsig reads it from, so a KeyInfo it could take a certificate from is
+// never treated as certificate-less.
+func holdsCertificate(keyInfo *etree.Element) bool {
+	return walk(keyInfo, func(el *etree.Element) error {
+		if el != keyInfo && el.Tag == tagX509Certificate {
+			return errFound
+		}
+
+		return nil
+	}) != nil
+}
+
+// errFound stops a walk once its target is found.
+var errFound = errors.New("found")
 
 // dsigChildren returns el's children, which must all be XML-DSig elements
 // with distinct names from allowed.
@@ -122,23 +150,23 @@ func contains(list []string, s string) bool {
 }
 
 // checkSignature checks one ds:Signature (no ds:Object, errata E91) and
-// reports whether KeyInfo is absent.
-func checkSignature(sig *etree.Element, parentID string, policy signaturePolicy) (bool, error) {
+// returns its KeyInfo (nil when absent).
+func checkSignature(sig *etree.Element, parentID string, policy signaturePolicy) (*etree.Element, error) {
 	parts, err := dsigChildren(sig, "SignedInfo", "SignatureValue", "KeyInfo")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	signedInfo, value := parts["SignedInfo"], parts["SignatureValue"]
 	if signedInfo == nil || value == nil || len(value.ChildElements()) != 0 {
-		return false, invalidSignature(errSignatureStructure)
+		return nil, invalidSignature(errSignatureStructure)
 	}
 
 	if err := checkSignedInfo(signedInfo, parentID, policy); err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return parts["KeyInfo"] == nil, nil
+	return parts["KeyInfo"], nil
 }
 
 // checkSignedInfo checks the canonicalization, the signature method and the

@@ -46,7 +46,11 @@ type IdentityProvider struct {
 	// whose KeyInfo carries a certificate selects it among these by exact
 	// equality; without KeyInfo, the three most recent (by NotBefore) valid
 	// certificates are tried, since each attempt costs a full verification.
-	// Keys must be
+	// A KeyInfo carrying no certificate (KeyName, KeyValue… — Core §5.4.5
+	// puts no restriction on KeyInfo) selects nothing and counts as absent:
+	// it is cut from the verified bytes, except from an Assertion whose
+	// Response is signed, which digests it (that response is refused with
+	// ErrInvalidSignature). Keys must be
 	// RSA of at least 2048 bits, or ECDSA P-256, P-384 or P-521. ECDSA is
 	// verified as goxmldsig implements it (ASN.1 DER signature values): IdPs
 	// that follow XML Signature 1.1 (raw r‖s values) fail closed. The

@@ -36,6 +36,10 @@ const (
 // tagSignature is the local name of the XML-DSig Signature element.
 const tagSignature = "Signature"
 
+// tagX509Certificate is the local name of the XML-DSig X509Certificate
+// element.
+const tagX509Certificate = "X509Certificate"
+
 // Protocol constants.
 const (
 	samlVersion           = "2.0"

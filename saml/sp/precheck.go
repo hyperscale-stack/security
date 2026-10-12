@@ -25,8 +25,19 @@ type rawResponse struct {
 	// keyInfoMissing reports a signature without KeyInfo: the certificate
 	// rollover retry applies.
 	keyInfoMissing bool
+	// responseSigned reports a signature of the Response itself.
+	responseSigned bool
+	// keyInfo is the KeyInfo of the Response signature and of the
+	// Assertion signature, by keyInfoPosition (index 0 is unused).
+	keyInfo [3]keyInfoState
 	// proxyCountPresent reports a ProxyRestriction with a Count attribute.
 	proxyCountPresent bool
+}
+
+// keyInfoState describes the KeyInfo of one signature as the tree shows
+// it: present, and holding no element named X509Certificate.
+type keyInfoState struct {
+	present, certless bool
 }
 
 // responseStatus is the decoded <samlp:Status> (sanitized diagnostics).
@@ -54,11 +65,17 @@ func gateRejection(err error) error {
 // checks the envelope (an error response carries no assertion and is never
 // trusted).
 func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
-	if err := checkXML(data, responseLimits); err != nil {
+	scan, err := scanXML(data, responseLimits)
+	if err != nil {
 		return nil, gateRejection(err)
 	}
 
-	return precheckTree(data, allowSHA1)
+	raw, err := precheckTree(data, allowSHA1)
+	if err != nil {
+		return nil, err
+	}
+
+	return cutCertificatelessKeyInfo(raw, scan, allowSHA1)
 }
 
 // precheckTree applies the structural rules to a document the lexical gate
@@ -109,7 +126,7 @@ func precheckTree(data []byte, allowSHA1 bool) (*rawResponse, error) {
 		return nil, err
 	}
 
-	if raw.keyInfoMissing, err = checkSignatures(root, assertion, allowSHA1); err != nil {
+	if err := checkSignatures(root, assertion, allowSHA1, raw); err != nil {
 		return nil, err
 	}
 

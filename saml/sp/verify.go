@@ -28,13 +28,13 @@ const gosamlMaxTokens = 3*(2*MaxResponseElements+4096) + 1
 // with the connection's trusted certificates and returns the decoded,
 // verified response: every value comes from the digested canonical bytes.
 //
-// When a signature has no KeyInfo and the connection trusts several
-// certificates, goxmldsig cannot select one ("Missing x509 Element"), so
-// the certificates are tried alone (Core §5.4.5 lets KeyInfo be absent;
-// plan review F7): the three most recent valid at now−skew, since each
-// attempt re-runs the whole verification (code review F4). A KeyInfo
-// certificate, when present, only selects among the trusted ones by exact
-// equality.
+// When a signature has no KeyInfo (or had one without certificate, cut by
+// the pre-check) and the connection trusts several certificates, goxmldsig
+// cannot select one ("Missing x509 Element"), so the certificates are tried
+// alone (Core §5.4.5 lets KeyInfo be absent; plan review F7): the three most
+// recent valid at now−skew, since each attempt re-runs the whole
+// verification (code review F4). A KeyInfo certificate, when present, only
+// selects among the trusted ones by exact equality.
 func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, now time.Time) (*types.Response, error) {
 	certs := conn.IdentityProvider.SigningCertificates
 	at := now.Add(-sp.cfg.ClockSkew)

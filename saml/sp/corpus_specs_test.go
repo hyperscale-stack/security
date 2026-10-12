@@ -127,6 +127,16 @@ func unsignedCopy(el *etree.Element) *etree.Element {
 	return c
 }
 
+// replaceChildren empties el of its child elements and fills it with
+// content.
+func replaceChildren(el *etree.Element, content func(*etree.Element)) {
+	for _, c := range el.ChildElements() {
+		el.RemoveChild(c)
+	}
+
+	content(el)
+}
+
 // setNameID returns an edit setting the NameID text.
 func setNameID(value string) func(a *etree.Element) {
 	return func(a *etree.Element) { path(a, "Subject", "NameID").SetText(value) }
@@ -865,6 +875,17 @@ func (g *corpusGen) statusSpecs() []corpusSpec {
 			expect: statusOf(responderCode, authnFailed, "Sign-in failed for adminlevel=error user=mallory", "Responder, AuthnFailed"),
 		},
 		{
+			id: "status/signed-error-response", attack: "an error status in a signed Response (its KeyInfo is not examined: no signature work for an error)",
+			refs: refStatus,
+			build: func() []byte {
+				return g.xml("acme", respOpts{signResponse: true, unsignedAssert: true, before: func(r, a *etree.Element) {
+					r.RemoveChild(a)
+					setStatus(requesterCode, authnFailed, "")(r)
+				}})
+			},
+			expect: statusOf(requesterCode, authnFailed, "", "Requester, AuthnFailed"),
+		},
+		{
 			id: "status/error-with-assertion", attack: "error status carrying an assertion", refs: refStatus,
 			build: func() []byte {
 				return g.xml("acme", onResponse(setStatus(requesterCode, "", "")))
@@ -1143,13 +1164,112 @@ func (g *corpusGen) keySpecs() []corpusSpec {
 			expect: rejected("ErrInvalidSignature", verifyFailed),
 		},
 		{
-			id: "keys/keyinfo-keyname-only", attack: "KeyInfo with a KeyName only (unsupported, fails closed)", refs: refKeys,
+			id: "keys/keyinfo-keyname-only", attack: "KeyInfo with a KeyName only: cut from the verified bytes, the trusted certificate verifies (Core §5.4.5)",
+			refs: refKeys,
 			build: func() []byte {
 				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
 					ki.CreateElement("ds:KeyName").SetText("idp-a")
 				})})
 			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-key-value-only", attack: "KeyInfo with an RSAKeyValue only, signed by the trusted key (cut, verified)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					kv := ki.CreateElement("ds:KeyValue").CreateElement("ds:RSAKeyValue")
+					kv.CreateElement("ds:Modulus").SetText("AQAB")
+					kv.CreateElement("ds:Exponent").SetText("AQAB")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-keyname-only-two-trusted", attack: "KeyName-only KeyInfo, two trusted keys, signed by the second (cut, rollover retry)",
+			refs: refKeys, knobs: corpusKnobs{Trust: []string{"idp-a", "idp-b"}},
+			build: func() []byte {
+				return g.xml("acme", respOpts{assertionSig: sigOpts{signer: g.keys["idp-b"]}, after: replaceKeyInfo(func(ki *etree.Element) {
+					ki.CreateElement("ds:KeyName").SetText("idp-b")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-keyname-only-on-the-response", attack: "only the Response is signed, its KeyInfo a KeyName (cut: no digest covers it)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{unsignedAssert: true, signResponse: true, after: func(r *etree.Element) {
+					replaceChildren(path(child(r, "Signature"), "KeyInfo"), func(ki *etree.Element) {
+						ki.CreateElement("ds:KeyName").SetText("idp-a")
+					})
+				}})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-self-closing", attack: "an empty, self-closing KeyInfo (cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(*etree.Element) {})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-comment-and-cdata", attack: "a KeyInfo whose comment and CDATA spell X509Certificate (no such element: cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					ki.CreateComment(" <ds:X509Certificate> ")
+					ki.CreateElement("ds:KeyName").CreateCData("<ds:X509Certificate>")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-default-namespace", attack: "a certificate-less KeyInfo in the default namespace (resolved alike by both parsers: cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: func(r *etree.Element) {
+					sig := assertionSignature(r)
+					old := path(sig, "KeyInfo")
+					ki := etree.NewElement("KeyInfo")
+					ki.CreateAttr("xmlns", nsDS)
+					ki.CreateElement("KeyName").SetText("idp-a")
+					sig.InsertChildAt(old.Index(), ki)
+					sig.RemoveChild(old)
+				}})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "keys/keyinfo-certificate-in-another-namespace",
+			attack: "the trusted certificate in an X509Certificate of another namespace: never cut (any element so named counts), and goxmldsig, reading the XML-DSig namespace only, finds no certificate",
+			refs:   refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					c := ki.CreateElement("ds:X509Data").CreateElement("f:X509Certificate")
+					c.CreateAttr("xmlns:f", "urn:example:foreign")
+					c.SetText(certText("idp-a"))
+				})})
+			},
 			expect: rejected("ErrInvalidSignature", verifyFailed),
+		},
+		{
+			id: "keys/keyinfo-elsewhere-not-cut", attack: "certificate-less KeyInfo elements in the envelope and in the signed bearer confirmation (not signature positions: not cut)",
+			refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{
+					beforeAssertion: func(a *etree.Element) {
+						ki := scd(a).CreateElement("ds:KeyInfo")
+						ki.CreateAttr("xmlns:ds", nsDS)
+						ki.CreateElement("ds:KeyName").SetText("hok")
+					},
+					after: func(r *etree.Element) {
+						ext := etree.NewElement("samlp:Extensions")
+						ki := ext.CreateElement("ds:KeyInfo")
+						ki.CreateAttr("xmlns:ds", nsDS)
+						ki.CreateElement("ds:KeyName").SetText("decoy")
+						r.InsertChildAt(child(r, "Issuer").Index()+1, ext)
+					},
+				})
+			},
+			expect: accepted(baselineIdentity()),
 		},
 		{
 			id: "keys/keyinfo-rsa-key-value", attack: "attacker signature with an RSAKeyValue-only KeyInfo", refs: refKeys,
@@ -1833,6 +1953,33 @@ func (g *corpusGen) signatureSpecs() []corpusSpec {
 					sig := path(r, "Assertion", "Signature")
 					sig.RemoveChild(path(sig, "SignatureValue"))
 				}}))
+			},
+			expect: rejected("ErrInvalidSignature", signatureShape),
+		},
+		{
+			id:     "signature/keyinfo-without-certificate-under-signed-response",
+			attack: "both signed; the Assertion KeyInfo is a KeyName, covered by the Response signature: cutting it would break that digest",
+			refs:   append(refs, "SAML Core §5.4.5"),
+			build: func() []byte {
+				return g.xml("acme", respOpts{signResponse: true, before: func(_, a *etree.Element) {
+					replaceChildren(path(child(a, "Signature"), "KeyInfo"), func(ki *etree.Element) {
+						ki.CreateElement("ds:KeyName").SetText("idp-a")
+					})
+				}})
+			},
+			expect: rejected("ErrInvalidSignature", "a KeyInfo without certificate in an assertion covered by a signed Response"),
+		},
+		{
+			id: "signature/keyinfo-outside-dsig-namespace", attack: "a KeyInfo of the empty namespace in the signature (not XML-DSig: profile refused)", refs: refs,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: func(r *etree.Element) {
+					sig := assertionSignature(r)
+					old := path(sig, "KeyInfo")
+					ki := etree.NewElement("KeyInfo")
+					ki.CreateAttr("xmlns", "")
+					sig.InsertChildAt(old.Index(), ki)
+					sig.RemoveChild(old)
+				}})
 			},
 			expect: rejected("ErrInvalidSignature", signatureShape),
 		},

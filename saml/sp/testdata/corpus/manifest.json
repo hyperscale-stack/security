@@ -2138,6 +2138,28 @@
       }
     },
     {
+      "id": "status/signed-error-response",
+      "category": "status",
+      "attack": "an error status in a signed Response (its KeyInfo is not examined: no signature work for an error)",
+      "refs": [
+        "SAML Core §3.2.2.2",
+        "SAML errata E65"
+      ],
+      "file": "status/signed-error-response.xml",
+      "sha256": "9fd8c79a1ebaba4759543443fd59d529c1ed4b98a02a79bd79cbc61fecdde0ee",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "status",
+        "sentinel": "ErrResponseStatus",
+        "status": {
+          "code": "urn:oasis:names:tc:SAML:2.0:status:Requester",
+          "subCode": "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed",
+          "printed": "Requester, AuthnFailed"
+        }
+      }
+    },
+    {
       "id": "status/error-with-assertion",
       "category": "status",
       "attack": "error status carrying an assertion",
@@ -2960,7 +2982,7 @@
     {
       "id": "keys/keyinfo-keyname-only",
       "category": "keys",
-      "attack": "KeyInfo with a KeyName only (unsupported, fails closed)",
+      "attack": "KeyInfo with a KeyName only: cut from the verified bytes, the trusted certificate verifies (Core §5.4.5)",
       "refs": [
         "OWASP SAML Security Cheat Sheet",
         "SAML Core §5.4.5"
@@ -2970,9 +2992,494 @@
       "transaction": "acme",
       "knobs": {},
       "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-key-value-only",
+      "category": "keys",
+      "attack": "KeyInfo with an RSAKeyValue only, signed by the trusted key (cut, verified)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-key-value-only.xml",
+      "sha256": "b3b05b82c77ae8332388480f38623dbb6b15ed93ba5f2d38ef57b5616462a6fb",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-keyname-only-two-trusted",
+      "category": "keys",
+      "attack": "KeyName-only KeyInfo, two trusted keys, signed by the second (cut, rollover retry)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-keyname-only-two-trusted.xml",
+      "sha256": "912d28475cd92d6d1a059b37c879293964cf18c06b89e612c3cf5a67c6204e8b",
+      "transaction": "acme",
+      "knobs": {
+        "trust": [
+          "idp-a",
+          "idp-b"
+        ]
+      },
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-keyname-only-on-the-response",
+      "category": "keys",
+      "attack": "only the Response is signed, its KeyInfo a KeyName (cut: no digest covers it)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-keyname-only-on-the-response.xml",
+      "sha256": "a9dc57ed6a932dc8ad8cb068ac389feae6e0f7f51bd3040b67362a14813ed2d8",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-self-closing",
+      "category": "keys",
+      "attack": "an empty, self-closing KeyInfo (cut)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-self-closing.xml",
+      "sha256": "31c6866b6417b5dc208b3fbf4a783428e5c874da87dcacc8e9cbed85c3bf575c",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-comment-and-cdata",
+      "category": "keys",
+      "attack": "a KeyInfo whose comment and CDATA spell X509Certificate (no such element: cut)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-comment-and-cdata.xml",
+      "sha256": "01740f0ee0fe14db4e2116ad8cd2015c71748a95ec06e28fe422abd7f0ea0360",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-default-namespace",
+      "category": "keys",
+      "attack": "a certificate-less KeyInfo in the default namespace (resolved alike by both parsers: cut)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-default-namespace.xml",
+      "sha256": "6994efe2c1fc210cac0a573edb71e5960a28ae5667a31f089a4858c380e81a36",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "keys/keyinfo-certificate-in-another-namespace",
+      "category": "keys",
+      "attack": "the trusted certificate in an X509Certificate of another namespace: never cut (any element so named counts), and goxmldsig, reading the XML-DSig namespace only, finds no certificate",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-certificate-in-another-namespace.xml",
+      "sha256": "17d74549328d91c2089b46a2f36a8b36118afa0a2fa4a3a467e4120e5d827c9b",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
         "outcome": "rejected",
         "sentinel": "ErrInvalidSignature",
         "detail": "signature verification failed"
+      }
+    },
+    {
+      "id": "keys/keyinfo-elsewhere-not-cut",
+      "category": "keys",
+      "attack": "certificate-less KeyInfo elements in the envelope and in the signed bearer confirmation (not signature positions: not cut)",
+      "refs": [
+        "OWASP SAML Security Cheat Sheet",
+        "SAML Core §5.4.5"
+      ],
+      "file": "keys/keyinfo-elsewhere-not-cut.xml",
+      "sha256": "76058d077a3f4d78a4843cabeb2186363bce8b4390039aedcc651c111e6765e2",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
       }
     },
     {
@@ -4609,6 +5116,43 @@
       ],
       "file": "signature/missing-signature-value.xml",
       "sha256": "0a4060dea2da870d648e8908df2498c5d5c2a8e254186b3791afcff433bd87c5",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrInvalidSignature",
+        "detail": "signature does not follow the SAML XML-DSig profile"
+      }
+    },
+    {
+      "id": "signature/keyinfo-without-certificate-under-signed-response",
+      "category": "signature",
+      "attack": "both signed; the Assertion KeyInfo is a KeyName, covered by the Response signature: cutting it would break that digest",
+      "refs": [
+        "SAML Core §5.4 (XML Signature profile)",
+        "#87 code review F6 (validly re-signed shapes)",
+        "SAML Core §5.4.5"
+      ],
+      "file": "signature/keyinfo-without-certificate-under-signed-response.xml",
+      "sha256": "ef0c09f1a73eb5574b3fff1e97cf0084310001e6cc73faeab3423f3054029a3e",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrInvalidSignature",
+        "detail": "a KeyInfo without certificate in an assertion covered by a signed Response"
+      }
+    },
+    {
+      "id": "signature/keyinfo-outside-dsig-namespace",
+      "category": "signature",
+      "attack": "a KeyInfo of the empty namespace in the signature (not XML-DSig: profile refused)",
+      "refs": [
+        "SAML Core §5.4 (XML Signature profile)",
+        "#87 code review F6 (validly re-signed shapes)"
+      ],
+      "file": "signature/keyinfo-outside-dsig-namespace.xml",
+      "sha256": "7e030889b3ca77d231921debc88252ee4d6e8d8030dc8c646c5d763f349842e1",
       "transaction": "acme",
       "knobs": {},
       "expect": {
