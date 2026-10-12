@@ -1290,3 +1290,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   in `Authorization` — with `%v`, and the Connect error messages told the
   client why authentication failed; the carrier now prints and logs key
   counts only, and the messages are one fixed string per code.
+- The `grpc-bearer` example and the `grpcsec` godoc example installed only
+  unary interceptors: the streaming `Health.Watch` RPC was served to callers
+  without any token. Both now install the unary and stream chains through
+  `grpcsec.ServerOptions` / `grpcsec.AuthorizeServerOptions`.
