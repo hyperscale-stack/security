@@ -9,6 +9,7 @@ use (
 	./grpc
 	./http
 	./internal/integrations
+	./internal/interop/oidcop
 	./internal/interop/oidcrp
 	./jwt
 	./oauth2
