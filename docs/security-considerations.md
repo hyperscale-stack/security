@@ -644,7 +644,9 @@ elements (`MaxResponseElements`, sized from goxmldsig's 1000-node
 canonicalization budget; gosaml2 verifies up to about 500), 4096 tokens,
 depth 64, 16 attributes and 16 namespace declarations per element, 32
 in-scope prefixes, 8 KiB attribute values; no DTD, entity or processing
-instruction. Measured on an Apple M-series machine (Go 1.26): a typical
+instruction, and only namespace-well-formed names (Namespaces in XML 1.0
+§3, §7: no empty prefix or local part, which encoding/xml would keep whole
+in no namespace). Measured on an Apple M-series machine (Go 1.26): a typical
 login costs about 1.1 ms and 1.1 MB; the most expensive response within the
 default limits about 25–33 ms and 21–28 MiB, about 61–69 ms and 33–43 MiB at
 the 1 MiB ceiling; inputs aimed at amplification are refused within 10 ms

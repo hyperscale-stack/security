@@ -66,7 +66,8 @@
 //
 //   - XML: no DTD, entity or processing instruction; at most
 //     [MaxResponseElements] elements and bounded tokens, depth, attributes,
-//     namespace declarations and in-scope prefixes; declared prefixes;
+//     namespace declarations and in-scope prefixes; declared prefixes and
+//     namespace-well-formed names (no empty prefix or local part);
 //     [Config].MaxResponseSize bytes (256 KiB by default, 1 MiB at most).
 //     An element may not carry two attributes of one local name, whatever
 //     their prefixes, nor a prefixed attribute named like a SAML or

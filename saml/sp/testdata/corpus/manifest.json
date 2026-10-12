@@ -6676,6 +6676,96 @@
       }
     },
     {
+      "id": "xml/attribute-empty-local-part",
+      "category": "xml",
+      "attack": "an attribute with an empty local part (samlp:) on the Status",
+      "refs": [
+        "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)",
+        "#88 code review F6"
+      ],
+      "file": "xml/attribute-empty-local-part.xml",
+      "sha256": "fe6ea1f1d795d080cb6ac3e016a830236a1d9110ab913b245252559ed5715694",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "name not namespace-well-formed"
+      }
+    },
+    {
+      "id": "xml/attribute-empty-prefix",
+      "category": "xml",
+      "attack": "an attribute with an empty prefix (:x) on the Status",
+      "refs": [
+        "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)",
+        "#88 code review F6"
+      ],
+      "file": "xml/attribute-empty-prefix.xml",
+      "sha256": "76a81e432709557eee9cf336e213ebe75428d4ce35e0a8373b967e09744f7e1f",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "name not namespace-well-formed"
+      }
+    },
+    {
+      "id": "xml/element-empty-prefix",
+      "category": "xml",
+      "attack": "an element with an empty prefix (\u003c:Foo/\u003e) before the Status",
+      "refs": [
+        "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)",
+        "#88 code review F6"
+      ],
+      "file": "xml/element-empty-prefix.xml",
+      "sha256": "ab3117cf1031447b7e901b30e0e68e22e9271a04124438355a2b72e505a500bd",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "name not namespace-well-formed"
+      }
+    },
+    {
+      "id": "xml/element-empty-local-part",
+      "category": "xml",
+      "attack": "an element with an empty local part (\u003csamlp:/\u003e) before the Status",
+      "refs": [
+        "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)",
+        "#88 code review F6"
+      ],
+      "file": "xml/element-empty-local-part.xml",
+      "sha256": "f4a4f3afaf01e0859bd96f31f2d731153f6c0060fe8eca039f042268ad40b0a1",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "name not namespace-well-formed"
+      }
+    },
+    {
+      "id": "xml/declaration-empty-prefix",
+      "category": "xml",
+      "attack": "a namespace declaration with an empty prefix (xmlns:) on the Status",
+      "refs": [
+        "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)",
+        "#88 code review F6"
+      ],
+      "file": "xml/declaration-empty-prefix.xml",
+      "sha256": "df234f9b86fae8f0cc343794e5fca5a0ed4022443eefd6669edc5bb0bc94a90c",
+      "transaction": "acme",
+      "knobs": {},
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrMalformedResponse",
+        "detail": "name not namespace-well-formed"
+      }
+    },
+    {
       "id": "xml/mismatched-end-tag",
       "category": "xml",
       "attack": "an end tag closing another element",

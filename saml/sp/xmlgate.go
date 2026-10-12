@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"strings"
 )
 
 // xmlLimits bounds the shape of an untrusted XML document before it is
@@ -142,8 +143,9 @@ type gateFrame struct {
 // text outside the root, more than one root, two attributes of one local
 // name on an element (whatever their prefixes, namespace declarations
 // included), prefixed ID attributes other than xml:id, undeclared prefixes, misuse of
-// the reserved xml/xmlns prefixes and namespaces, and empty prefixed
-// declarations.
+// the reserved xml/xmlns prefixes and namespaces, empty prefixed
+// declarations, and names that are not namespace-well-formed (an empty
+// prefix or local part).
 type gate struct {
 	lim      xmlLimits
 	scope    nsScope
@@ -243,6 +245,10 @@ func (g *gate) start(t xml.StartElement) error {
 		return gateTooLarge("too many attributes on an element")
 	}
 
+	if !wellFormedName(t.Name) {
+		return gateMalformed(errNotNSWellFormed)
+	}
+
 	own, err := g.declarations(t.Attr)
 	if err != nil {
 		return err
@@ -277,6 +283,10 @@ func (g *gate) declarations(attrs []xml.Attr) (map[string]string, error) {
 	locals := make(map[string]struct{}, len(attrs))
 
 	for _, a := range attrs {
+		if !wellFormedName(a.Name) {
+			return nil, gateMalformed(errNotNSWellFormed)
+		}
+
 		if _, dup := locals[a.Name.Local]; dup {
 			return nil, gateMalformed("two attributes of one local name")
 		}
@@ -305,6 +315,17 @@ func (g *gate) declarations(attrs []xml.Attr) (map[string]string, error) {
 
 	return own, nil
 }
+
+// errNotNSWellFormed refuses a name whose prefix or local part is empty.
+const errNotNSWellFormed = "name not namespace-well-formed"
+
+// wellFormedName reports whether n is a QName of Namespaces in XML 1.0 §3:
+// a prefix, when present, and a local part that are both non-empty. The
+// raw tokenizer splits a name at its colon only when both parts are
+// non-empty, and keeps any other name whole, colon included, in no
+// namespace (a name with two colons is a syntax error): such a document is
+// not namespace-well-formed (§7), and readers could disagree on it.
+func wellFormedName(n xml.Name) bool { return !strings.Contains(n.Local, ":") }
 
 // declaredPrefix reports whether an attribute is a namespace declaration
 // and which prefix it declares ("" for the default namespace).

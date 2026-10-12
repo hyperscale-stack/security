@@ -28,38 +28,40 @@ import (
 )
 
 const (
-	evilNameID     = "mallory@attacker.example"
-	evilIssuer     = "https://idp.attacker.example"
-	evilACS        = "https://sp.attacker.example/acs"
-	nsDS           = "http://www.w3.org/2000/09/xmldsig#"
-	nsXENC         = "http://www.w3.org/2001/04/xmlenc#"
-	requesterCode  = "urn:oasis:names:tc:SAML:2.0:status:Requester"
-	responderCode  = "urn:oasis:names:tc:SAML:2.0:status:Responder"
-	authnFailed    = "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"
-	noPassive      = "urn:oasis:names:tc:SAML:2.0:status:NoPassive"
-	signatureShape = "signature does not follow the SAML XML-DSig profile"
-	notReferenced  = "the Reference does not point at the signed element"
-	transformRule  = "transforms must be exactly enveloped-signature then exclusive C14N"
-	oneAssertion   = "a response must carry exactly one assertion, child of the Response"
-	misplacedSig   = "misplaced or repeated signature"
-	verifyFailed   = "signature verification failed"
-	twoLocalNames  = "two attributes of one local name"
-	prefixedSAML   = "prefixed attribute named like a SAML or XML-DSig attribute"
-	duplicateID    = "duplicate identifier"
+	evilNameID      = "mallory@attacker.example"
+	evilIssuer      = "https://idp.attacker.example"
+	evilACS         = "https://sp.attacker.example/acs"
+	nsDS            = "http://www.w3.org/2000/09/xmldsig#"
+	nsXENC          = "http://www.w3.org/2001/04/xmlenc#"
+	requesterCode   = "urn:oasis:names:tc:SAML:2.0:status:Requester"
+	responderCode   = "urn:oasis:names:tc:SAML:2.0:status:Responder"
+	authnFailed     = "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"
+	noPassive       = "urn:oasis:names:tc:SAML:2.0:status:NoPassive"
+	signatureShape  = "signature does not follow the SAML XML-DSig profile"
+	notReferenced   = "the Reference does not point at the signed element"
+	transformRule   = "transforms must be exactly enveloped-signature then exclusive C14N"
+	oneAssertion    = "a response must carry exactly one assertion, child of the Response"
+	misplacedSig    = "misplaced or repeated signature"
+	verifyFailed    = "signature verification failed"
+	twoLocalNames   = "two attributes of one local name"
+	prefixedSAML    = "prefixed attribute named like a SAML or XML-DSig attribute"
+	duplicateID     = "duplicate identifier"
+	notNSWellFormed = "name not namespace-well-formed"
 )
 
 // References used by several entries.
 var (
-	refXSW      = "Somorovsky et al., On Breaking SAML: Be Whoever You Want to Be (USENIX Security 2012)"
-	refRaider   = "SAML Raider (CompassSecurity) XSWHelpers.applyXSW"
-	refProfiles = "SAML Profiles §4.1.4.2, §4.1.4.3"
-	refDSig     = "SAML Core §5.4 (XML Signature profile)"
-	refE91      = "SAML errata E91 (no ds:Object)"
-	refIDs      = "SAML Core §1.3.4 (ID uniqueness)"
-	refOWASP    = "OWASP SAML Security Cheat Sheet"
-	refCR87     = "#87 code review F3 (attribute-name parser differential)"
-	refPolicy   = "#87 user decision Q1 (algorithm policy)"
-	refQ2       = "#87 user decision Q2 (ambiguous shapes refused)"
+	refXSW        = "Somorovsky et al., On Breaking SAML: Be Whoever You Want to Be (USENIX Security 2012)"
+	refRaider     = "SAML Raider (CompassSecurity) XSWHelpers.applyXSW"
+	refProfiles   = "SAML Profiles §4.1.4.2, §4.1.4.3"
+	refDSig       = "SAML Core §5.4 (XML Signature profile)"
+	refE91        = "SAML errata E91 (no ds:Object)"
+	refIDs        = "SAML Core §1.3.4 (ID uniqueness)"
+	refOWASP      = "OWASP SAML Security Cheat Sheet"
+	refCR87       = "#87 code review F3 (attribute-name parser differential)"
+	refPolicy     = "#87 user decision Q1 (algorithm policy)"
+	refNamespaces = "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)"
+	refQ2         = "#87 user decision Q2 (ambiguous shapes refused)"
 )
 
 // chainA composes assertion edits.
@@ -2035,6 +2037,17 @@ func (g *corpusGen) xmlSpecs() []corpusSpec {
 	insertOnRoot := func(attrs string) func(s string) string {
 		return func(s string) string { return strings.Replace(s, "<samlp:Response ", "<samlp:Response "+attrs+" ", 1) }
 	}
+	// nsName replaces the unsigned envelope's Status start tag: a name
+	// whose prefix or local part is empty is not namespace-well-formed
+	// (Namespaces in XML 1.0 §3, §7), and encoding/xml keeps it whole in no
+	// namespace (#88 code review F6).
+	nsName := func(id, attack, statusTag string) corpusSpec {
+		return corpusSpec{
+			id: "xml/" + id, attack: attack, refs: []string{refNamespaces, "#88 code review F6"},
+			build:  func() []byte { return []byte(strings.Replace(baseXML(), "<samlp:Status>", statusTag, 1)) },
+			expect: rejected("ErrMalformedResponse", notNSWellFormed),
+		}
+	}
 
 	return []corpusSpec{
 		text("billion-laughs", "internal entity expansion (billion laughs)", func(s string) string {
@@ -2113,6 +2126,11 @@ func (g *corpusGen) xmlSpecs() []corpusSpec {
 		text("element-in-reserved-namespace", "an element with the xml prefix", func(s string) string {
 			return strings.Replace(s, "<samlp:Status>", "<xml:evil/><samlp:Status>", 1)
 		}, "element in a reserved namespace", "ErrMalformedResponse"),
+		nsName("attribute-empty-local-part", "an attribute with an empty local part (samlp:) on the Status", `<samlp:Status samlp:="1">`),
+		nsName("attribute-empty-prefix", "an attribute with an empty prefix (:x) on the Status", `<samlp:Status :x="1">`),
+		nsName("element-empty-prefix", "an element with an empty prefix (<:Foo/>) before the Status", `<:Foo/><samlp:Status>`),
+		nsName("element-empty-local-part", "an element with an empty local part (<samlp:/>) before the Status", `<samlp:/><samlp:Status>`),
+		nsName("declaration-empty-prefix", "a namespace declaration with an empty prefix (xmlns:) on the Status", `<samlp:Status xmlns:="urn:evil:attacker.example">`),
 		text("mismatched-end-tag", "an end tag closing another element", func(s string) string {
 			return strings.Replace(s, "</samlp:Status>", "</samlp:Evil>", 1)
 		}, "mismatched end tag", "ErrMalformedResponse"),

@@ -544,6 +544,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `github.com/russellhaering/goxmldsig` v1.6.1 or later (CVE-2026-33487,
   GHSA-qhrp-hfff-vphr) and gosaml2 v0.12.0 or later (GHSA-66r8-42f7-4q74).
   See [docs/security-considerations.md](docs/security-considerations.md#saml-service-provider).
+- The SAML Service Provider's lexical gate also refuses XML names that are
+  not namespace-well-formed (Namespaces in XML 1.0 §3 and §7): an element
+  or attribute name with an empty prefix or an empty local part (`<:x>`,
+  `p:=""`, `xmlns:=""`), which encoding/xml keeps whole, colon included, in
+  no namespace. No reader disagreed on them yet; they are refused, like the
+  other names readers could read differently (`ErrMalformedResponse`).
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,
