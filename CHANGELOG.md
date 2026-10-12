@@ -627,6 +627,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `OAuth2AccessTokenSigner` now print, log and encode their key IDs,
   algorithms and key types only, whatever the verb; an asymmetric
   `PublicKey` still encodes as before (#86).
+- A `session.Codec` printed with a `fmt` verb a pointer does not take
+  (`%s`, `%q`…) revealed the AES-256 key schedule of its ciphers, which
+  starts with the encryption key; it now prints `session.Codec{Keys: n}`
+  whatever the verb (#86).
 - Multi-issuer deployments can keep each client in its realm: with the
   `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
   can no longer send another issuer's end-users to that issuer's login page
