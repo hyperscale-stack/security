@@ -225,6 +225,26 @@ func repeatRune(r rune, n int) string {
 	return string(out)
 }
 
+func TestRolloverCandidates(t *testing.T) {
+	t.Parallel()
+
+	cert := func(notBefore, notAfter time.Duration) *x509.Certificate {
+		return &x509.Certificate{NotBefore: pcNow.Add(notBefore), NotAfter: pcNow.Add(notAfter)}
+	}
+
+	expired := cert(-48*time.Hour, -time.Hour)
+	future := cert(time.Hour, 48*time.Hour)
+	c1, c2, c3, c4 := cert(-10*time.Hour, 24*time.Hour), cert(-5*time.Hour, 24*time.Hour),
+		cert(-3*time.Hour, 24*time.Hour), cert(-time.Hour, 24*time.Hour)
+
+	// Each candidate re-runs the whole verification: the three most recent
+	// valid certificates, newest first (code review F4).
+	got := rolloverCandidates([]*x509.Certificate{c1, expired, c2, future, c3, c4}, pcNow)
+	assert.Equal(t, []*x509.Certificate{c4, c3, c2}, got)
+	assert.Equal(t, []*x509.Certificate{c2, c1}, rolloverCandidates([]*x509.Certificate{c1, c2}, pcNow))
+	assert.Empty(t, rolloverCandidates([]*x509.Certificate{expired, future}, pcNow))
+}
+
 func TestVerifyResponse_NoValidCertificate(t *testing.T) {
 	t.Parallel()
 

@@ -21,10 +21,11 @@ type xmlLimits struct {
 	maxElements     int // whole document
 	maxTokens       int // whole document: elements, text, comments, ...
 	maxDepth        int
-	maxAttrs        int // per element, namespace declarations included
-	maxNSDecls      int // per element
-	maxInScope      int // distinct prefixes in scope at any element
-	maxAttrValueLen int // bytes
+	maxAttrs        int   // per element, namespace declarations included
+	maxNSDecls      int   // per element
+	maxInScope      int   // distinct prefixes in scope at any element
+	maxAttrValueLen int   // bytes
+	maxBytes        int64 // whole document
 }
 
 // MaxResponseElements is the most elements a SAMLResponse may contain.
@@ -49,10 +50,12 @@ var responseLimits = xmlLimits{
 	maxNSDecls:      16,
 	maxInScope:      32,
 	maxAttrValueLen: 8 << 10,
+	maxBytes:        MaxMaxResponseSize,
 }
 
 // metadataLimits apply to imported IdP metadata, which is configuration
-// rather than attacker traffic but still bounded.
+// rather than attacker traffic but still bounded (maxBytes is the
+// MetadataOptions.MaxSize of the call).
 var metadataLimits = xmlLimits{
 	maxElements:     20000,
 	maxTokens:       100000,
@@ -134,10 +137,11 @@ type gateFrame struct {
 // gate streams data with a strict encoding/xml decoder (no entity map, no
 // charset conversion: a declared encoding other than UTF-8 is refused) and
 // enforces XML hygiene and the limits before the document is turned into a
-// tree. It refuses DOCTYPE and every other directive, processing
-// instructions other than a leading XML declaration, text outside the root,
-// more than one root, duplicate attributes (raw or namespace-resolved),
-// prefixed ID attributes other than xml:id, undeclared prefixes, misuse of
+// tree. It refuses documents over maxBytes, DOCTYPE and every other
+// directive, processing instructions other than a leading XML declaration,
+// text outside the root, more than one root, two attributes of one local
+// name on an element (whatever their prefixes, namespace declarations
+// included), prefixed ID attributes other than xml:id, undeclared prefixes, misuse of
 // the reserved xml/xmlns prefixes and namespaces, and empty prefixed
 // declarations.
 type gate struct {
@@ -150,6 +154,10 @@ type gate struct {
 
 // checkXML runs the gate over data (BOM already stripped).
 func checkXML(data []byte, lim xmlLimits) error {
+	if int64(len(data)) > lim.maxBytes {
+		return gateTooLarge("XML document too large")
+	}
+
 	g := &gate{lim: lim, scope: nsScope{}}
 
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -255,17 +263,25 @@ func (g *gate) start(t xml.StartElement) error {
 }
 
 // declarations collects the namespace declarations of a start tag and
-// checks their count, the reserved names and the attribute value lengths.
+// checks their count, the reserved names, the attribute value lengths and
+// the uniqueness of local names.
+//
+// Two attributes of one local name are refused whatever their prefixes:
+// etree's SelectAttr returns the first in document order, encoding/xml
+// (with which goxmldsig and gosaml2 decode) the last, and exclusive C14N
+// reorders them, so readers could disagree on the value (code review F3).
+// Namespace declarations count: encoding/xml matches xmlns:Algorithm
+// against an Algorithm field too.
 func (g *gate) declarations(attrs []xml.Attr) (map[string]string, error) {
 	own := map[string]string{}
-	raw := make(map[xml.Name]struct{}, len(attrs))
+	locals := make(map[string]struct{}, len(attrs))
 
 	for _, a := range attrs {
-		if _, dup := raw[a.Name]; dup {
-			return nil, gateMalformed("duplicate attribute")
+		if _, dup := locals[a.Name.Local]; dup {
+			return nil, gateMalformed("two attributes of one local name")
 		}
 
-		raw[a.Name] = struct{}{}
+		locals[a.Name.Local] = struct{}{}
 
 		if len(a.Value) > g.lim.maxAttrValueLen {
 			return nil, gateTooLarge("attribute value too long")
@@ -339,35 +355,22 @@ func (g *gate) checkElementName(n xml.Name) error {
 	return nil
 }
 
-// checkAttributes resolves attribute prefixes, refuses namespace-resolved
-// duplicates (Namespaces §6.3) and prefixed ID attributes other than xml:id.
+// checkAttributes requires declared attribute prefixes and refuses prefixed
+// ID attributes other than xml:id. Unique local names (checked by
+// declarations) imply the Namespaces §6.3 uniqueness.
 func (g *gate) checkAttributes(attrs []xml.Attr) error {
-	resolved := make(map[xml.Name]struct{}, len(attrs))
-
 	for _, a := range attrs {
-		if _, isDecl := declaredPrefix(a.Name); isDecl {
+		if _, isDecl := declaredPrefix(a.Name); isDecl || a.Name.Space == "" {
 			continue
 		}
 
-		uri := ""
-
-		if a.Name.Space != "" {
-			var ok bool
-			if uri, ok = g.scope.lookup(a.Name.Space); !ok {
-				return gateMalformed("undeclared namespace prefix")
-			}
-
-			if isIDName(a.Name.Local) && (a.Name.Space != prefixXML || a.Name.Local != "id") {
-				return gateMalformed("prefixed ID attribute")
-			}
+		if _, ok := g.scope.lookup(a.Name.Space); !ok {
+			return gateMalformed("undeclared namespace prefix")
 		}
 
-		key := xml.Name{Space: uri, Local: a.Name.Local}
-		if _, dup := resolved[key]; dup {
-			return gateMalformed("duplicate attribute")
+		if isIDName(a.Name.Local) && (a.Name.Space != prefixXML || a.Name.Local != "id") {
+			return gateMalformed("prefixed ID attribute")
 		}
-
-		resolved[key] = struct{}{}
 	}
 
 	return nil

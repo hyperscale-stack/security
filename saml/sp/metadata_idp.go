@@ -73,7 +73,10 @@ func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*Identity
 
 	data = stripBOM(data)
 
-	if err := checkXML(data, metadataLimits); err != nil {
+	lim := metadataLimits
+	lim.maxBytes = opts.MaxSize
+
+	if err := checkXML(data, lim); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
 	}
 
@@ -138,7 +141,7 @@ func (m *metadataReader) selectEntity(root *etree.Element, pin string) (*etree.E
 		case inNS(child, nsMetadata, "EntitiesDescriptor"):
 			return nil, fmt.Errorf("%w: nested EntitiesDescriptor (aggregates are not supported)", ErrInvalidMetadata)
 		case inNS(child, nsMetadata, "EntityDescriptor"):
-			if pin == "" || child.SelectAttrValue("entityID", "") == pin {
+			if pin == "" || attrValue(child, "entityID") == pin {
 				candidates = append(candidates, child)
 			}
 		}
@@ -158,7 +161,7 @@ func (m *metadataReader) selectEntity(root *etree.Element, pin string) (*etree.E
 
 // checkPin compares the entity ID with the pinned one.
 func checkPin(entity *etree.Element, pin string) error {
-	if pin != "" && entity.SelectAttrValue("entityID", "") != pin {
+	if pin != "" && attrValue(entity, "entityID") != pin {
 		return fmt.Errorf("%w: entity ID does not match the pinned one", ErrInvalidMetadata)
 	}
 
@@ -168,8 +171,8 @@ func checkPin(entity *etree.Element, pin string) error {
 // applyValidity folds the validUntil and cacheDuration of el into m (the
 // smallest value wins, errata E76).
 func (m *metadataReader) applyValidity(el *etree.Element) error {
-	if v := el.SelectAttr("validUntil"); v != nil {
-		t, err := parseMetadataTime(strings.TrimSpace(v.Value))
+	if v, ok := attr(el, "validUntil"); ok {
+		t, err := parseMetadataTime(strings.TrimSpace(v))
 		if err != nil {
 			return fmt.Errorf("%w: validUntil: %w", ErrInvalidMetadata, err)
 		}
@@ -179,8 +182,8 @@ func (m *metadataReader) applyValidity(el *etree.Element) error {
 		}
 	}
 
-	if v := el.SelectAttr("cacheDuration"); v != nil {
-		d, err := parseXSDuration(strings.TrimSpace(v.Value))
+	if v, ok := attr(el, "cacheDuration"); ok {
+		d, err := parseXSDuration(strings.TrimSpace(v))
 		if err != nil {
 			return fmt.Errorf("%w: cacheDuration: %w", ErrInvalidMetadata, err)
 		}
@@ -207,8 +210,8 @@ func (m *metadataReader) readEntity(entity *etree.Element) (*IdentityProvider, e
 	ssoURL := ""
 
 	for _, el := range role.ChildElements() {
-		if inNS(el, nsMetadata, "SingleSignOnService") && el.SelectAttrValue("Binding", "") == bindingHTTPRedirect {
-			ssoURL = strings.TrimSpace(el.SelectAttrValue("Location", ""))
+		if inNS(el, nsMetadata, "SingleSignOnService") && attrValue(el, "Binding") == bindingHTTPRedirect {
+			ssoURL = strings.TrimSpace(attrValue(el, "Location"))
 
 			break
 		}
@@ -223,13 +226,16 @@ func (m *metadataReader) readEntity(entity *etree.Element) (*IdentityProvider, e
 		return nil, err
 	}
 
-	want, err := parseXSBoolean(role.SelectAttrValue("WantAuthnRequestsSigned", "false"))
-	if err != nil {
-		return nil, fmt.Errorf("%w: WantAuthnRequestsSigned: %w", ErrInvalidMetadata, err)
+	want := false
+
+	if v, ok := attr(role, "WantAuthnRequestsSigned"); ok {
+		if want, err = parseXSBoolean(v); err != nil {
+			return nil, fmt.Errorf("%w: WantAuthnRequestsSigned: %w", ErrInvalidMetadata, err)
+		}
 	}
 
 	return &IdentityProvider{
-		EntityID:                entity.SelectAttrValue("entityID", ""),
+		EntityID:                attrValue(entity, "entityID"),
 		SSOURL:                  ssoURL,
 		SigningCertificates:     certs,
 		WantAuthnRequestsSigned: want,
@@ -247,7 +253,7 @@ func idpDescriptor(entity *etree.Element) (*etree.Element, error) {
 			continue
 		}
 
-		if !containsToken(el.SelectAttrValue("protocolSupportEnumeration", ""), nsProtocol) {
+		if !containsToken(attrValue(el, "protocolSupportEnumeration"), nsProtocol) {
 			continue
 		}
 
@@ -285,7 +291,7 @@ func signingCertificates(role *etree.Element) ([]*x509.Certificate, error) {
 			continue
 		}
 
-		if use := kd.SelectAttrValue("use", ""); use != "" && use != "signing" {
+		if use := attrValue(kd, "use"); use != "" && use != "signing" {
 			continue
 		}
 

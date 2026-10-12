@@ -22,7 +22,11 @@ type LoginOptions struct {
 	// NUL), kept server-side in the transaction and returned by
 	// [ServiceProvider.CompleteLogin]: typically where to send the user
 	// afterwards. The library never follows it; an application redirecting
-	// to it MUST only accept local paths (no open redirect, errata E90).
+	// to it MUST only accept local paths (no open redirect, errata E90),
+	// with an allowlist: one leading slash and no "//", RFC 3986 path and
+	// query characters only (no control, white space, backslash or
+	// non-ASCII byte: browsers drop TAB, CR and LF inside URLs), still a
+	// local path once percent-decoded. See safeReturn in examples/saml-sp.
 	AppState string
 
 	// ForceAuthn asks the IdP to authenticate the user afresh (Core §3.4.1);
@@ -131,6 +135,12 @@ func (sp *ServiceProvider) BeginLogin(ctx context.Context, w http.ResponseWriter
 		AppState:     opts.AppState,
 	}
 
+	payload := tx.encode()
+	if len(payload) > MaxTransactionPayloadSize {
+		return "", fmt.Errorf("%w: the options exceed the transaction payload limit of %d bytes once encoded",
+			ErrInvalidLoginOptions, MaxTransactionPayloadSize)
+	}
+
 	handle := newHandle()
 
 	redirect, err := sp.authnRequestURL(conn, tx, handle, now)
@@ -143,7 +153,7 @@ func (sp *ServiceProvider) BeginLogin(ctx context.Context, w http.ResponseWriter
 	rec := &TransactionRecord{
 		ID:          transactionID(conn.ID, handle),
 		BindingHash: bindingHash(binding),
-		Payload:     tx.encode(),
+		Payload:     payload,
 		ExpiresAt:   now.Add(sp.cfg.TransactionTTL),
 	}
 

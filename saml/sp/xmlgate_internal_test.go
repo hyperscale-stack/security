@@ -59,7 +59,6 @@ func TestCheckXML_Hygiene(t *testing.T) {
 		{"namespaces", `<p:r xmlns:p="urn:p" xmlns="urn:d"><p:a p:x="1" y="2"/><b xml:lang="en" xml:id="i"/></p:r>`, "ok"},
 		{"xml prefix declared to its namespace", `<r xmlns:xml="http://www.w3.org/XML/1998/namespace"/>`, "ok"},
 		{"default namespace undeclared", `<r xmlns=""/>`, "ok"},
-		{"same local name, different namespaces", `<r xmlns:a="urn:a" xmlns:b="urn:b" a:x="1" b:x="2"/>`, "ok"},
 		{"unprefixed Id attribute", `<r Id="a" ID="b" id="c"/>`, "ok"},
 
 		{"DOCTYPE", `<!DOCTYPE r><r/>`, "malformed"},
@@ -85,6 +84,13 @@ func TestCheckXML_Hygiene(t *testing.T) {
 		{"duplicate prefixed attribute", `<r xmlns:p="urn:p" p:a="1" p:a="2"/>`, "malformed"},
 		{"duplicate after namespace resolution", `<r xmlns:a="urn:x" xmlns:b="urn:x" a:k="1" b:k="2"/>`, "malformed"},
 		{"duplicate namespace declaration", `<r xmlns:a="urn:x" xmlns:a="urn:y"/>`, "malformed"},
+		// etree's SelectAttr returns the first attribute of a local name
+		// whatever its prefix, encoding/xml the last: two attributes of one
+		// local name are refused, whatever their namespaces (code review F3).
+		{"same local name, different namespaces", `<r xmlns:a="urn:a" xmlns:b="urn:b" a:x="1" b:x="2"/>`, "malformed"},
+		{"plain and prefixed attribute", `<r x="1" xmlns:p="urn:p" p:x="2"/>`, "malformed"},
+		{"prefixed then plain attribute", `<r xmlns:p="urn:p" p:Algorithm="a" Algorithm="b"/>`, "malformed"},
+		{"declaration named like an attribute", `<r xmlns:Algorithm="urn:a" Algorithm="b"/>`, "malformed"},
 		{"prefixed ID", `<r xmlns:foo="urn:foo" foo:ID="_x" ID="_y"/>`, "malformed"},
 		{"prefixed Id", `<r xmlns:foo="urn:foo" foo:Id="_x"/>`, "malformed"},
 		{"prefixed id", `<r xmlns:foo="urn:foo" foo:id="_x"/>`, "malformed"},
@@ -158,6 +164,20 @@ func TestCheckXML_SiblingScopesDoNotLeak(t *testing.T) {
 	// 30 siblings each declaring 2 prefixes: never more than 2 in scope.
 	doc := "<r>" + strings.Repeat(`<e xmlns:x="urn:x" xmlns:y="urn:y"><x:a/></e>`, 30) + "</r>"
 	require.NoError(t, checkXML([]byte(doc), responseLimits))
+}
+
+func TestCheckXML_ByteBound(t *testing.T) {
+	t.Parallel()
+
+	// The gate bounds the document size itself (code review F2).
+	lim := responseLimits
+	lim.maxBytes = 32
+
+	doc := func(n int) []byte { return []byte("<r>" + strings.Repeat("x", n-len("<r></r>")) + "</r>") }
+
+	assert.Equal(t, "ok", gateResult(checkXML(doc(32), lim)))
+	assert.Equal(t, "too-large", gateResult(checkXML(doc(33), lim)))
+	assert.Equal(t, int64(MaxMaxResponseSize), responseLimits.maxBytes, "responses: the configurable ceiling")
 }
 
 func TestGateError(t *testing.T) {

@@ -75,7 +75,7 @@ func checkSignatures(root, assertion *etree.Element, allowSHA1 bool) (bool, erro
 
 		signed[parent] = true
 
-		missing, err := checkSignature(el, parent.SelectAttrValue("ID", ""), policy)
+		missing, err := checkSignature(el, attrValue(parent, "ID"), policy)
 		keyInfoMissing = keyInfoMissing || missing
 
 		return err
@@ -174,7 +174,7 @@ func checkSignedInfo(si *etree.Element, parentID string, policy signaturePolicy)
 }
 
 // algorithm returns the Algorithm attribute.
-func algorithm(el *etree.Element) string { return el.SelectAttrValue("Algorithm", "") }
+func algorithm(el *etree.Element) string { return attrValue(el, "Algorithm") }
 
 // checkInclusiveNamespaces allows at most one exc-c14n InclusiveNamespaces
 // child with a bounded PrefixList.
@@ -186,7 +186,7 @@ func checkInclusiveNamespaces(el *etree.Element) error {
 		return nil
 	case len(kids) > 1 || !inNS(kids[0], nsExcC14N, "InclusiveNamespaces") || len(kids[0].ChildElements()) != 0:
 		return invalidSignature(errSignatureStructure)
-	case len(strings.Fields(kids[0].SelectAttrValue("PrefixList", ""))) > maxInclusivePrefixes:
+	case len(strings.Fields(attrValue(kids[0], "PrefixList"))) > maxInclusivePrefixes:
 		return invalidSignature("too many inclusive namespace prefixes")
 	}
 
@@ -196,7 +196,7 @@ func checkInclusiveNamespaces(el *etree.Element) error {
 // checkReference requires URI = "#" + the signed element's ID, the
 // transforms [enveloped-signature, exclusive C14N] and an allowed digest.
 func checkReference(ref *etree.Element, parentID string, policy signaturePolicy) error {
-	if uri := ref.SelectAttr("URI"); parentID == "" || uri == nil || uri.Value != "#"+parentID {
+	if uri, ok := attr(ref, "URI"); parentID == "" || !ok || uri != "#"+parentID {
 		return invalidSignature("the Reference does not point at the signed element")
 	}
 

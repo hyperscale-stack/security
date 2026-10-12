@@ -6,6 +6,7 @@ package samlsp_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hyperscale-stack/security"
@@ -48,14 +49,23 @@ func TestErrors_Taxonomy(t *testing.T) {
 func TestStatusError(t *testing.T) {
 	t.Parallel()
 
-	err := error(&samlsp.StatusError{Code: "urn:oasis:names:tc:SAML:2.0:status:Responder"})
+	const ns = "urn:oasis:names:tc:SAML:2.0:status:"
+
+	err := error(&samlsp.StatusError{Code: ns + "Responder"})
 	require.ErrorIs(t, err, samlsp.ErrResponseStatus)
 	require.ErrorIs(t, err, samlsp.ErrRejected)
-	assert.Contains(t, err.Error(), "(urn:oasis:names:tc:SAML:2.0:status:Responder)")
+	assert.Equal(t, samlsp.ErrResponseStatus.Error()+" (Responder)", err.Error())
 
-	err = &samlsp.StatusError{Code: "c", SubCode: "s", Message: "secret detail"}
-	assert.Contains(t, err.Error(), "(c, s)")
+	err = &samlsp.StatusError{Code: ns + "Requester", SubCode: ns + "NoPassive", Message: "secret detail"}
+	assert.Equal(t, samlsp.ErrResponseStatus.Error()+" (Requester, NoPassive)", err.Error())
 	assert.NotContains(t, err.Error(), "secret detail", "the message is never part of Error()")
+
+	// Codes outside the SAML 2.0 status codes come from the IdP or from an
+	// attacker: Error() names none of them (code review F5).
+	for _, code := range []string{"level=error msg=admin", ns + "Unknown", ns + strings.Repeat("A", 300), "c"} {
+		err = &samlsp.StatusError{Code: code, SubCode: code}
+		assert.Equal(t, samlsp.ErrResponseStatus.Error()+" (non-standard status, non-standard status)", err.Error())
+	}
 
 	var se *samlsp.StatusError
 	require.True(t, errors.As(err, &se))

@@ -414,6 +414,26 @@ func TestBeginLogin_MaximalOptionsFitTheStore(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestBeginLogin_OptionsOverflowingThePayload(t *testing.T) {
+	t.Parallel()
+
+	// Each option within its own limit, but '<' is JSON-escaped to six
+	// bytes: the transaction would exceed MaxTransactionPayloadSize. That is
+	// an invalid option, not a store failure (code review F8).
+	e := newEnv(t)
+
+	contexts := make([]string, 8)
+	for i := range contexts {
+		contexts[i] = "urn:" + strings.Repeat("<", 1020)
+	}
+
+	rec := httptest.NewRecorder()
+	_, err := e.sp.BeginLogin(context.Background(), rec, httptest.NewRequest(http.MethodGet, "/login", nil), connID,
+		samlsp.LoginOptions{AppState: strings.Repeat("<", 2048), RequestedAuthnContext: contexts})
+	require.ErrorIs(t, err, samlsp.ErrInvalidLoginOptions)
+	assert.Empty(t, rec.Result().Cookies(), "nothing stored, no cookie")
+}
+
 // failingSigner is an RSA signer whose Sign fails (an unreachable KMS).
 type failingSigner struct{ crypto.Signer }
 

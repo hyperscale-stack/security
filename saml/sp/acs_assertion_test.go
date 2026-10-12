@@ -608,6 +608,12 @@ func TestCompleteLogin_ProfileRefusedBeforeSignatureWork(t *testing.T) {
 		{"BaseID next to the NameID", onAssertion(func(a *etree.Element) { path(a, "Subject").CreateElement("saml:BaseID") }), samlsp.ErrInvalidAssertion},
 		{"unknown condition", onAssertion(func(a *etree.Element) { child(a, "Conditions").CreateElement("saml:Condition") }), samlsp.ErrInvalidAssertion},
 		{"time zone offset", onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", "2026-10-12T12:00:00+02:00") }), samlsp.ErrMalformedResponse},
+		{"AuthnInstant with an offset", onAssertion(func(a *etree.Element) {
+			child(a, "AuthnStatement").CreateAttr("AuthnInstant", "2026-10-12T12:00:00+02:00")
+		}), samlsp.ErrMalformedResponse},
+		{"SessionNotOnOrAfter without a zone", onAssertion(func(a *etree.Element) {
+			child(a, "AuthnStatement").CreateAttr("SessionNotOnOrAfter", "2026-10-12T18:00:00")
+		}), samlsp.ErrMalformedResponse},
 		{"encrypted identifier", onAssertion(func(a *etree.Element) {
 			el := path(a, "Subject").CreateElement("saml:EncryptedID")
 			el.CreateElement("xenc:EncryptedData").CreateAttr("xmlns:xenc", "http://www.w3.org/2001/04/xmlenc#")

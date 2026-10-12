@@ -240,6 +240,20 @@ func TestParseIdentityProviderMetadata(t *testing.T) {
 	require.NoError(t, idp.Validate())
 }
 
+func TestParseIdentityProviderMetadata_WantAuthnRequestsSigned(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]bool{"true": true, "1": true, " false ": false, "0": false} {
+		idp, err := parseMetadata(idpMetadataSpec{roleAttrs: ` WantAuthnRequestsSigned="` + value + `"`}.render(t), samlsp.MetadataOptions{})
+		require.NoError(t, err, value)
+		assert.Equal(t, want, idp.WantAuthnRequestsSigned, value)
+	}
+
+	idp, err := parseMetadata(idpMetadataSpec{}.render(t), samlsp.MetadataOptions{})
+	require.NoError(t, err)
+	assert.False(t, idp.WantAuthnRequestsSigned, "absent means false")
+}
+
 func TestParseIdentityProviderMetadata_ValidityMinimum(t *testing.T) {
 	t.Parallel()
 
@@ -300,6 +314,10 @@ func TestParseIdentityProviderMetadata_Refusals(t *testing.T) {
 		{"negative max size", idpMetadataSpec{}.render(t), samlsp.MetadataOptions{MaxSize: -1}},
 		{"nested aggregate", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">` +
 			`<md:EntitiesDescriptor>ENTITY</md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
+		{"prefixed entityID only", []byte(strings.Replace(string(idpMetadataSpec{}.render(t)),
+			`entityID="https://idp.example.com/acme"`, `xmlns:foo="urn:example:foo" foo:entityID="https://idp.example.com/acme"`, 1)), samlsp.MetadataOptions{}},
+		{"nested aggregate next to the entity", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">ENTITY` +
+			`<md:EntitiesDescriptor><md:EntityDescriptor entityID="https://other.example.com"/></md:EntitiesDescriptor></md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
 		{"no redirect SSO", idpMetadataSpec{sso: `<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://idp.example.com/post"/>`}.render(t), samlsp.MetadataOptions{}},
 		{"http SSO", idpMetadataSpec{sso: redirect("http://idp.example.com/sso")}.render(t), samlsp.MetadataOptions{}},
 		{"SSO carrying SAMLRequest", idpMetadataSpec{sso: redirect("https://idp.example.com/sso?SAMLRequest=x")}.render(t), samlsp.MetadataOptions{}},

@@ -73,12 +73,14 @@ type Config struct {
 	TransactionTTL time.Duration
 
 	// ClockSkew is tolerated on every time check against IdP-issued
-	// instants (0 means DefaultClockSkew); at most MaxClockSkew.
+	// instants (0 means DefaultClockSkew); at most MaxClockSkew. Zero skew
+	// cannot be configured: one nanosecond is the strictest setting.
 	ClockSkew time.Duration
 
-	// MaxResponseSize caps the ACS request body in bytes (0 means
-	// DefaultMaxResponseSize); between MinMaxResponseSize and
-	// MaxMaxResponseSize.
+	// MaxResponseSize caps the ACS request body in bytes or, when the
+	// application parsed the form before CompleteLogin, the SAMLResponse
+	// value (0 means DefaultMaxResponseSize); between MinMaxResponseSize
+	// and MaxMaxResponseSize.
 	MaxResponseSize int64
 
 	// MetadataCacheDuration is the cacheDuration of the published SP

@@ -586,6 +586,9 @@ func TestCompleteLogin_MalformedRequest(t *testing.T) {
 		{"two RelayState", post(http.MethodPost, ct, form("SAMLResponse", resp, "RelayState", lr.relayState, "RelayState", lr.relayState)), samlsp.ErrMalformedRequest},
 		{"bad form encoding", post(http.MethodPost, ct, "SAMLResponse=%zz"), samlsp.ErrMalformedRequest},
 		{"body over MaxResponseSize", post(http.MethodPost, ct, form("SAMLResponse", resp+strings.Repeat("A", samlsp.MinMaxResponseSize))), samlsp.ErrResponseTooLarge},
+		// The body is capped as it is read, whatever the field.
+		{"other fields over MaxResponseSize", post(http.MethodPost, ct, form("SAMLResponse", resp, "RelayState", lr.relayState,
+			"padding", strings.Repeat("A", samlsp.MinMaxResponseSize))), samlsp.ErrResponseTooLarge},
 	}
 
 	for _, tc := range cases {
@@ -625,6 +628,55 @@ func TestCompleteLogin_PreParsedForm(t *testing.T) {
 
 	_, err := e.sp.CompleteLogin(context.Background(), req, connID)
 	require.NoError(t, err)
+}
+
+func TestCompleteLogin_PreParsedFormIsBounded(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t) // MaxResponseSize = 256 KiB
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	// The application or a middleware parsed the form first (Go's own limit
+	// is 10 MB): the SAMLResponse itself must stay within MaxResponseSize
+	// (code review F2), here 256 KiB, below the 1 MiB the lexical gate
+	// admits whatever the configuration.
+	big := respond(t, lr.requestID, respOpts{raw: func(s string) string {
+		return strings.Replace(s, "<samlp:Status>", "<!--"+strings.Repeat("x", 512<<10)+"--><samlp:Status>", 1)
+	}})
+
+	req := acsRequest(big, lr.relayState, lr.cookie.Value)
+	require.NoError(t, req.ParseForm())
+
+	_, err := e.sp.CompleteLogin(context.Background(), req, connID)
+	requireRejected(t, e, lr, err, samlsp.ErrResponseTooLarge)
+
+	// Within the limit, a parsed form is used as it is.
+	req = acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value)
+	require.NoError(t, req.ParseForm())
+
+	_, err = e.sp.CompleteLogin(context.Background(), req, connID)
+	require.NoError(t, err)
+}
+
+// nilLookupStore is a non-conformant store whose LookupTransaction returns
+// neither a record nor an error.
+type nilLookupStore struct{ samlsp.TransactionStore }
+
+func (nilLookupStore) LookupTransaction(context.Context, string) (*samlsp.TransactionRecord, error) {
+	return nil, nil //nolint:nilnil // the non-conformance under test
+}
+
+func TestCompleteLogin_NilTransactionRecord(t *testing.T) {
+	t.Parallel()
+
+	// A store returning (nil, nil) means "not found", never a panic (code
+	// review F9).
+	e := newEnv(t, func(c *samlsp.Config, _ *samlsp.Connection) { c.Transactions = nilLookupStore{c.Transactions} })
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	_, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
+	require.ErrorIs(t, err, samlsp.ErrTransactionNotFound)
+	require.ErrorIs(t, err, samlsp.ErrRejected)
 }
 
 func TestCompleteLogin_RejectsUnsolicited(t *testing.T) {
@@ -683,6 +735,22 @@ func TestCompleteLogin_StatusError(t *testing.T) {
 	assert.Equal(t, "user[31m notsigned in", se.Message, "control characters stripped")
 	assert.Equal(t, connID, se.ConnectionID)
 	assert.Equal(t, "/back", se.AppState)
+
+	// Hostile codes are sanitized in the fields, which keep visible ASCII
+	// only, at most 256 bytes, and Error() names none (code review F5).
+	hostile := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	sc := path(hostile, "Status", "StatusCode")
+	sc.CreateAttr("Value", "level=error msg=admin user=root "+strings.Repeat("x", 400))
+	sc.CreateElement("samlp:StatusCode").CreateAttr("Value", "urn:x \u0085sub\tcode")
+
+	_, err = complete(e, lr, encodeElement(t, hostile))
+	requireRejected(t, e, lr, err, samlsp.ErrResponseStatus)
+	require.ErrorAs(t, err, &se)
+	assert.True(t, strings.HasPrefix(se.Code, "level=errormsg=adminuser=rootxxx"), se.Code)
+	assert.Len(t, se.Code, 256)
+	assert.Equal(t, "urn:xsubcode", se.SubCode)
+	assert.NotContains(t, err.Error(), "level")
+	assert.NotContains(t, err.Error(), "urn:x")
 
 	// An error status is only reported for the bound browser (review F8).
 	_, err = e.sp.CompleteLogin(context.Background(), acsRequest(statusResponse(lr.requestID, "", ""), lr.relayState, newHandleLike("Z")), connID)

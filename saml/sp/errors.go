@@ -221,13 +221,39 @@ type StatusError struct {
 	AppState string
 }
 
-// Error implements error. The codes are sanitized URIs; Message is omitted.
+// Error implements error. It names the SAML 2.0 status codes (Core
+// §3.2.2.2) by their short names and any other code as "non-standard
+// status": the codes may come from an attacker, so their text is never
+// printed (code review F5). Message is omitted.
 func (e *StatusError) Error() string {
 	if e.SubCode != "" {
-		return ErrResponseStatus.Error() + " (" + e.Code + ", " + e.SubCode + ")"
+		return ErrResponseStatus.Error() + " (" + statusName(e.Code) + ", " + statusName(e.SubCode) + ")"
 	}
 
-	return ErrResponseStatus.Error() + " (" + e.Code + ")"
+	return ErrResponseStatus.Error() + " (" + statusName(e.Code) + ")"
+}
+
+// statusCodePrefix is the namespace of the SAML 2.0 status codes.
+const statusCodePrefix = "urn:oasis:names:tc:SAML:2.0:status:"
+
+// statusNames are the SAML 2.0 status codes (Core §3.2.2.2).
+var statusNames = map[string]bool{
+	"Success": true, "Requester": true, "Responder": true, "VersionMismatch": true,
+	"AuthnFailed": true, "InvalidAttrNameOrValue": true, "InvalidNameIDPolicy": true, "NoAuthnContext": true,
+	"NoAvailableIDP": true, "NoPassive": true, "NoSupportedIDP": true, "PartialLogout": true,
+	"ProxyCountExceeded": true, "RequestDenied": true, "RequestUnsupported": true,
+	"RequestVersionDeprecated": true, "RequestVersionTooHigh": true, "RequestVersionTooLow": true,
+	"ResourceNotRecognized": true, "TooManyResponses": true, "UnknownAttrProfile": true,
+	"UnknownPrincipal": true, "UnsupportedBinding": true,
+}
+
+// statusName returns the short name of a SAML 2.0 status code.
+func statusName(code string) string {
+	if name, ok := strings.CutPrefix(code, statusCodePrefix); ok && statusNames[name] {
+		return name
+	}
+
+	return "non-standard status"
 }
 
 // Unwrap returns [ErrResponseStatus].

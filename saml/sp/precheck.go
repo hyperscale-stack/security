@@ -72,7 +72,7 @@ func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
 		return nil, err
 	}
 
-	raw := &rawResponse{data: data, status: status, inResponseTo: root.SelectAttrValue("InResponseTo", "")}
+	raw := &rawResponse{data: data, status: status, inResponseTo: attrValue(root, "InResponseTo")}
 	assertions := descendants(root, nsAssertion, "Assertion")
 
 	if !status.success() {
@@ -115,15 +115,19 @@ func checkEnvelope(root *etree.Element) error {
 		return reject(ErrMalformedResponse, "root is not a SAML 2.0 Response", nil)
 	}
 
-	if root.SelectAttrValue("Version", "") != samlVersion {
+	if attrValue(root, "Version") != samlVersion {
 		return reject(ErrMalformedResponse, "unsupported SAML version", nil)
 	}
 
-	if root.SelectAttrValue("ID", "") == "" || root.SelectAttr("IssueInstant") == nil {
+	if _, ok := attr(root, attrIssueInstant); !ok || attrValue(root, "ID") == "" {
 		return reject(ErrMalformedResponse, "Response without ID or IssueInstant", nil)
 	}
 
 	if err := checkIDs(root); err != nil {
+		return err
+	}
+
+	if err := checkPrefixedAttributes(root); err != nil {
 		return err
 	}
 
@@ -132,6 +136,62 @@ func checkEnvelope(root *etree.Element) error {
 	}
 
 	return checkTimeFormats(root)
+}
+
+// attr returns the value of el's unprefixed attribute name. etree's
+// SelectAttr would also match a prefixed attribute of that local name.
+func attr(el *etree.Element, name string) (string, bool) {
+	for _, a := range el.Attr {
+		if a.Space == "" && a.Key == name {
+			return a.Value, true
+		}
+	}
+
+	return "", false
+}
+
+// attrValue returns the value of el's unprefixed attribute name, or "".
+func attrValue(el *etree.Element, name string) string {
+	v, _ := attr(el, name)
+
+	return v
+}
+
+// Names of the SAML time attributes.
+const (
+	attrIssueInstant        = "IssueInstant"
+	attrNotBefore           = "NotBefore"
+	attrNotOnOrAfter        = "NotOnOrAfter"
+	attrAuthnInstant        = "AuthnInstant"
+	attrSessionNotOnOrAfter = "SessionNotOnOrAfter"
+)
+
+// samlAttributeNames are the attribute names SAML 2.0 and XML-DSig define
+// on the elements of a response.
+var samlAttributeNames = map[string]bool{
+	"ID": true, "Id": true, "Version": true, attrIssueInstant: true, "Destination": true, "Consent": true,
+	"InResponseTo": true, "Value": true, "Format": true, "NameQualifier": true, "SPNameQualifier": true,
+	"SPProvidedID": true, "Method": true, attrNotBefore: true, attrNotOnOrAfter: true, "Recipient": true,
+	"Address": true, "DNSName": true, "Count": true, attrAuthnInstant: true, "SessionIndex": true,
+	attrSessionNotOnOrAfter: true, "Resource": true, "Decision": true, "Namespace": true, "Name": true,
+	"NameFormat": true, "FriendlyName": true, "Algorithm": true, "URI": true, "Type": true, "PrefixList": true,
+}
+
+// checkPrefixedAttributes refuses a prefixed attribute named like a SAML or
+// XML-DSig attribute (xml:* aside). gosaml2 and goxmldsig decode with
+// encoding/xml, which matches attributes by local name: foo:Destination
+// would be read as the Destination, while this pre-check reads unprefixed
+// attributes only (code review F3).
+func checkPrefixedAttributes(root *etree.Element) error {
+	return walk(root, func(el *etree.Element) error {
+		for _, a := range el.Attr {
+			if a.Space != "" && a.Space != prefixXMLNS && a.Space != prefixXML && samlAttributeNames[a.Key] {
+				return reject(ErrMalformedResponse, "prefixed attribute named like a SAML or XML-DSig attribute", nil)
+			}
+		}
+
+		return nil
+	})
 }
 
 // descendants returns el's descendants (el excluded) named {ns}local.
@@ -226,7 +286,7 @@ func checkNoEncryption(root *etree.Element) error {
 
 // timeAttributes are the SAML attributes holding time instants.
 var timeAttributes = map[string]bool{
-	"IssueInstant": true, "NotBefore": true, "NotOnOrAfter": true, "AuthnInstant": true, "SessionNotOnOrAfter": true,
+	attrIssueInstant: true, attrNotBefore: true, attrNotOnOrAfter: true, attrAuthnInstant: true, attrSessionNotOnOrAfter: true,
 }
 
 // checkTimeFormats requires every SAML time value to be in the UTC form of
@@ -255,7 +315,7 @@ func readStatus(root *etree.Element) (responseStatus, error) {
 	}
 
 	codes := children(statuses[0], nsProtocol, "StatusCode")
-	if len(codes) != 1 || codes[0].SelectAttrValue("Value", "") == "" {
+	if len(codes) != 1 || attrValue(codes[0], "Value") == "" {
 		return responseStatus{}, reject(ErrMalformedResponse, "a Status needs exactly one StatusCode with a Value", nil)
 	}
 
@@ -266,10 +326,10 @@ func readStatus(root *etree.Element) (responseStatus, error) {
 		return responseStatus{}, reject(ErrMalformedResponse, "repeated StatusCode or StatusMessage", nil)
 	}
 
-	st := responseStatus{code: sanitizeURI(codes[0].SelectAttrValue("Value", ""))}
+	st := responseStatus{code: sanitizeURI(attrValue(codes[0], "Value"))}
 
 	if len(subs) == 1 {
-		st.subCode = sanitizeURI(subs[0].SelectAttrValue("Value", ""))
+		st.subCode = sanitizeURI(attrValue(subs[0], "Value"))
 	}
 
 	if len(messages) == 1 {
@@ -289,7 +349,7 @@ func checkIssuers(el *etree.Element, what string) error {
 		return reject(ErrIssuerMismatch, what+" needs exactly one Issuer", nil)
 	}
 
-	if f := issuers[0].SelectAttrValue("Format", nameIDFormatEntity); f != nameIDFormatEntity {
+	if f, ok := attr(issuers[0], "Format"); ok && f != nameIDFormatEntity {
 		return reject(ErrIssuerMismatch, what+" Issuer Format is not entity", nil)
 	}
 
@@ -298,11 +358,11 @@ func checkIssuers(el *etree.Element, what string) error {
 
 // checkAssertionHeader checks the assertion version, ID and IssueInstant.
 func checkAssertionHeader(a *etree.Element) error {
-	if a.SelectAttrValue("Version", "") != samlVersion {
+	if attrValue(a, "Version") != samlVersion {
 		return reject(ErrMalformedResponse, "unsupported assertion version", nil)
 	}
 
-	if a.SelectAttrValue("ID", "") == "" || a.SelectAttr("IssueInstant") == nil {
+	if _, ok := attr(a, attrIssueInstant); !ok || attrValue(a, "ID") == "" {
 		return reject(ErrMalformedResponse, "Assertion without ID or IssueInstant", nil)
 	}
 
@@ -371,7 +431,7 @@ func checkSubject(s *etree.Element) error {
 	}
 
 	sc := confirmations[0]
-	if sc.SelectAttrValue("Method", "") != confirmationBearer {
+	if attrValue(sc, "Method") != confirmationBearer {
 		return reject(ErrInvalidAssertion, "the subject confirmation is not bearer", nil)
 	}
 
@@ -380,7 +440,7 @@ func checkSubject(s *etree.Element) error {
 		return reject(ErrInvalidAssertion, "a bearer confirmation needs exactly one SubjectConfirmationData", nil)
 	}
 
-	if data[0].SelectAttr("NotBefore") != nil {
+	if _, ok := attr(data[0], attrNotBefore); ok {
 		return reject(ErrInvalidAssertion, "a bearer SubjectConfirmationData must not carry NotBefore", nil)
 	}
 
@@ -440,8 +500,8 @@ func checkProxyRestriction(pr *etree.Element, raw *rawResponse) error {
 		return err
 	}
 
-	if a := pr.SelectAttr("Count"); a != nil {
-		if n, err := strconv.Atoi(a.Value); err != nil || n < 0 {
+	if count, ok := attr(pr, "Count"); ok {
+		if n, err := strconv.Atoi(count); err != nil || n < 0 {
 			return reject(ErrInvalidAssertion, "ProxyRestriction Count is not a non-negative integer", nil)
 		}
 
@@ -454,7 +514,7 @@ func checkProxyRestriction(pr *etree.Element, raw *rawResponse) error {
 // checkAuthnStatement requires AuthnInstant and one AuthnContext with at
 // most one class reference.
 func checkAuthnStatement(st *etree.Element) error {
-	if st.SelectAttr("AuthnInstant") == nil {
+	if _, ok := attr(st, attrAuthnInstant); !ok {
 		return reject(ErrInvalidAssertion, "AuthnStatement without AuthnInstant", nil)
 	}
 

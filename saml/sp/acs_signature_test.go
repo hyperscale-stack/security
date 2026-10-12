@@ -244,6 +244,154 @@ func TestCompleteLogin_SignatureProfileBeyondGoxmldsig(t *testing.T) {
 	}}, samlsp.ErrInvalidSignature)
 }
 
+func TestCompleteLogin_AttributeNameDifferential(t *testing.T) {
+	t.Parallel()
+
+	const sha256URI, sha1URI = "http://www.w3.org/2001/04/xmlenc#sha256", "http://www.w3.org/2000/09/xmldsig#sha1"
+
+	// A SHA-1 digest under a SignedInfo validly re-signed (rsa-sha256) by
+	// the trusted key, whose DigestMethod also names SHA-256 through another
+	// attribute of the same local name. etree's SelectAttr returns the
+	// first such attribute whatever its prefix; encoding/xml, which decodes
+	// goxmldsig's canonical SignedInfo, the last (code review F3).
+	sha1Digest := func(edit func(dm *etree.Element)) respOpts {
+		return resigned(t, func(sig *etree.Element) {
+			path(sig, "SignedInfo", "SignatureMethod").CreateAttr("Algorithm", dsig.RSASHA256SignatureMethod)
+			dm := path(sig, "SignedInfo", "Reference", "DigestMethod")
+			dm.RemoveAttr("Algorithm")
+			edit(dm)
+		}, crypto.SHA256, crypto.SHA1)
+	}
+
+	cases := map[string]func(dm *etree.Element){
+		"plain SHA-256, then prefixed SHA-1": func(dm *etree.Element) {
+			dm.CreateAttr("Algorithm", sha256URI)
+			dm.CreateAttr("xmlns:foo", "urn:example:foo")
+			dm.CreateAttr("foo:Algorithm", sha1URI)
+		},
+		"prefixed SHA-1, then plain SHA-256": func(dm *etree.Element) {
+			dm.CreateAttr("xmlns:foo", "urn:example:foo")
+			dm.CreateAttr("foo:Algorithm", sha1URI)
+			dm.CreateAttr("Algorithm", sha256URI)
+		},
+		"namespace declaration named Algorithm": func(dm *etree.Element) {
+			dm.CreateAttr("xmlns:Algorithm", sha256URI)
+			dm.CreateAttr("Algorithm", sha1URI)
+		},
+		"lone prefixed Algorithm": func(dm *etree.Element) {
+			dm.CreateAttr("xmlns:foo", "urn:example:foo")
+			dm.CreateAttr("foo:Algorithm", sha1URI)
+		},
+	}
+
+	for name, edit := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			reject(t, sha1Digest(edit), samlsp.ErrMalformedResponse)
+		})
+	}
+
+	// Control: the same digest under a plain Algorithm is an algorithm
+	// refusal, and is accepted with the opt-in.
+	plain := sha1Digest(func(dm *etree.Element) { dm.CreateAttr("Algorithm", sha1URI) })
+	reject(t, plain, samlsp.ErrUnsupportedAlgorithm)
+
+	_, err := flow(t, newEnv(t, allowSHA1), plain)
+	require.NoError(t, err)
+}
+
+func TestCompleteLogin_PrefixedSAMLAttributes(t *testing.T) {
+	t.Parallel()
+
+	// encoding/xml matches attributes by local name: gosaml2 would read
+	// foo:Destination as the Destination. A prefixed attribute named like
+	// a SAML or XML-DSig attribute is refused (code review F3).
+	prefixed := func(el *etree.Element, name, value string) {
+		el.CreateAttr("xmlns:foo", "urn:example:foo")
+		el.CreateAttr("foo:"+name, value)
+	}
+
+	cases := map[string]respOpts{
+		"Response Destination": onResponse(func(r *etree.Element) {
+			r.RemoveAttr("Destination")
+			prefixed(r, "Destination", "https://evil.example.com/acs")
+		}),
+		"SubjectConfirmationData NotBefore": onAssertion(func(a *etree.Element) {
+			prefixed(path(a, "Subject", "SubjectConfirmation", "SubjectConfirmationData"), "NotBefore", "2026-10-12T09:00:00Z")
+		}),
+		"Reference Type": {before: func(_, a *etree.Element) {
+			prefixed(path(child(a, "Signature"), "SignedInfo", "Reference"), "Type", "urn:x")
+		}},
+	}
+
+	for name, o := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			reject(t, o, samlsp.ErrMalformedResponse)
+		})
+	}
+
+	// Foreign attributes with other names are allowed (xsi:type, x500:Encoding...).
+	_, err := flow(t, newEnv(t), onAssertion(func(a *etree.Element) {
+		attr := path(a, "AttributeStatement", "Attribute")
+		attr.CreateAttr("xmlns:x500", "urn:oasis:names:tc:SAML:2.0:profiles:attribute:X500")
+		attr.CreateAttr("x500:Encoding", "LDAP")
+	}))
+	require.NoError(t, err)
+}
+
+func TestCompleteLogin_SignatureStructureValidlySigned(t *testing.T) {
+	t.Parallel()
+
+	// Each shape below is validly signed by the trusted key, and goxmldsig
+	// ignores the extra content: only the pre-check refuses it (code review
+	// F6).
+	foreign := func(parent *etree.Element) {
+		el := parent.CreateElement("x:Extra")
+		el.CreateAttr("xmlns:x", "urn:example:x")
+	}
+	transforms := func(sig *etree.Element) []*etree.Element {
+		return path(sig, "SignedInfo", "Reference", "Transforms").ChildElements()
+	}
+
+	cases := map[string]respOpts{
+		"element inside CanonicalizationMethod": resigned(t, func(sig *etree.Element) {
+			foreign(path(sig, "SignedInfo", "CanonicalizationMethod"))
+		}, crypto.SHA256),
+		"element inside the enveloped-signature transform": resigned(t, func(sig *etree.Element) {
+			transforms(sig)[0].CreateElement("ds:XPath").SetText("1")
+		}, crypto.SHA256),
+		"element inside DigestValue": resigned(t, func(sig *etree.Element) {
+			path(sig, "SignedInfo", "Reference", "DigestValue").CreateElement("ds:Extra")
+		}, crypto.SHA256),
+		"element inside DigestMethod": resigned(t, func(sig *etree.Element) {
+			foreign(path(sig, "SignedInfo", "Reference", "DigestMethod"))
+		}, crypto.SHA256),
+		"foreign element instead of InclusiveNamespaces": resigned(t, func(sig *etree.Element) {
+			foreign(transforms(sig)[1])
+		}, crypto.SHA256),
+		"InclusiveNamespaces with a child": resigned(t, func(sig *etree.Element) {
+			inc := transforms(sig)[1].CreateElement("ec:InclusiveNamespaces")
+			inc.CreateAttr("xmlns:ec", "http://www.w3.org/2001/10/xml-exc-c14n#")
+			inc.CreateAttr("PrefixList", "")
+			foreign(inc)
+		}, crypto.SHA256),
+		"element inside SignatureValue": {after: func(r *etree.Element) {
+			path(assertionSignature(r), "SignatureValue").CreateElement("ds:Extra")
+		}},
+	}
+
+	for name, o := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			reject(t, o, samlsp.ErrInvalidSignature)
+		})
+	}
+}
+
 func TestCompleteLogin_InclusiveNamespacesPrefixList(t *testing.T) {
 	t.Parallel()
 

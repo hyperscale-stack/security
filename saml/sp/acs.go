@@ -36,10 +36,11 @@ type LoginResult struct {
 //
 // In order, without side effects until step 10:
 //
-//  1. the request: POST, form content type, body within MaxResponseSize, one
-//     SAMLResponse, at most one RelayState that must be a handle issued by
-//     BeginLogin — otherwise the response is unsolicited (IdP-initiated SSO
-//     is refused, Profiles §4.1.5, errata E90);
+//  1. the request: POST, form content type, body within MaxResponseSize (or,
+//     for a form the application already parsed, the SAMLResponse value),
+//     one SAMLResponse, at most one RelayState that must be a handle issued
+//     by BeginLogin — otherwise the response is unsolicited (IdP-initiated
+//     SSO is refused, Profiles §4.1.5, errata E90);
 //  2. the browser-binding cookie must be present;
 //  3. the SAMLResponse is base64-decoded (line breaks tolerated), never
 //     inflated (DEFLATE is a Redirect binding encoding);
@@ -138,6 +139,12 @@ func (sp *ServiceProvider) readACSRequest(r *http.Request) (*acsInput, error) {
 		return nil, reject(ErrMalformedRequest, "need one SAMLResponse and at most one RelayState", nil)
 	}
 
+	// A form the application parsed first was not read under
+	// MaxResponseSize (Go's own limit is 10 MB): bound the value itself.
+	if int64(len(responses[0])) > sp.cfg.MaxResponseSize {
+		return nil, reject(ErrResponseTooLarge, "SAMLResponse over MaxResponseSize", nil)
+	}
+
 	in := &acsInput{}
 
 	if len(relayStates) == 1 {
@@ -165,8 +172,9 @@ func (sp *ServiceProvider) readACSRequest(r *http.Request) (*acsInput, error) {
 	return in, nil
 }
 
-// readForm returns the POST form, reading at most MaxResponseSize bytes.
-// A form the application already parsed (r.PostForm) is used as is.
+// readForm returns the POST form, reading at most MaxResponseSize bytes. A
+// form the application already parsed (r.PostForm) is used as it is; the
+// caller bounds its SAMLResponse.
 func (sp *ServiceProvider) readForm(r *http.Request) (url.Values, error) {
 	if r.Method != http.MethodPost {
 		return nil, reject(ErrMalformedRequest, "method is not POST", nil)
@@ -240,6 +248,8 @@ func (sp *ServiceProvider) loadTransaction(ctx context.Context, conn *Connection
 		return nil, nil, reject(err, "", nil)
 	case err != nil:
 		return nil, nil, fmt.Errorf("samlsp: lookup transaction: %w", err)
+	case rec == nil: // a non-conformant store: nothing found
+		return nil, nil, reject(ErrTransactionNotFound, "", nil)
 	}
 
 	if subtle.ConstantTimeCompare([]byte(rec.BindingHash), []byte(bindingHash(in.binding))) != 1 {

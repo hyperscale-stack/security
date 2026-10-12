@@ -57,6 +57,9 @@ func TestConnection_Validate(t *testing.T) {
 		{"SSO with SAMLRequest", func(c *samlsp.Connection) {
 			c.IdentityProvider.SSOURL = "https://idp.example.com/sso?SAMLRequest=x"
 		}},
+		{"http on a host ending in localhost", func(c *samlsp.Connection) {
+			c.IdentityProvider.SSOURL = "http://evillocalhost/sso"
+		}},
 		{"SSO with RelayState", func(c *samlsp.Connection) {
 			c.IdentityProvider.SSOURL = "https://idp.example.com/sso?RelayState=x"
 		}},

@@ -41,7 +41,11 @@ type IdentityProvider struct {
 	SSOURL string
 
 	// SigningCertificates are the trusted signing keys (1 to 8). Several
-	// keys support rollover (errata E68): any of them may sign. Keys must be
+	// keys support rollover (errata E68): any of them may sign. A signature
+	// whose KeyInfo carries a certificate selects it among these by exact
+	// equality; without KeyInfo, the three most recent (by NotBefore) valid
+	// certificates are tried, since each attempt costs a full verification.
+	// Keys must be
 	// RSA of at least 2048 bits, or ECDSA P-256, P-384 or P-521. ECDSA is
 	// verified as goxmldsig implements it (ASN.1 DER signature values): IdPs
 	// that follow XML Signature 1.1 (raw r‖s values) fail closed. The

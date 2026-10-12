@@ -65,9 +65,12 @@
 //
 //   - XML: no DTD, entity or processing instruction; at most
 //     [MaxResponseElements] elements and bounded tokens, depth, attributes,
-//     namespace declarations and in-scope prefixes; unique attributes and
-//     declared prefixes; [Config].MaxResponseSize bytes (256 KiB by
-//     default, 1 MiB at most).
+//     namespace declarations and in-scope prefixes; declared prefixes;
+//     [Config].MaxResponseSize bytes (256 KiB by default, 1 MiB at most).
+//     An element may not carry two attributes of one local name, whatever
+//     their prefixes, nor a prefixed attribute named like a SAML or
+//     XML-DSig one: etree, which the pre-check reads with, and encoding/xml,
+//     which gosaml2 and goxmldsig decode with, would read them differently.
 //   - Shape: exactly one Assertion, child of the Response, with unique IDs,
 //     one Issuer, one Subject with one NameID and one bearer
 //     SubjectConfirmation, one AuthnStatement and only understood

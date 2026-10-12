@@ -75,10 +75,17 @@ type NameID struct {
 // (eduPersonTargetedID) are rendered as their NameID value; other complex
 // values as their character data.
 type Attribute struct {
-	Name         string
-	NameFormat   string
+	// Name is the attribute name, as the IdP releases it (often a URI or an
+	// OID URN).
+	Name string
+	// NameFormat is the name format URI ("" when absent, meaning
+	// unspecified).
+	NameFormat string
+	// FriendlyName is the optional human-readable name; it is not unique
+	// and MUST NOT be used to select an attribute.
 	FriendlyName string
-	Values       []string
+	// Values are the attribute values in document order.
+	Values []string
 }
 
 // ProxyRestriction is the ProxyRestriction condition (Core §2.5.1.6).

@@ -41,15 +41,26 @@ func cost(fn func()) (time.Duration, uint64) {
 	return elapsed, after.TotalAlloc - before.TotalAlloc
 }
 
-// Budgets of a refused or worst-case response. They are generous so the
-// tests stay stable under -race and on slow CI machines; the measured
-// figures are logged and reported in the PR.
+// Budgets of a refused or worst-case response. The allocation budgets are
+// deterministic and always enforced; the wall-clock ones are generous and
+// skipped under the race detector, which slows the verification tenfold
+// (code review F10). The measured figures are logged.
 const (
 	refusalBudgetBytes   = 32 << 20
 	refusalBudgetTime    = 2 * time.Second
 	worstCaseBudgetBytes = 96 << 20
 	worstCaseBudgetTime  = 5 * time.Second
 )
+
+// requireFaster enforces a wall-clock budget, except under the race
+// detector.
+func requireFaster(t *testing.T, elapsed, budget time.Duration, what string) {
+	t.Helper()
+
+	if !raceEnabled {
+		require.Less(t, elapsed, budget, what)
+	}
+}
 
 // withMaxSize sets MaxResponseSize to the ceiling.
 func withMaxSize(c *samlsp.Config, _ *samlsp.Connection) {
@@ -130,7 +141,7 @@ func TestCompleteLogin_AmplificationInputsRefusedEarly(t *testing.T) {
 			base64.StdEncoding.DecodedLen(len(tc.body))>>10, elapsed.Round(time.Microsecond), alloc>>10)
 		requireRejected(t, e, lr, err, samlsp.ErrResponseTooLarge)
 		require.Less(t, alloc, uint64(refusalBudgetBytes), tc.name)
-		require.Less(t, elapsed, refusalBudgetTime, tc.name)
+		requireFaster(t, elapsed, refusalBudgetTime, tc.name)
 	}
 }
 
@@ -139,10 +150,10 @@ func TestCompleteLogin_AmplificationInputsRefusedEarly(t *testing.T) {
 // declarations (25 prefixes in scope on every attribute value), nearly the
 // element cap filled with attribute values carrying 16 attributes each of
 // valueLen bytes, signed with signer.
-func worstCaseResponse(t testing.TB, requestID string, signer keyPair, valueLen int) string {
+func worstCaseResponse(t testing.TB, requestID string, sig sigOpts, valueLen int) string {
 	t.Helper()
 
-	o := respOpts{assertionSig: sigOpts{signer: signer}, beforeAssertion: func(a *etree.Element) {
+	o := respOpts{assertionSig: sig, beforeAssertion: func(a *etree.Element) {
 		for i := 0; i < 12; i++ {
 			a.CreateAttr(fmt.Sprintf("xmlns:q%d", i), fmt.Sprintf("urn:q:%d", i))
 		}
@@ -193,7 +204,7 @@ func TestCompleteLogin_WorstCaseWithinLimitsIsBounded(t *testing.T) {
 	for _, size := range sizes {
 		e := newEnv(t, size.opts...)
 		lr := begin(t, e, samlsp.LoginOptions{})
-		body := worstCaseResponse(t, lr.requestID, k.attacker, size.valueLen)
+		body := worstCaseResponse(t, lr.requestID, sigOpts{signer: k.attacker}, size.valueLen)
 
 		var err error
 
@@ -203,10 +214,10 @@ func TestCompleteLogin_WorstCaseWithinLimitsIsBounded(t *testing.T) {
 			base64.StdEncoding.DecodedLen(len(body))>>10, elapsed.Round(time.Microsecond), alloc>>10)
 		requireRejected(t, e, lr, err, samlsp.ErrInvalidSignature)
 		require.Less(t, alloc, uint64(worstCaseBudgetBytes))
-		require.Less(t, elapsed, worstCaseBudgetTime)
+		requireFaster(t, elapsed, worstCaseBudgetTime, size.name)
 
 		// The same shape signed by the trusted key is a valid login.
-		body = worstCaseResponse(t, lr.requestID, k.idpA, size.valueLen)
+		body = worstCaseResponse(t, lr.requestID, sigOpts{signer: k.idpA}, size.valueLen)
 		elapsed, alloc = cost(func() { _, err = complete(e, lr, body) })
 
 		t.Logf("worst case, %s (trusted signer, accepted): %v, %d KiB allocated", size.name,
@@ -214,6 +225,35 @@ func TestCompleteLogin_WorstCaseWithinLimitsIsBounded(t *testing.T) {
 		require.NoError(t, err)
 		require.Less(t, alloc, uint64(worstCaseBudgetBytes))
 	}
+}
+
+func TestCompleteLogin_RolloverRetryIsBounded(t *testing.T) {
+	k := keys(t)
+
+	// Eight trusted certificates valid now, and a worst-case response
+	// without KeyInfo signed by an untrusted key: each certificate tried
+	// re-runs gosaml2, so at most three are (code review F4).
+	eight := []keyPair{k.idpA, k.idpB}
+	for i := 0; i < 6; i++ {
+		eight = append(eight, newRSAPair(2048, fmt.Sprintf("rollover-%d", i), t0.Add(-time.Hour), t0.Add(24*time.Hour)))
+	}
+
+	measure := func(trusted ...keyPair) uint64 {
+		e := newEnv(t, withMaxSize, trustKeys(trusted...))
+		lr := begin(t, e, samlsp.LoginOptions{})
+		body := worstCaseResponse(t, lr.requestID, sigOpts{signer: k.attacker, noKeyInfo: true}, 80)
+
+		var err error
+
+		_, alloc := cost(func() { _, err = complete(e, lr, body) })
+		requireRejected(t, e, lr, err, samlsp.ErrInvalidSignature)
+
+		return alloc
+	}
+
+	one, all := measure(k.idpA), measure(eight...)
+	t.Logf("worst case without KeyInfo: 1 trusted certificate %d KiB, 8 trusted certificates %d KiB", one>>10, all>>10)
+	require.Less(t, all, 4*one, "at most three certificates are tried")
 }
 
 // atCap builds a valid response of exactly MaxResponseElements elements.
@@ -345,7 +385,7 @@ func BenchmarkCompleteLogin_WorstCaseUntrusted(b *testing.B) {
 	k := keys(b)
 	e := newEnv(b, withMaxSize)
 	lr := begin(b, e, samlsp.LoginOptions{})
-	body := worstCaseResponse(b, lr.requestID, k.attacker, 80)
+	body := worstCaseResponse(b, lr.requestID, sigOpts{signer: k.attacker}, 80)
 
 	b.ReportAllocs()
 	b.ResetTimer()

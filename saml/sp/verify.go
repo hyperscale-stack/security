@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"errors"
+	"slices"
 	"time"
 
 	rtvalidator "github.com/mattermost/xml-roundtrip-validator"
@@ -29,9 +30,11 @@ const gosamlMaxTokens = 3*(2*MaxResponseElements+4096) + 1
 //
 // When a signature has no KeyInfo and the connection trusts several
 // certificates, goxmldsig cannot select one ("Missing x509 Element"), so
-// each certificate valid at now−skew is tried alone (Core §5.4.5 lets
-// KeyInfo be absent; plan review F7). A KeyInfo certificate, when present,
-// only selects among the trusted ones by exact equality.
+// the certificates are tried alone (Core §5.4.5 lets KeyInfo be absent;
+// plan review F7): the three most recent valid at now−skew, since each
+// attempt re-runs the whole verification (code review F4). A KeyInfo
+// certificate, when present, only selects among the trusted ones by exact
+// equality.
 func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, now time.Time) (*types.Response, error) {
 	certs := conn.IdentityProvider.SigningCertificates
 	at := now.Add(-sp.cfg.ClockSkew)
@@ -42,11 +45,7 @@ func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, no
 
 	var lastErr error
 
-	for _, c := range certs {
-		if at.Before(c.NotBefore) || at.After(c.NotAfter) {
-			continue
-		}
-
+	for _, c := range rolloverCandidates(certs, at) {
 		resp, err := sp.validateWith(raw, conn, at, []*x509.Certificate{c})
 		if err == nil {
 			return resp, nil
@@ -60,6 +59,30 @@ func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, no
 	}
 
 	return nil, lastErr
+}
+
+// maxRolloverAttempts bounds the certificates tried when a signature has
+// no KeyInfo: an IdP rolling its key announces the current and the next
+// one, sometimes the previous one too.
+const maxRolloverAttempts = 3
+
+// rolloverCandidates returns the certificates tried one by one when a
+// signature has no KeyInfo: the maxRolloverAttempts most recent (by
+// NotBefore) of those valid at at, newest first.
+func rolloverCandidates(certs []*x509.Certificate, at time.Time) []*x509.Certificate {
+	var out []*x509.Certificate
+
+	for _, c := range certs {
+		if at.Before(c.NotBefore) || at.After(c.NotAfter) {
+			continue
+		}
+
+		out = append(out, c)
+	}
+
+	slices.SortStableFunc(out, func(a, b *x509.Certificate) int { return b.NotBefore.Compare(a.NotBefore) })
+
+	return out[:min(len(out), maxRolloverAttempts)]
 }
 
 // validateWith runs gosaml2 with the given trusted certificates. gosaml2's
