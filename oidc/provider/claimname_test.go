@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"math/big"
 	"slices"
 	"strings"
 	"testing"
@@ -292,11 +293,14 @@ func TestReleasedClaimNamesAreValidAndUnique(t *testing.T) {
 }
 
 // TestReleasedClaimValuesAreWellFormed: a claim whose value holds, at any
-// depth, a member name with invalid UTF-8 (written as U+FFFD), two member
-// names of one object that are case variants of each other (exact
-// duplicates included), invalid UTF-8, or more nesting than strict relying
-// parties accept, is dropped — oidc/client refuses a whole token holding
-// one, and encoding/json reads such members under names they never had.
+// depth, a member name with invalid UTF-8 (written as U+FFFD) or a control
+// character, two member names of one object that are case variants of each
+// other (exact duplicates included), invalid UTF-8, an unpaired surrogate
+// escape, or more nesting than strict relying parties accept, is dropped —
+// oidc/client refuses a whole token holding one, and encoding/json reads
+// such members under names they never had — and so is a number beyond
+// float64, for which encoding/json refuses a whole document decoded into an
+// any.
 func TestReleasedClaimValuesAreWellFormed(t *testing.T) {
 	t.Parallel()
 
@@ -317,14 +321,26 @@ func TestReleasedClaimValuesAreWellFormed(t *testing.T) {
 		"invalid_name":      map[string]any{"k\xff": 1},
 		"escaped_invalid":   json.RawMessage(`{"k\ud800": 1}`),
 		"invalid_utf8":      json.RawMessage("{\"k\": \"\xff\"}"),
+		"lone_surrogate":    json.RawMessage(`"\ud800"`),
+		"reversed_pair":     json.RawMessage(`{"k": "\udfff\ud800"}`),
+		"lone_low":          json.RawMessage(`["\udc00"]`),
+		"escaped_backslash": json.RawMessage(`"\\ud800"`),
+		"nul_member":        map[string]any{"country": "FR", "country\x00": "EVIL"},
+		"control_member":    map[string]any{"role\x1f": "admin"},
 		"too_deep":          nested(32),
 		"deepest":           nested(31),
 		"separate_objects":  []any{map[string]any{"k": 1}, map[string]any{"K": 2}},
 		"well_formed":       map[string]any{"a": map[string]any{"b": []any{1, "two", true}}, "c": nil},
+		"surrogate_pair":    json.RawMessage(`"\ud83d\ude00"`),
+		"beyond_float64":    json.Number("1e400"),
+		"big_integer":       new(big.Int).Exp(big.NewInt(10), big.NewInt(400), nil),
+		"deep_big_number":   []any{map[string]any{"n": json.Number("-1e309")}},
+		"large_integer":     json.Number("12345678901234567890"),
 	}
 	dropped := []string{
 		"folded_members", "deep_folded", "duplicate_members", "invalid_names", "invalid_name",
-		"escaped_invalid", "invalid_utf8", "too_deep",
+		"escaped_invalid", "invalid_utf8", "lone_surrogate", "reversed_pair", "lone_low", "nul_member", "control_member", "too_deep",
+		"beyond_float64", "big_integer", "deep_big_number",
 	}
 
 	e := newEnv(t)
@@ -342,7 +358,7 @@ func TestReleasedClaimValuesAreWellFormed(t *testing.T) {
 			assert.NotContains(t, got, name, target)
 		}
 
-		for _, name := range []string{"deepest", "separate_objects", "well_formed"} {
+		for _, name := range []string{"deepest", "separate_objects", "well_formed", "surrogate_pair", "escaped_backslash", "large_integer"} {
 			assert.Contains(t, got, name, target)
 		}
 	}

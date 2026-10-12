@@ -253,9 +253,12 @@ the source for:
 - a name that is not 1 to 255 bytes of UTF-8 without control characters
   (two invalid names would be written as the same member twice);
 - a value holding, at any depth, an object with two member names that are
-  case variants of each other (exact duplicates included) or with a member
-  name in invalid UTF-8, or nested more than 31 levels: strict relying
-  parties — `oidc/client` among them — refuse a whole token holding one.
+  case variants of each other (exact duplicates included) or a member name
+  in invalid UTF-8 or with a control character, an unpaired surrogate
+  escape, a number beyond float64, or more than 31 levels of nesting:
+  relying parties refuse a whole token or document holding one —
+  `oidc/client` the token, `encoding/json` decoding into an `any` the
+  document.
 
 Dropping a claim is never an error (Core §5.3.2, §5.5). The `Interaction` is
 only shown the claim requests the provider may release (`Request.Claims`),

@@ -5,14 +5,12 @@
 package oidcprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 // Scope values (OpenID Connect Core §3.1.2.1, §5.4, §11).
@@ -65,10 +63,12 @@ const (
 // would read is unknowable), whose name is not 1 to 255 bytes of UTF-8
 // without control characters, and whose value holds, at any depth, an
 // object with two member names that are case variants of each other
-// (exact duplicates included) or with a member name in invalid UTF-8, or
-// is nested more than 31 levels — strict relying parties refuse a whole
-// token holding one. Dropping a claim is never an error (Core §5.3.2,
-// §5.5); a value encoding/json cannot encode answers server_error.
+// (exact duplicates included) or a member name in invalid UTF-8 or with a
+// control character, an unpaired surrogate escape or a number beyond
+// float64, or is nested more than 31 levels — relying parties refuse a
+// whole token or document holding one. Dropping a claim is never an error
+// (Core §5.3.2, §5.5); a value encoding/json cannot encode answers
+// server_error.
 //
 // A source whose claim names end-users or upstream directories choose
 // must keep them apart from the names relying parties consume, and
@@ -204,11 +204,6 @@ func queryNames(allowed map[string][]json.RawMessage) []string {
 // it carries neither the value nor its name.
 var errClaimValue = errors.New("oidcprovider: claims source: a released claim value cannot be encoded as JSON")
 
-// maxClaimDepth bounds the nesting of a released claim value: the claims
-// object is one level, and strict relying parties — oidc/client among
-// them — refuse a document nested deeper than 32.
-const maxClaimDepth = 31
-
 // releaseClaims keeps, of what a ClaimsSource returned, the claims allowed
 // lists — a language-tagged variant ("name#fr") with its untagged name —
 // under a valid claim name, encoded: their value is neither null nor an
@@ -280,75 +275,6 @@ func dropCaseVariants(claims map[string]any) {
 			delete(claims, name)
 		}
 	}
-}
-
-// wellFormedValue reports whether an encoded claim value can be released:
-// valid UTF-8, nested at most maxClaimDepth levels, without an object
-// holding a member name with U+FFFD — what encoding/json writes for
-// invalid UTF-8 — or two member names that are case variants of each
-// other, exact duplicates included. A relying party decoding such a value
-// with encoding/json reads members under names they never had, and a
-// strict one refuses the whole token.
-func wellFormedValue(encoded []byte) bool {
-	if !utf8.Valid(encoded) {
-		return false
-	}
-
-	return wellFormedNext(json.NewDecoder(bytes.NewReader(encoded)), 0)
-}
-
-// wellFormedNext reads the next value of dec, nested depth levels deep.
-func wellFormedNext(dec *json.Decoder, depth int) bool {
-	tok, err := dec.Token()
-	if err != nil {
-		return false
-	}
-
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return true // a scalar
-	}
-
-	if depth == maxClaimDepth {
-		return false
-	}
-
-	names := map[string]struct{}{}
-
-	for dec.More() {
-		if delim == '{' && !uniqueMember(dec, names) {
-			return false
-		}
-
-		if !wellFormedNext(dec, depth+1) {
-			return false
-		}
-	}
-
-	_, err = dec.Token() // the closing delimiter
-
-	return err == nil
-}
-
-// uniqueMember reads a member name of an object, and reports whether it is
-// valid UTF-8 and no case variant of a name already in names, which gets
-// it.
-func uniqueMember(dec *json.Decoder, names map[string]struct{}) bool {
-	tok, err := dec.Token()
-	name, _ := tok.(string)
-
-	if err != nil || strings.ContainsRune(name, utf8.RuneError) {
-		return false
-	}
-
-	key := claimKey(name)
-	if _, dup := names[key]; dup {
-		return false
-	}
-
-	names[key] = struct{}{}
-
-	return true
 }
 
 // matchesAny reports whether the encoded claim value equals one of values —
