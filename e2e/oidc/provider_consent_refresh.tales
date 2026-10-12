@@ -1,0 +1,368 @@
+version = 1
+
+# Consent (OpenID Connect Core §3.1.2.4, §3.1.2.6), offline access (Core
+# §11) and refresh-token rotation with reuse detection (Core §12, RFC 9700
+# §4.14.2).
+
+scenario "Consent denied: access_denied" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid profile"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.request.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "deny" {
+    name = "op_consent"
+    inputs = {
+      url      = result.request.url
+      cookie   = result.sign_in.cookie
+      decision = "deny"
+      offline  = false
+      location = "${result.request.prefix}error=access_denied&error_description=[^&]*${result.request.suffix}"
+    }
+  }
+}
+
+# offline_access granted in the consent dialog gives a refresh token. It
+# rotates at each use; presenting a rotated one again is refused and
+# revokes the whole family — the newest refresh and access tokens too.
+scenario "offline_access consented: refresh rotation and reuse detection" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid offline_access"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.request.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.request.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = true
+      location = "${result.request.prefix}code=[^&]+${result.request.suffix}"
+    }
+  }
+
+  step "http" "exchange_code" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          code          = regex_find(result.consent.location, "[?&]code=([^&]+)", 1)
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.request.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        access_token  = is_string()
+        refresh_token = is_string()
+        id_token      = is_string()
+        scope         = "openid offline_access"
+      }
+    }
+
+    capture {
+      refresh_token = response.json.refresh_token
+    }
+  }
+
+  # The refresh rotates the refresh token — the expected status is 200
+  # only when the new one differs — and issues a new ID Token (Core §12.2).
+  step "http" "refresh" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "refresh_token"
+          refresh_token = result.exchange_code.refresh_token
+        }
+      }
+    }
+
+    expect {
+      status = response.json.refresh_token != result.exchange_code.refresh_token ? 200 : 0
+      json = {
+        access_token  = is_string()
+        refresh_token = is_string()
+        id_token      = is_string()
+      }
+    }
+
+    capture {
+      access_token  = response.json.access_token
+      refresh_token = response.json.refresh_token
+    }
+  }
+
+  step "http" "userinfo_with_the_rotated_grant" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer ${result.refresh.access_token}"
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        sub = result.user.subject
+      }
+    }
+  }
+
+  step "http" "reuse_the_rotated_refresh_token" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "refresh_token"
+          refresh_token = result.exchange_code.refresh_token
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      json = {
+        error = "invalid_grant"
+      }
+    }
+  }
+
+  step "http" "the_newest_refresh_token_is_revoked" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "refresh_token"
+          refresh_token = result.refresh.refresh_token
+        }
+      }
+    }
+
+    expect {
+      status = 400
+      json = {
+        error = "invalid_grant"
+      }
+    }
+  }
+
+  step "http" "the_newest_access_token_is_revoked" {
+    request {
+      url = result.endpoints.userinfo_endpoint
+      headers = {
+        Authorization = "Bearer ${result.refresh.access_token}"
+      }
+    }
+
+    expect {
+      status = 401
+      headers = {
+        Www-Authenticate = [contains("error=\"invalid_token\"")]
+      }
+    }
+  }
+}
+
+# Without the consent dialog (no prompt=consent), offline_access is not
+# granted — Core §11 — even with a consent remembered for the client: the
+# scope drops it and no refresh token is issued.
+scenario "offline_access without the consent dialog: no refresh token" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "first" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.first.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "remembered_consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.first.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.first.prefix}code=[^&]+${result.first.suffix}"
+    }
+  }
+
+  step "keyword" "offline" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid offline_access"
+      extra     = ""
+    }
+  }
+
+  step "http" "authorize_without_dialog" {
+    request {
+      url = result.offline.url
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.offline.prefix}code=[^&]+${result.offline.suffix}")]
+      }
+    }
+
+    capture {
+      code = regex_find(response.headers["Location"][0], "[?&]code=([^&]+)", 1)
+    }
+  }
+
+  step "http" "exchange_code" {
+    request {
+      method = "POST"
+      url    = result.endpoints.token_endpoint
+
+      auth {
+        basic {
+          username = result.client.client_id
+          password = result.client.client_secret
+        }
+      }
+
+      body {
+        form = {
+          grant_type    = "authorization_code"
+          code          = result.authorize_without_dialog.code
+          redirect_uri  = config.redirect_uri
+          code_verifier = result.offline.verifier
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        access_token  = is_string()
+        scope         = "openid"
+        refresh_token = not_exists()
+      }
+    }
+  }
+}

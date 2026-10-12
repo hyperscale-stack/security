@@ -5,6 +5,7 @@
 package oidcclient_test
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -21,6 +22,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
 	op := newFakeOP(t)
+	// Checked once every parallel case has run (a parent assertion after
+	// the loop would run before them): every refusal comes before any
+	// network access — the transaction keys' included.
+	t.Cleanup(func() {
+		assert.Zero(t, op.hitCount("/.well-known/openid-configuration"), "a refused configuration never reaches the network")
+	})
 
 	cases := map[string]func(*oidcclient.Config){
 		"empty connection":              func(c *oidcclient.Config) { c.ConnectionID = "" },
@@ -73,6 +80,16 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		"skew over five minutes":        func(c *oidcclient.Config) { c.ClockSkew = 5*time.Minute + time.Second },
 		"insecure cookies in form_post": func(c *oidcclient.Config) { c.InsecureCookies = true; c.ResponseMode = oidcclient.ResponseModeFormPost },
 		"invalid outbound policy":       func(c *oidcclient.Config) { c.Outbound.MaxRedirects = -1 },
+		"no transaction key":            func(c *oidcclient.Config) { c.TransactionKeys = nil },
+		"short transaction key": func(c *oidcclient.Config) {
+			c.TransactionKeys = [][]byte{make([]byte, oidcclient.MinTransactionKeySize-1)}
+		},
+		"empty transaction key after a valid one": func(c *oidcclient.Config) {
+			c.TransactionKeys = [][]byte{testTransactionKey, nil}
+		},
+		"too many transaction keys": func(c *oidcclient.Config) {
+			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+		},
 	}
 
 	for name, breakIt := range cases {
@@ -84,8 +101,6 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 			assert.Nil(t, c)
 		})
 	}
-
-	assert.Zero(t, op.hitCount("/.well-known/openid-configuration"), "a refused configuration never reaches the network")
 }
 
 // TestNewAcceptsBoundaries checks the accepted edges of the configuration.
@@ -109,6 +124,10 @@ func TestNewAcceptsBoundaries(t *testing.T) {
 		"no explicit scopes":          func(c *oidcclient.Config) { c.Scopes = nil },
 		"duplicated scopes":           func(c *oidcclient.Config) { c.Scopes = []string{"email", "openid", "email"} },
 		"trusted audience":            func(c *oidcclient.Config) { c.TrustedAudiences = []string{"https://api.example.com"} },
+		"four transaction keys": func(c *oidcclient.Config) {
+			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+		},
+		"long transaction key": func(c *oidcclient.Config) { c.TransactionKeys = [][]byte{make([]byte, 64)} },
 	}
 
 	for name, tweak := range cases {
@@ -148,4 +167,16 @@ func TestNewCopiesConfigSlices(t *testing.T) {
 
 	_, err = op.login(t, trusting)
 	require.NoError(t, err, "the Client kept its own copy of TrustedAudiences")
+
+	plain := newFakeOP(t)
+	key := bytes.Clone(testTransactionKey)
+	keys := [][]byte{key}
+	keyed := plain.client(t, func(cfg *oidcclient.Config) { cfg.TransactionKeys = keys })
+	ar, code := plain.begin(t, keyed, oidcclient.AuthOptions{})
+
+	key[0] ^= 0xff
+	keys[0] = bytes.Repeat([]byte{0x33}, oidcclient.MinTransactionKeySize)
+
+	_, err = keyed.Complete(context.Background(), callbackFor(ar, code))
+	require.NoError(t, err, "the Client kept its own copy of TransactionKeys and of their bytes")
 }

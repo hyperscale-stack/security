@@ -22,12 +22,13 @@ const encodedSecretLength = 43
 
 // Labels of the values derived from the binding secret. Each derived value
 // is HMAC-SHA256(binding secret, label): independent pseudorandom values
-// under one 256-bit key.
+// under one 256-bit key. labelIntegrity is the exception: it derives the
+// integrity MAC key under a server-held transaction key (integrityKey).
 const (
 	labelNonce     = "oidcclient/nonce/v1"
 	labelVerifier  = "oidcclient/code_verifier/v1"
 	labelBinding   = "oidcclient/binding/v1"
-	labelIntegrity = "oidcclient/integrity/v1"
+	labelIntegrity = "oidcclient/integrity/v2"
 )
 
 // newSecret returns 256 bits from crypto/rand, base64url-encoded without
@@ -94,12 +95,26 @@ func stateHashFor(state string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// integrityFor is the Transaction.Integrity of tx under the binding
-// secret: HMAC-SHA256, keyed by a value derived from the secret, over every
-// other field of tx, each as a netstring (length, ':', value, ',') so that
-// no two transactions encode alike.
-func integrityFor(secret []byte, tx *Transaction) string {
-	mac := hmac.New(sha256.New, derive(secret, labelIntegrity))
+// integrityKey is the MAC key of a transaction: HMAC-SHA256 keyed by the
+// server-held transaction key over labelIntegrity then the 32-byte binding
+// secret. Both secrets are needed: the binding secret ties the MAC to its
+// login, the server key keeps whoever holds that secret — the user agent
+// of the login included — from computing the MAC.
+func integrityKey(serverKey, secret []byte) []byte {
+	mac := hmac.New(sha256.New, serverKey)
+	mac.Write([]byte(labelIntegrity))
+	mac.Write(secret)
+
+	return mac.Sum(nil)
+}
+
+// integrityFor is the Transaction.Integrity of tx under the transaction
+// key serverKey and the binding secret: HMAC-SHA256 keyed by
+// integrityKey(serverKey, secret), over every other field of tx, each as a
+// netstring (length, ':', value, ',') so that no two transactions encode
+// alike.
+func integrityFor(serverKey, secret []byte, tx *Transaction) string {
+	mac := hmac.New(sha256.New, integrityKey(serverKey, secret))
 
 	for _, field := range []string{
 		tx.StateHash, tx.BindingHash, tx.ConnectionID, tx.Issuer, tx.ClientID, tx.RedirectURI,
@@ -110,4 +125,16 @@ func integrityFor(secret []byte, tx *Transaction) string {
 	}
 
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// verifyIntegrity reports whether tx.Integrity is the MAC of tx under one
+// of the transaction keys, comparing in constant time.
+func verifyIntegrity(keys [][]byte, secret []byte, tx *Transaction) bool {
+	for _, key := range keys {
+		if hmac.Equal([]byte(integrityFor(key, secret, tx)), []byte(tx.Integrity)) {
+			return true
+		}
+	}
+
+	return false
 }

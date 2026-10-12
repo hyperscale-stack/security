@@ -1,0 +1,142 @@
+version = 1
+
+# The relying party of examples/oidc-client against the provider, at the
+# HTTP level: the login starts with a binding cookie, and only the browser
+# that holds it completes the login, once.
+
+scenario "Relying party: the callback is bound to the browser" {
+  tags = ["rp-callback", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  # The binding cookie: HttpOnly, SameSite=Lax (the query response mode
+  # comes back by a top-level GET), Secure dropped by the development mode
+  # only (plain http). The redirect leaks nothing: no-store, no-referrer.
+  step "http" "start_login" {
+    request {
+      method = "POST"
+      url    = "${config.rp_url}/login/${config.rp_connection}"
+    }
+
+    expect {
+      status = 303
+      headers = {
+        Location        = [matches("^${result.endpoints.authorization_endpoint}\\?")]
+        Set-Cookie      = [matches("^oidc-[0-9a-f]{16}=[A-Za-z0-9_-]+; Path=/; Max-Age=[0-9]+; HttpOnly; SameSite=Lax$")]
+        Cache-Control   = ["no-store"]
+        Referrer-Policy = ["no-referrer"]
+      }
+    }
+
+    capture {
+      location     = response.headers["Location"][0]
+      binding      = regex_find(response.headers["Set-Cookie"][0], "^(oidc-[0-9a-f]{16}=[^;]+)", 1)
+      binding_name = regex_find(response.headers["Set-Cookie"][0], "^(oidc-[0-9a-f]{16})=", 1)
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.start_login.location
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.start_login.location
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "^${config.redirect_uri}\\?code=[^&]+&iss=${url_encode(config.issuer)}&state=[A-Za-z0-9_-]+$"
+    }
+  }
+
+  # Another browser — no binding cookie — cannot complete the login, and
+  # the attempt leaves the login usable by its own browser.
+  step "http" "callback_without_the_cookie" {
+    request {
+      url = result.consent.location
+    }
+
+    expect {
+      status = 400
+      body   = contains("sign-in failed")
+    }
+  }
+
+  # A well-formed binding of another login: the transaction store refuses
+  # the mismatch and keeps the transaction.
+  step "http" "callback_with_a_wrong_cookie" {
+    request {
+      url = result.consent.location
+      headers = {
+        Cookie = "${result.start_login.binding_name}=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+
+    expect {
+      status = 400
+    }
+  }
+
+  # The browser that started the login completes it: a fresh session, the
+  # binding cookie expired, a redirect to a URL without the code.
+  step "http" "callback" {
+    request {
+      url = result.consent.location
+      headers = {
+        Cookie = result.start_login.binding
+      }
+    }
+
+    expect {
+      status = 303
+      headers = {
+        Location = ["/"]
+      }
+    }
+
+    capture {
+      session = regex_find("%{for c in response.headers["Set-Cookie"]}${c}\n%{endfor}", "(?m)^(session=[^;]+)", 1)
+      expired = regex_find("%{for c in response.headers["Set-Cookie"]}${c}\n%{endfor}", "(?m)^(${result.start_login.binding_name}=; Path=/; Max-Age=0)", 1)
+    }
+  }
+
+  step "http" "signed_in" {
+    request {
+      url = "${config.rp_url}/"
+      headers = {
+        Cookie = result.callback.session
+      }
+    }
+
+    expect {
+      status = 200
+      body   = contains("${config.rp_connection}: ${config.issuer}, subject ${result.user.subject}")
+    }
+  }
+
+  # A callback is completed once.
+  step "http" "callback_replay" {
+    request {
+      url = result.consent.location
+      headers = {
+        Cookie = result.start_login.binding
+      }
+    }
+
+    expect {
+      status = 400
+    }
+  }
+}

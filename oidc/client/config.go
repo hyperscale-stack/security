@@ -5,7 +5,9 @@
 package oidcclient
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
@@ -71,6 +73,16 @@ const (
 	MaxClockSkew = 5 * time.Minute
 )
 
+// Bounds of Config.TransactionKeys.
+const (
+	// MinTransactionKeySize is the minimum size of a transaction key, in
+	// bytes: 256 bits.
+	MinTransactionKeySize = 32
+	// MaxTransactionKeys bounds the number of transaction keys: the active
+	// one and the keys of a rotation in progress.
+	MaxTransactionKeys = 4
+)
+
 // responseParams are the authorization response parameters the Client
 // interprets (RFC 6749 §4.1.2, §4.1.2.1; RFC 9207 §2); RedirectURL may not
 // carry them in its query.
@@ -124,6 +136,22 @@ type Config struct {
 	// Store persists the pending logins. It MUST be shared by every
 	// instance that may serve the callback.
 	Store TransactionStore
+
+	// TransactionKeys are the server-held keys of the transactions'
+	// integrity MAC. REQUIRED: 1 to MaxTransactionKeys keys of at least
+	// MinTransactionKeySize bytes from a cryptographic source, secret like
+	// a session key and shared by every instance that may serve the
+	// callback. TransactionKeys[0] protects the transactions Begin stores;
+	// Complete accepts any of the keys. The MAC key of a transaction
+	// derives from both a transaction key and the login's binding secret,
+	// so whoever can write to the Store — even from the browser of a login
+	// it runs itself, which holds that secret — cannot forge it.
+	//
+	// Rotate without failing a login: add the new key last on every
+	// instance, then move it first, then remove the old key once
+	// TransactionTTL has elapsed. A key removed earlier fails the logins it
+	// protected with ErrTransactionIntegrity.
+	TransactionKeys [][]byte
 
 	// TransactionTTL bounds the time between Begin and the callback, in
 	// whole seconds: DefaultTransactionTTL when zero, at most
@@ -204,6 +232,7 @@ func (c Config) normalized() (Config, *url.URL, error) {
 	}
 
 	out.TrustedAudiences = slices.Clone(c.TrustedAudiences)
+	out.TransactionKeys = cloneKeys(c.TransactionKeys)
 	out.Outbound.AllowedPrefixes = slices.Clone(c.Outbound.AllowedPrefixes)
 	out.applyDefaults()
 
@@ -272,7 +301,70 @@ func (c Config) validateFlow() error {
 		}
 	}
 
+	return validateTransactionKeys(c.TransactionKeys)
+}
+
+// validateTransactionKeys checks Config.TransactionKeys: 1 to
+// MaxTransactionKeys keys of at least MinTransactionKeySize bytes. The
+// errors never carry key material.
+func validateTransactionKeys(keys [][]byte) error {
+	if len(keys) == 0 || len(keys) > MaxTransactionKeys {
+		return fmt.Errorf("%w: TransactionKeys must hold 1 to %d keys", ErrInvalidConfig, MaxTransactionKeys)
+	}
+
+	for _, key := range keys {
+		if len(key) < MinTransactionKeySize {
+			return fmt.Errorf("%w: every TransactionKeys entry must be at least %d bytes", ErrInvalidConfig, MinTransactionKeySize)
+		}
+	}
+
 	return nil
+}
+
+// cloneKeys returns a deep copy of keys: the Client never shares key
+// bytes with its caller.
+func cloneKeys(keys [][]byte) [][]byte {
+	out := make([][]byte, len(keys))
+	for i, key := range keys {
+		out[i] = bytes.Clone(key)
+	}
+
+	return out
+}
+
+// String implements fmt.Stringer with the identifying fields only: the
+// client secret and the transaction keys are redacted.
+func (c Config) String() string {
+	return fmt.Sprintf("oidcclient.Config{ConnectionID: %q, Issuer: %q, ClientID: %q, ClientSecret: %s, AuthMethod: %s, "+
+		"RedirectURL: %q, ResponseMode: %s, TransactionKeys: %d REDACTED}",
+		c.ConnectionID, c.Issuer, c.ClientID, redacted(c.ClientSecret), c.AuthMethod, c.RedirectURL, c.ResponseMode,
+		len(c.TransactionKeys))
+}
+
+// GoString implements fmt.GoStringer like String.
+func (c Config) GoString() string { return c.String() }
+
+// LogValue implements slog.LogValuer like String.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("connection_id", c.ConnectionID),
+		slog.String("issuer", c.Issuer),
+		slog.String("client_id", c.ClientID),
+		slog.String("client_secret", redacted(c.ClientSecret)),
+		slog.String("auth_method", string(c.AuthMethod)),
+		slog.String("redirect_url", c.RedirectURL),
+		slog.String("response_mode", string(c.ResponseMode)),
+		slog.Int("transaction_keys", len(c.TransactionKeys)),
+	)
+}
+
+// redacted renders a secret as REDACTED, or as "" when it is empty.
+func redacted(secret string) string {
+	if secret == "" {
+		return `""`
+	}
+
+	return "REDACTED"
 }
 
 // validateIssuer checks an issuer identifier (OpenID Connect Core §2:

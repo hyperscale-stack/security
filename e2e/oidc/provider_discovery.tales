@@ -1,0 +1,103 @@
+version = 1
+
+# Discovery (OpenID Connect Discovery 1.0 §3, §4), its consistency with the
+# RFC 8414 metadata of the same issuer, and the JWK Set (RFC 7517).
+
+scenario "Discovery document" {
+  tags = ["provider", "protocol"]
+
+  step "http" "discovery" {
+    request {
+      url = "${config.issuer}/.well-known/openid-configuration"
+    }
+
+    expect {
+      status = 200
+      headers = {
+        Content-Type  = [contains("application/json")]
+        Cache-Control = [matches("max-age=[0-9]+")]
+      }
+      json = {
+        issuer                                         = config.issuer
+        authorization_endpoint                         = is_string()
+        token_endpoint                                 = is_string()
+        userinfo_endpoint                              = is_string()
+        jwks_uri                                       = is_string()
+        response_types_supported                       = ["code"]
+        response_modes_supported                       = ["query"]
+        subject_types_supported                        = ["public"]
+        id_token_signing_alg_values_supported          = contains("RS256")
+        code_challenge_methods_supported               = ["S256"]
+        token_endpoint_auth_methods_supported          = contains("client_secret_basic")
+        scopes_supported                               = contains("openid")
+        claims_parameter_supported                     = true
+        request_parameter_supported                    = false
+        request_uri_parameter_supported                = false
+        authorization_response_iss_parameter_supported = true
+        registration_endpoint                          = not_exists()
+      }
+    }
+
+    capture {
+      token_endpoint = response.json.token_endpoint
+      jwks_uri       = response.json.jwks_uri
+    }
+  }
+
+  # RFC 8414 §3: the metadata of the issuer, at the well-known URI built
+  # from its host and path, names the same issuer and endpoints.
+  step "http" "authorization_server_metadata" {
+    request {
+      url = "${regex_find(config.issuer, "^(https?://[^/]+)", 1)}/.well-known/oauth-authorization-server${regex_find(config.issuer, "^https?://[^/]+(.*)$", 1)}"
+    }
+
+    expect {
+      status = 200
+      json = {
+        issuer         = config.issuer
+        token_endpoint = result.discovery.token_endpoint
+        jwks_uri       = result.discovery.jwks_uri
+      }
+    }
+  }
+}
+
+scenario "JWK Set publishes public keys only" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "endpoints" {
+    name = "discover"
+  }
+
+  step "http" "jwks" {
+    request {
+      url = result.endpoints.jwks_uri
+    }
+
+    expect {
+      status = 200
+      headers = {
+        Content-Type  = [contains("json")]
+        Cache-Control = [matches("max-age=[0-9]+")]
+      }
+      json = {
+        keys = [
+          {
+            kty = "RSA"
+            kid = is_string()
+            alg = "RS256"
+            use = "sig"
+            n   = is_string()
+            e   = is_string()
+            d   = not_exists()
+            p   = not_exists()
+            q   = not_exists()
+            dp  = not_exists()
+            dq  = not_exists()
+            qi  = not_exists()
+          },
+        ]
+      }
+    }
+  }
+}

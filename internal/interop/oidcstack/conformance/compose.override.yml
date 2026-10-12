@@ -1,0 +1,27 @@
+# Override of the OpenID Foundation conformance suite's
+# docker-compose-prebuilt.yml for run.sh: images pinned by digest (pulled
+# 2026-10-11), the suite's database in memory — nothing is written into the
+# suite checkout — ports bound to the loopback interface only, nginx serving
+# the run's certificate (SAN localhost.emobix.co.uk: Go clients refuse the
+# image's CN-only one), and host.docker.internal reaching the host on Linux
+# too (Docker Desktop provides it).
+services:
+  mongodb:
+    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
+    volumes: !reset []
+    tmpfs:
+      - /data/db
+
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx@sha256:22e15c7dc5631d28dc361aeb4ae844c9bcde57a5b3bec22efc67076b736d337c
+    ports: !override
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8444:8444"
+    volumes:
+      - ${CONFORMANCE_TLS_DIR:?set by run.sh}/nginx.crt:/etc/ssl/certs/nginx-selfsigned.crt:ro
+      - ${CONFORMANCE_TLS_DIR:?set by run.sh}/nginx.key:/etc/ssl/private/nginx-selfsigned.key:ro
+
+  server:
+    image: registry.gitlab.com/openid/conformance-suite@sha256:f1a6e7a68e78bd97f2aa492ea0de51869074b6b64ae67c4fc0ed70ea0bf0d05a
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

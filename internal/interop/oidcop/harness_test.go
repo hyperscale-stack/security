@@ -10,6 +10,8 @@ package oidcop_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -46,6 +48,7 @@ const (
 	postClientID      = "rp-post"
 	postClientSecret  = "post-secret"
 	publicClientID    = "rp-public"
+	signingSecret     = "signing-secret"
 	redirectURI       = "https://rp.example/callback"
 	tenantA           = "/tenant-a"
 	tenantB           = "/tenant-b"
@@ -64,25 +67,63 @@ var (
 	publicClient = clientSpec{publicClientID, "", xoauth2.AuthStyleInParams}
 )
 
-// rsaKeys are generated once: RSA-2048 is slow to generate.
-var rsaKeys = sync.OnceValue(func() []*rsa.PrivateKey {
-	keys := make([]*rsa.PrivateKey, 4)
+// The keys are generated once: RSA-2048 is slow to generate.
+var (
+	rsaKeys = sync.OnceValue(func() []*rsa.PrivateKey {
+		keys := make([]*rsa.PrivateKey, 7)
 
-	for i := range keys {
-		k, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			panic(err)
+		for i := range keys {
+			k, err := rsa.GenerateKey(rand.Reader, 2048)
+			if err != nil {
+				panic(err)
+			}
+
+			keys[i] = k
 		}
 
-		keys[i] = k
-	}
+		return keys
+	})
+	ecKeys = sync.OnceValue(func() []*ecdsa.PrivateKey {
+		keys := make([]*ecdsa.PrivateKey, 0, 2)
 
-	return keys
-})
+		for _, curve := range []elliptic.Curve{elliptic.P256(), elliptic.P384()} {
+			k, err := ecdsa.GenerateKey(curve, rand.Reader)
+			if err != nil {
+				panic(err)
+			}
+
+			keys = append(keys, k)
+		}
+
+		return keys
+	})
+)
 
 // signingKey returns RS256 signing key i of rsaKeys under kid.
 func signingKey(i int, kid string) jwtsec.PrivateKey {
 	return jwtsec.PrivateKey{KeyID: kid, Algorithm: jwtsec.RS256, Key: rsaKeys()[i]}
+}
+
+// algorithmRing signs with RS256 and with every algorithm of
+// signingAlgorithms: one key per algorithm (RFC 8725 §3.1).
+func algorithmRing() oidcprovider.KeyRing {
+	return oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{
+		signingKey(0, "root-1"),
+		{KeyID: "root-ps256", Algorithm: jwtsec.PS256, Key: rsaKeys()[4]},
+		{KeyID: "root-rs512", Algorithm: jwtsec.RS512, Key: rsaKeys()[5]},
+		{KeyID: "root-es256", Algorithm: jwtsec.ES256, Key: ecKeys()[0]},
+		{KeyID: "root-es384", Algorithm: jwtsec.ES384, Key: ecKeys()[1]},
+	}}
+}
+
+// signingAlgorithms are the ID Token algorithms clients register besides
+// RS256 (Registration §2 id_token_signed_response_alg); client
+// "rp-<alg>" registers alg.
+var signingAlgorithms = []jwtsec.Algorithm{jwtsec.PS256, jwtsec.RS512, jwtsec.ES256, jwtsec.ES384}
+
+// accessTokenKey signs the RFC 9068 access tokens of withJWTAccessTokens.
+func accessTokenKey() jwtsec.PrivateKey {
+	return jwtsec.PrivateKey{KeyID: "access-tokens", Algorithm: jwtsec.RS256, Key: rsaKeys()[6]}
 }
 
 // op is an OpenID Provider on a TLS test server: the root issuer (the
@@ -102,7 +143,29 @@ func (o *op) now() time.Time { return time.Now().Add(time.Duration(o.offset.Load
 // advance moves the provider's clock forward by d.
 func (o *op) advance(d time.Duration) { o.offset.Add(int64(d)) }
 
-func newOP(t *testing.T) *op {
+// opOption changes the provider newOP builds.
+type opOption func(t *testing.T, o *op, gcfg *grant.Config)
+
+// withJWTAccessTokens issues RFC 9068 JWT access tokens, signed by a key
+// the root issuer publishes in its JWK Set.
+func withJWTAccessTokens() opOption {
+	return func(t *testing.T, o *op, gcfg *grant.Config) {
+		t.Helper()
+
+		gcfg.AccessTokens = token.NewJWTAccessTokenGenerator(jwtsec.NewOAuth2AccessTokenSigner(accessTokenKey()))
+
+		pub, err := accessTokenKey().Public()
+		require.NoError(t, err)
+
+		ring, err := o.keys.Keys(t.Context(), o.issuer)
+		require.NoError(t, err)
+
+		ring.Published = append(ring.Published, pub)
+		o.keys.set(o.issuer, ring)
+	}
+}
+
+func newOP(t *testing.T, opts ...opOption) *op {
 	t.Helper()
 
 	mux := http.NewServeMux()
@@ -110,7 +173,8 @@ func newOP(t *testing.T) *op {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	o := &op{srv: srv, issuer: srv.URL, keys: &issuerKeys{rings: map[string]oidcprovider.KeyRing{}}, login: &autoLogin{}}
+	o := &op{srv: srv, issuer: srv.URL, keys: &issuerKeys{rings: map[string]oidcprovider.KeyRing{}}}
+	o.login = &autoLogin{now: o.now, authTime: o.now()}
 	o.keys.set(o.issuer, oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{signingKey(0, "root-1")}})
 	o.keys.set(o.issuer+tenantA, oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{signingKey(2, "tenant-a")}})
 	o.keys.set(o.issuer+tenantB, oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{signingKey(3, "tenant-b")}})
@@ -123,6 +187,10 @@ func newOP(t *testing.T) *op {
 		AccessTTL:         time.Hour,
 		RefreshTTL:        24 * time.Hour,
 		RefreshTokenScope: oidcprovider.ScopeOfflineAccess,
+	}
+
+	for _, opt := range opts {
+		opt(t, o, &gcfg)
 	}
 
 	provider, err := oidcprovider.New(oauth2.ServerConfig{
@@ -202,13 +270,36 @@ func (k *issuerKeys) Keys(_ context.Context, issuer string) (oidcprovider.KeyRin
 	return oidcprovider.KeyRing{Signing: slices.Clone(ring.Signing), Published: slices.Clone(ring.Published)}, nil
 }
 
-// autoLogin is the end-user agent: it authenticates alice at once and
-// agrees to everything requested — offline access when the consent dialog
-// was asked for; signed out, it answers a silent request login_required.
-type autoLogin struct{ signedOut atomic.Bool }
+// autoLogin is the end-user agent: a browser whose session authenticated
+// alice when the provider started. An interactive request the session
+// does not satisfy (Request.Check: prompt=login, max_age) makes her
+// authenticate again. She agrees to everything requested — every claim of
+// the claims parameter, offline access when the consent dialog was asked
+// for — unless a test narrows what she grants. A silent request is
+// answered from the session as it is, leaving it to the provider to refuse
+// a stale one or another end-user's; signed out, login_required.
+type autoLogin struct {
+	now       func() time.Time
+	signedOut atomic.Bool
+
+	mu       sync.Mutex
+	authTime time.Time // when the session's end-user authenticated
+	subject  string    // the session's end-user; "" is alice
+	claims   []string  // the claims she releases; nil: every requested one
+	scope    string    // the scope she grants; "": the requested one
+}
 
 func (a *autoLogin) Authorize(_ http.ResponseWriter, _ *http.Request, req *oidcprovider.Request) (*oidcprovider.Decision, error) {
-	return approve(req), nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	ev := a.event(req)
+	if req.Check(ev, time.Time{}) != nil {
+		a.authTime = a.now() // she authenticates again
+		ev.AuthTime = a.authTime
+	}
+
+	return a.approve(req, ev), nil
 }
 
 func (a *autoLogin) AuthorizeSilently(_ *http.Request, req *oidcprovider.Request) (*oidcprovider.Decision, error) {
@@ -216,16 +307,37 @@ func (a *autoLogin) AuthorizeSilently(_ *http.Request, req *oidcprovider.Request
 		return &oidcprovider.Decision{Refusal: oauth2.ErrLoginRequired}, nil
 	}
 
-	return approve(req), nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.approve(req, a.event(req)), nil
 }
 
-func approve(req *oidcprovider.Request) *oidcprovider.Decision {
-	d := &oidcprovider.Decision{Authentication: &oidcprovider.AuthenticationEvent{
-		Issuer: req.Issuer, Subject: endUser, AuthTime: time.Now(), AMR: []string{"pwd"},
-	}}
+// set changes the session and what she grants.
+func (a *autoLogin) set(edit func(*autoLogin)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	for _, c := range append(slices.Clone(req.Claims.IDToken), req.Claims.UserInfo...) {
-		d.Claims = append(d.Claims, c.Name)
+	edit(a)
+}
+
+// event is the session's authentication.
+func (a *autoLogin) event(req *oidcprovider.Request) oidcprovider.AuthenticationEvent {
+	subject := a.subject
+	if subject == "" {
+		subject = endUser
+	}
+
+	return oidcprovider.AuthenticationEvent{Issuer: req.Issuer, Subject: subject, AuthTime: a.authTime, AMR: []string{"pwd"}}
+}
+
+func (a *autoLogin) approve(req *oidcprovider.Request, ev oidcprovider.AuthenticationEvent) *oidcprovider.Decision {
+	d := &oidcprovider.Decision{Authentication: &ev, Scope: a.scope, Claims: slices.Clone(a.claims)}
+
+	if a.claims == nil {
+		for _, c := range append(slices.Clone(req.Claims.IDToken), req.Claims.UserInfo...) {
+			d.Claims = append(d.Claims, c.Name)
+		}
 	}
 
 	if req.OfflineAccess && req.Prompt.Consent {
@@ -243,8 +355,23 @@ func (claimsOf) Claims(_ context.Context, q oidcprovider.ClaimsQuery) (map[strin
 		return nil, oidcprovider.ErrUnknownSubject
 	}
 
-	return map[string]any{"name": "Alice Liddell", "email": "alice@example.com", "email_verified": true}, nil
+	return map[string]any{
+		"name": "Alice Liddell", "email": "alice@example.com", "email_verified": true,
+		"phone_number": "+33 1 23 45 67 89", "phone_number_verified": true,
+	}, nil
 }
+
+// signingClient is a DefaultClient registering an ID Token algorithm.
+type signingClient struct {
+	*oauth2.DefaultClient
+
+	alg jwtsec.Algorithm
+}
+
+func (c signingClient) IDTokenSignedResponseAlg() jwtsec.Algorithm { return c.alg }
+
+// signingClientID is the client registering alg.
+func signingClientID(alg jwtsec.Algorithm) string { return "rp-" + strings.ToLower(string(alg)) }
 
 // staticClients is the ClientStore.
 type staticClients map[string]oauth2.Client
@@ -257,7 +384,7 @@ func clients() staticClients {
 	scopes := []string{"openid", "profile", "email", "offline_access"}
 	grants := []string{"authorization_code", "refresh_token"}
 
-	return staticClients{
+	registered := staticClients{
 		basicClientID: &oauth2.DefaultClient{
 			IDValue: basicClientID, Secret: basicClientSecret, TypeValue: oauth2.ClientConfidential,
 			RedirectURIValues: []string{redirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
@@ -274,6 +401,16 @@ func clients() staticClients {
 			AuthMethodValues: []string{"none"},
 		},
 	}
+
+	for _, alg := range signingAlgorithms {
+		registered[signingClientID(alg)] = signingClient{alg: alg, DefaultClient: &oauth2.DefaultClient{
+			IDValue: signingClientID(alg), Secret: signingSecret, TypeValue: oauth2.ClientConfidential,
+			RedirectURIValues: []string{redirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
+			AuthMethodValues: []string{"client_secret_basic"},
+		}}
+	}
+
+	return registered
 }
 
 // rp is a go-oidc + x/oauth2 relying party of one issuer.

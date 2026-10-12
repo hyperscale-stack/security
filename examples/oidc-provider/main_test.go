@@ -63,7 +63,7 @@ func newHarness(t *testing.T) *harness {
 	srv := httptest.NewUnstartedServer(nil)
 	issuer := "http://" + srv.Listener.Addr().String()
 
-	handler, err := newServer(issuer)
+	handler, err := newServer(config{Issuer: issuer, RedirectURI: defaultRedirectURI})
 	require.NoError(t, err)
 
 	srv.Config.Handler = handler
@@ -127,7 +127,7 @@ func (h *harness) getJSON(target string, v any) {
 // authorizeURL is an authorization request of the confidential client.
 func (h *harness) authorizeURL(challenge, nonce string, extra ...string) string {
 	q := url.Values{
-		"response_type": {"code"}, "client_id": {rpClientID}, "redirect_uri": {rpRedirectURI},
+		"response_type": {"code"}, "client_id": {rpClientID}, "redirect_uri": {defaultRedirectURI},
 		"scope": {"openid profile email"}, "state": {"st"}, "nonce": {nonce},
 		"code_challenge": {challenge}, "code_challenge_method": {"S256"},
 	}
@@ -164,7 +164,7 @@ func redirected(t *testing.T, resp *http.Response) url.Values {
 
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(loc.String(), rpRedirectURI+"?"), loc.String())
+	require.True(t, strings.HasPrefix(loc.String(), defaultRedirectURI+"?"), loc.String())
 
 	return loc.Query()
 }
@@ -278,7 +278,7 @@ func TestOpenIDProviderFlow(t *testing.T) {
 
 	tokens := h.token(url.Values{
 		"grant_type": {"authorization_code"}, "code": {params.Get("code")},
-		"redirect_uri": {rpRedirectURI}, "code_verifier": {verifier},
+		"redirect_uri": {defaultRedirectURI}, "code_verifier": {verifier},
 	})
 	require.NotEmpty(t, tokens.RefreshToken, "offline access consented")
 
@@ -439,4 +439,86 @@ func TestAdvertisedURLsAreServed(t *testing.T) {
 
 	h.getJSON(h.issuer+"/.well-known/oauth-authorization-server", &metadata)
 	assert.Equal(t, h.issuer, metadata["issuer"])
+}
+
+// TestLoadConfig: the defaults pair the example with examples/oidc-client;
+// the environment overrides them; a redirect URI that is not an absolute
+// http(s) URL, or has a fragment, is refused (RFC 6749 §3.1.2).
+func TestLoadConfig(t *testing.T) {
+	t.Setenv("OIDC_PROVIDER_ISSUER", "")
+	t.Setenv("OIDC_PROVIDER_ADDR", "")
+	t.Setenv("OIDC_PROVIDER_REDIRECT_URI", "")
+
+	cfg, err := loadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, config{
+		Issuer: "http://localhost:8083", Addr: "localhost:8083", RedirectURI: "http://localhost:9000/oidc/demo/callback",
+	}, cfg)
+
+	t.Setenv("OIDC_PROVIDER_ISSUER", "http://127.0.0.1:8083")
+	t.Setenv("OIDC_PROVIDER_ADDR", "127.0.0.1:8083")
+	t.Setenv("OIDC_PROVIDER_REDIRECT_URI", "http://localhost:9000/oidc/e2e/callback")
+
+	cfg, err = loadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, config{
+		Issuer: "http://127.0.0.1:8083", Addr: "127.0.0.1:8083", RedirectURI: "http://localhost:9000/oidc/e2e/callback",
+	}, cfg)
+
+	for _, bad := range []string{
+		"/oidc/demo/callback", "http:///oidc/demo/callback", "ftp://localhost/cb",
+		"http://localhost:9000/cb#fragment", "http://localhost:9000/cb#", "%zz",
+	} {
+		t.Setenv("OIDC_PROVIDER_REDIRECT_URI", bad)
+
+		_, err := loadConfig()
+		require.ErrorContains(t, err, "OIDC_PROVIDER_REDIRECT_URI", bad)
+	}
+}
+
+// TestConfiguredRedirectURI: both clients are registered with the
+// configured redirect URI only — the default one is then refused without
+// a redirect — and an https issuer gets Secure session cookies.
+func TestConfiguredRedirectURI(t *testing.T) {
+	t.Parallel()
+
+	const custom = "https://rp.example/oidc/demo/callback"
+
+	handler, err := newServer(config{Issuer: "https://op.example", RedirectURI: custom})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://op.example/.well-known/openid-configuration", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var doc discovery
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+
+	_, challenge := pkce()
+
+	authorize := func(redirectURI string) *httptest.ResponseRecorder {
+		q := url.Values{
+			"response_type": {"code"}, "client_id": {rpClientID}, "redirect_uri": {redirectURI}, "scope": {"openid"},
+			"state": {"st"}, "nonce": {"n"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
+		}
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, doc.AuthorizationEndpoint+"?"+q.Encode(), nil))
+
+		return rec
+	}
+
+	login := authorize(custom)
+	require.Equal(t, http.StatusOK, login.Code, "the login page")
+
+	cookies := login.Result().Cookies()
+	require.NotEmpty(t, cookies)
+
+	for _, c := range cookies {
+		assert.True(t, c.Secure, c.Name)
+	}
+
+	refused := authorize(defaultRedirectURI)
+	assert.Equal(t, http.StatusBadRequest, refused.Code)
+	assert.Empty(t, refused.Header().Get("Location"))
 }

@@ -15,8 +15,24 @@
 // a relying party at the issuer http://localhost:8083 with the confidential
 // client demo-rp / demo-rp-secret (client_secret_basic) or the public
 // client demo-spa (PKCE only), both registered with the redirect URI
-// http://localhost:9000/callback, and sign in as alice / alice-secret.
-// Request offline_access with prompt=consent to get a refresh token.
+// http://localhost:9000/oidc/demo/callback — the callback of the "demo"
+// connection of examples/oidc-client served at http://localhost:9000 — and
+// sign in as alice / alice-secret. Request offline_access with
+// prompt=consent to get a refresh token.
+//
+// The environment overrides the defaults: OIDC_PROVIDER_ISSUER (https, or
+// http on a loopback host), OIDC_PROVIDER_ADDR (the listen address) and
+// OIDC_PROVIDER_REDIRECT_URI (the redirect URI of both clients). With
+// examples/oidc-client, from the examples directory:
+//
+//	go run ./oidc-provider &
+//	BASE_URL=http://localhost:9000 ADDR=localhost:9000 OIDC_DEV_ALLOW_LOOPBACK=1 \
+//	OIDC_CONNECTIONS=demo OIDC_DEMO_ISSUER=http://localhost:8083 \
+//	OIDC_DEMO_CLIENT_ID=demo-rp OIDC_DEMO_CLIENT_SECRET=demo-rp-secret \
+//	go run ./oidc-client
+//
+// then open http://localhost:9000. make e2e-oidc runs both the same way
+// (e2e/oidc), through a browser.
 //
 // The demo cuts corners a deployment must not: an http issuer
 // (AllowInsecureLoopbackIssuer — production issuers are https), a key
@@ -35,6 +51,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -55,14 +72,52 @@ import (
 // Demo configuration. A deployment loads clients and accounts from its
 // stores.
 const (
-	demoIssuer     = "http://localhost:8083"
-	demoAddr       = "localhost:8083"
-	rpClientID     = "demo-rp"
-	rpClientSecret = "demo-rp-secret" //nolint:gosec // demo credential
-	spaClientID    = "demo-spa"
-	rpRedirectURI  = "http://localhost:9000/callback"
-	apiAudience    = "demo-api"
+	defaultIssuer      = "http://localhost:8083"
+	defaultAddr        = "localhost:8083"
+	defaultRedirectURI = "http://localhost:9000/oidc/demo/callback"
+	rpClientID         = "demo-rp"
+	rpClientSecret     = "demo-rp-secret" //nolint:gosec // demo credential
+	spaClientID        = "demo-spa"
+	apiAudience        = "demo-api"
 )
+
+// config is the demo's configuration.
+type config struct {
+	// Issuer is the issuer identifier: https, or http on a loopback host
+	// (development).
+	Issuer string
+	// Addr is the listen address.
+	Addr string
+	// RedirectURI is the redirect URI registered for both clients.
+	RedirectURI string
+}
+
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+
+	return fallback
+}
+
+// loadConfig reads the configuration from the environment
+// (OIDC_PROVIDER_ISSUER, OIDC_PROVIDER_ADDR, OIDC_PROVIDER_REDIRECT_URI),
+// with the demo's defaults. The provider validates the issuer.
+func loadConfig() (config, error) {
+	cfg := config{
+		Issuer:      envOr("OIDC_PROVIDER_ISSUER", defaultIssuer),
+		Addr:        envOr("OIDC_PROVIDER_ADDR", defaultAddr),
+		RedirectURI: envOr("OIDC_PROVIDER_REDIRECT_URI", defaultRedirectURI),
+	}
+
+	// A redirection URI is absolute and has no fragment (RFC 6749 §3.1.2).
+	u, err := url.Parse(cfg.RedirectURI)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.Contains(cfg.RedirectURI, "#") {
+		return config{}, fmt.Errorf("OIDC_PROVIDER_REDIRECT_URI: an absolute http(s) URL without fragment is required, got %q", cfg.RedirectURI)
+	}
+
+	return cfg, nil
+}
 
 // account is an end-user of the demo.
 type account struct {
@@ -102,10 +157,12 @@ type app struct {
 	answers map[string]consentAnswer
 }
 
-// newServer builds the provider for issuer and the application around it.
-// It is separate from main so that the end-to-end test drives the exact
-// same wiring.
-func newServer(issuer string) (http.Handler, error) {
+// newServer builds the provider of cfg and the application around it. It
+// is separate from main so that the end-to-end test drives the exact same
+// wiring.
+func newServer(cfg config) (http.Handler, error) {
+	issuer := cfg.Issuer
+
 	a, err := newApp(issuer)
 	if err != nil {
 		return nil, err
@@ -130,7 +187,7 @@ func newServer(issuer string) (http.Handler, error) {
 
 	op, err := oidcprovider.New(oauth2.ServerConfig{
 		Storage:        store,
-		ClientStore:    demoClients(),
+		ClientStore:    demoClients(cfg.RedirectURI),
 		IssuerResolver: oauth2.StaticIssuer(issuer, apiAudience),
 		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost(), clientauth.NewNone()},
 		Grants:         []oauth2.Grant{grant.NewAuthorizationCode(grants), grant.NewRefreshToken(grants)},
@@ -187,10 +244,12 @@ func newApp(issuer string) (*app, error) {
 		return nil, fmt.Errorf("hash alice: %w", err)
 	}
 
+	// Secure cookies need https: off for an http (loopback) issuer only.
+	secure := strings.HasPrefix(issuer, "https://")
+
 	return &app{
-		issuer: issuer,
-		// Secure cookies need https: off for the http demo only.
-		sessions: session.NewManager(codec, session.WithCookieName("op_session"), session.WithSecure(false)),
+		issuer:   issuer,
+		sessions: session.NewManager(codec, session.WithCookieName("op_session"), session.WithSecure(secure)),
 		hasher:   hasher,
 		accounts: map[string]account{"alice": {passwordHash: aliceHash, claims: map[string]any{
 			"name": "Alice Liddell", "given_name": "Alice", "family_name": "Liddell",
@@ -228,19 +287,19 @@ func (s staticClients) LoadClient(_ context.Context, id string) (oauth2.Client, 
 	return s[id], nil
 }
 
-func demoClients() staticClients {
+func demoClients(redirectURI string) staticClients {
 	scopes := []string{oidcprovider.ScopeOpenID, oidcprovider.ScopeProfile, oidcprovider.ScopeEmail, oidcprovider.ScopeOfflineAccess}
 	grants := []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken}
 
 	return staticClients{
 		rpClientID: &oauth2.DefaultClient{
 			IDValue: rpClientID, Secret: rpClientSecret, TypeValue: oauth2.ClientConfidential,
-			RedirectURIValues: []string{rpRedirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
+			RedirectURIValues: []string{redirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
 			AuthMethodValues: []string{"client_secret_basic"},
 		},
 		spaClientID: &oauth2.DefaultClient{
 			IDValue: spaClientID, TypeValue: oauth2.ClientPublic,
-			RedirectURIValues: []string{rpRedirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
+			RedirectURIValues: []string{redirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
 			AuthMethodValues: []string{"none"},
 		},
 	}
@@ -660,13 +719,18 @@ func render(w http.ResponseWriter, status int, page *template.Template, data pag
 }
 
 func main() {
-	handler, err := newServer(demoIssuer)
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("oidc-provider: %v", err)
 	}
 
-	srv := &http.Server{Addr: demoAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	handler, err := newServer(cfg)
+	if err != nil {
+		log.Fatalf("oidc-provider: %v", err)
+	}
 
-	log.Printf("oidc-provider: issuer %s", demoIssuer)
+	srv := &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+
+	log.Printf("oidc-provider: issuer %s, listening on %s", cfg.Issuer, cfg.Addr)
 	log.Fatal(srv.ListenAndServe())
 }

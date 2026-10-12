@@ -1,0 +1,223 @@
+version = 1
+
+# prompt and max_age (OpenID Connect Core §3.1.2.1, §3.1.2.6).
+
+scenario "prompt=none without a session: login_required" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=none"
+    }
+  }
+
+  # The error goes back to the client with its state and the issuer.
+  step "http" "silent_authorization" {
+    request {
+      url = result.request.url
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.request.prefix}error=login_required&error_description=[^&]*${result.request.suffix}")]
+      }
+    }
+  }
+}
+
+scenario "prompt=none with a session and a remembered consent: a code" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "interactive" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.interactive.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.interactive.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.interactive.prefix}code=[^&]+${result.interactive.suffix}"
+    }
+  }
+
+  step "keyword" "silent" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=none"
+    }
+  }
+
+  step "http" "silent_authorization" {
+    request {
+      url = result.silent.url
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.silent.prefix}code=[^&]+${result.silent.suffix}")]
+      }
+    }
+  }
+}
+
+# prompt=login and max_age=0 make the end-user authenticate again: the
+# provider shows its login page to a signed-in browser.
+scenario "prompt=login and max_age=0: the login page again" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  step "keyword" "interactive" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=consent"
+    }
+  }
+
+  step "keyword" "sign_in" {
+    name = "op_sign_in"
+    inputs = {
+      url      = result.interactive.url
+      username = result.user.username
+      password = result.user.password
+    }
+  }
+
+  step "keyword" "consent" {
+    name = "op_consent"
+    inputs = {
+      url      = result.interactive.url
+      cookie   = result.sign_in.cookie
+      decision = "allow"
+      offline  = false
+      location = "${result.interactive.prefix}code=[^&]+${result.interactive.suffix}"
+    }
+  }
+
+  step "keyword" "login_again" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=login"
+    }
+  }
+
+  step "http" "prompt_login" {
+    request {
+      url = result.login_again.url
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+    }
+
+    expect {
+      status = 200
+      body   = contains("name=\"password\"")
+    }
+  }
+
+  step "keyword" "max_age_zero" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&max_age=0"
+    }
+  }
+
+  step "http" "max_age_0" {
+    request {
+      url = result.max_age_zero.url
+      headers = {
+        Cookie = result.sign_in.cookie
+      }
+    }
+
+    expect {
+      status = 200
+      body   = contains("name=\"password\"")
+    }
+  }
+}
+
+scenario "prompt=none combined with another value: invalid_request" {
+  tags = ["provider", "protocol"]
+
+  step "keyword" "client" {
+    name   = "provision_client"
+    inputs = { kind = "confidential" }
+  }
+
+  step "keyword" "request" {
+    name = "new_authorization"
+    inputs = {
+      client_id = result.client.client_id
+      scope     = "openid"
+      extra     = "&prompt=none+login"
+    }
+  }
+
+  step "http" "contradictory_prompt" {
+    request {
+      url = result.request.url
+    }
+
+    expect {
+      status = 302
+      headers = {
+        Location = [matches("${result.request.prefix}error=invalid_request&error_description=[^&]*${result.request.suffix}")]
+      }
+    }
+  }
+}

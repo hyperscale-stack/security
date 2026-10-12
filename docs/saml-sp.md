@@ -465,8 +465,9 @@ SAMLSP_MYSQL_DSN="root:$SAMLSP_DB_PASSWORD@tcp(127.0.0.1:13306)/" \
 SAMLSP_RACE_ROUNDS=10 go test -count=1 -race -run 'TestSharedStore' .
 ```
 
-`make e2e` runs the browser suite (`e2e/saml`): Tales scenarios against
-the real `examples/saml-sp` binary in Chrome. It needs Chrome and Tales:
+`make e2e-saml` runs the browser suite (`e2e/saml`; `make e2e` runs it,
+then `e2e/oidc`): Tales scenarios against the real `examples/saml-sp`
+binary in Chrome. It needs Chrome and Tales:
 
 ```sh
 go install github.com/tales-testing/tales/cmd/tales@d50dd8b   # v0.1.0-rc.23

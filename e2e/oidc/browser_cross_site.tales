@@ -1,0 +1,57 @@
+version = 1
+
+# Cross-site form posts through a real browser: a page of another site
+# (a data: URL, an opaque origin) submits a form to each example.
+
+scenario "Browser: cross-site form posts are refused" {
+  tags = ["browser-cross-site", "app-hardening"]
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  # Login CSRF at the relying party: another site cannot start a login in
+  # the end-user's browser — the relying party refuses cross-origin POSTs
+  # (http.CrossOriginProtection, Sec-Fetch-Site).
+  step "browser" "cross_site_login_start" {
+    target = "chrome"
+
+    actions {
+      goto {
+        url = "data:text/html,<form method='post' action='${config.rp_url}/login/${config.rp_connection}'><button id='submit'>Submit</button></form>"
+      }
+      click {
+        selector = "button#submit"
+      }
+    }
+
+    expect {
+      text {
+        selector = "body"
+        value    = contains("cross-origin request detected")
+      }
+    }
+  }
+
+  # Login CSRF at the provider: credentials posted from another site carry
+  # no CSRF token of the browser's provider session — refused.
+  step "browser" "cross_site_provider_login" {
+    target = "chrome"
+
+    actions {
+      goto {
+        url = "data:text/html,<form method='post' action='${config.issuer}/login'><input name='username' value='${result.user.username}'><input name='password' value='${result.user.password}'><input name='return_to' value='/oauth2/authorize'><button id='submit'>Submit</button></form>"
+      }
+      click {
+        selector = "button#submit"
+      }
+    }
+
+    expect {
+      text {
+        selector = "body"
+        value    = contains("invalid or missing CSRF token")
+      }
+    }
+  }
+}

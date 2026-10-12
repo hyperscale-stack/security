@@ -64,7 +64,14 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   bound to a `code_challenge`, `/token` answers `invalid_grant` to a
   `code_verifier` that is not 43–128 unreserved characters. The code is
   consumed whether the verifier is malformed or wrong. Well-formed
-  verifiers are compared in constant time.
+  verifiers are compared in constant time. A `code_verifier` sent for a
+  code issued without `code_challenge` is refused with `invalid_grant`
+  under every profile (RFC 9700 §4.8.2, the PKCE downgrade attack: an
+  attacker strips `code_challenge` from its own authorization request and
+  injects the code into a victim's session); a parameter without value
+  counts as absent (RFC 6749 §3.1). The refusal burns the code but revokes
+  nothing: a replay of a code redeemed without PKCE still revokes its
+  tokens, whatever `code_verifier` it carries.
 - **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
   and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
   every refresh exchange consumes the presented token and issues a new one
@@ -768,15 +775,22 @@ are attacker-influenced.
   nothing that completes a login, and a stolen state alone cannot be
   replayed from another browser (login CSRF, RFC 9700 §4.7).
 - **Store integrity** — every transaction carries an integrity MAC over all
-  its fields, keyed by a value derived from the binding secret, which
-  `Complete` verifies before using any stored field: a transaction altered
-  in the store — a stripped `max_age` or `acr_values`, a rewritten
-  `AppState` or redirect URI — fails its login
-  (`ErrTransactionIntegrity`). The user agent of a login holds its binding
-  secret, though: an attacker who can write to the store can still relax
-  the `max_age` and `acr_values` checks of logins it runs with its own
-  browser. When step-up authentication matters, protect the store's
-  integrity (authentication, network isolation), not only its availability.
+  its fields, which `Complete` verifies before using any stored field: a
+  transaction altered in the store — a stripped `max_age` or `acr_values`,
+  a rewritten `AppState` or redirect URI — fails its login
+  (`ErrTransactionIntegrity`). The MAC key is
+  HMAC-SHA256(transaction key, `"oidcclient/integrity/v2"` ‖ binding
+  secret): it needs both the binding secret — which the user agent of the
+  login holds — and a server-held transaction key
+  (`Config.TransactionKeys`) the store never sees, so an attacker who can
+  write to the store cannot forge it even for a login it runs with its own
+  browser. The store is trusted for availability and single consumption
+  only. The transaction keys are secrets like a session key: 32 bytes or
+  more from a cryptographic source, shared by every instance serving
+  callbacks, never logged (`Config` and `*Client` redact them with every
+  `fmt` verb and in `slog`). Rotate them in three steps — add the new key last on every
+  instance, move it first, remove the old one once `TransactionTTL` has
+  elapsed: the first key protects new transactions, every key is accepted.
 - **Single use** — `TransactionStore.Consume` removes the transaction
   atomically, unknown first, then expired whatever the binding, then a
   binding mismatch, which keeps the transaction so that a leaked state
@@ -848,14 +862,36 @@ are attacker-influenced.
 - **Tokens** — token and UserInfo requests never follow redirects;
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
-  their `sub` is the identity's. `String`, `GoString` and `LogValue` redact
-  secrets, but `json.Marshal` of an `Identity` serializes its tokens.
+  their `sub` is the identity's. Every `fmt` verb and `slog` redact
+  secrets (`%p` of a non-pointer value excepted: fmt prints the fields
+  before any method), but `json.Marshal` of an `Identity` serializes its
+  tokens.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:
   its verifier skips nonce, azp, iat, `typ`, auth_time and acr, and its key
   set refetches on every failure without rate limit (see the package
   documentation of `oidc/client`).
+
+## OpenID Connect: protocol validation vs application policy
+
+`oidc/provider` and `oidc/client` validate the protocol — every rule their
+feature matrices list ([oidc-provider.md](oidc-provider.md),
+[oidc-client.md](oidc-client.md), [oidc-conformance.md](oidc-conformance.md)).
+What the protocol leaves open is policy, and stays with the application:
+
+| Concern                    | The library validates                                                                                                    | The application decides                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Tenants and connections    | issuer equality, a transaction bound to its connection, issuer, client and redirect URI, RFC 9207 `iss`; realms and issuer-bound clients (provider) | which connections exist, routing a login start to one, distinct redirect URIs, which issuers tenants may configure |
+| Identity and accounts      | the (issuer, subject) pair, UserInfo `sub` equality                                                                      | account linking (on connection, issuer, subject), just-in-time provisioning, link flows bound to a session    |
+| Authentication strength    | `max_age`/`auth_time`, `acr` among `acr_values` (client); freshness, essential `acr` (provider)                          | the acr levels required, step-up and MFA, AMR policy, the login pages                                         |
+| Consent                    | released claims, a scope that only narrows, `offline_access` only with `prompt=consent` or the application's policy      | the consent pages and records, the offline-access policy                                                      |
+| Sessions                   | no session of another realm or end-user, no state revealed under `prompt=none`                                           | session lifetime, a fresh session after each login, sign-out (no logout specification is supported)          |
+| Account disabling          | `ErrUnknownSubject` stops every grant at its next use (exchange, refresh, UserInfo)                                     | disabling accounts, revoking their token families for immediate effect                                        |
+| Keys                       | rings validated on every use, public keys only published; the client's bounded JWK Set cache                             | key custody (KMS), the rotation schedule, the response to a leaked key                                       |
+| Outbound requests          | https and public destinations only by default                                                                            | exemptions for on-premises providers (`AllowedPrefixes`, `CheckURL`, `RootCAs`)                               |
+| Login transactions         | browser binding, integrity, single use                                                                                   | the store's deployment, the transaction keys (generation, sharing, rotation), purging                        |
+| Abuse and audit            | nothing beyond the protocol's refusals                                                                                   | rate limiting of login starts and endpoints, audit logs (`OnError` sinks), monitoring                         |
 
 ## Outbound requests (SSRF)
 
@@ -992,9 +1028,21 @@ span catalog.
       (`/oidc/{connection}/callback`), registered exactly at its provider.
 - [ ] Use a shared `TransactionStore` (`oidc/client/store/sql` or
       `store/redis`) when several instances serve callbacks, and schedule
-      `PurgeExpired` with the SQL store; restrict write access to it when
-      you rely on `max_age` or `acr_values`.
+      `PurgeExpired` with the SQL store.
+- [ ] Load `oidcclient.Config.TransactionKeys` from your secret store — the
+      same keys on every instance — and rotate them by adding the new key
+      last, then moving it first, then removing the old one after
+      `TransactionTTL`.
 - [ ] Link accounts on (connection, issuer, subject), never on email;
       create a fresh session after each login.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only
       the `form_post` callback routes from CSRF middleware.
+- [ ] Rotate an OpenID Provider's keys on its relying parties' timetable:
+      publish the next key at least an hour before it signs; after a leak,
+      withdraw the key and ask relying parties to rebuild their clients
+      (`oidc/client` keeps a withdrawn key for up to an hour).
+- [ ] Prefer providers that send the RFC 9207 `iss` parameter; never
+      register a connection's redirect URI at another provider.
+- [ ] Serialize the refreshes of one grant across instances: providers
+      that rotate refresh tokens with reuse detection revoke the grant
+      when a rotated token is presented twice.

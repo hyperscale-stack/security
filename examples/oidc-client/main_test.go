@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -25,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	oidcclient "github.com/hyperscale-stack/security/oidc/client"
 	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -239,7 +241,8 @@ func TestOIDCClientExample(t *testing.T) {
 			{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: "acme-secret"},
 			{ID: "globex", Issuer: globex.issuer(), ClientID: "rp-globex", ClientSecret: "globex-secret"},
 		},
-		Outbound: outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
+		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
+		TransactionKeys: [][]byte{[]byte("an example transaction key of 32+ bytes")},
 	})
 	require.NoError(t, err)
 
@@ -363,10 +366,117 @@ func TestLoadConfig(t *testing.T) {
 	t.Setenv("OIDC_GLOBEX_CLIENT_ID", "rp-public")
 	t.Setenv("OIDC_GLOBEX_RESPONSE_MODE", "form_post")
 
-	cfg := loadConfig()
+	t.Setenv("OIDC_TRANSACTION_KEYS", "")
+
+	cfg, err := loadConfig()
+	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:8083", cfg.BaseURL)
 	assert.Equal(t, []connectionConfig{
 		{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"},
 		{ID: "globex", Issuer: "https://globex.example.com", ClientID: "rp-public", ResponseMode: "form_post"},
 	}, cfg.Connections)
+	require.Len(t, cfg.TransactionKeys, 1, "a random development key when none is configured")
+	assert.Len(t, cfg.TransactionKeys[0], 32)
+
+	other, err := loadConfig()
+	require.NoError(t, err)
+	assert.NotEqual(t, cfg.TransactionKeys, other.TransactionKeys, "drawn at random")
+
+	k1, k2 := strings.Repeat("ab", 32), strings.Repeat("cd", 48)
+	t.Setenv("OIDC_TRANSACTION_KEYS", k1+", "+k2)
+
+	cfg, err = loadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, cfg.TransactionKeys)
+
+	// A malformed key is reported by its position: the decoder's error would
+	// echo one of its characters into the log.
+	t.Setenv("OIDC_TRANSACTION_KEYS", k1+","+strings.Repeat("ab", 31)+"zQ")
+
+	_, err = loadConfig()
+	require.ErrorIs(t, err, errKeyNotHex)
+	require.ErrorContains(t, err, "OIDC_TRANSACTION_KEYS: key 2")
+	assert.NotContains(t, err.Error(), "z")
+	assert.NotContains(t, err.Error(), "U+007A")
+}
+
+func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
+	t.Parallel()
+
+	_, err := newServer(t.Context(), config{
+		BaseURL:         "http://localhost:8083",
+		Connections:     []connectionConfig{{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"}},
+		TransactionKeys: [][]byte{[]byte("too short")},
+	})
+	require.ErrorIs(t, err, oidcclient.ErrInvalidConfig)
+}
+
+// TestDevLoopbackPolicy: OIDC_DEV_ALLOW_LOOPBACK=1 lets the demo reach a
+// provider on the loopback interface over plain http — and nothing more:
+// plain http elsewhere stays refused. Unset or false, the default policy
+// (public https only) applies; another value is a configuration error.
+func TestDevLoopbackPolicy(t *testing.T) {
+	t.Setenv("OIDC_CONNECTIONS", "")
+	t.Setenv("OIDC_TRANSACTION_KEYS", strings.Repeat("ab", 32))
+
+	for _, off := range []string{"", "0", "false"} {
+		t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", off)
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.False(t, cfg.Outbound.AllowHTTP, off)
+		assert.Empty(t, cfg.Outbound.AllowedPrefixes, off)
+	}
+
+	t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", "maybe")
+
+	_, err := loadConfig()
+	require.ErrorContains(t, err, "OIDC_DEV_ALLOW_LOOPBACK")
+
+	t.Setenv("OIDC_DEV_ALLOW_LOOPBACK", "1")
+
+	cfg, err := loadConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.Outbound.AllowHTTP)
+	assert.Equal(t, outbound.LoopbackPrefixes(), cfg.Outbound.AllowedPrefixes)
+
+	for target, allowed := range map[string]bool{
+		"http://localhost:8083/.well-known/openid-configuration": true,
+		"http://127.0.0.1:8083/.well-known/openid-configuration": true,
+		"http://[::1]:8083/.well-known/openid-configuration":     true,
+		"http://op.example.com/.well-known/openid-configuration": false,
+		"https://op.example.com/":                                true,
+	} {
+		u, err := url.Parse(target)
+		require.NoError(t, err)
+
+		err = cfg.Outbound.CheckURL(t.Context(), u)
+		if allowed {
+			require.NoError(t, err, target)
+		} else {
+			require.ErrorIs(t, err, errHTTPBeyondLoopback, target)
+		}
+	}
+
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	t.Cleanup(provider.Close)
+
+	for name, policy := range map[string]outbound.Policy{"dev": cfg.Outbound, "default": {}} {
+		client, err := outbound.NewClient(policy)
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, provider.URL, nil)
+		require.NoError(t, err)
+
+		resp, err := client.Do(req)
+		if name == "default" {
+			require.Error(t, err, "the default policy refuses http and loopback")
+
+			continue
+		}
+
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
 }

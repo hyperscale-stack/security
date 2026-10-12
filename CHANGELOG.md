@@ -191,7 +191,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   started it: a 256-bit binding secret kept in an HttpOnly `__Host-` cookie
   (SameSite=Lax for `query`, None for `form_post`), from which the nonce and
   the PKCE verifier are derived, so the transaction store holds no secret,
-  and which keys an integrity MAC over every field of the transaction
+  and which, with a server-held transaction key (`Config.TransactionKeys`,
+  required), keys an integrity MAC over every field of the transaction
   (`Transaction.Integrity`, verified before any field is used: a
   transaction altered in the store fails with `ErrTransactionIntegrity`).
   The transaction is also bound to its connection, issuer, client, redirect
@@ -230,12 +231,76 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `oidc/client/storetest`.
 - **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
   tests only): the Relying Party against the example provider of
-  `github.com/zitadel/oidc/v3`, plus an opt-in browser test
+  `github.com/zitadel/oidc/v3` — every client authentication method and
+  response mode, UserInfo, callback replay, `prompt=none`, `max_age`, and
+  the `acr_values` caveat (#86) — plus an opt-in browser test
   (`OIDC_BROWSER_TESTS=1`, headless Chrome) of the binding cookie's
-  SameSite behavior.
+  SameSite behavior. A pinned corpus of six real providers' discovery
+  documents (Google, Microsoft Entra, Apple, GitLab, Salesforce, Auth0;
+  `testdata/metadata`) checks every client profile against them (#86), and
+  `OIDC_LIVE_DISCOVERY=1` reruns those checks against the live providers.
+- **Real-backend runs of the OIDC client stores** (`internal/interop/oidcstack`,
+  private and test-only, #86): the `oidc/client/storetest` conformance suite
+  and a race of 120 consumers spread over four store instances — 20 rounds,
+  a third with a wrong binding — on real PostgreSQL 16, MySQL 8.0 and
+  Redis 7.4 (digest-pinned `compose.yaml`), opt-in through
+  `OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`, `OIDCCLIENT_REDIS_ADDR`.
+- **End-to-end tests of the OpenID Connect stack** (`internal/interop/oidcstack`,
+  #85, #86): our Relying Party against our Provider over HTTP — every
+  client authentication method (`client_secret_basic` with form-encoded
+  credentials), root and path issuers (with a trailing slash too), the nine
+  ID Token algorithms, `prompt`, `max_age`, `acr_values`, hints, consent
+  denial, granted scope, refresh — and the attacks that must fail: mix-up
+  with an attacker provider and between the issuers of one provider (RFC
+  9207, RFC 9700 §4.4; the residual risk without `iss` is characterized), an
+  issuer-bound client used at another issuer, re-signed or substituted ID
+  Tokens, token and UserInfo responses, code injection, PKCE downgrade,
+  callback and code replay, refresh-token reuse, key rotation and
+  withdrawal windows, concurrent callbacks across replicas (on real
+  PostgreSQL, MySQL and Redis too), and provider, store or network
+  failures. The tests import no third-party OpenID Connect, OAuth 2.0 or
+  JOSE library — the client's own go-jose is part of the code under test
+  (`TestDependencyPolicy`).
+- **OpenID Foundation conformance-suite harness**
+  (`internal/interop/oidcstack/conformance`, `make conformance`, opt-in and
+  local, never in CI; #86): the suite's OP plans (Basic under
+  `oauth2.Profile20`, Config for a root and a path issuer) run against
+  `oidc/provider` with a headless interaction, and its RP plans (Basic,
+  Form Post Basic, Config, the comprehensive plan) against `oidc/client`
+  through a Go driver of the suite's REST API that pins the suite's result
+  and the client's outcome of every module. Images are pinned by digest,
+  the expected failures, skips and outcomes live in `testdata`. A local run
+  is not an OpenID Certification; its results are recorded in
+  [docs/oidc-conformance.md](docs/oidc-conformance.md).
+- **OpenID Connect documentation** (#86):
+  [docs/oidc-conformance.md](docs/oidc-conformance.md) — the cross-cutting
+  requirements matrix with the tests behind every row, what is not
+  supported, the independent implementations, the attack catalogue, the
+  end-to-end and conformance-suite runs with their gaps, and the release
+  checklist; [docs/oidc-client.md](docs/oidc-client.md) — the Relying
+  Party's feature matrix and integration guide (connections and redirect
+  URIs, callback and session, several instances, the provider-key
+  timetable, account linking, refresh tokens);
+  `docs/security-considerations.md` — protocol validation versus
+  application policy. `TestDocumentedTestsExist` keeps the cited tests
+  real and the pages free of certification claims.
+- **End-to-end suites of the OpenID Connect examples** (`e2e/oidc`, Tales,
+  opt-in through `make e2e-oidc`, never in CI; #85, #86):
+  `examples/oidc-provider` and `examples/oidc-client` built and started on
+  two loopback sites — provider scenarios over HTTP (discovery and JWK Set,
+  code flow with PKCE, UserInfo, code replay, `prompt`, `max_age`, consent,
+  offline access, refresh rotation and reuse, refused requests, the login
+  and consent pages' hardening), the relying party's callback binding,
+  and a real Chrome: consent denied then given, sign-out, single sign-on,
+  cross-site form posts refused. Only the configuration and four keywords
+  are specific to the examples, so the provider scenarios can run against
+  another provider. `make e2e-oidc-live` signs in with a real provider
+  account (`LIVE_OIDC_*`, a person at the keyboard).
 - **Example** `examples/oidc-client`: sign-in through several connections
   with distinct callback routes, account linking on (connection, issuer,
-  subject), and a local session.
+  subject), and a local session. `OIDC_DEV_ALLOW_LOOPBACK=1` (development
+  only) lets it reach a provider on the loopback interface over plain http
+  — `examples/oidc-provider`, which it runs against out of the box (#86).
 
 - **OAuth2 protocol extension points** (`oauth2`): `ServerConfig.Extension`
   takes an `oauth2.Extension` — the contract an OpenID Provider (the
@@ -340,10 +405,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   test-only): the provider against `github.com/coreos/go-oidc/v3` and
   `golang.org/x/oauth2` as an independent relying party, over TLS — code
   flow with S256 PKCE, the three client authentication methods, path
-  issuers, refresh, key rotation, `prompt=none` and the advertised URLs.
+  issuers, refresh, key rotation, `prompt=none` and the advertised URLs;
+  and (#86) the `claims` parameter with consent filtering, a narrowed
+  granted scope, re-authentication (`prompt=login`, `max_age`),
+  `id_token_hint`, PS256/RS512/ES256/ES384 ID Tokens verified by go-oidc,
+  RFC 9068 access tokens refused by go-oidc's ID Token verifier (audience),
+  code replay and refresh-token reuse revoking the tokens.
 - **Example** `examples/oidc-provider`: a runnable OpenID Provider with its
   own login and consent pages (CSRF tokens, anti-framing headers),
-  cookie sessions, `prompt` handling and offline access.
+  cookie sessions, `prompt` handling and offline access. Its issuer,
+  listen address and clients' redirect URI come from
+  `OIDC_PROVIDER_ISSUER`, `OIDC_PROVIDER_ADDR` and
+  `OIDC_PROVIDER_REDIRECT_URI`; the default redirect URI is the callback of
+  the `demo` connection of `examples/oidc-client` (#86).
 
 ### Changed
 
@@ -432,6 +506,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   answered `server_error` and issues nothing (breaking for `ConsentFunc`s
   approving without one). A `ConsentFunc` error still answers `server_error`,
   whatever the error, and its cause now reaches `OnError`.
+- **`oidcclient.Config.TransactionKeys` is required** (#86, breaking): 1 to
+  4 server-held keys of at least 32 bytes, shared by every instance serving
+  callbacks; the first protects new login transactions, all are accepted
+  (rotation). `New` fails with `ErrInvalidConfig` without them, and the
+  logins in flight during the upgrade fail once with
+  `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
+  without the client secret and the keys, whatever the `fmt` verb. The example
+  reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -512,6 +594,44 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- The OAuth2 token endpoint refuses a `code_verifier` presented for an
+  authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
+  §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is
+  optional — it used to ignore the verifier and issue tokens, so an
+  attacker could strip `code_challenge` from its own authorization request
+  and inject the resulting code into a victim's session at a client relying
+  on PKCE instead of `state` (the PKCE downgrade attack).
+- The integrity MAC of an `oidc/client` login transaction is keyed by a
+  server-held transaction key as well as by the login's binding secret
+  (#86). Keyed by the binding secret alone, it could be recomputed by an
+  attacker with write access to the transaction store for a login it ran
+  in its own browser — which holds that secret — to strip the login's
+  `max_age` or `acr_values` requirement (a step-up or MFA bypass) or to
+  rewrite its `AppState`. Such a transaction now fails with
+  `ErrTransactionIntegrity` before the code is redeemed; the store is
+  trusted for availability and single consumption only.
+- An `oauth2.DefaultClient` printed with `fmt` or logged with `slog`
+  revealed its cleartext secret; it now prints and logs its registration
+  with the secret redacted, whatever the verb (#86).
+- An `oidcclient.Client` printed with `fmt` revealed its client secret and
+  transaction keys (fmt prints the unexported fields of a struct pointer),
+  and `Config`, `AuthRequest`, `Callback`, `Identity` and `Tokens` revealed
+  their secrets with the verbs their `String` method does not cover (`%d`,
+  `%t`…). Every one now prints its redacted form with every verb
+  (`fmt.Formatter`) and logs without secrets in `slog` (#86).
+- `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
+  or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
+  `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key
+  set holding one (fmt prints the unexported fields of a struct pointer),
+  and `encoding/json` — so `slog`'s JSON handler — wrote the material of
+  every private key. Keys, signers, key sets, verifiers and
+  `OAuth2AccessTokenSigner` now print, log and encode their key IDs,
+  algorithms and key types only, whatever the verb; an asymmetric
+  `PublicKey` still encodes as before (#86).
+- A `session.Codec` printed with a `fmt` verb a pointer does not take
+  (`%s`, `%q`…) revealed the AES-256 key schedule of its ciphers, which
+  starts with the encryption key; it now prints `session.Codec{Keys: n}`
+  whatever the verb (#86).
 - Multi-issuer deployments can keep each client in its realm: with the
   `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
   can no longer send another issuer's end-users to that issuer's login page

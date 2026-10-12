@@ -1,0 +1,291 @@
+{
+    "basic": {
+        "oidcc-client-test": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-invalid-iss": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenIssuer"
+        },
+        "oidcc-client-test-missing-sub": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-invalid-aud": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenAudience"
+        },
+        "oidcc-client-test-missing-iat": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-kid-absent-single-jwks": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-kid-absent-multiple-jwks": {
+            "result": "PASSED",
+            "outcome": "ErrUnknownSigningKey"
+        },
+        "oidcc-client-test-idtoken-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-idtoken-sig-none": {
+            "result": "SKIPPED",
+            "outcome": "ErrIDTokenAlgorithm",
+            "rationale": "unsigned ID Tokens are refused by design (RFC 8725 §3.1, alg none never allowed); the module accepts either behaviour and reports SKIPPED when the relying party refuses"
+        },
+        "oidcc-client-test-invalid-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenSignature"
+        },
+        "oidcc-client-test-userinfo-invalid-sub": {
+            "result": "PASSED",
+            "outcome": "ErrUserInfoSubject"
+        },
+        "oidcc-client-test-nonce-invalid": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenNonce"
+        },
+        "oidcc-client-test-scope-userinfo-claims": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-client-secret-basic": {
+            "result": "PASSED",
+            "outcome": "ok"
+        }
+    },
+    "formpost-basic": {
+        "oidcc-client-test": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-invalid-iss": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenIssuer"
+        },
+        "oidcc-client-test-missing-sub": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-invalid-aud": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenAudience"
+        },
+        "oidcc-client-test-missing-iat": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-kid-absent-single-jwks": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-kid-absent-multiple-jwks": {
+            "result": "PASSED",
+            "outcome": "ErrUnknownSigningKey"
+        },
+        "oidcc-client-test-idtoken-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-idtoken-sig-none": {
+            "result": "SKIPPED",
+            "outcome": "ErrIDTokenAlgorithm",
+            "rationale": "unsigned ID Tokens are refused by design (RFC 8725 §3.1, alg none never allowed); the module accepts either behaviour and reports SKIPPED when the relying party refuses"
+        },
+        "oidcc-client-test-invalid-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenSignature"
+        },
+        "oidcc-client-test-userinfo-invalid-sub": {
+            "result": "PASSED",
+            "outcome": "ErrUserInfoSubject"
+        },
+        "oidcc-client-test-nonce-invalid": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenNonce"
+        },
+        "oidcc-client-test-scope-userinfo-claims": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-client-secret-basic": {
+            "result": "PASSED",
+            "outcome": "ok"
+        }
+    },
+    "config": {
+        "oidcc-client-test-discovery-openid-config": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "the driver stops after discovery: the module finishes on the discovery request and fails any later one"
+        },
+        "oidcc-client-test-discovery-jwks-uri-keys": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "the driver stops after the callback: the module finishes once the JWK Set is fetched and fails any later request"
+        },
+        "oidcc-client-test-discovery-issuer-mismatch": {
+            "result": "PASSED",
+            "outcome": "ErrIssuerMismatch"
+        },
+        "oidcc-client-test-idtoken-sig-none": {
+            "result": "SKIPPED",
+            "outcome": "ErrIDTokenAlgorithm",
+            "rationale": "unsigned ID Tokens are refused by design (RFC 8725 §3.1, alg none never allowed); the module accepts either behaviour and reports SKIPPED when the relying party refuses"
+        },
+        "oidcc-client-test-signing-key-rotation-just-before-signing": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-signing-key-rotation": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "two logins, the client's clock moved 11 s between them: past its 10 s minimum interval between key-set refreshes (review F6)"
+        }
+    },
+    "comprehensive": {
+        "oidcc-client-test": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-missing-sub": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-invalid-aud": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenAudience"
+        },
+        "oidcc-client-test-missing-iat": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenMissingClaim"
+        },
+        "oidcc-client-test-kid-absent-single-jwks": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-kid-absent-multiple-jwks": {
+            "result": "PASSED",
+            "outcome": "ErrUnknownSigningKey"
+        },
+        "oidcc-client-test-idtoken-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-idtoken-sig-none": {
+            "result": "SKIPPED",
+            "outcome": "ErrIDTokenAlgorithm",
+            "rationale": "unsigned ID Tokens are refused by design (RFC 8725 §3.1, alg none never allowed); the module accepts either behaviour and reports SKIPPED when the relying party refuses"
+        },
+        "oidcc-client-test-invalid-sig-rs256": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenSignature"
+        },
+        "oidcc-client-test-userinfo-invalid-sub": {
+            "result": "PASSED",
+            "outcome": "ErrUserInfoSubject"
+        },
+        "oidcc-client-test-nonce-invalid": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenNonce"
+        },
+        "oidcc-client-test-scope-userinfo-claims": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-client-secret-basic": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-invalid-iss": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenIssuer"
+        },
+        "oidcc-client-test-missing-aud": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenAudience"
+        },
+        "oidcc-client-test-userinfo-bearer-header": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-userinfo-bearer-body": {
+            "result": "FAILED",
+            "outcome": "ErrUserInfo",
+            "rationale": "the client sends the access token in the Authorization header only (RFC 6750 §2.1, the method every resource server must support); the module requires the form-encoded body (§2.2, optional)"
+        },
+        "oidcc-client-test-invalid-sig-hs256": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenAlgorithm"
+        },
+        "oidcc-client-test-invalid-sig-es256": {
+            "result": "PASSED",
+            "outcome": "ErrIDTokenSignature"
+        },
+        "oidcc-client-test-aggregated-claims": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "aggregated claims are returned as received (Core §5.6.2 not processed); the module only requires the login"
+        },
+        "oidcc-client-test-distributed-claims": {
+            "result": "INTERRUPTED",
+            "outcome": "ok",
+            "rationale": "distributed claims are not fetched (Core §5.6.2 not supported): the module waits for a request to the claims endpoint and is stopped after 30 s"
+        },
+        "oidcc-client-test-discovery-webfinger-acct": {
+            "result": "FAILED",
+            "outcome": "no authorization response",
+            "rationale": "WebFinger (Discovery §2) is not supported: the client is configured with the issuer; the module refuses an authorization request not preceded by a WebFinger lookup (400)"
+        },
+        "oidcc-client-test-discovery-webfinger-url": {
+            "result": "FAILED",
+            "outcome": "no authorization response",
+            "rationale": "WebFinger (Discovery §2) is not supported: the client is configured with the issuer; the module refuses an authorization request not preceded by a WebFinger lookup (400)"
+        },
+        "oidcc-client-test-userinfo-signed": {
+            "result": "PASSED",
+            "outcome": "ErrUserInfoUnsupported",
+            "rationale": "signed UserInfo responses are refused (ErrUserInfoUnsupported); the module accepts that"
+        },
+        "oidcc-client-test-discovery-openid-config": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "the driver stops after discovery: the module finishes on the discovery request and fails any later one"
+        },
+        "oidcc-client-test-discovery-jwks-uri-keys": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "the driver stops after the callback: the module finishes once the JWK Set is fetched and fails any later request"
+        },
+        "oidcc-client-test-discovery-issuer-mismatch": {
+            "result": "PASSED",
+            "outcome": "ErrIssuerMismatch"
+        },
+        "oidcc-client-test-signing-key-rotation-just-before-signing": {
+            "result": "PASSED",
+            "outcome": "ok"
+        },
+        "oidcc-client-test-signing-key-rotation": {
+            "result": "PASSED",
+            "outcome": "ok",
+            "rationale": "two logins, the client's clock moved 11 s between them: past its 10 s minimum interval between key-set refreshes (review F6)"
+        }
+    },
+    "comprehensive-post": {
+        "oidcc-client-test": {
+            "result": "PASSED",
+            "outcome": "ok"
+        }
+    },
+    "comprehensive-none": {
+        "oidcc-client-test": {
+            "result": "INTERRUPTED",
+            "outcome": "ErrInvalidMetadata",
+            "rationale": "a public client needs advertised S256 PKCE support (RFC 9700 §2.1.1): the suite's metadata has no code_challenge_methods_supported, so New refuses it before any login (review F6)"
+        }
+    }
+}

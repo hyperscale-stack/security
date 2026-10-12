@@ -1,0 +1,150 @@
+version = 1
+
+# The two examples through a real browser: the relying party at
+# http://localhost:9000, the provider at http://127.0.0.1:8083 — two sites,
+# so the browser applies SameSite to the relying party's binding cookie
+# when the provider sends it back (a cross-site top-level GET, which Lax
+# allows). One ordered scenario on fresh servers (e2e/oidc/run.sh).
+
+scenario "Browser: deny, consent, sign out, single sign-on" {
+  tags = ["browser-lifecycle", "protocol"]
+
+  step "keyword" "user" {
+    name = "provision_user"
+  }
+
+  # The end-user signs in at the provider and denies consent: the relying
+  # party gets access_denied and reports a failed sign-in.
+  step "browser" "deny" {
+    target = "chrome"
+
+    actions {
+      goto {
+        url = "${config.rp_url}/"
+      }
+      click {
+        selector = "form[action='/login/${config.rp_connection}'] button"
+      }
+      wait_visible {
+        selector = "input[name='username']"
+      }
+      fill {
+        selector = "input[name='username']"
+        value    = result.user.username
+      }
+      fill {
+        selector = "input[name='password']"
+        value    = result.user.password
+        secure   = true
+      }
+      click {
+        selector = "form[action='/login'] button"
+      }
+      wait_visible {
+        selector = "button[name='decision'][value='deny']"
+      }
+      click {
+        selector = "button[name='decision'][value='deny']"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^${config.redirect_uri}\\?error=access_denied&")
+      }
+      text {
+        selector = "body"
+        value    = contains("sign-in failed")
+      }
+    }
+  }
+
+  # Signed in at the provider already, the end-user consents: the relying
+  # party validates the ID Token (signature, iss, aud, nonce, at_hash) and
+  # links the identity to a local account.
+  step "browser" "consent" {
+    target = "chrome"
+
+    actions {
+      goto {
+        url = "${config.rp_url}/"
+      }
+      click {
+        selector = "form[action='/login/${config.rp_connection}'] button"
+      }
+      wait_visible {
+        selector = "button[name='decision'][value='allow']"
+      }
+      click {
+        selector = "button[name='decision'][value='allow']"
+      }
+      wait_visible {
+        selector = "form[action='/logout'] button"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.rp_url}/"
+      }
+      text {
+        selector = "h1"
+        value    = matches("^Signed in as account-[0-9]+$")
+      }
+      text {
+        selector = "li"
+        value    = "${config.rp_connection}: ${config.issuer}, subject ${result.user.subject}"
+      }
+    }
+
+    capture {
+      account = text("h1")
+    }
+  }
+
+  step "browser" "sign_out" {
+    target = "chrome"
+
+    actions {
+      click {
+        selector = "form[action='/logout'] button"
+      }
+      wait_visible {
+        selector = "form[action='/login/${config.rp_connection}'] button"
+      }
+    }
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Sign in"
+      }
+    }
+  }
+
+  # Single sign-on: the provider's session and the remembered consent
+  # answer at once — no provider page stops the browser — and the same
+  # account signs in again.
+  step "browser" "single_sign_on" {
+    target = "chrome"
+
+    actions {
+      click {
+        selector = "form[action='/login/${config.rp_connection}'] button"
+      }
+      wait_visible {
+        selector = "form[action='/logout'] button"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.rp_url}/"
+      }
+      text {
+        selector = "h1"
+        value    = result.consent.account
+      }
+    }
+  }
+}

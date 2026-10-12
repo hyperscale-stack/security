@@ -50,14 +50,15 @@
 //     returns a binding secret the user agent keeps (an HttpOnly __Host-
 //     cookie with the net/http helpers) and the callback presents. The
 //     nonce and the PKCE verifier are derived from it with HMAC-SHA256, so
-//     the store holds no secret, and so is the key of an integrity MAC over
-//     every field of the transaction: a transaction altered in the store
-//     fails its login. The transaction is also bound to the connection,
-//     issuer, client, redirect URI and response mode, expires, and is
-//     consumed atomically once. The user agent of a login holds its
-//     binding secret, so protect the store's integrity when relying on
-//     max_age or acr_values: an attacker able to write to it can relax
-//     them for logins it runs itself.
+//     the store holds no secret. An integrity MAC over every field of the
+//     transaction is keyed by both that secret and a server-held
+//     transaction key (Config.TransactionKeys): a transaction altered in
+//     the store fails its login, even when the attacker writing to the
+//     store runs that login itself — so max_age and acr_values cannot be
+//     relaxed through the store. The transaction is also bound to the
+//     connection, issuer, client, redirect URI and response mode, expires,
+//     and is consumed atomically once. The store is trusted for
+//     availability and single consumption only.
 //   - Mix-up defense (RFC 9700 §4.4): every connection MUST have its own
 //     redirect URI — distinct from every other connection's by scheme,
 //     host, port, path or query parameter — and Complete refuses a response

@@ -32,6 +32,7 @@ released on its own cadence.
 | `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
 | `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
+| `./internal/interop/oidcstack` | `github.com/hyperscale-stack/security/internal/interop/oidcstack` | Our RP against our OP end to end, attacks included; opt-in real-backend runs of the client stores (private, tests only) |
 | `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak, shared stores, e2e helper (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
@@ -83,6 +84,13 @@ internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/
                            + github.com/chromedp/chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
+                           + oidc/provider + oauth2 + jwt
+                           + opt-in drivers github.com/jackc/pgx/v5,
+                           github.com/go-sql-driver/mysql, go-redis;
+                           imports no third-party OpenID Connect, OAuth 2.0
+                           or JOSE library (go-jose comes with oidc/client,
+                           under test)
 internal/interop/saml/  ← (tests only) saml/sp + saml/sp/store/{sql,redis}
                            + github.com/crewjam/saml + github.com/beevik/etree
                            + modernc.org/sqlite + github.com/jackc/pgx/v5
@@ -658,6 +666,24 @@ To migrate:
    `jwtsec.WithType(jwtsec.TypeAccessToken)` to their verifier (RFC 9068 §4).
    A verifier that compared `typ` with `JWT` must accept `at+jwt` now.
 
+### `jwt`: keys print, log and encode without their material (#86)
+
+A `jwtsec.PrivateKey` holding an Ed25519 or HMAC key — or an HMAC secret
+carried as a `PublicKey` — printed its material with `fmt`, and so did a
+`Signer` or a static key set holding one; `encoding/json` wrote the material
+of every private key, so `slog`'s JSON handler logged it:
+
+| | Before | After |
+| --- | --- | --- |
+| `fmt` of a key, a `Signer`, a `NewStaticJWKS` provider or key set, a `Verifier`, an `OAuth2AccessTokenSigner` | Ed25519 and HMAC key bytes (`%v` and most verbs) | key IDs, algorithm and key type, e.g. `jwtsec.PrivateKey{KeyID: "k1", Algorithm: EdDSA, Key: ed25519.PrivateKey REDACTED}`, whatever the verb |
+| `log/slog` of a key | its fields | `kid`, `alg` and the key type |
+| `encoding/json` of a `PrivateKey` or an HMAC `PublicKey` | the key material | `{"KeyID": …, "Algorithm": …, "Key": "<key type> REDACTED"}` |
+| `encoding/json` of an asymmetric `PublicKey` | its public fields | unchanged |
+
+Nothing to migrate unless code serialized private keys with `encoding/json`
+— it could not read them back (`Key` is an interface). Publish public keys
+with `MarshalJWKS`; keep private keys in a secret store.
+
 ### `oauth2`: clients can be bound to the issuers they are registered at (#84)
 
 With one `ClientStore` behind an `IssuerResolver` that serves several
@@ -693,3 +719,64 @@ To migrate:
    every client the issuers it is registered at: implement `AllowsIssuer` on
    your client type (issuers compared exactly), or fill
    `DefaultClient.IssuerValues` — or scope your `ClientStore` by issuer.
+
+### `oidc/client`: a server-held key protects the login transactions (#86)
+
+The integrity MAC of a `Transaction` (#85) was keyed by the login's binding
+secret only. The user agent that starts a login holds that secret, so an
+attacker with write access to the transaction store could start a login in
+its own browser, strip its `max_age` or `acr_values` requirement — a step-up
+or MFA bypass — or rewrite its `AppState`, recompute the MAC and complete the
+login. The MAC key now also requires a server-held transaction key the store
+never sees:
+
+| | Before | After |
+| --- | --- | --- |
+| `Config.TransactionKeys` | — | REQUIRED: 1 to 4 keys of at least 32 bytes; `New` fails with `ErrInvalidConfig` otherwise, before any network access |
+| MAC key of a transaction | HMAC-SHA256(binding secret, `"oidcclient/integrity/v1"`) | HMAC-SHA256(transaction key, `"oidcclient/integrity/v2"` ‖ binding secret): `TransactionKeys[0]` for new transactions, any key accepted |
+| a store writer relaxing a login it runs itself | login completed | `ErrTransactionIntegrity`, the code is never redeemed |
+| transactions stored before the upgrade | — | fail once with `ErrTransactionIntegrity` (the user signs in again) |
+| SQL and Redis stores | — | unchanged: `Integrity` is still 64 hex digits |
+| `fmt` / `log/slog` of a `Config` or a `*Client` | every field, client secret included | identifying fields only, with every `fmt` verb; client secret and keys redacted |
+
+To migrate:
+
+1. Generate a transaction key: 32 bytes or more from a cryptographic source
+   (`openssl rand -hex 32`). It is a secret like a session key: keep it in
+   your secret store, never in code or logs.
+2. Give the same keys to every instance that may serve a callback, and set
+   `Config.TransactionKeys: [][]byte{key}` on every `oidcclient.Client`
+   (`examples/oidc-client` reads `OIDC_TRANSACTION_KEYS`, hex keys separated
+   by commas).
+3. Deploy knowing that the logins in progress at that moment fail once with
+   `ErrTransactionIntegrity`; the users start over.
+4. To rotate a key later without failing a login: add the new key last on
+   every instance; once all of them run with it, move it first; remove the
+   old key once `TransactionTTL` (10 minutes by default) has elapsed.
+
+### `oauth2`: a `code_verifier` without `code_challenge` is refused (PKCE downgrade, #86)
+
+RFC 9700 §4.8.2: "the authorization server MUST ensure that if there was no
+code_challenge in the authorization request, a request to the token endpoint
+containing a code_verifier is rejected". Under `Profile20`, where PKCE is
+optional (unless `grant.Config.RequirePKCE`), `/token` ignored a
+`code_verifier` sent for a code issued without `code_challenge`: an attacker
+could strip `code_challenge` from its own authorization request and inject the
+code into a victim's session at a client that relies on PKCE rather than
+`state`.
+
+| Code issued | `code_verifier` in the token request | Before | After |
+| --- | --- | --- | --- |
+| without `code_challenge`, `Profile20` | absent, or present without a value | issued | unchanged |
+| without `code_challenge`, `Profile20` | with a value (any occurrence) | issued, verifier ignored | `400 invalid_grant` ("code_verifier sent for a code issued without code_challenge"); the code is consumed, nothing is issued or revoked |
+| without `code_challenge`, `Profile20BCP` / `Profile21Draft` | any | `invalid_grant` ("PKCE required") | unchanged |
+| with `code_challenge` | any | verified (RFC 7636 §4.6) | unchanged |
+| replay of a code redeemed without PKCE, otherwise valid | with a value | `invalid_grant`, family revoked (#80) | unchanged |
+
+To migrate:
+
+1. Nothing for clients that use PKCE (send `code_challenge`, then
+   `code_verifier`) or none of it.
+2. A `Profile20` client that sends a `code_verifier` without having sent a
+   `code_challenge` now fails: send the matching `code_challenge` (S256) in
+   its authorization requests, or stop sending the verifier.

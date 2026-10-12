@@ -19,7 +19,8 @@ phases. Source-of-truth docs:
 - `CHANGELOG.md` — what the v2 stack ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
-- `docs/` — `architecture.md`, `oidc-provider.md`, `observability.md`,
+- `docs/` — `architecture.md`, `oidc-provider.md`, `oidc-client.md`,
+  `oidc-conformance.md`, `saml-sp.md`, `observability.md`,
   `security-considerations.md`, `migration-from-v0.md`.
 
 ## Working rules
@@ -59,7 +60,9 @@ make sync       # go work sync
 make bench      # benchmarks across all modules
 make coverage   # go tool cover -func on the aggregated profile
 make generate   # mockery — currently BROKEN, see "Tooling caveats" below
-make e2e        # opt-in browser suites (Tales + Chrome, e2e/saml), never in CI
+make e2e        # opt-in browser suites (Tales + Chrome: e2e/saml, e2e/oidc), never in CI
+make e2e-oidc   # only the OIDC one (make e2e-saml: only the SAML one)
+make conformance # opt-in: the OpenID Foundation suite against oidc/provider and oidc/client (Docker, OIDF_SUITE_DIR)
 ```
 
 To run a **single test** or work on one module, `cd` into that module first
@@ -111,6 +114,7 @@ is intentionally skipped in CI.
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
+| `./internal/interop/oidcstack` | (private, tests only)                 | our RP ↔ our OP end to end, attacks included; opt-in real-backend store runs |
 | `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
@@ -275,9 +279,11 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - **Invariants**: the issuer comes from configuration only; every fetch goes
   through `outbound`; token and UserInfo requests follow no redirect; a
   login is bound to the user agent by a binding secret from which the nonce
-  and PKCE verifier are derived (the store holds no secret) and which keys
-  the transaction's integrity MAC (`integrityFor`, verified in `Complete`
-  before any stored field is used; every store persists `Integrity`); a
+  and PKCE verifier are derived (the store holds no secret) and which, with
+  a REQUIRED server-held key (`Config.TransactionKeys`: the first MACs, all
+  verify), keys the transaction's integrity MAC (`integrityFor`, verified
+  in `Complete` before any stored field is used; every store persists
+  `Integrity`); a
   transaction is consumed once, in the pinned order of
   `TransactionStore.Consume`;
   `Callback.URL` must be the connection's redirect URI — scheme, host,
@@ -285,13 +291,33 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
   distinct per connection; `HandleCallback` takes the host from `r.Host`
   and the scheme from the redirect URI); nothing is returned
   before the ID Token is fully validated; every JSON document goes through
-  the strict decoder (`strictjson.go`); errors, `String`, `GoString` and
-  `LogValue` never carry secrets.
+  the strict decoder (`strictjson.go`); errors and every `fmt`/`slog`
+  rendering (`format.go`: `Format`, `String`, `GoString`, `LogValue`) never
+  carry secrets.
 - Every `TransactionStore` (`storage/memory`, `store/sql`, `store/redis`)
   must pass `oidc/client/storetest.RunConformance`.
 - Tests use the scriptable fake provider of `fakeop_test.go`;
-  `internal/interop/oidcrp` runs the client against zitadel/oidc, and its
-  Chrome test runs with `OIDC_BROWSER_TESTS=1`.
+  `internal/interop/oidcrp` runs the client against zitadel/oidc and a
+  pinned corpus of real providers' discovery documents
+  (`testdata/metadata`); its Chrome test runs with `OIDC_BROWSER_TESTS=1`,
+  its live discovery check with `OIDC_LIVE_DISCOVERY=1` (Internet, no
+  credentials).
+- `internal/interop/oidcstack` runs the client against the provider over
+  HTTP — flows, attacks, failures, concurrency — importing no third-party
+  OIDC, OAuth 2.0 or JOSE library (`TestDependencyPolicy`; the client's own
+  go-jose is part of the code under test); its real-backend store runs are
+  opt-in (`OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`,
+  `OIDCCLIENT_REDIS_ADDR`, `compose.yaml`). `TestDocumentedTestsExist`
+  fails when `docs/oidc-{conformance,client,provider}.md` cite a test that
+  does not exist, or when a page claims a certification.
+- Opt-in, never in CI: `make e2e-oidc` (`e2e/oidc/*.tales`, Tales
+  v0.1.0-rc.23 + Chrome, against `examples/oidc-provider` and
+  `examples/oidc-client`), `make e2e-oidc-live` (`LIVE_OIDC_*`), and
+  `make conformance` (the OpenID Foundation suite, `OIDF_SUITE_DIR`;
+  `internal/interop/oidcstack/conformance`: the expectations in its
+  `testdata` must be updated with a rationale when a result changes).
+  `docs/oidc-conformance.md` records their results and the release
+  checklist.
 
 ## SAML Service Provider (`saml/sp/`)
 

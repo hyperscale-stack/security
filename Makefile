@@ -54,12 +54,6 @@ test: _build
 	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
 	@rm -f $(BUILD_DIR)/*.cover $(BUILD_DIR)/coverage.body
 
-# Opt-in browser suites (Tales and Chrome, see docs/saml-sp.md): never part
-# of `make test` nor of CI.
-.PHONY: e2e
-e2e:
-	@./e2e/saml/run.sh
-
 .PHONY: coverage
 coverage: $(BUILD_DIR)/coverage.out
 	@go tool cover -func ./$(BUILD_DIR)/coverage.out
@@ -83,6 +77,32 @@ ifeq (, $(shell which golangci-lint))
 		| sh -s -- -b $$(go env GOPATH)/bin v2.12.2
 endif
 	@go list -f '{{.Dir}}/...' -m | xargs golangci-lint run --timeout=300s --config="$(LINT_CONFIG)"
+
+# Opt-in browser suites (Tales and Chrome, prerequisites in docs/saml-sp.md
+# and e2e/oidc/run.sh): never part of `make test` nor of CI.
+.PHONY: e2e
+e2e: e2e-saml e2e-oidc
+
+.PHONY: e2e-saml
+e2e-saml:
+	@./e2e/saml/run.sh
+
+.PHONY: e2e-oidc
+e2e-oidc:
+	@./e2e/oidc/run.sh
+
+# The OpenID Foundation conformance suite against oidc/provider (OP plans) and
+# oidc/client (RP plans), locally: opt-in, never in CI, not a certification
+# (prerequisites in internal/interop/oidcstack/conformance/run.sh).
+.PHONY: conformance
+conformance:
+	@./internal/interop/oidcstack/conformance/run.sh
+
+# A sign-in with a real provider account (LIVE_OIDC_* variables, a person
+# at the keyboard): see e2e/oidc-live/run.sh.
+.PHONY: e2e-oidc-live
+e2e-oidc-live:
+	@./e2e/oidc-live/run.sh
 
 .PHONY: tidy
 tidy:

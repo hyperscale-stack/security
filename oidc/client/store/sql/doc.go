@@ -12,11 +12,11 @@
 // state, the browser binding is a keyed hash, and the nonce and PKCE
 // verifier are derived from the binding secret only the user agent holds.
 // Reading the table yields nothing that completes a login. A row altered in
-// the table fails its login (oidcclient.ErrTransactionIntegrity), except
-// for the user agent of that login, which holds the key of its integrity
-// MAC: an attacker with write access can relax the max_age and acr_values
-// checks of logins it runs itself. Protect the database's integrity when
-// relying on step-up authentication.
+// the table fails its login (oidcclient.ErrTransactionIntegrity): its
+// integrity MAC is keyed by the binding secret and a transaction key the
+// database never sees (oidcclient.Config.TransactionKeys), so write access
+// to the table cannot relax a login's max_age or acr_values checks. The
+// database is trusted for availability and single consumption.
 //
 // # Deployment requirements
 //

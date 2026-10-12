@@ -1,0 +1,10 @@
+{
+    "alias": "hyperscale-rp",
+    "description": "hyperscale-stack/security oidc/client, statically registered",
+    "client": {
+        "client_id": "hyperscale-rp",
+        "client_secret": "replaced by the driver with a per-run secret",
+        "redirect_uri": "replaced by the driver"
+    },
+    "waitTimeoutSeconds": 5
+}

@@ -124,8 +124,13 @@ matrix. Not supported, and never advertised:
 - **No UI, directory or CORS** — no login or consent pages, tenant
   directory or identity linking (the application's `Interaction`), and no
   built-in CORS.
-- **No certification** — the OpenID Foundation conformance suite is run
-  separately (#86); no certification is claimed.
+- **No certification** — the OpenID Foundation conformance suite's OP
+  plans run locally (`make conformance`, results in
+  [docs/oidc-conformance.md](docs/oidc-conformance.md)); a local run is no
+  certification. Its Basic plan needs `oauth2.Profile20`: it sends PKCE in
+  a single module, and the default profile refuses requests without it.
+  `acr_values` stay voluntary (a warning of the suite when the application
+  asserts no requested `acr`).
 
 ## OpenID Connect client
 
@@ -146,6 +151,11 @@ PKCE. Not supported, and refused where a provider could select them:
   algorithm.
 - **Signed or encrypted UserInfo responses** (`application/jwt`):
   `UserInfo` returns `ErrUserInfoUnsupported`.
+- **UserInfo token in the header only** — the access token goes in the
+  `Authorization` header (RFC 6750 §2.1); a provider requiring the form
+  body fails `UserInfo` (the conformance suite's
+  `oidcc-client-test-userinfo-bearer-body`).
+- **WebFinger** (Discovery §2) — not supported: configure the issuer.
 - **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
   mTLS; DPoP. `client_secret_basic`, `client_secret_post` and `none` are
   supported.
@@ -173,23 +183,37 @@ PKCE. Not supported, and refused where a provider could select them:
   `Complete` with the public URL. Forwarded headers (`X-Forwarded-Host`,
   RFC 7239) are never read: only the application knows which proxy to
   trust.
-- **Transaction stores** — the integrity MAC of a transaction is keyed by
-  its binding secret, which the user agent of the login holds: an attacker
-  with write access to the store can still relax the `max_age` and
-  `acr_values` checks of logins it runs itself (a server-held key would
-  close this; not implemented). Protect the store's integrity when relying
-  on step-up authentication. `oidc/client/storage/memory` keeps transactions
-  in the process: use the SQL or Redis store when several instances serve
+- **Transaction stores** — the store is trusted for availability and single
+  consumption: its integrity is not needed (the transaction MAC is keyed by
+  the binding secret and a server-held transaction key the store never
+  sees), but a store that loses or resurrects transactions fails or replays
+  logins. Removing a transaction key before `TransactionTTL` has elapsed
+  fails the logins it protected. `oidc/client/storage/memory` keeps
+  transactions in the process: use the SQL or Redis store when several instances serve
   callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
   package documentation), and its PostgreSQL and MySQL guarantees are not
-  exercised in CI (SQLite only). On Redis, a consumption acknowledged by a
+  exercised in CI (SQLite only) — the opt-in runs of
+  `internal/interop/oidcstack` (`TestRealBackend*`, `compose.yaml`) cover
+  them, with Redis, locally. On Redis, a consumption acknowledged by a
   primary that fails before replicating it can be lost in a failover,
   making the transaction consumable again: single use then rests on the
   provider's single-use authorization code and on the binding secret only
   the user agent holds. The browser test of the binding cookie
-  (`internal/interop/oidcrp`, headless Chrome) is opt-in
-  (`OIDC_BROWSER_TESTS=1`) and does not run in CI.
+  (`internal/interop/oidcrp`, headless Chrome, `OIDC_BROWSER_TESTS=1`) and
+  the live discovery check against six real providers
+  (`OIDC_LIVE_DISCOVERY=1`) are opt-in and do not run in CI.
+- **Opt-in evidence** — the end-to-end suites (`make e2e-oidc`), the
+  conformance-suite runs (`make conformance`), the real-backend, browser
+  and live checks need Docker, Chrome, Tales or the Internet and run
+  locally only; [docs/oidc-conformance.md](docs/oidc-conformance.md) keeps
+  their latest results and the release checklist.
+- **Provider metadata in the wild** — of the six providers of the pinned
+  corpus, only Auth0 lists `none` in `token_endpoint_auth_methods_supported`:
+  a public client is refused at `New` by the others (Google, Microsoft
+  Entra, Apple, GitLab, Salesforce), and Apple offers `client_secret_post`
+  only. A provider ignoring `acr_values` fails every login that sends them
+  (`ErrIDTokenACR`).
 
 ## Outbound requests
 
@@ -285,6 +309,23 @@ PKCE. Not supported, and refused where a provider could select them:
   cookie, there is no server-side session store. This covers the common
   case without server state, but a session cannot be revoked server-side
   before its cookie expires. A server-side store (Redis/SQL) is not shipped.
+
+## Logging
+
+- **What `fmt` cannot redact** — the types that hold secrets
+  (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
+  keys, signers and key sets, `session.Codec`…) print redacted with every
+  `fmt` verb and in `slog` output, but fmt prints some values without
+  calling any of their methods: `%p` of a value that is not a pointer, a
+  value held in an unexported field of your own types, and — for the verbs
+  a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
+  Log these types directly or through exported fields, with `%v`.
+- **Credentials and tokens in flight are not redacted yet** — `basic` and
+  `bearer` authentications print the password (before authentication) and
+  the bearer token they carry, and the `oauth2` records
+  (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the `GrantResponse`
+  holding them) the raw code and tokens they carry during issuance: never
+  log them.
 
 ## Tooling
 

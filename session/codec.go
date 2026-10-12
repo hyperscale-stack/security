@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 )
 
 // Codec encrypts and authenticates a [Session] into an opaque cookie value
@@ -64,6 +65,17 @@ func NewCodec(keys ...[]byte) (*Codec, error) {
 
 	return &Codec{aeads: aeads}, nil
 }
+
+// String implements fmt.Stringer with the number of keys: the keys, and the
+// ciphers built from them, are never printed.
+func (c *Codec) String() string { return fmt.Sprintf("session.Codec{Keys: %d}", len(c.aeads)) }
+
+// Format implements fmt.Formatter like String, for every verb: without it,
+// fmt prints the AES key schedule behind the ciphers — which starts with
+// the encryption key — for the verbs a pointer does not take (%s, %q…).
+// fmt handles %p of a non-pointer value before any method: no type can
+// redact that one.
+func (c *Codec) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, c.String()) }
 
 // Encode serializes s to JSON and seals it with the active key. The output
 // is base64url(nonce || ciphertext||tag), safe for a cookie value.

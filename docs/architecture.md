@@ -46,6 +46,7 @@ transitive dependencies.
 | `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
 | `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
+| `./internal/interop/oidcstack` | (private)                           | Our RP against our OP, attacks included; opt-in real PG/MySQL/Redis store runs |
 | `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak, shared stores, e2e helper) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
@@ -86,6 +87,9 @@ examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
+internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
+                           + oidc/provider + oauth2 + jwt
+                           + opt-in pgx, go-sql-driver/mysql, go-redis
 internal/interop/saml/  ← (tests only) saml/sp + its stores + crewjam/saml + etree
                           + modernc sqlite + pgx + go-sql-driver/mysql
                           + go-redis + miniredis
@@ -273,10 +277,11 @@ StartLogin / Begin                          HandleCallback / Complete
   discovery; the metadata issuer must equal the configured one.
 - **Browser binding** — `Begin` draws a 256-bit binding secret that the
   user agent keeps (an HttpOnly `__Host-` cookie with the net/http helpers);
-  the nonce, the PKCE verifier and the key of the transaction's integrity
-  MAC are HMACs of it, and the store keeps only a hash of it and of the
-  state. Reading the store gives nothing that completes a login; altering a
-  transaction fails it.
+  the nonce and the PKCE verifier are HMACs of it, the key of the
+  transaction's integrity MAC an HMAC of it under a server-held
+  transaction key (`Config.TransactionKeys`), and the store keeps only a
+  hash of it and of the state. Reading the store gives nothing that
+  completes a login; altering a transaction fails it, whoever runs it.
 - **`TransactionStore`** — `Save` never overwrites, `Consume` removes a
   transaction atomically in a pinned decision order (unknown, expired,
   binding mismatch — which keeps it). In-memory, SQL and Redis
@@ -289,7 +294,15 @@ StartLogin / Begin                          HandleCallback / Complete
 - **What stays with the application** — choosing the connection, deploying
   the store, linking an identity (issuer + subject, never email) to an
   account, its own session, and rate limiting login starts. See
-  `examples/oidc-client`.
+  `examples/oidc-client` and [oidc-client.md](oidc-client.md).
+
+The two modules are tested against each other in
+`internal/interop/oidcstack` (CI), against independent implementations in
+`internal/interop/oidcop` and `internal/interop/oidcrp` (CI), and — opt-in —
+through `e2e/oidc` (Tales and Chrome against the two examples) and the
+OpenID Foundation conformance suite
+(`internal/interop/oidcstack/conformance`); see
+[oidc-conformance.md](oidc-conformance.md).
 
 ## SAML Service Provider
 

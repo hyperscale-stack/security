@@ -1,0 +1,59 @@
+version = 1
+
+# Black-box end-to-end suite of the OpenID Connect examples — opt-in, never
+# part of `make test` or CI: run it with `make e2e-oidc` (e2e/oidc/run.sh,
+# which builds and starts examples/oidc-provider and examples/oidc-client).
+#
+# The provider scenarios (tag "provider") find every endpoint through
+# discovery and only talk to the provider. What is specific to the
+# examples lives in this file and, in _keywords.tales, in the
+# provision_client, provision_user, op_sign_in and op_consent keywords:
+# replace those to run the provider scenarios against another provider
+# (its URLs, clients, end-user, login and consent pages).
+
+config {
+  # The provider under test.
+  issuer = env("OIDC_E2E_ISSUER", "http://127.0.0.1:8083")
+
+  # The relying party (examples/oidc-client) and its connection to the
+  # provider. The redirect URI is registered for both clients.
+  rp_url        = env("OIDC_E2E_RP_URL", "http://localhost:9000")
+  rp_connection = env("OIDC_E2E_RP_CONNECTION", "demo")
+  redirect_uri  = env("OIDC_E2E_REDIRECT_URI", "http://localhost:9000/oidc/demo/callback")
+
+  # The clients and the end-user registered at the provider: the demo
+  # values of examples/oidc-provider.
+  confidential_client_id     = env("OIDC_E2E_CLIENT_ID", "demo-rp")
+  confidential_client_secret = env("OIDC_E2E_CLIENT_SECRET", "demo-rp-secret")
+  public_client_id           = env("OIDC_E2E_PUBLIC_CLIENT_ID", "demo-spa")
+  username                   = env("OIDC_E2E_USERNAME", "alice")
+  password                   = env("OIDC_E2E_PASSWORD", "alice-secret")
+  subject                    = env("OIDC_E2E_SUBJECT", "alice")
+
+  browser = {
+    targets = {
+      chrome = {
+        browser  = "chrome"
+        headless = env("OIDC_E2E_HEADLESS", "true") == "true"
+        timeout  = "30s"
+      }
+    }
+  }
+}
+
+# A 64-character PKCE code verifier (RFC 7636 §4.1: 43 to 128 unreserved
+# characters).
+generator "bytes" "pkce_verifier" {
+  length   = 32
+  encoding = "hex"
+}
+
+generator "bytes" "state" {
+  length   = 16
+  encoding = "hex"
+}
+
+generator "bytes" "nonce" {
+  length   = 16
+  encoding = "hex"
+}
