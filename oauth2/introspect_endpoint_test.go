@@ -42,8 +42,9 @@ const (
 )
 
 const (
-	// introspectionRefused is the error_description /introspect answers
-	// every caller that is not a confidential client with.
+	// introspectionRefused is the detail the ErrorHook gets when
+	// /introspect refuses a caller that is not a confidential client: on
+	// the wire, every failed client authentication reads the same.
 	introspectionRefused = "introspection requires confidential client authentication"
 	// inactiveBody is the bare RFC 7662 §2.2 answer for a token the caller
 	// may not see.
@@ -284,7 +285,7 @@ func TestIntrospectCallerAuthentication(t *testing.T) {
 		name     string
 		req      *http.Request
 		accepted bool
-		wantDesc string // the pinned error_description, if any
+		wantDesc string // the detail the ErrorHook gets, if pinned
 	}{
 		{
 			name:     "client_secret_basic confidential client",
@@ -375,11 +376,12 @@ func TestIntrospectCallerAuthentication(t *testing.T) {
 			assert.NotEmpty(t, rec.Header().Get("WWW-Authenticate"))
 			assert.Equal(t, oauth2.CodeInvalidClient, body["error"])
 
-			desc, _ := body["error_description"].(string)
-			assert.Regexp(t, descriptionCharset, desc)
+			// ...whose description is the same for every refused
+			// caller (RFC 6749 §5.2), the detail going to the hook only.
+			assert.Equal(t, "client authentication failed", body["error_description"])
 
 			if tc.wantDesc != "" {
-				assert.Equal(t, tc.wantDesc, desc)
+				assert.Equal(t, tc.wantDesc, hookDetail(t, sink))
 			}
 
 			// ...that tells nothing about the token, never handed to the
@@ -703,4 +705,20 @@ func TestPublicClientAuthorizationCodeFlowUnaffected(t *testing.T) {
 	rec = serve(srv.IntrospectHandler(), introspectRequest(rsAPIClientID, rsAPISecret, refreshed.AccessToken))
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, inactiveBody, rec.Body.String())
+}
+
+// hookDetail returns the description of the refusal the constant
+// invalid_client the sink received replaced.
+func hookDetail(t *testing.T, sink *errorSink) string {
+	t.Helper()
+
+	reported := sink.collected()
+	require.Len(t, reported, 1)
+
+	var envelope, detailed *oauth2.Error
+
+	require.ErrorAs(t, reported[0], &envelope)
+	require.ErrorAs(t, envelope.Unwrap(), &detailed)
+
+	return detailed.Description
 }

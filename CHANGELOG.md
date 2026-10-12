@@ -793,6 +793,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   private-use scheme without a period such as `myapp:` or `javascript:`, a
   query naming a response parameter — is answered with a bare 400, never
   redirected to. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 failed client authentications read alike**: every `401
+  invalid_client` of `/token`, `/revoke` and `/introspect` carries the
+  description "client authentication failed"; the reason ("unknown client",
+  "method not allowed for client"…) moved to the cause `OnError` receives.
+  See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1553,3 +1558,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and have the server redirect them — without any authentication — to its
   redirect URI: `AuthorizeConfig.TrustedRedirect` answers such requests of
   untrusted clients with a bare error page.
+- OAuth2 client authentication no longer enumerates clients: the
+  `invalid_client` descriptions told an unknown client ("unknown client")
+  from a known one with a wrong secret, and disclosed a client's type and
+  methods ("none method reserved to public clients", "method not allowed
+  for client"). Every failed client authentication now reads "client
+  authentication failed" (RFC 6749 §5.2); the detail goes to `OnError`.

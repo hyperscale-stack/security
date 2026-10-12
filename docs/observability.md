@@ -65,7 +65,10 @@ srv, err := oauth2.NewServer(oauth2.ServerConfig{
 The hook fires for:
 
 - every error serialized as an RFC 6749 §5.2 body (`/token`, `/revoke`,
-  `/introspect`, metadata) and every error redirected back to the client by
+  `/introspect`, metadata) — a failed client authentication as the constant
+  `invalid_client` the wire carries, the refusal it replaced ("unknown
+  client", "method not allowed for client"…) in its cause — and every error
+  redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
   400 (unknown client, unregistered `redirect_uri`, a registered
   `redirect_uri` `oauth2.ValidateRedirectURI` refuses — `invalid registered

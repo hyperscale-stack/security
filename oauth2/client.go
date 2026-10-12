@@ -123,9 +123,9 @@ type ClientStore interface {
 // exist. /authorize answers it as it answers an unknown client_id — a bare
 // 400 that is never redirected (RFC 6749 §4.1.2.1: the client identifier is
 // invalid here, and so are its redirect URIs) — and /token, /revoke and
-// /introspect fail its authentication as they fail an unknown client's —
-// 401 invalid_client, "unknown client" (RFC 6749 §5.2), whatever the
-// secret presented — so another realm's clients can be neither enumerated
+// /introspect fail its authentication as they fail any other — 401
+// invalid_client, "client authentication failed" (RFC 6749 §5.2), whatever
+// the secret presented — so another realm's clients can be neither enumerated
 // nor their secrets checked. unauthorized_client is not used: it would
 // confirm an authenticated, existing client. The [ErrorHook] gets
 // [ErrClientNotAtIssuer] as the cause. A server whose IssuerResolver fails

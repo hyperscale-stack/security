@@ -287,7 +287,19 @@ keys by `kid` against a JWKS provider (static or remote).
   public a client that cannot keep its credentials confidential (RFC 6749
   §2.1). `/introspect` answers `ClientConfidential` callers only: a public
   client (whatever the method, `none` included) or an untyped client gets
-  `401 invalid_client`.
+  `401 invalid_client`. Every failed client authentication reads the same —
+  `401 invalid_client`, "client authentication failed", the Basic
+  challenge — whether the client is unknown, of another issuer, presented a
+  wrong secret, used a method it may not use or a malformed credential: the
+  answer neither confirms a client exists nor discloses its type and
+  methods; the detail reaches `OnError` only. Two residual signals remain,
+  both acceptable since client identifiers are not secret (RFC 6749 §2.2):
+  the response time — an unknown client skips `SecretMatches`, so a slow
+  matcher (a password hash for human-chosen secrets) makes it ~100 ms
+  faster: such a matcher runs a dummy verification for unknown clients — and
+  `/authorize`, which tells an unknown `client_id` from an unregistered
+  `redirect_uri` by design (RFC 6749 §4.1.2.1 asks it to inform the resource
+  owner).
 - **Token introspection** — RFC 7662 §4 requires the authorization server
   to authenticate the protected resources calling `/introspect`. A public
   client cannot authenticate: its `client_id` ships inside every copy of the
@@ -333,8 +345,8 @@ keys by `kid` against a JWKS provider (static or remote).
   (`DefaultClient.IssuerValues`) exists at its issuers only: elsewhere
   `/authorize` answers the bare 400 of an unknown `client_id`, never
   redirected (RFC 6749 §4.1.2.1), and `/token`, `/revoke` and `/introspect`
-  fail its authentication as an unknown client's (`401 invalid_client`,
-  "unknown client"), whatever the secret — the same bytes in both cases, so
+  fail its authentication as any other (`401 invalid_client`, "client
+  authentication failed"), whatever the secret — the same bytes in both cases, so
   realm B can neither be used by A's clients nor enumerate them or check
   their secrets. The binding is checked before the client's secret and
   redirect URI, and again on the client an authenticator returns. A

@@ -20,6 +20,13 @@ import "context"
 //     again — or an [IntrospectionPolicy] that failed (the token is
 //     withheld behind a bare {"active":false}, RFC 7662 §2.2).
 //
+// A failed client authentication at /token, /revoke or /introspect reaches
+// it as the invalid_client the wire carries — "client authentication
+// failed", whatever the reason — whose cause holds the refusal it replaced:
+// errors.As on its Unwrap finds the detailed [*Error] ("unknown client",
+// "method not allowed for client"…), and errors.Is finds
+// [ErrClientNotAtIssuer] for a client of another issuer.
+//
 // The hook is a pure observability sink: it MUST NOT influence the
 // response. It runs synchronously on the request goroutine, so a slow
 // implementation slows the request down.

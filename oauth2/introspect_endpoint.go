@@ -12,9 +12,9 @@ import (
 	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
-// introspectionCallerRefused is the error_description of the 401 answered
-// to a caller that is not a confidential client. It stays within the
-// RFC 6749 §5.2 charset.
+// introspectionCallerRefused describes, to the [ErrorHook], the refusal of
+// a caller that is not a confidential client — answered on the wire like
+// every failed client authentication.
 const introspectionCallerRefused = "introspection requires confidential client authentication"
 
 // IntrospectHandler returns the http.Handler for RFC 7662 token
@@ -101,7 +101,7 @@ func (s *Server) authenticateIntrospectionCaller(ctx context.Context, r *http.Re
 	}
 
 	if caller.Type() != ClientConfidential {
-		return nil, ErrInvalidClient.WithDescription(introspectionCallerRefused)
+		return nil, clientAuthFailed(ErrInvalidClient.WithDescription(introspectionCallerRefused))
 	}
 
 	return caller, nil

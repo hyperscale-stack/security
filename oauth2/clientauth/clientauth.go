@@ -19,6 +19,11 @@
 // client_secret — and refuses a body client_id naming another client than
 // the one authenticated.
 //
+// The descriptions of the invalid_client errors the methods return reach
+// the server's ErrorHook only: on the wire, the server answers every failed
+// client authentication alike (401 invalid_client, "client authentication
+// failed").
+//
 // Adding private_key_jwt requires the JWT module; it lives behind a small
 // adapter in the jwt sub-module so this package stays JOSE-free.
 package clientauth

@@ -729,7 +729,7 @@ issuer the client does not exist:
 | Request at an issuer the client is not registered at | Before | After |
 | ---------------------------------------------------- | ------ | ----- |
 | `/authorize` | served like at its own issuer | bare `400` "unknown or invalid client", never redirected — the same bytes as for a `client_id` that exists nowhere (RFC 6749 §4.1.2.1) |
-| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client` "unknown client", whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2) |
+| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client`, whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2); the description read "unknown client" until every failed client authentication was answered "client authentication failed" (see below) |
 | any of them | — | `OnError` gets the refusal with `oauth2.ErrClientNotAtIssuer` as its cause |
 
 The server now resolves the issuer of a request before it loads its client:
@@ -1883,3 +1883,21 @@ To migrate:
    renamed: the response would carry it twice (RFC 6749 §3.1).
 4. A loopback client exchanging a code sends, at `/token`, the redirect URI
    with the port it used at `/authorize`.
+
+### `oauth2`: failed client authentications read alike
+
+`/token`, `/revoke` and `/introspect` described each failed client
+authentication: "unknown client", "client authentication failed" (a wrong
+secret), "method not allowed for client", "none method reserved to public
+clients", "client cannot verify secret", "introspection requires
+confidential client authentication"… — telling whether a client exists, and
+its type and authentication methods.
+
+| | Before | After |
+| --- | --- | --- |
+| `error_description` of any `401 invalid_client` | the reason | `client authentication failed` |
+| the reason | in the body | in the cause of the `invalid_client` `OnError` receives: `errors.As` on its `Unwrap` finds the detailed `*oauth2.Error`; `oauth2.ErrClientNotAtIssuer` still matches with `errors.Is` |
+
+To migrate: clients and tests that branched on the `error_description` of an
+`invalid_client` use the `error` code only; diagnostics read the detail from
+`OnError`.
