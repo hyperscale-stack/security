@@ -3,7 +3,7 @@ module github.com/hyperscale-stack/security/connectrpc
 go 1.26.5
 
 require (
-	connectrpc.com/connect v1.20.0
+	connectrpc.com/connect v1.21.0
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.47.0
