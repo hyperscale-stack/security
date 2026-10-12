@@ -211,7 +211,9 @@ Carrier ──> Extractor ──> Authentication ──> Manager/Authenticator �
   Security's). The attributes a route lists are the policy: each voter votes
   only on the attributes it supports — family AND value (`HasRole("ADMIN")`
   abstains on `Role("USER")`) — and the ADM denies when an attribute is
-  supported by no voter. Stock voters live in `voter/` (`HasRole`,
+  supported by no voter. Roles are matched only as `ROLE_<name>` authorities
+  and scopes only as one `scope:<name>` authority each
+  (`security.RolePrefix` / `security.ScopePrefix`). Stock voters live in `voter/` (`HasRole`,
   `HasAnyRole`, `HasScope`, `HasAnyScope`, `HasAuthority`,
   `HasAnyAuthority`, `HasPermission`, and `Authenticated` / `Anonymous`,
   which vote only on `security.IsAuthenticated` / `security.IsAnonymous`);

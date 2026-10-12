@@ -20,15 +20,26 @@ type Attribute interface {
 	String() string
 }
 
-// RoleAttribute names a role expected on the authenticated principal. Roles
-// use the Spring Security "ROLE_" prefix at the wire level (in OTel
-// attributes and in custom Authorities() slices) but the constructor
-// accepts the bare name to keep usage idiomatic.
+// Authority prefixes. A principal holds a role as the authority
+// RolePrefix + name ("ROLE_ADMIN", the Spring Security convention) and a
+// scope as the authority ScopePrefix + name ("scope:read:mail", one scope
+// per authority — what jwtsec.DefaultAuthorityResolver emits). The voter
+// package matches roles and scopes in these namespaces only: a bare
+// "admin" authority is neither a role nor a scope.
+const (
+	RolePrefix  = "ROLE_"
+	ScopePrefix = "scope:"
+)
+
+// RoleAttribute names a role expected on the authenticated principal: the
+// bare name, matched against the authority RolePrefix + name. A name that
+// is empty or already starts with RolePrefix cannot be required (no stock
+// voter accepts it, so the decision is denied).
 type RoleAttribute string
 
 // String implements [Attribute]. Output is "ROLE_<name>" — Spring-compatible
 // for ops tooling that already keys off that convention.
-func (r RoleAttribute) String() string { return rolePrefix + string(r) }
+func (r RoleAttribute) String() string { return RolePrefix + string(r) }
 
 // Name returns the bare role name (without the ROLE_ prefix).
 func (r RoleAttribute) Name() string { return string(r) }
@@ -36,15 +47,13 @@ func (r RoleAttribute) Name() string { return string(r) }
 // Role constructs a [RoleAttribute] from a bare role name.
 func Role(name string) Attribute { return RoleAttribute(name) }
 
-const rolePrefix = "ROLE_"
-
 // ScopeAttribute names an OAuth2 scope expected on the authenticated
-// principal. Scope names follow the RFC 6749 §3.3 grammar but this type
-// stays format-agnostic.
+// principal: an RFC 6749 §3.3 scope-token, matched against the authority
+// ScopePrefix + name.
 type ScopeAttribute string
 
 // String implements [Attribute]. Output is "scope:<name>".
-func (s ScopeAttribute) String() string { return "scope:" + string(s) }
+func (s ScopeAttribute) String() string { return ScopePrefix + string(s) }
 
 // Name returns the bare scope name.
 func (s ScopeAttribute) Name() string { return string(s) }

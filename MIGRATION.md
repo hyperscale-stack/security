@@ -1349,3 +1349,36 @@ To migrate:
 6. Custom voters: `Supports` must check the attribute's value, not only its
    type, and `Vote` must consider only the attributes it supports (the
    decision manager now passes it only those) and abstain without them.
+
+### `voter`: roles and scopes live in their own authority namespaces
+
+`voter.HasRole("admin")` accepted the authority `admin` as well as
+`ROLE_admin`, and `voter.HasScope("admin")` accepted `admin`, `scope:admin`
+and any `scope:…` authority holding `admin` among space-separated words: one
+bare `admin` authority — a scope a client obtained, a fine-grained
+permission — satisfied the role, the scope and the authority checks at once,
+and one authority string could carry many scopes. `HasRole("")` matched
+`ROLE_`.
+
+| Authority held | Check | Before | After |
+| --- | --- | --- | --- |
+| `ROLE_admin` | `HasRole("admin")` | granted | granted |
+| `admin` | `HasRole("admin")` | granted | denied |
+| `scope:admin` | `HasScope("admin")` | granted | granted |
+| `admin` | `HasScope("admin")` | granted | denied |
+| `scope:read billing:admin` | `HasScope("billing:admin")` | granted | denied |
+| `admin` | `HasAuthority("admin")` | granted | granted (unchanged) |
+| — | `HasRole("")`, `HasRole("ROLE_X")`, `HasScope("a b")`, `HasScope("scope:x")`, `HasAnyRole()` | constructed | panic at construction |
+
+To migrate:
+
+1. Emit roles as `security.RolePrefix + name` (`ROLE_ADMIN`) from your
+   `basic.WithAuthorityResolver` and `session.PrincipalLoader`
+   implementations — `examples/basic-http` shows it.
+2. Emit one `security.ScopePrefix + scope` authority per scope
+   (`scope:read:mail`): `jwtsec.DefaultAuthorityResolver` already does; split
+   a space-separated `scope` claim before prefixing it.
+3. Keep `HasAuthority` for verbatim, unprefixed authorities.
+4. Pass the bare name to `HasRole`/`security.Role` (`"ADMIN"`, not
+   `"ROLE_ADMIN"`), and valid RFC 6749 §3.3 scope-tokens to
+   `HasScope`/`security.Scope`.

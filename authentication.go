@@ -41,6 +41,8 @@ type Authentication interface {
 	// system has granted to this principal. Implementations MUST NOT expose
 	// their internal state through it — return a copy (slices.Clone) — so
 	// that no caller can rewrite the authorities of an immutable snapshot.
+	// Roles are carried as RolePrefix + name and scopes as ScopePrefix +
+	// name, one scope per authority, for the voter package to match them.
 	Authorities() []string
 
 	// IsAuthenticated reports whether the credentials have been validated by

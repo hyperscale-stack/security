@@ -23,18 +23,18 @@ func TestHasRoleSupportsOnlyRoleAttribute(t *testing.T) {
 	assert.False(t, v.Supports(security.Scope("ADMIN")))
 }
 
-func TestHasRoleMatchesEitherPrefixedOrBare(t *testing.T) {
+func TestHasRoleMatchesThePrefixedRoleOnly(t *testing.T) {
 	t.Parallel()
 
 	v := voter.HasRole("ADMIN")
 	attrs := []security.Attribute{security.Role("ADMIN")}
 
 	assert.Equal(t, security.DecisionGrant,
-		v.Vote(context.Background(), newAuth("a", "ADMIN"), attrs))
-	assert.Equal(t, security.DecisionGrant,
 		v.Vote(context.Background(), newAuth("a", "ROLE_ADMIN"), attrs))
 	assert.Equal(t, security.DecisionDeny,
-		v.Vote(context.Background(), newAuth("a", "USER"), attrs))
+		v.Vote(context.Background(), newAuth("a", "ADMIN"), attrs), "a bare authority is not a role")
+	assert.Equal(t, security.DecisionDeny,
+		v.Vote(context.Background(), newAuth("a", "ROLE_USER"), attrs))
 }
 
 func TestHasRoleDeniesUnauthenticated(t *testing.T) {
@@ -57,9 +57,9 @@ func TestHasAnyRoleMatchesAtLeastOneRequestedRole(t *testing.T) {
 		want  security.Decision
 	}{
 		{"first_matches", newAuth("a", "ROLE_ADMIN"), []security.Attribute{security.Role("ADMIN")}, security.DecisionGrant},
-		{"second_matches", newAuth("a", "OWNER"), []security.Attribute{security.Role("ADMIN"), security.Role("OWNER")}, security.DecisionGrant},
-		{"held_but_not_requested", newAuth("a", "OWNER"), []security.Attribute{security.Role("ADMIN")}, security.DecisionDeny},
-		{"neither", newAuth("a", "USER"), []security.Attribute{security.Role("ADMIN"), security.Role("OWNER")}, security.DecisionDeny},
+		{"second_matches", newAuth("a", "ROLE_OWNER"), []security.Attribute{security.Role("ADMIN"), security.Role("OWNER")}, security.DecisionGrant},
+		{"held_but_not_requested", newAuth("a", "ROLE_OWNER"), []security.Attribute{security.Role("ADMIN")}, security.DecisionDeny},
+		{"neither", newAuth("a", "ROLE_USER"), []security.Attribute{security.Role("ADMIN"), security.Role("OWNER")}, security.DecisionDeny},
 		{"not_bound", newAuth("a", "ROLE_USER"), []security.Attribute{security.Role("USER")}, security.DecisionAbstain},
 	}
 	for _, c := range cases {

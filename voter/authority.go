@@ -14,20 +14,25 @@ import (
 // the [security.AuthorityAttribute] naming that authority and abstains on
 // every other attribute. It grants when the authenticated principal carries
 // the authority verbatim — no prefix normalisation (use [HasRole] /
-// [HasScope] when you want the conventions of those types).
+// [HasScope] when you want the conventions of those types). It panics if
+// name is empty.
 func HasAuthority(name string) security.Voter {
-	return newAuthorityVoter(name)
+	return newAuthorityVoter("HasAuthority", name)
 }
 
 // HasAnyAuthority returns a [security.Voter] bound to several authorities: it
 // grants when the principal carries at least one of the authorities the
-// route requests.
+// route requests. It panics without an authority or on an empty one.
 func HasAnyAuthority(names ...string) security.Voter {
-	return newAuthorityVoter(names...)
+	return newAuthorityVoter("HasAnyAuthority", names...)
 }
 
-func newAuthorityVoter(names ...string) security.Voter {
-	return nameVoter{names: slices.Clone(names), nameOf: authorityName, holds: slices.Contains[[]string]}
+func newAuthorityVoter(constructor string, names ...string) security.Voter {
+	return nameVoter{
+		names:  mustNames(constructor, "authority", names, checkAuthority),
+		nameOf: authorityName,
+		holds:  slices.Contains[[]string],
+	}
 }
 
 // authorityName returns the name of an authority attribute.

@@ -1102,6 +1102,11 @@ Authorization follows Spring Security's voter model, and fails closed:
   asks for. `voter.Authenticated()` and `voter.Anonymous()` vote only on
   `security.IsAuthenticated` / `security.IsAnonymous`: list the state you
   require among the route's attributes.
+- **Separate namespaces.** A role is the authority `ROLE_<name>`
+  (`security.RolePrefix`), a scope the authority `scope:<name>`
+  (`security.ScopePrefix`, one scope per authority), anything else a plain
+  authority matched verbatim by `HasAuthority`: a scope a client obtained
+  can never pass for a role.
 - **No requirement is ignored.** A decision is denied when one of its
   attributes is supported by no voter of the decision manager, when there
   is no attribute, and when there is no voter.

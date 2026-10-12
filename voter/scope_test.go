@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestHasScopeMatchesStorageConventions(t *testing.T) {
+func TestHasScopeMatchesOnePrefixedScopePerAuthority(t *testing.T) {
 	t.Parallel()
 
 	v := voter.HasScope("read:mail")
@@ -24,10 +24,10 @@ func TestHasScopeMatchesStorageConventions(t *testing.T) {
 		auth fakeAuth
 		want security.Decision
 	}{
-		{"bare_match", newAuth("a", "read:mail"), security.DecisionGrant},
 		{"prefixed_match", newAuth("a", "scope:read:mail"), security.DecisionGrant},
-		{"space_packed_match", newAuth("a", "scope:foo read:mail write:mail"), security.DecisionGrant},
-		{"miss", newAuth("a", "write:mail"), security.DecisionDeny},
+		{"bare_is_not_a_scope", newAuth("a", "read:mail"), security.DecisionDeny},
+		{"space_packed_is_one_authority", newAuth("a", "scope:foo read:mail write:mail"), security.DecisionDeny},
+		{"miss", newAuth("a", "scope:write:mail"), security.DecisionDeny},
 		{"unauthenticated", newAnonymous(), security.DecisionDeny},
 	}
 	for _, c := range cases {
@@ -59,11 +59,11 @@ func TestHasAnyScopeMatchesAtLeastOneRequestedScope(t *testing.T) {
 		attrs []security.Attribute
 		want  security.Decision
 	}{
-		{"first", newAuth("a", "read"), []security.Attribute{security.Scope("read")}, security.DecisionGrant},
-		{"second", newAuth("a", "write"), []security.Attribute{security.Scope("read"), security.Scope("write")}, security.DecisionGrant},
-		{"held_but_not_requested", newAuth("a", "write"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
-		{"none", newAuth("a", "admin"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
-		{"not_bound", newAuth("a", "admin"), []security.Attribute{security.Scope("admin")}, security.DecisionAbstain},
+		{"first", newAuth("a", "scope:read"), []security.Attribute{security.Scope("read")}, security.DecisionGrant},
+		{"second", newAuth("a", "scope:write"), []security.Attribute{security.Scope("read"), security.Scope("write")}, security.DecisionGrant},
+		{"held_but_not_requested", newAuth("a", "scope:write"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
+		{"none", newAuth("a", "scope:admin"), []security.Attribute{security.Scope("read")}, security.DecisionDeny},
+		{"not_bound", newAuth("a", "scope:admin"), []security.Attribute{security.Scope("admin")}, security.DecisionAbstain},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

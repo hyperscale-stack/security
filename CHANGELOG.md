@@ -446,6 +446,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `security.StateAttribute` with `security.IsAuthenticated` and
   `security.IsAnonymous`: the attributes `voter.Authenticated()` and
   `voter.Anonymous()` vote on.
+- `security.RolePrefix` (`ROLE_`) and `security.ScopePrefix` (`scope:`): the
+  authority namespaces the voter package matches roles and scopes in.
 
 ### Changed
 
@@ -634,6 +636,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   principal, and the decision managers deny an attribute that no voter
   supports and pass each voter only the attributes it supports. `And`, `Or`
   and `Not` panic on a nil or missing voter. See
+  [MIGRATION.md](MIGRATION.md).
+- Roles and scopes live in their own authority namespaces: `voter.HasRole`
+  matches only `ROLE_<name>` and `voter.HasScope` only one `scope:<name>`
+  per authority. A bare `admin` authority no longer satisfies
+  `HasRole("admin")` and `HasScope("admin")`, and `scope:a b` is no longer
+  split into two scopes. The voter constructors panic on a name they could
+  never match: none, an empty one, a role starting with `ROLE_`, a scope
+  that is not an RFC 6749 §3.3 scope-token or starts with `scope:`. See
   [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
