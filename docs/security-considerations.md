@@ -76,7 +76,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   declares (`Client.GrantTypes`, compared exactly; empty allows none) and
   request only the scopes it declares (`Client.Scopes`; empty allows none).
   `/token` checks the grant type for every grant, custom ones included,
-  before the grant runs, so a refused request consumes nothing;
+  before the grant runs, so a refused request consumes nothing, and
+  `/authorize` checks the grant of the response type (`authorization_code`
+  for `code`, `implicit` for `token`) before the extension and the
+  `ConsentFunc` run;
   `client_credentials` refuses every client that is not confidential (RFC
   6749 §4.4); a consent narrows the requested scope, never broadens it; a
   refresh token goes only to a client declaring `refresh_token` (RFC 9700

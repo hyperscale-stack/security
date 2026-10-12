@@ -995,3 +995,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a compromised client — kept minting access tokens with it. A refresh now
   issues an access token only within the client's current `Scopes()`
   (`invalid_scope` otherwise, nothing consumed).
+- OAuth2 `/authorize` checks the client's grant types: a client declaring
+  neither `authorization_code` nor `implicit` obtained codes — refused only
+  at `/token` — and, under `Profile20` with the implicit flow enabled, access
+  tokens straight from the authorization endpoint. `response_type=code` now
+  needs `authorization_code`, and `token` needs `implicit` (RFC 7591 §2.1);
+  otherwise the request is answered `unauthorized_client` (RFC 6749
+  §4.1.2.1, §4.2.2.1) before the extension or the `ConsentFunc` runs.

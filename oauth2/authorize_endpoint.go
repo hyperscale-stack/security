@@ -54,6 +54,37 @@ const (
 	flowImplicit                      // response_type=token (legacy)
 )
 
+// grantType returns the grant type a client declares to use the flow (RFC
+// 7591 §2.1): authorization_code for response_type=code, implicit for
+// response_type=token.
+func (f authorizeFlow) grantType() string {
+	if f == flowImplicit {
+		return GrantTypeImplicit
+	}
+
+	return GrantTypeAuthorizationCode
+}
+
+// errResponseTypeNotDeclared answers a response type whose grant the client
+// does not declare: unauthorized_client, "not authorized to request an
+// authorization code / access token using this method" (RFC 6749 §4.1.2.1,
+// §4.2.2.1).
+var errResponseTypeNotDeclared = ErrUnauthorizedClient.WithDescription("the client may not use this response type")
+
+// flowRefusal returns nil when c declares the grant of flow, otherwise
+// errResponseTypeNotDeclared — with [ErrNoGrantTypesDeclared] as cause when
+// c declares no grant type at all.
+func flowRefusal(c Client, flow authorizeFlow) *Error {
+	switch {
+	case ClientAllowsGrantType(c, flow.grantType()):
+		return nil
+	case len(c.GrantTypes()) == 0:
+		return errResponseTypeNotDeclared.WithCause(ErrNoGrantTypesDeclared)
+	default:
+		return errResponseTypeNotDeclared
+	}
+}
+
 // OpaqueTokenGenerator mints opaque tokens — a raw value plus the storage
 // hash. The token sub-package's OpaqueRefreshAdapter and OpaqueCodeAdapter
 // satisfy it; it is the type the implicit flow uses to issue access tokens.
@@ -194,8 +225,10 @@ type AuthorizeConfig struct {
 // The handler resolves the issuer of the request through the
 // [IssuerResolver] — the realm the code, or implicit token, is bound to —
 // validates the request (client — known at that issuer, see
-// [IssuerBoundClient] —, redirect URI, response type, scope, PKCE), and
-// then calls consent.
+// [IssuerBoundClient] —, redirect URI, response type and the client's
+// declaration of its grant — authorization_code for code, implicit for
+// token, unauthorized_client otherwise —, scope, PKCE), and then calls
+// consent.
 // The library owns the protocol plumbing — request validation, code /
 // token minting, the redirect — while the application owns the login and
 // consent UI through the [ConsentFunc].
@@ -470,6 +503,12 @@ func (s *Server) validateAuthorize(
 
 	if flowErr != nil {
 		s.redirectAuthorizeError(w, r, target, flowErr)
+
+		return nil, false
+	}
+
+	if oerr := flowRefusal(client, flow); oerr != nil {
+		s.redirectAuthorizeError(w, r, target, oerr)
 
 		return nil, false
 	}

@@ -578,3 +578,110 @@ func TestRefreshRechecksTheScopeRegistration(t *testing.T) {
 	assert.Equal(t, oauth2.CodeInvalidScope, jsonBody(t, rec)["error"])
 	assert.True(t, env.sink.matches(oauth2.ErrNoScopesDeclared))
 }
+
+// withClients makes an extensionEnv serve clients.
+func withClients(clients ...oauth2.Client) envOption {
+	return func(s *oauth2.ServerConfig, _ *grant.Config) {
+		registry := make(map[string]oauth2.Client, len(clients))
+		for _, c := range clients {
+			registry[c.ID()] = c
+		}
+
+		s.ClientStore = &staticClientStore{clients: registry}
+	}
+}
+
+// TestAuthorizeChecksTheClientGrantTypes pins RFC 6749 §4.1.2.1 / §4.2.2.1
+// with RFC 7591 §2.1: response_type=code needs the authorization_code grant,
+// response_type=token the implicit one. A client not declaring it is
+// answered unauthorized_client in the flow's response mode — before the
+// extension or the ConsentFunc runs, nothing persisted.
+func TestAuthorizeChecksTheClientGrantTypes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		grants   []string
+		implicit bool
+		allowed  bool
+	}{
+		{"client_credentials only, token", []string{oauth2.GrantTypeClientCredentials}, true, false},
+		{"client_credentials only, code", []string{oauth2.GrantTypeClientCredentials}, false, false},
+		{"implicit only, code", []string{oauth2.GrantTypeImplicit}, false, false},
+		{"implicit only, token", []string{oauth2.GrantTypeImplicit}, true, true},
+		{"authorization_code only, token", []string{oauth2.GrantTypeAuthorizationCode}, true, false},
+		{"authorization_code only, code", []string{oauth2.GrantTypeAuthorizationCode}, false, true},
+		{"nothing declared, code", nil, false, false},
+		{"nothing declared, token", nil, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &oauth2.DefaultClient{
+				IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+				RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"}, GrantTypeValues: tc.grants,
+			}
+			ext := &fakeExtension{}
+			store := &writeCountingStore{Store: memory.New()}
+			env := newExtensionEnv(t, ext, withProfile(oauth2.Profile20), withStore(store), withClients(client))
+
+			q, cfg := authorizeQuery(), oauth2.AuthorizeConfig{}
+			if tc.implicit {
+				q, cfg = implicitQuery(), oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}
+			}
+
+			consented := false
+			rec := runAuthorizeCfg(env.srv, cfg, q, func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+				consented = true
+
+				return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
+			})
+			require.Equal(t, http.StatusFound, rec.Code)
+
+			loc := mustLocation(t, rec)
+
+			params := loc.Query()
+			if tc.implicit {
+				var err error
+
+				params, err = url.ParseQuery(loc.Fragment)
+				require.NoError(t, err)
+			}
+
+			if tc.allowed {
+				assert.Empty(t, params.Get("error"))
+				assert.True(t, consented)
+
+				return
+			}
+
+			assert.Equal(t, oauth2.CodeUnauthorizedClient, params.Get("error"))
+			assert.Equal(t, "https://auth.example", params.Get("iss"))
+			assert.Equal(t, q.Get("state"), params.Get("state"))
+			assert.Empty(t, params.Get("code"))
+			assert.Empty(t, params.Get("access_token"))
+			assert.False(t, consented, "the ConsentFunc never runs")
+
+			validated, _, _ := ext.calls()
+			assert.Zero(t, validated, "the extension never runs")
+			assert.Zero(t, store.writes.Load(), "nothing persisted")
+			assert.Equal(t, tc.grants == nil, env.sink.matches(oauth2.ErrNoGrantTypesDeclared))
+		})
+	}
+
+	t.Run("an implicit flow the server does not enable", func(t *testing.T) {
+		t.Parallel()
+
+		env := newExtensionEnv(t, &fakeExtension{}, withClients(&oauth2.DefaultClient{
+			IDValue: testClientID, TypeValue: oauth2.ClientConfidential, RedirectURIValues: []string{redirectURI},
+			ScopeValues: []string{"read"}, GrantTypeValues: []string{oauth2.GrantTypeImplicit},
+		}))
+
+		rec := env.authorize(implicitQuery(), approve)
+		require.Equal(t, http.StatusFound, rec.Code)
+		assert.Equal(t, oauth2.CodeUnsupportedResponseType, mustLocation(t, rec).Query().Get("error"),
+			"unsupported_response_type keeps precedence")
+	})
+}
