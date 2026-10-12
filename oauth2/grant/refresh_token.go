@@ -164,7 +164,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 	if !rotate {
 		// The legacy Profile20 refresh: the access token alone joins the
 		// family, which the store refuses once revoked.
-		idToken, err := extendResponse(ctx, req, iss, pair.Access)
+		idToken, err := extendResponse(ctx, req, iss, pair)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +185,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 
 	// Extended before the rotation: a failure leaves the presented token
 	// usable.
-	idToken, err := extendResponse(ctx, req, iss, pair.Access)
+	idToken, err := extendResponse(ctx, req, iss, pair)
 	if err != nil {
 		return nil, err
 	}

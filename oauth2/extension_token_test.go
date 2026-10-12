@@ -78,6 +78,7 @@ func TestExtendTokenResponseInputs(t *testing.T) {
 		{oauth2.GrantTypeRefreshToken, "", refreshBody["access_token"].(string), env.clock.Now()},
 	} {
 		ti := ext.issuances[i]
+		assert.True(t, ti.RefreshTokenIssued, "the exchange and the BCP rotation persist a refresh token")
 		assert.Equal(t, want.grantType, ti.GrantType)
 		assert.Equal(t, testClientID, ti.Client.ID())
 		assert.Equal(t, want.nonce, ti.Nonce)

@@ -97,6 +97,52 @@ func TestGrantsExtendTheirResponses(t *testing.T) {
 	assert.Empty(t, ext.issuances[0].Nonce, "the seeded code has no nonce")
 	assert.Equal(t, oauth2.GrantTypeRefreshToken, ext.issuances[1].GrantType)
 	assert.Equal(t, oauth2.GrantTypeRefreshToken, ext.issuances[2].GrantType)
+
+	// A refresh never carries the code's nonce (OIDC Core §12.2).
+	assert.Empty(t, ext.issuances[1].Nonce)
+	assert.Empty(t, ext.issuances[2].Nonce)
+
+	// The exchange and the rotation persist a refresh token; the
+	// non-rotating refresh keeps the presented one in use and mints none.
+	assert.True(t, ext.issuances[0].RefreshTokenIssued)
+	assert.True(t, ext.issuances[1].RefreshTokenIssued)
+	assert.False(t, ext.issuances[2].RefreshTokenIssued)
+}
+
+// TestTokenIssuanceReportsAGatedRefreshToken: a code exchange whose grant
+// RefreshTokenScope keeps from minting a refresh token tells the extension
+// so — an OpenID provider fails closed on a refresh token issued without
+// offline_access consent.
+func TestTokenIssuanceReportsAGatedRefreshToken(t *testing.T) {
+	t.Parallel()
+
+	for gate, want := range map[string]bool{"": true, "offline_access": false} {
+		ext := &issuanceRecorder{}
+		store := memory.New()
+		cfg := grantConfig(store)
+		cfg.RefreshTokenScope = gate
+
+		req := boundCode(t, store, "gated-code", issuerA, issuerA)
+		req.Extension = ext
+
+		resp, err := grant.NewAuthorizationCode(cfg).Handle(t.Context(), req)
+		require.NoError(t, err)
+		require.Len(t, ext.issuances, 1)
+		assert.Equal(t, want, ext.issuances[0].RefreshTokenIssued, gate)
+		assert.Equal(t, want, resp.Pair.Refresh != nil, gate)
+	}
+
+	ext := &issuanceRecorder{}
+	cfg := grantConfig(memory.New())
+	cfg.RefreshTokens = nil
+
+	req := boundCode(t, cfg.Storage, "no-generator-code", issuerA, issuerA)
+	req.Extension = ext
+
+	_, err := grant.NewAuthorizationCode(cfg).Handle(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, ext.issuances, 1)
+	assert.False(t, ext.issuances[0].RefreshTokenIssued, "no generator, no refresh token")
 }
 
 // TestCodeExchangeHandsTheNonceToTheExtension: the nonce the code recorded
@@ -140,6 +186,9 @@ func TestGrantExtensionFailuresPersistNothing(t *testing.T) {
 	}{
 		{errDown, oauth2.CodeServerError},
 		{oauth2.ErrInvalidGrant.WithDescription("not an OpenID Connect grant"), oauth2.CodeInvalidGrant},
+		// Only invalid_grant passes through: any other *Error is a
+		// server_error.
+		{oauth2.ErrInvalidScope, oauth2.CodeServerError},
 	} {
 		store := &countingStore{Store: memory.New()}
 		pair := issueRefresh(t, store, issuerA)

@@ -498,7 +498,7 @@ an `oauth2.Extension` adds (`id_token`, OIDC Core §3.1.3.3).
 | Before | After |
 | ------ | ----- |
 | `GrantResponse.ExtraParams map[string]any` (dropped) | removed; `GrantResponse.IDToken` (serialized when non-empty) |
-| no way to extend the authorization-code flow | `ServerConfig.Extension` (`oauth2.Extension`): `ValidateAuthorizeRequest`, `CompleteAuthorization`, `ExtendTokenResponse`; `AuthorizeRequest.ExtensionRequest`, `Consent.ExtensionResult`; `GrantRequest.Extension` |
+| no way to extend the authorization-code flow | `ServerConfig.Extension` (`oauth2.Extension`): `ValidateAuthorizeRequest`, `CompleteAuthorization`, `ExtendTokenResponse` (its `TokenIssuance` carries the access token, the grant context, the nonce and `RefreshTokenIssued`); `AuthorizeRequest.ExtensionRequest`, `Consent.ExtensionResult`; `GrantRequest.Extension` |
 | a refresh token with every code exchange that has a generator | unchanged by default; `grant.Config.RefreshTokenScope` (e.g. `offline_access`, OIDC Core §11) issues one only when the grant holds that scope |
 
 To migrate:

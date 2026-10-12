@@ -158,6 +158,14 @@ type TokenIssuance struct {
 	// The core does not bound it: an extension bounds it when it validates
 	// the authorization request.
 	Nonce string
+	// RefreshTokenIssued reports whether a refresh token is persisted with
+	// the access token — minted at a code exchange (a RefreshTokens
+	// generator configured, and grant.Config.RefreshTokenScope satisfied),
+	// or the replacement of a rotating refresh. It is false for a refresh
+	// that does not rotate, whose presented token stays in use. An OpenID
+	// provider fails closed on a refresh token the end-user did not consent
+	// to (offline_access, OpenID Connect Core §11).
+	RefreshTokenIssued bool
 }
 
 // TokenResponseExtension holds the members an [Extension] adds to a

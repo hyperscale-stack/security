@@ -122,8 +122,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   same across refreshes (OIDC Core §12.2, RFC 9068 §2.2.1);
   `ExtendTokenResponse` runs in the `authorization_code` and `refresh_token`
   grants between minting the tokens and their single atomic write, with a
-  copy of the access token (OIDC Core §3.1.3.6 `at_hash`), the grant context
-  and the code's nonce, and returns an `oauth2.TokenResponseExtension` whose
+  copy of the access token (OIDC Core §3.1.3.6 `at_hash`), the grant context,
+  the code's nonce and whether a refresh token comes with the access token
+  (`RefreshTokenIssued`, so an OpenID provider can fail closed on a refresh
+  token issued without `offline_access` consent, OIDC Core §11), and returns
+  an `oauth2.TokenResponseExtension` whose
   `IDToken` becomes the `id_token` member (`GrantResponse.IDToken`). The RFC
   6749 §5.1 members cannot be overwritten, and no response is partially
   successful: a hook failure persists nothing, and an `id_token` only travels

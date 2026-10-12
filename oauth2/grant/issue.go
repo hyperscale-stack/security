@@ -57,7 +57,7 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) 
 		}
 	}
 
-	idToken, err := extendResponse(ctx, req, iss, pair.Access)
+	idToken, err := extendResponse(ctx, req, iss, pair)
 	if err != nil {
 		return nil, err
 	}
@@ -71,18 +71,20 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) 
 
 // extendResponse runs the server's extension on the exchange iss — when
 // the request carries one and the exchange is one it extends — handing it
-// the minted, not yet persisted access token, and returns the id_token it
-// adds. A failure is answered through grantFailure.
-func extendResponse(ctx context.Context, req Request, iss issuance, access oauth2.AccessToken) (string, error) {
+// the minted, not yet persisted pair: a copy of the access token, and
+// whether a refresh token comes with it. It returns the id_token the
+// extension adds. A failure is answered through grantFailure.
+func extendResponse(ctx context.Context, req Request, iss issuance, pair *oauth2.TokenPair) (string, error) {
 	if req.Extension == nil || iss.grantType == "" {
 		return "", nil
 	}
 
 	ext, err := req.Extension.ExtendTokenResponse(ctx, oauth2.TokenIssuance{
-		GrantType: iss.grantType,
-		Client:    req.Client,
-		Access:    access,
-		Nonce:     iss.nonce,
+		GrantType:          iss.grantType,
+		Client:             req.Client,
+		Access:             pair.Access,
+		Nonce:              iss.nonce,
+		RefreshTokenIssued: pair.Refresh != nil,
 	})
 	if err != nil {
 		return "", grantFailure(err)
