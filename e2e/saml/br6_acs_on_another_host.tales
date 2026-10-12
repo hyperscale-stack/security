@@ -1,0 +1,97 @@
+version = 1
+
+# BR6: the login must start on the host of the ACS. The __Host- binding
+# cookie is host-only: a login started on acs.sp.test sets it there, and the
+# IdP posts to the ACS on sp.test, which never receives it. Deployments
+# serve the login and the ACS from one host.
+scenario "BR6 a login started on another host than the ACS fails" {
+  tags = ["saml", "browser", "br6"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+      gate = false
+    }
+  }
+
+  step "browser" "start_login_on_acs_host" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.acs_host}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "refused" {
+    target = "victim"
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: missing browser binding cookie:")
+        login = {
+          host = "acs.sp.test"
+          set_cookies = {
+            "__Host-samlsp" = {
+              domain = ""
+            }
+          }
+        }
+        acs = {
+          host = "sp.test"
+          cookies = {
+            "__Host-samlsp" = not_exists()
+          }
+        }
+      }
+    }
+  }
+}

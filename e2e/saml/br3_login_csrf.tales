@@ -1,0 +1,236 @@
+version = 1
+
+# BR3: login CSRF with a valid response. Mallory signs in at the IdP in her
+# own browser and keeps her response; attacker.test then auto-posts it to
+# the ACS from the victim's browser. The browser binding refuses it: the
+# transaction is bound to the hash of mallory's binding cookie, which the
+# victim's browser does not hold. SameSite is not the defense: the victim's
+# own SameSite=None binding cookie is sent with the forged POST.
+
+scenario "BR3 login CSRF into a browser without a binding cookie" {
+  tags = ["saml", "browser", "br3"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "hold"
+      gate = false
+    }
+  }
+
+  step "keyword" "mallory_response" {
+    name = "mallory_holds_her_response"
+    inputs = {
+      password = result.helper.mallory_password
+    }
+  }
+
+  step "browser" "forged_post" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/csrf?slot=held"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: missing browser binding cookie:")
+        acs = {
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-samlsp" = not_exists()
+          }
+        }
+      }
+    }
+  }
+
+  step "browser" "victim_not_signed_in" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/"
+      }
+    }
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Welcome"
+      }
+    }
+  }
+
+  step "keyword" "mallory_login" {
+    name   = "mallory_completes_her_login"
+    inputs = {}
+  }
+
+  step "http" "mallory_evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 1
+        rejection_count = 1
+      }
+    }
+  }
+}
+
+scenario "BR3 login CSRF into a browser with its own binding cookie" {
+  tags = ["saml", "browser", "br3"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "hold"
+      gate = false
+    }
+  }
+
+  step "keyword" "mallory_response" {
+    name = "mallory_holds_her_response"
+    inputs = {
+      password = result.helper.mallory_password
+    }
+  }
+
+  # The victim has a login of her own in progress: a binding cookie.
+  step "browser" "victim_starts_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "browser" "forged_post" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/csrf?slot=held"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: browser binding mismatch:")
+        acs = {
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-samlsp" = true
+          }
+        }
+      }
+    }
+  }
+
+  step "keyword" "mallory_login" {
+    name   = "mallory_completes_her_login"
+    inputs = {}
+  }
+
+  step "http" "mallory_evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 1
+        rejection_count = 1
+      }
+    }
+  }
+}

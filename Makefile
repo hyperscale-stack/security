@@ -54,6 +54,12 @@ test: _build
 	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
 	@rm -f $(BUILD_DIR)/*.cover $(BUILD_DIR)/coverage.body
 
+# Opt-in browser suites (Tales and Chrome, see docs/saml-sp.md): never part
+# of `make test` nor of CI.
+.PHONY: e2e
+e2e:
+	@./e2e/saml/run.sh
+
 .PHONY: coverage
 coverage: $(BUILD_DIR)/coverage.out
 	@go tool cover -func ./$(BUILD_DIR)/coverage.out

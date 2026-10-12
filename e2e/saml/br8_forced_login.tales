@@ -1,0 +1,206 @@
+version = 1
+
+# BR8: login CSRF by forced login initiation. The SP's browser binding only
+# ties a response to the browser that started the login; it cannot tell
+# whether the user meant to start it. An attacker page that navigates the
+# victim to the login of a connection whose IdP the attacker controls (here
+# the IdP's as-mallory mode: it answers as mallory, unprompted) signs the
+# victim in to the attacker's account. The defense is to start logins only
+# from a same-origin gesture: the helper's proxy plays the documented gate
+# (Sec-Fetch-Site same-origin or none), since the example has none.
+
+scenario "BR8 an ungated login can be forced from another site" {
+  tags = ["saml", "browser", "br8"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "as-mallory"
+      gate = false
+    }
+  }
+
+  step "browser" "forced" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/force-login"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/"
+      }
+
+      text {
+        selector = "p"
+        value    = contains("mallory-pairwise-id")
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 1
+        credential_posts = 0
+        login = {
+          sec_fetch_site = "cross-site"
+          status         = 302
+        }
+      }
+    }
+  }
+}
+
+scenario "BR8 the login-initiation gate refuses a forced login" {
+  tags = ["saml", "browser", "br8"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "as-mallory"
+      gate = true
+    }
+  }
+
+  step "browser" "forced" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/force-login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='sp.gate']"
+      }
+
+      url {
+        value = contains("${config.sp}/login")
+      }
+    }
+  }
+
+  step "http" "refused" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in     = 0
+        acs_count     = 0
+        gate_refusals = 1
+        login = {
+          sec_fetch_site = "cross-site"
+          status         = 403
+        }
+      }
+    }
+  }
+
+  # The user's own gesture on the site still starts a login.
+  step "keyword" "honest_idp" {
+    name = "set_idp_mode"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  step "browser" "user_clicks_sign_in" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/"
+      }
+
+      click {
+        selector = "a[href='/login']"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim"
+
+    expect {
+      text {
+        selector = "p"
+        value    = contains("alice-pairwise-id")
+      }
+    }
+  }
+
+  step "http" "allowed" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in     = 1
+        gate_refusals = 1
+        login = {
+          sec_fetch_site = "same-origin"
+          status         = 302
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,439 @@
+version = 1
+
+# BR5: RelayState integrity. The RelayState is an opaque handle to the
+# transaction stored by the SP; whatever the IdP or an attacker puts there
+# never selects another transaction, never sends the browser elsewhere, and
+# a refused attempt consumes nothing.
+
+scenario "BR5 a tampered RelayState finds no transaction" {
+  tags = ["saml", "browser", "br5"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "tamper"
+      gate = false
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?from=br5")}"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "refused" {
+    target = "victim"
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: transaction not found:")
+        acs = {
+          cookies = {
+            "__Host-samlsp" = true
+          }
+        }
+      }
+    }
+  }
+
+  # The genuine response still completes the untouched transaction.
+  step "browser" "original_completes" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.idp}/_e2e/release?slot=original"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?from=br5"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+}
+
+scenario "BR5 a response delivered with another transaction's RelayState" {
+  tags = ["saml", "browser", "br5"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "hold-first"
+      gate = false
+    }
+  }
+
+  # Transaction A: the IdP keeps its response.
+  step "browser" "start_login_a" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?tab=a")}"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "response_a_held" {
+    target = "victim"
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.held']"
+      }
+    }
+  }
+
+  # Transaction B, in the same browser: its response arrives with A's
+  # RelayState.
+  step "keyword" "swap" {
+    name = "set_idp_mode"
+    inputs = {
+      mode = "swap"
+    }
+  }
+
+  step "browser" "login_b_swapped" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?tab=b")}"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 0
+        rejection_count  = 1
+        last_rejection   = contains("samlsp: InResponseTo mismatch:")
+        credential_posts = 1
+      }
+    }
+  }
+
+  # Both transactions are intact: each genuine response completes its own.
+  step "browser" "a_completes" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.idp}/_e2e/release?slot=first"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?tab=a"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "browser" "b_completes" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.idp}/_e2e/release?slot=second"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?tab=b"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "http" "both_completed" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 2
+        rejection_count = 1
+      }
+    }
+  }
+}
+
+scenario "BR5 a response without RelayState is unsolicited" {
+  tags = ["saml", "browser", "br5"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "drop"
+      gate = false
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "refused" {
+    target = "victim"
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: unsolicited response:")
+      }
+    }
+  }
+}
+
+scenario "BR5 a URL in RelayState is never followed" {
+  tags = ["saml", "browser", "br5"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "url"
+      gate = false
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "refused_on_sp" {
+    target = "victim"
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 0
+        rejection_count  = 1
+        last_rejection   = contains("samlsp: unsolicited response:")
+        attacker_landing = 0
+        hits = {
+          "attacker.test" = not_exists()
+        }
+      }
+    }
+  }
+}

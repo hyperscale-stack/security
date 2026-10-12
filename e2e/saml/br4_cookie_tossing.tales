@@ -1,0 +1,126 @@
+version = 1
+
+# BR4: cookie tossing from a sibling host. evil.sp.test is same-site with
+# sp.test and can set cookies for the whole sp.test domain. It plants
+# mallory's binding value for sp.test under every name variant, then
+# attacker.test auto-posts mallory's held response from the victim's
+# browser (BR3). The __Host- prefix makes the binding cookie host-only and
+# un-plantable: only the unprefixed control reaches sp.test, the SP ignores
+# it, and the forged login fails. The defense relies on the browser's prefix
+# rules (RFC 6265bis §4.1.3.2).
+scenario "BR4 a sibling host cannot plant the binding cookie" {
+  tags = ["saml", "browser", "br4"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = "hold"
+      gate = false
+    }
+  }
+
+  step "keyword" "mallory_response" {
+    name = "mallory_holds_her_response"
+    inputs = {
+      password = result.helper.mallory_password
+    }
+  }
+
+  # Plants: __Host-samlsp with Domain=sp.test, a nameless cookie whose
+  # value starts with "__Host-samlsp=", the case variant __HOST-samlsp, a
+  # valid host-only __Host-samlsp for evil.sp.test, and samlsp (control).
+  step "browser" "toss" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.evil_sp}/toss"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='evil.tossed']"
+      }
+    }
+  }
+
+  step "browser" "forged_post" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/csrf?slot=held"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 0
+        rejection_count = 1
+        last_rejection  = contains("samlsp: missing browser binding cookie:")
+        acs = {
+          cookies = {
+            samlsp          = true
+            "__Host-samlsp" = not_exists()
+            "__HOST-samlsp" = not_exists()
+          }
+        }
+      }
+    }
+  }
+
+  step "keyword" "mallory_login" {
+    name   = "mallory_completes_her_login"
+    inputs = {}
+  }
+
+  step "http" "mallory_evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 1
+        rejection_count = 1
+      }
+    }
+  }
+}
