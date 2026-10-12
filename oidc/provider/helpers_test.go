@@ -54,6 +54,7 @@ var (
 	rsaKeyB *rsa.PrivateKey
 	ecKey   *ecdsa.PrivateKey
 	ec384   *ecdsa.PrivateKey
+	ec521   *ecdsa.PrivateKey
 	rsa1024 *rsa.PrivateKey
 )
 
@@ -67,6 +68,8 @@ func TestMain(m *testing.M) {
 	ecKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(err)
 	ec384, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	must(err)
+	ec521, err = ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	must(err)
 	//nolint:gosec // G403: a deliberately undersized key, refused by the code under test
 	rsa1024, err = rsa.GenerateKey(rand.Reader, 1024)
@@ -276,6 +279,7 @@ type env struct {
 	t           *testing.T
 	op          *oidcprovider.Provider
 	store       *memory.Store
+	storage     oauth2.Storage
 	clock       *testClock
 	sink        *errorSink
 	keys        *mutableKeys
@@ -284,6 +288,30 @@ type env struct {
 }
 
 type envOption func(*oauth2.ServerConfig, *grant.Config, *oidcprovider.Config)
+
+// withStore shares store between environments (one deployment, two
+// configurations).
+func withStore(store *memory.Store) envOption {
+	return func(s *oauth2.ServerConfig, g *grant.Config, _ *oidcprovider.Config) {
+		s.Storage, g.Storage = store, store
+	}
+}
+
+// withSpy wraps the memory store in a spy counting its writes.
+func withSpy(spy *spyStore) envOption {
+	return func(s *oauth2.ServerConfig, g *grant.Config, _ *oidcprovider.Config) {
+		spy.Store = s.Storage.(*memory.Store) //nolint:forcetypeassert // the env's own store
+		s.Storage, g.Storage = spy, spy
+	}
+}
+
+// withClient registers one more client.
+func withClient(c oauth2.Client) envOption {
+	return func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) {
+		clients := s.ClientStore.(staticClients) //nolint:forcetypeassert // the env's own store
+		clients[c.ID()] = c
+	}
+}
 
 func withResolver(r oauth2.IssuerResolver) envOption {
 	return func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) { s.IssuerResolver = r }
@@ -343,6 +371,12 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	for _, o := range opts {
 		o(&scfg, &gcfg, &ocfg)
 	}
+
+	if shared, ok := scfg.Storage.(*memory.Store); ok {
+		e.store = shared
+	}
+
+	e.storage = scfg.Storage
 
 	switch {
 	case scfg.Grants == nil:
@@ -466,6 +500,7 @@ func newFakeClaims() *fakeClaims {
 		"alice": {
 			"name": "Alice Liddell", "name#fr": "Alice Liddell (fr)", "given_name": "Alice", "family_name": "Liddell",
 			"email": "alice@example.com", "email_verified": true, "phone_number": "+33 1 23 45 67 89",
+			"phone_number#x#y": "+0", "sub#x": "mallory",
 			"address": map[string]any{"country": "FR"}, "updated_at": 1760000000, "nickname": "",
 			"middle_name": nil, "groups": []string{"admins"},
 			// Protocol claims an application must not be able to set.
@@ -518,4 +553,47 @@ func (f *fakeClaims) recorded() []oidcprovider.ClaimsQuery {
 	defer f.mu.Unlock()
 
 	return slices.Clone(f.queries)
+}
+
+// spyStore is a memory store counting the writes that issue something.
+type spyStore struct {
+	*memory.Store
+
+	codes atomic.Int32
+	pairs atomic.Int32
+}
+
+func (s *spyStore) SaveAuthorizationCode(ctx context.Context, code *oauth2.AuthorizationCode) error {
+	s.codes.Add(1)
+
+	return s.Store.SaveAuthorizationCode(ctx, code) //nolint:wrapcheck // test double
+}
+
+func (s *spyStore) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
+	s.pairs.Add(1)
+
+	return s.Store.SaveTokenPair(ctx, pair) //nolint:wrapcheck // test double
+}
+
+func (s *spyStore) RotateRefreshToken(ctx context.Context, oldHash string, next *oauth2.TokenPair) error {
+	s.pairs.Add(1)
+
+	return s.Store.RotateRefreshToken(ctx, oldHash, next) //nolint:wrapcheck // test double
+}
+
+// algClient is a confidential client that registered an
+// id_token_signed_response_alg.
+type algClient struct {
+	oauth2.DefaultClient
+
+	alg jwtsec.Algorithm
+}
+
+func (c *algClient) IDTokenSignedResponseAlg() jwtsec.Algorithm { return c.alg }
+
+func newAlgClient(id string, alg jwtsec.Algorithm) *algClient {
+	return &algClient{DefaultClient: oauth2.DefaultClient{
+		IDValue: id, Secret: webClientSecret, TypeValue: oauth2.ClientConfidential,
+		RedirectURIValues: []string{webRedirectURI}, ScopeValues: []string{"openid", "profile", "email", "offline_access"},
+	}, alg: alg}
 }

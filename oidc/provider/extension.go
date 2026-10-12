@@ -6,7 +6,6 @@ package oidcprovider
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,30 +14,31 @@ import (
 	"github.com/hyperscale-stack/security/oauth2"
 )
 
-// errOpenIDNotServed refuses OpenID requests until the authorization flow
-// is wired: fail closed.
-var errOpenIDNotServed = errors.New("oidcprovider: OpenID authentication requests are not served yet")
-
-// extension is the oauth2.Extension of a Provider.
+// extension is the oauth2.Extension of a Provider: the hooks the server
+// calls around its own checks.
 type extension struct{ p *Provider }
 
-// ValidateAuthorizeRequest implements oauth2.Extension.
-func (e *extension) ValidateAuthorizeRequest(_ context.Context, _ *http.Request, ar *oauth2.AuthorizeRequest) (any, error) {
-	if hasScope(ar.Scope, ScopeOpenID) {
-		return nil, errOpenIDNotServed
+// ValidateAuthorizeRequest implements oauth2.Extension: the OpenID
+// parameters of an authorization request the core validated.
+func (e *extension) ValidateAuthorizeRequest(ctx context.Context, r *http.Request, ar *oauth2.AuthorizeRequest) (any, error) {
+	view, err := e.p.validateRequest(ctx, r, ar)
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, nil
+	return view, nil
 }
 
-// CompleteAuthorization implements oauth2.Extension.
-func (e *extension) CompleteAuthorization(context.Context, *oauth2.AuthorizeRequest, oauth2.Consent, time.Time) (oauth2.ExtensionGrant, error) {
-	return oauth2.ExtensionGrant{}, nil
+// CompleteAuthorization implements oauth2.Extension: the verification of
+// an approved decision, and the context the grant records.
+func (e *extension) CompleteAuthorization(_ context.Context, ar *oauth2.AuthorizeRequest, consent oauth2.Consent, now time.Time) (oauth2.ExtensionGrant, error) {
+	return e.p.completeAuthorization(ar, consent, now)
 }
 
-// ExtendTokenResponse implements oauth2.Extension.
-func (e *extension) ExtendTokenResponse(context.Context, oauth2.TokenIssuance) (oauth2.TokenResponseExtension, error) {
-	return oauth2.TokenResponseExtension{}, nil
+// ExtendTokenResponse implements oauth2.Extension: the ID Token of a code
+// exchange or a refresh.
+func (e *extension) ExtendTokenResponse(ctx context.Context, iss oauth2.TokenIssuance) (oauth2.TokenResponseExtension, error) {
+	return e.p.extendTokenResponse(ctx, iss)
 }
 
 // hasScope reports whether the space-delimited scope holds value.

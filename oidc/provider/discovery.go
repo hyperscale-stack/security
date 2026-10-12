@@ -16,7 +16,9 @@ import (
 
 // protocolClaims are the claims the provider itself supplies, published
 // first in claims_supported.
-var protocolClaims = []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr", "at_hash"}
+var protocolClaims = []string{
+	claimSub, claimIss, claimAud, claimExp, claimIat, claimAuthTime, claimNonce, claimACR, claimAMR, claimAtHash,
+}
 
 // DiscoveryHandler returns the handler of the OpenID Provider Configuration
 // document (OpenID Connect Discovery 1.0 §3, §4) of the request's issuer —
@@ -118,7 +120,7 @@ func (p *Provider) discoveryDocument(issuer string, snap *keySnapshot) discovery
 		RevocationEndpoint:                         routes + "/revoke",
 		IntrospectionEndpoint:                      routes + "/introspect",
 		ScopesSupported:                            p.scopesSupported(),
-		ResponseTypesSupported:                     []string{"code"},
+		ResponseTypesSupported:                     []string{responseTypeCode},
 		ResponseModesSupported:                     []string{"query"},
 		GrantTypesSupported:                        grantTypes(sc.Grants),
 		SubjectTypesSupported:                      []string{"public"},

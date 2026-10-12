@@ -5,7 +5,11 @@
 package oidcprovider
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -191,4 +195,193 @@ type Decision struct {
 	// [ReceivedAt − MaxInteractionDuration, ReceivedAt + 5s]. Zero when the
 	// end-user authenticated during this HTTP request.
 	InteractionStartedAt time.Time
+}
+
+// authTimeSkew tolerates clock skew between the instances that record an
+// authentication and the one that checks it.
+const authTimeSkew = 5 * time.Second
+
+// Why an interaction's answer is refused although no protocol rule failed:
+// the causes the ErrorHook gets, the client gets a bare server_error.
+var (
+	errNoRequestView         = errors.New("oidcprovider: no validated request view")
+	errSilentWithoutDecision = errors.New("oidcprovider: AuthorizeSilently returned no decision")
+	errContradictoryDecision = errors.New("oidcprovider: a decision both approves and refuses")
+	errRefusalNotProtocol    = errors.New("oidcprovider: a refusal is not an OAuth 2.0 protocol error")
+	errInteractionStart      = errors.New("oidcprovider: InteractionStartedAt outside its window")
+)
+
+// authResult is the trusted outcome of an approval, carried from the
+// provider's ConsentFunc to CompleteAuthorization as
+// Consent.ExtensionResult — a type only the provider builds.
+type authResult struct {
+	event     AuthenticationEvent
+	claims    []string
+	offline   OfflineAccessConsent
+	startedAt time.Time
+}
+
+// AuthorizeHandler returns the authorization endpoint ([Paths].Authorize,
+// GET and POST, OpenID Connect Core §3.1.2.1): the server's, with the
+// provider as its ConsentFunc. Every OpenID request must come through it:
+// one served by Server().AuthorizeHandler with another ConsentFunc is
+// refused (server_error) before that ConsentFunc runs. cfg configures the
+// endpoint as for oauth2.Server.AuthorizeHandler.
+func (p *Provider) AuthorizeHandler(cfg oauth2.AuthorizeConfig) http.Handler {
+	h := p.server.AuthorizeHandler(cfg, p.consent)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), markerKey{}, p)))
+	})
+}
+
+// consent is the server's ConsentFunc: it hands the application a copy of
+// the validated request — without ResponseWriter for prompt=none — and
+// turns its Decision into the server's Consent.
+func (p *Provider) consent(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+	view, ok := ar.ExtensionRequest.(*authRequest)
+	if !ok || view == nil {
+		return nil, errNoRequestView
+	}
+
+	req := view.public()
+	silent := view.openID && view.prompt.None
+
+	var (
+		decision *Decision
+		err      error
+	)
+
+	if silent {
+		decision, err = p.cfg.Interaction.AuthorizeSilently(r, req)
+		if err == nil && decision == nil {
+			err = errSilentWithoutDecision
+		}
+	} else {
+		decision, err = p.cfg.Interaction.Authorize(w, r, req)
+		if err == nil && decision == nil {
+			return nil, nil // the application answered: its login page
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("oidcprovider: interaction: %w", err)
+	}
+
+	return consentOf(decision, silent)
+}
+
+// consentOf turns a Decision into the server's Consent. The approval's
+// result is a copy: the application keeps no handle on what is verified.
+func consentOf(d *Decision, silent bool) (*oauth2.Consent, error) {
+	switch {
+	case d.Refusal != nil && d.Authentication != nil:
+		return nil, errContradictoryDecision
+	case d.Refusal != nil:
+		var oe *oauth2.Error
+		if !errors.As(d.Refusal, &oe) || oe == nil {
+			return nil, fmt.Errorf("%w: %w", errRefusalNotProtocol, d.Refusal)
+		}
+
+		return &oauth2.Consent{Refusal: oe}, nil
+	case d.Authentication == nil:
+		return &oauth2.Consent{}, nil // the end-user denied: access_denied
+	}
+
+	result := &authResult{
+		event: *d.Authentication, claims: slices.Clone(d.Claims), offline: d.OfflineAccess,
+		startedAt: d.InteractionStartedAt,
+	}
+	result.event.AMR = slices.Clone(d.Authentication.AMR)
+
+	// There is no interaction under prompt=none: InteractionStartedAt could
+	// only stretch max_age.
+	if silent {
+		result.startedAt = time.Time{}
+	}
+
+	return &oauth2.Consent{Approved: true, Subject: result.event.Subject, Scope: d.Scope, ExtensionResult: result}, nil
+}
+
+// Check returns nil when ev satisfies the request, or the refusal the
+// provider answers if ev is approved as is — the rules of OpenID Connect
+// Core §3.1.2.1–§3.1.2.3, §5.5.1 and §5.5.1.1 the provider applies to every
+// approval:
+//   - ev.Issuer differs from Issuer (a session of another realm):
+//     oauth2.ErrLoginRequired — oauth2.ErrAccessDenied for an OAuth 2.0
+//     request, which no other rule concerns;
+//   - prompt=login or max_age=0: ev.AuthTime before the reference time;
+//     max_age=N: ev.AuthTime more than N seconds before it — both
+//     oauth2.ErrLoginRequired, in whole seconds (auth_time is a NumericDate);
+//   - Subjects set and ev.Subject not among them: oauth2.ErrLoginRequired;
+//   - EssentialACR set and ev.ACR not among them: oauth2.ErrAccessDenied, a
+//     failed authentication — oauth2.ErrLoginRequired under prompt=none,
+//     where a step-up needs an interaction.
+//
+// The reference time is ReceivedAt, or interactionStartedAt when the login
+// spanned several HTTP requests (see Decision.InteractionStartedAt); outside
+// [ReceivedAt − MaxInteractionDuration, ReceivedAt + 5s] it answers
+// oauth2.ErrServerError. Use it to decide whether a session can be reused
+// or the end-user must log in.
+func (r *Request) Check(ev AuthenticationEvent, interactionStartedAt time.Time) error {
+	if ev.Issuer != r.Issuer {
+		if r.OpenID {
+			return oauth2.ErrLoginRequired.WithDescription("the end-user is not authenticated in this realm")
+		}
+
+		return oauth2.ErrAccessDenied.WithDescription("the end-user is not authenticated in this realm")
+	}
+
+	if !r.OpenID {
+		return nil
+	}
+
+	reference := r.ReceivedAt
+
+	if !interactionStartedAt.IsZero() {
+		if interactionStartedAt.Before(r.ReceivedAt.Add(-MaxInteractionDuration)) ||
+			interactionStartedAt.After(r.ReceivedAt.Add(authTimeSkew)) {
+			return oauth2.ErrServerError.WithCause(errInteractionStart)
+		}
+
+		reference = interactionStartedAt
+	}
+
+	if err := r.checkFreshness(ev, reference); err != nil {
+		return err
+	}
+
+	if len(r.Subjects) > 0 && !slices.Contains(r.Subjects, ev.Subject) {
+		return oauth2.ErrLoginRequired.WithDescription("the request designates another end-user")
+	}
+
+	if len(r.EssentialACR) > 0 && !slices.Contains(r.EssentialACR, ev.ACR) {
+		if r.Prompt.None {
+			return oauth2.ErrLoginRequired.WithDescription("the requested authentication context needs an interaction")
+		}
+
+		return oauth2.ErrAccessDenied.WithDescription("the authentication does not satisfy the requested context")
+	}
+
+	return nil
+}
+
+// checkFreshness applies prompt=login and max_age against reference.
+// max_age=0 needs no case of its own: "elapsed time greater than 0" is
+// exactly prompt=login's rule, as Core §3.1.2.1 notes.
+func (r *Request) checkFreshness(ev AuthenticationEvent, reference time.Time) error {
+	authTime, ref := ev.AuthTime.Unix(), reference.Unix()
+
+	switch {
+	case r.Prompt.Login:
+		if authTime < ref {
+			return oauth2.ErrLoginRequired.WithDescription("the end-user must authenticate again")
+		}
+	case r.MaxAge != nil:
+		if ref-authTime > int64(*r.MaxAge/time.Second) {
+			return oauth2.ErrLoginRequired.WithDescription("the end-user authentication is too old")
+		}
+	}
+
+	return nil
 }
