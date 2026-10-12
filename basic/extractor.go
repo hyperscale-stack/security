@@ -34,9 +34,15 @@ func NewExtractor() Extractor { return Extractor{} }
 
 // Extract implements [security.Extractor]. Returns (nil, nil) when no Basic
 // credentials are present (next extractor gets a chance); a non-nil error
-// for credentials that are present but malformed.
+// for credentials that are present but malformed, and one wrapping
+// [security.ErrInvalidRequest] when the Authorization field is repeated
+// (RFC 9110 §5.3).
 func (Extractor) Extract(_ context.Context, c security.Carrier) (security.Authentication, error) {
-	header := c.Get("Authorization")
+	header, err := security.SingleValue(c, "Authorization")
+	if err != nil {
+		return nil, fmt.Errorf("basic: %w", err)
+	}
+
 	if header == "" {
 		return nil, nil
 	}

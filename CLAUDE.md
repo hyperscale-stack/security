@@ -229,7 +229,11 @@ Conventions baked into the core:
   `WithAnonymousFallback` is set.
 - **Errors are sentinels** (`errors.go`) implementing the unexported
   `SecurityError` marker. Always wrap with `fmt.Errorf("...: %w", ErrXxx)`;
-  callers match with `errors.Is`/`errors.As`, never string matching.
+  callers match with `errors.Is`/`errors.As`, never string matching. The
+  transports answer from `security.ErrorClass(err)` (one precedence for
+  joined errors): a credential verdict is 401, `ErrUnavailable` 503, an
+  access denial 403 (401 for an unauthenticated principal), and an error
+  wrapping no sentinel 500 — never a verdict on the credentials.
 - **Context first.** `context.Context` is the first argument of every
   runtime operation (`Extract`, `Authenticate`, `Hasher.Hash`/`Verify`,
   `TokenVerifier.Verify`). It also carries the `Authentication` under an

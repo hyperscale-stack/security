@@ -37,7 +37,9 @@ func TestCarrierWithContext(t *testing.T) {
 func TestWithChallengeScheme(t *testing.T) {
 	t.Parallel()
 
-	engine := security.NewEngine(security.NewManager())
+	// An extractor that finds nothing: the request carries no credential.
+	// (An engine without any extractor is a misconfiguration: 500.)
+	engine := security.NewEngine(security.NewManager(), scriptedExtractor{})
 
 	handler := httpsec.Middleware(engine, httpsec.WithChallengeScheme("Basic"))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

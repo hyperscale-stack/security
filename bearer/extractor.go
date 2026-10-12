@@ -6,6 +6,7 @@ package bearer
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/hyperscale-stack/security"
@@ -26,8 +27,14 @@ func NewExtractor() Extractor { return Extractor{} }
 // Bearer credentials are present (next extractor gets a chance). Returns
 // a non-nil Authentication carrying the raw token when the header is
 // well-formed; the verifier is responsible for validating the token shape.
+// A repeated Authorization field is refused with an error wrapping
+// [security.ErrInvalidRequest] (RFC 9110 §5.3, RFC 6750 §3.1).
 func (Extractor) Extract(_ context.Context, c security.Carrier) (security.Authentication, error) {
-	header := c.Get("Authorization")
+	header, err := security.SingleValue(c, "Authorization")
+	if err != nil {
+		return nil, fmt.Errorf("bearer: %w", err)
+	}
+
 	if header == "" {
 		return nil, nil
 	}

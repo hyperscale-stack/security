@@ -20,6 +20,10 @@ import "context"
 //     surfaces err to the caller and stops; downstream authenticators are
 //     not invoked.
 //
+// Read credentials from header fields only, and a singleton field such as
+// Authorization through [SingleValue]: a repeated field is a malformed
+// request ([ErrInvalidRequest]), not an invitation to pick one value.
+//
 // Implementations MUST be safe for concurrent use.
 type Extractor interface {
 	Extract(ctx context.Context, c Carrier) (Authentication, error)

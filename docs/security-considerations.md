@@ -1139,10 +1139,31 @@ Authorization follows Spring Security's voter model, and fails closed:
 
 ## Transport error mapping
 
-Error mappers return terse, code-first responses. HTTP emits a status code
-plus a `WWW-Authenticate` challenge; gRPC emits a `codes.Code`. Clients are
-expected to branch on the code, not parse the message — the message never
-leaks why authentication failed.
+Error mappers return terse, code-first responses, classified once by
+`security.ErrorClass` — joined errors included — so a refusal by one
+authenticator is never masked by another one's lack of support, and an
+outage never reads as a verdict on the credentials:
+
+| Class | HTTP | `WWW-Authenticate` (scheme S, realm R) |
+| --- | --- | --- |
+| `invalid_request` (e.g. repeated `Authorization`) | 400 | Bearer + bearer token sent: `error="invalid_request"` |
+| `unavailable` (`ErrUnavailable`) | 503 | — |
+| `token_expired`, `token_not_found`, `client_secret_mismatch`, `invalid_credentials` | 401 | `S realm=R`; Bearer + bearer token sent: `error="invalid_token"` (RFC 9068 §4) |
+| `authentication_required`, `unsupported_credential` | 401 | `S realm=R` — no error code (RFC 6750 §3.1) |
+| `insufficient_scope`, `access_denied` | 403 | `S realm=R`; Bearer + bearer token sent: `error="insufficient_scope"` |
+| `no_extractor`, `_OTHER` (no sentinel: a broken contract) | 500 | — |
+
+Every 401 carries a challenge with a realm (`api` by default; RFC 9110
+§11.6.1, RFC 7617 §2, RFC 6750 §3), a Basic one also `charset="UTF-8"`
+(RFC 7617 §2.1), and the realm is sent as an RFC 9110 quoted-string — a
+realm a quoted-string cannot carry is refused at startup. An unauthenticated
+principal refused by `httpsec.Authorize` is asked to authenticate (401), an
+authenticated one refused (403) (RFC 9110 §15.5.2, §15.5.4); `Authorize`
+answers with the challenge of the `Middleware` in front of it. The RFC 6750
+error codes are sent only when the request carried a bearer token. The
+`error_description` is a fixed string per code: the response never says why
+authentication failed. Clients are expected to branch on the status and the
+code, not parse the message.
 
 ## Observability
 

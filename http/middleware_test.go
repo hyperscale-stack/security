@@ -86,11 +86,12 @@ func TestMiddlewareErrorMappingShortCircuits(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"unsupported", security.ErrUnsupportedCredential, http.StatusBadRequest},
+		{"unsupported", security.ErrUnsupportedCredential, http.StatusUnauthorized},
 		{"invalid", security.ErrInvalidCredentials, http.StatusUnauthorized},
 		{"expired", security.ErrTokenExpired, http.StatusUnauthorized},
 		{"not_found", security.ErrTokenNotFound, http.StatusUnauthorized},
-		{"unknown", errors.New("boom"), http.StatusUnauthorized},
+		{"unavailable", security.ErrUnavailable, http.StatusServiceUnavailable},
+		{"unknown", errors.New("boom"), http.StatusInternalServerError},
 	}
 
 	for _, c := range cases {
@@ -123,7 +124,7 @@ func TestMiddlewareWWWAuthenticateIncludesRealm(t *testing.T) {
 	rec := httptest.NewRecorder()
 	httpsec.Middleware(engine, httpsec.WithRealm("hyperscale"))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }),
-	).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	).ServeHTTP(rec, bearerRequest())
 
 	ww := rec.Header().Get("WWW-Authenticate")
 	assert.True(t, strings.Contains(ww, `realm="hyperscale"`),
@@ -152,7 +153,7 @@ func TestMiddlewareWWWAuthenticateDoesNotLeakErrorDetail(t *testing.T) {
 	rec := httptest.NewRecorder()
 	httpsec.Middleware(engine, httpsec.WithRealm("hyperscale"))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }),
-	).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	).ServeHTTP(rec, bearerRequest())
 
 	ww := rec.Header().Get("WWW-Authenticate")
 	assert.NotContains(t, ww, secret, "wrapped error detail must not leak into the header")

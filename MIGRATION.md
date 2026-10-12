@@ -1412,3 +1412,45 @@ To migrate:
 2. A custom `security.Carrier` used with `session.Manager` must implement
    `session.CookieReader` (`CookiesNamed(name string) []*http.Cookie`, as
    `httpsec.Carrier` does); its `Get`/`Values` must read header fields only.
+
+### `http`: challenges and status codes follow RFC 6750, RFC 7617 and RFC 9110
+
+The default HTTP error mapping answered a Basic-only server with a bare
+`Bearer` challenge, sent no realm (RFC 7617 §2 requires one; RFC 6750 §3
+requires an auth-param after `Bearer`), rendered the realm with Go escapes,
+sent `invalid_token` only for expired or unknown tokens (RFC 9068 §4: for
+every failed check), never sent `insufficient_scope`, answered `400` when a
+wrong password was joined with another authenticator's bail-out, `403` to an
+anonymous caller refused by `Authorize` (with a hard-coded bare `Bearer`),
+and `401` to an infrastructure failure. The mapping now comes from
+`security.ErrorClass`:
+
+| Situation | Before | After |
+| --- | --- | --- |
+| No credentials | `401 Bearer` | `401 Bearer realm="api"` |
+| No credentials, `WithChallengeScheme("Basic")` | `401 Basic` | `401 Basic realm="api", charset="UTF-8"` |
+| Bad bearer token (signature, audience, malformed…) | `401 Bearer` | `401 Bearer realm="api", error="invalid_token", …` |
+| Bad credentials, no bearer token sent | `401 Bearer` | `401 Bearer realm="api"` (no RFC 6750 code) |
+| Unsupported credential (no authenticator supports it) | `400`, no challenge | `401` with challenge, no error code |
+| Wrong password next to an authenticator bailing out | `400`, no challenge | `401` with challenge |
+| Authenticated principal refused by `Authorize` | `403 Bearer` | `403 S realm=R` (`error="insufficient_scope"` for a bearer request) |
+| Unauthenticated principal refused by `Authorize` | `403 Bearer` | `401` with the `Middleware`'s challenge |
+| Repeated `Authorization` field | first value used | `400` (`invalid_request` for a bearer request) |
+| `ErrUnavailable` (store, key set down) | `401` | `503` |
+| Error wrapping no sentinel, `ErrNoExtractor` | `401` | `500` |
+| Realm with a control or non-ASCII character | Go-escaped | `Middleware` / `DefaultErrorMapper` panic |
+
+To migrate:
+
+1. Set `WithChallengeScheme("Basic")` on a Basic-only middleware, and
+   `WithRealm` if `api` does not suit; use printable ASCII in the realm.
+2. Make clients treat `401` as "send (other) credentials", including after an
+   `Authorize` refusal of an anonymous request, and `503` as "retry later".
+3. Authenticators: wrap `security.ErrUnavailable` for a dependency that is
+   temporarily down, a credential sentinel for a refusal; an error wrapping
+   no sentinel is now an internal error (500).
+4. Custom `ErrorMapper`s: classify with `security.ErrorClass` and handle the
+   new classes (`invalid_request`, `unavailable`,
+   `authentication_required`).
+5. Dashboards: the `httpsec.Middleware` span records `http.request.method`
+   (instead of `http.method`) and `http.route` only as a route template.

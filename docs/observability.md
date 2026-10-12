@@ -155,11 +155,18 @@ it yourself only behind a deliberate, low-cardinality (hashed) opt-in.
 
 | Span                | When                          | Attributes                                                          | Error status            |
 | ------------------- | ----------------------------- | -------------------------------------------------------------------- | ----------------------- |
-| `httpsec.Middleware` | Per request through `Middleware` | `http.method` (string), `http.route` (string), `security.handled` (bool) | inherited from the core |
+| `httpsec.Middleware` | Per request through `Middleware` | `http.request.method` (string), `http.route` (string, when known), `security.handled` (bool) | inherited from the core |
 
 `httpsec.Middleware` is the parent span of the core `security.Engine.*`
 spans for that request. `httpsec.Authorize` does **not** open its own span —
 it delegates to `security.AccessDecisionManager.Decide`.
+
+Both HTTP attributes follow the OpenTelemetry semantic conventions and carry
+no client-chosen value: `http.request.method` is one of the RFC 9110 / RFC
+5789 methods, matched exactly, or `_OTHER` (the original method is left to
+the server span of `otelhttp`); `http.route` is the path template of the
+`ServeMux` pattern that routed the request (`/items/{id}`) — set only when
+the middleware runs inside a route, never the raw path.
 
 ### gRPC — `github.com/hyperscale-stack/security/grpc`
 

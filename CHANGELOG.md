@@ -450,6 +450,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   authority namespaces the voter package matches roles and scopes in.
 - `httpsec.Carrier.CookiesNamed` and `session.CookieReader`: the explicit
   accessor the session `Manager` reads its cookie through.
+- `security.SingleValue(carrier, key)`: the value of a singleton header
+  field, refusing a repeated one with `ErrInvalidRequest`; the Basic and
+  Bearer extractors read `Authorization` through it. `httpsec.DefaultRealm`
+  (`api`).
 
 ### Changed
 
@@ -652,6 +656,22 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the key. `session.Manager` reads its cookie through the carrier's
   `CookiesNamed` accessor (`session.CookieReader`) and finds no session with
   a carrier that lacks it. See [MIGRATION.md](MIGRATION.md).
+- The HTTP error mapping follows RFC 6750, RFC 7617 and RFC 9110: every
+  challenge carries a realm (`httpsec.DefaultRealm` unless `WithRealm`), a
+  Basic one `charset="UTF-8"`, the realm is an RFC 9110 quoted-string
+  (`Middleware` and `DefaultErrorMapper` panic on a realm one cannot carry or
+  a scheme that is not a token); `invalid_token` answers every failed check
+  of a bearer token and `insufficient_scope` every 403 of a request made
+  with one, and no RFC 6750 code is sent for other requests; an unsupported
+  credential is 401 without error code (was 400), an unauthenticated
+  principal refused by `Authorize` 401 (was 403), a repeated `Authorization`
+  field 400, an `ErrUnavailable` 503, and an error wrapping no sentinel 500
+  (was 401). `Authorize` answers with the challenge of the `Middleware` in
+  front of it instead of a hard-coded bare `Bearer`. See
+  [MIGRATION.md](MIGRATION.md).
+- The `httpsec.Middleware` span records `http.request.method` (`_OTHER`
+  for a method outside RFC 9110 / RFC 5789) instead of `http.method`, and
+  `http.route` only as the `ServeMux` pattern's path template.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1223,3 +1243,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   precedence over the victim's cookie — so a link or a cross-site form
   logged the victim into the attacker's session. Credentials are now read
   from header fields only, and the session from its cookie only.
+- The `httpsec.Middleware` span recorded the raw request path as
+  `http.route` — reset tokens and e-mail addresses in paths reached the
+  trace backend — and the raw method; they are now a route template (or
+  absent) and a known method (or `_OTHER`).
+- A request with several `Authorization` fields was authenticated with the
+  first one; it is now refused (400), whatever the transport.

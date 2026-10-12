@@ -58,7 +58,7 @@ func TestAuthorizeInsufficientScopeIncludesOAuthErrorParam(t *testing.T) {
 	)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := bearerRequest()
 	req = req.WithContext(security.WithAuthentication(req.Context(), newAuth("alice").verified()))
 
 	h.ServeHTTP(rec, req)
@@ -72,13 +72,14 @@ func TestAuthorizeInsufficientScopeIncludesOAuthErrorParam(t *testing.T) {
 func TestAuthorizeUsesAnonymousWhenNoAuthInContext(t *testing.T) {
 	t.Parallel()
 
-	// scriptedADM deny -> Authorize must surface 403 even without a prior
-	// Middleware step (Authentication == Anonymous).
+	// scriptedADM deny without a prior Middleware step (Authentication ==
+	// Anonymous): the caller is asked to authenticate (RFC 9110 §15.5.2).
 	h := httpsec.Authorize(scriptedADM{err: security.ErrAccessDenied}, fakeAttr("scope:read"))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }),
 	)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	assert.Equal(t, http.StatusForbidden, rec.Result().StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, rec.Result().StatusCode)
+	assert.Equal(t, `Bearer realm="api"`, rec.Header().Get("WWW-Authenticate"))
 }

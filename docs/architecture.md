@@ -175,8 +175,9 @@ Adapters are deliberately thin — they translate between a transport message
 and a `Carrier`, then map security errors to transport responses.
 
 - **`httpsec`** — `Middleware` runs the `Engine` and enriches the request
-  context; `Authorize` runs an `AccessDecisionManager`. `ErrorMapper`
-  turns sentinels into HTTP status codes + `WWW-Authenticate`.
+  context; `Authorize` runs an `AccessDecisionManager` and answers with the
+  middleware's error mapper. `ErrorMapper` turns `security.ErrorClass` into
+  HTTP status codes + RFC 6750 / RFC 7617 `WWW-Authenticate` challenges.
 - **`grpcsec`** — `UnaryServerInterceptor` / `StreamServerInterceptor`
   authenticate every RPC; `UnaryAuthorize` / `StreamAuthorize` enforce an
   ADM. `ErrorMapper` turns sentinels into `codes.Code`.
