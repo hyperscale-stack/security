@@ -101,14 +101,21 @@ is intentionally skipped in CI.
 | `./oidc/client/store/sql` | `.../oidc/client/store/sql` → `sqlstore`    | Transaction store on `database/sql` (PG/MySQL/SQLite) |
 | `./oidc/client/store/redis` | `.../oidc/client/store/redis` → `redisstore` | Transaction store on Redis (Lua atomicity)       |
 | `./oidc/provider`         | `.../oidc/provider` → `oidcprovider`        | OpenID Provider on the `oauth2` extension points     |
-| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2, oidc-client, oidc-provider |
+| `./saml/sp`               | `.../saml/sp` → `samlsp`                   | SAML 2.0 Service Provider (SP-initiated SSO)         |
+| `./saml/sp/storage/memory` | `.../saml/sp/storage/memory`              | In-memory `samlsp.Storage` — **package of `saml/sp`** |
+| `./saml/sp/storetest`     | `.../saml/sp/storetest`                    | Storage conformance suite — **package of `saml/sp`** |
+| `./saml/sp/store/sql`     | `.../saml/sp/store/sql` → `sqlstore`       | SAML storage on `database/sql` (PG/MySQL/SQLite)     |
+| `./saml/sp/store/redis`   | `.../saml/sp/store/redis` → `redisstore`   | SAML storage on Redis (single-key Lua scripts)       |
+| `./examples`              | `.../examples`                             | Runnable demos: basic-http, bearer-jwt, grpc-bearer, connectrpc-bearer, session-web, oauth2, oidc-client, oidc-provider, saml-sp |
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
+| `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP + pinned Keycloak fixture |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
 of `oauth2`; likewise `oidc/client/storage/memory` and `oidc/client/storetest`
-belong to `oidc/client`; `outbound` is a sub-package of the core (stdlib only, the core's
+belong to `oidc/client`, and `saml/sp/storage/memory` and `saml/sp/storetest`
+to `saml/sp`; `outbound` is a sub-package of the core (stdlib only, the core's
 only networking code: every server-side fetch of a configuration- or
 metadata-supplied URL MUST go through `outbound.NewClient`). The other rows
 are independent modules (own `go.mod`).
@@ -125,14 +132,17 @@ wired via an adapter (`jwt` depends on `oauth2`, not the other way).
 the evaluation in `oidc/client/doc.go`). `oidc/provider` depends on core +
 `oauth2` + `jwt` only (go-jose stays behind `jwt`; `TestDependencyPolicy`
 enforces it); go-oidc and x/oauth2 are allowed only in the test-only
-`internal/interop/oidcop` module, as an independent relying party. When
-adding code, check the allowed-dependency list in `MIGRATION.md` before
-adding an import.
+`internal/interop/oidcop` module, as an independent relying party. The
+SAML XML-DSig stack (gosaml2, goxmldsig ≥ v1.6.1, etree) stays inside
+`saml/sp`; `crewjam/saml` is a test-only dependency of
+`internal/interop/saml`. When adding code, check the allowed-dependency
+list in `MIGRATION.md` before adding an import.
 
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
 (`=> ../../` for `oidc/provider` and `internal/integrations`, `=> ../../../`
 for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
-for the OIDC client stores, which also replace `oidc/client => ../../`) plus
+for the OIDC client and SAML SP stores, which also replace
+`oidc/client => ../../` or `saml/sp => ../../`) plus
 one per in-repo module of its graph, so local dev works without published
 versions. New modules declare `go 1.26.5`, like the core.
 
@@ -186,7 +196,7 @@ Conventions baked into the core:
 - **OTel spans live directly in each module** — there is intentionally no
   `EventSink` abstraction and no separate `otel/` module. The core uses
   scope `github.com/hyperscale-stack/security`; each instrumented module
-  (`httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, `session`) uses its own. See
+  (`httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, `session`, `samlsp`) uses its own. See
   `docs/observability.md` for the span catalog.
 
 ## OAuth2 server (`oauth2/`)
@@ -250,7 +260,7 @@ mount path of every handler (`AuthorizeHandler`, `UserInfoHandler`,
 `examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
 `examples/oidc-provider` the one for the OpenID Provider (login and consent
 pages, CSRF, sessions); `examples/` also has `basic-http`, `bearer-jwt`,
-`grpc-bearer`, `connectrpc-bearer`, `session-web`, and `oidc-client` demos.
+`grpc-bearer`, `connectrpc-bearer`, `session-web`, `oidc-client` and `saml-sp` demos.
 
 ## OpenID Connect client (`oidc/client/`)
 
@@ -280,6 +290,31 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - Tests use the scriptable fake provider of `fakeop_test.go`;
   `internal/interop/oidcrp` runs the client against zitadel/oidc, and its
   Chrome test runs with `OIDC_BROWSER_TESTS=1`.
+
+## SAML Service Provider (`saml/sp/`)
+
+`samlsp.New(Config{...})` takes a `ConnectionResolver` (each `Connection` has
+its own SP entity ID, ACS URL and trusted `IdentityProvider`), a
+`TransactionStore` and a `ReplayCache`. `BeginLogin` (HTTP-Redirect
+AuthnRequest + `__Host-samlsp` browser-binding cookie) and `CompleteLogin`
+(HTTP-POST ACS) are the flow; `Metadata`/`ServeMetadata` publish SP
+metadata; `ParseIdentityProviderMetadata` imports trusted IdP metadata.
+
+- Validation is layered: streaming lexical gate (`xmlgate.go`) → structural
+  profile on the raw etree (`precheck*.go`) → gosaml2/goxmldsig verification
+  (`verify.go`) → processing rules on the verified decoded values
+  (`postcheck.go`) → atomic consumption → replay mark. Never read identity
+  data from the raw tree; never write XML-DSig/C14N code.
+- Strict by default: SHA-1 only via `Connection.InsecureAllowSHA1`;
+  ambiguous shapes and encrypted assertions refused with typed errors.
+  Every refusal matches `ErrRejected` (wraps
+  `security.ErrInvalidCredentials`); store/resolver failures do not.
+- `Storage` implementations: `saml/sp/storage/memory` (dev/tests),
+  `saml/sp/store/sql`, `saml/sp/store/redis`; all must pass
+  `saml/sp/storetest`.
+- `internal/interop/saml` runs the SP against crewjam's IdP and replays a
+  pinned Keycloak 26.0.7 login (`testdata/`, regenerated with
+  `SAMLSP_KEYCLOAK_URL`, see `keycloak_capture_test.go`).
 
 ## Tooling caveats
 

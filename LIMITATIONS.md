@@ -2,9 +2,10 @@
 
 The v2 stack covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
 password hashing, JWT, OAuth2 (issuer + resource server), OpenID Connect
-(provider and relying party), production storage backends, and stateless
-cookie sessions. This document tracks what is **not** yet covered. Remaining items are tracked as GitHub issues rather
-than future refactor phases.
+(provider and relying party), a SAML 2.0 Service Provider, production
+storage backends, and stateless cookie sessions. This document tracks what is
+**not** yet covered. Remaining items are tracked as GitHub issues rather than
+future refactor phases.
 
 ## OAuth2 server
 
@@ -207,6 +208,45 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Error text** — a refused destination is never named, but the errors of
   allowed destinations (refused connection, timeout, TLS failure) come
   from the standard library and may name the resolved address and port.
+
+## SAML Service Provider
+
+- **Not supported** — Single Logout, IdP-initiated SSO (unsolicited
+  responses are refused), the HTTP-Artifact and other bindings, encrypted
+  assertions (refused with `ErrEncryptedAssertionUnsupported`), the IdP
+  role, and the verification of signed metadata: importing
+  administrator-provided metadata is the act of trust. Network retrieval of
+  IdP metadata is not shipped.
+- **Legal but ambiguous responses are refused** — several assertions,
+  `SubjectConfirmation`s or `AuthnStatement`s, an assertion without
+  `NameID`, a Response without `Issuer`. Configure the IdP to send one
+  assertion with a persistent NameID; see
+  [docs/security-considerations.md](docs/security-considerations.md#ambiguous-responses-are-refused)
+  for AD FS, Entra ID, Okta and Keycloak.
+- **At most 450 XML elements per response** (`MaxResponseElements`, sized
+  from goxmldsig's canonicalization budget): a response carrying hundreds
+  of group memberships is refused with `ErrResponseTooLarge`. Filter the
+  groups the IdP releases to the application.
+- **SHA-1** is refused unless the connection sets `InsecureAllowSHA1`;
+  inclusive C14N is never accepted.
+- **ECDSA** signature values are verified as ASN.1 DER (goxmldsig): IdPs
+  emitting the XML Signature 1.1 raw `r‖s` encoding fail closed. The SP
+  signs AuthnRequests with RSA only.
+- **IdP certificate rollover** — a certificate carried in a signature's
+  `KeyInfo` must equal a trusted one: import the IdP's new certificate
+  (refresh its metadata) before the IdP signs with it. Validity is checked
+  at `now − ClockSkew`, so a certificate whose validity starts at the
+  rollover is accepted only `ClockSkew` later.
+- **Legacy browsers** that mishandle `SameSite=None` (Safari on iOS 12 and
+  macOS 10.14, Chrome 51–66) drop the binding cookie: their logins fail
+  with `ErrMissingBrowserBinding`.
+- **Stores** — `saml/sp/storage/memory` never purges anything (development
+  and tests only); `saml/sp/store/sql` ships no expiry job (its package
+  documentation gives the cleanup statements) and is tested on SQLite only.
+- **Interoperability** is tested against crewjam/saml's IdP, which signs
+  with the library the SP verifies with, and against one pinned Keycloak
+  26.0.7 response. Live runs against Keycloak and real browsers are tracked
+  in #88.
 
 ## Transports
 

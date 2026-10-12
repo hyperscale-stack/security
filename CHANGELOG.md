@@ -102,6 +102,29 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   consumed); `oauth2.MaxFamilyIDLength` (64 bytes) and
   `oauth2.FamilyRevocationRetention` (24h) bound family identifiers and how
   long a revoked family is remembered.
+- **SAML 2.0 Service Provider** (`saml/sp`, package `samlsp`):
+  SP-initiated Web Browser SSO for enterprise federation (Profiles §4.1).
+  AuthnRequests over HTTP-Redirect, optionally signed (`rsa-sha256`);
+  Responses over HTTP-POST. Connections are the application's
+  (`ConnectionResolver`), each with its own SP entity ID, ACS URL, trusted
+  `IdentityProvider` and SP metadata (`Metadata`, `ServeMetadata`); IdP
+  metadata is imported with `ParseIdentityProviderMetadata`. A response
+  passes a streaming lexical gate and a strict structural profile before
+  gosaml2 v0.12.0 and goxmldsig v1.6.1 verify it: one assertion, signed
+  Response or signed Assertion (errata E93/E26), an algorithm allowlist
+  (SHA-1 only per connection, `InsecureAllowSHA1`), typed refusals of
+  ambiguous shapes and of encrypted assertions. Login transactions are
+  single-use and bound to the browser by a `__Host-` cookie; consumed
+  assertions go to a replay cache. Every refusal matches `ErrRejected`,
+  which wraps `security.ErrInvalidCredentials`; an IdP error status is a
+  `*StatusError`. OpenTelemetry spans under the module's own scope.
+- **SAML SP storage**: in-memory (`saml/sp/storage/memory`), SQL
+  (`saml/sp/store/sql`, PostgreSQL/MySQL/SQLite) and Redis
+  (`saml/sp/store/redis`, single-key Lua scripts), all validated by the
+  shared `saml/sp/storetest` conformance suite.
+- **SAML example and interoperability tests**: `examples/saml-sp`, and the
+  private `internal/interop/saml` module, which runs the SP against
+  crewjam/saml's IdP over TLS and replays a pinned Keycloak 26.0.7 login.
 - **OAuth2 code replay error**: `oauth2.CodeReplayError`, the error an
   `AuthorizationCodeStore` returns for a replayed code it still retains. It
   matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,

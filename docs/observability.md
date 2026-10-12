@@ -18,6 +18,7 @@ Each module reports under a stable instrumentation scope (the tracer name):
 | `connectrpcsec` | `github.com/hyperscale-stack/security/connectrpc` |
 | `jwtsec`        | `github.com/hyperscale-stack/security/jwt`        |
 | `session`       | `github.com/hyperscale-stack/security/session`    |
+| `samlsp`        | `github.com/hyperscale-stack/security/saml/sp`    |
 
 The `basic`, `bearer`, `password`, `oauth2` and `oidc/provider` modules do
 not open spans of their own — keeping them free of a direct `go.opentelemetry.io/otel`
@@ -192,10 +193,28 @@ to `otelconnect`, which you compose alongside these interceptors.
 Session IDs are never placed on a span raw — `session.*id_hash` attributes
 carry a non-reversible SHA-256 fingerprint for correlation only.
 
+### SAML SP — `github.com/hyperscale-stack/security/saml/sp`
+
+| Span                                    | When                          | Attributes                                                                                                                         | Error status                    |
+| --------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `samlsp.ServiceProvider.BeginLogin`     | `ServiceProvider.BeginLogin`    | `samlsp.connection_id` (string), `samlsp.idp_entity_id` (string), `samlsp.insecure_sha1` (bool, when set), `samlsp.outcome` (string), `samlsp.reason` (string, on failure) | any error                       |
+| `samlsp.ServiceProvider.CompleteLogin`  | `ServiceProvider.CompleteLogin` | same as `BeginLogin`                                                                                                               | any error                       |
+
+`samlsp.outcome` is `success`, `rejected` (the error matches
+`samlsp.ErrRejected`: the login was refused) or `error` (an
+infrastructure or configuration failure). `samlsp.reason` names the
+sentinel in snake case — `audience_mismatch`, `assertion_replayed`,
+`missing_browser_binding`… — so refusals can be counted per cause. The
+connection attributes are set once the connection is resolved. No span
+carries a NameID, an attribute value, a RelayState handle, the binding
+cookie, a request or assertion ID, or any message content, and error
+messages are not recorded.
+
 ## Secrets policy
 
 No span attribute ever carries a secret: cleartext passwords, access or
-refresh tokens, authorization codes, client secrets, or raw session IDs.
+refresh tokens, authorization codes, client secrets, raw session IDs, or
+SAML assertions, NameIDs, RelayState handles and binding cookies.
 Where correlation is genuinely needed, the value is hashed first
 (`session.id_hash`). When you add your own instrumentation around this
 library, keep the same rule.
