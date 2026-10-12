@@ -208,6 +208,75 @@ func TestHandleCallbackQuery(t *testing.T) {
 	assert.Empty(t, cleared.Value)
 }
 
+// TestHandleCallbackRedirectQuery checks that the request's own query is
+// compared with the query of a RedirectURL that has one.
+func TestHandleCallbackRedirectQuery(t *testing.T) {
+	t.Parallel()
+
+	for tenant, ok := range map[string]bool{"acme": true, "globex": false} {
+		t.Run(tenant, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t, func(cfg *oidcclient.Config) { cfg.RedirectURL = testRedirectURL + "?tenant=acme" })
+
+			login := startLogin(t, c)
+			state := loginState(t, login)
+			code := op.authorize(t, login.Header().Get("Location"))
+			binding := cookieNamed(t, login, expectedCookieName("__Host-oidc-", state))
+
+			query := url.Values{"tenant": {tenant}, "code": {code}, "state": {state}}.Encode()
+
+			_, err := c.HandleCallback(httptest.NewRecorder(), callbackRequest(http.MethodGet, testRedirectURL+"?"+query, nil, binding))
+			if ok {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, oidcclient.ErrInvalidCallback)
+			}
+		})
+	}
+}
+
+// TestHandleCallbackBehindProxy checks the reverse-proxy contract: the
+// scheme is the RedirectURL's — TLS is often terminated before the
+// application — while the host comes from the Host header, which the proxy
+// must preserve.
+func TestHandleCallbackBehindProxy(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		target string
+		err    error
+	}{
+		"TLS terminated, Host preserved": {"http://rp.example.com" + testCallbackPath, nil},
+		"Host rewritten to the upstream": {"http://app.internal:8080" + testCallbackPath, oidcclient.ErrInvalidCallback},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t)
+
+			login := startLogin(t, c)
+			state := loginState(t, login)
+			code := op.authorize(t, login.Header().Get("Location"))
+			binding := cookieNamed(t, login, expectedCookieName("__Host-oidc-", state))
+
+			req := callbackRequest(http.MethodGet, tc.target+"?"+url.Values{"code": {code}, "state": {state}}.Encode(), nil, binding)
+			require.Nil(t, req.TLS)
+
+			_, err := c.HandleCallback(httptest.NewRecorder(), req)
+			if tc.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.err)
+			}
+		})
+	}
+}
+
 func TestHandleCallbackFormPost(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +355,12 @@ func TestHandleCallbackRefuses(t *testing.T) {
 		}, oidcclient.ErrInvalidCallback},
 		{"another path", oidcclient.ResponseModeQuery, func(s, c string, b *http.Cookie) *http.Request {
 			return callbackRequest(http.MethodGet, "https://rp.example.com/oidc/other/callback?"+form(s, c), nil, b)
+		}, oidcclient.ErrInvalidCallback},
+		{"another host", oidcclient.ResponseModeQuery, func(s, c string, b *http.Cookie) *http.Request {
+			return callbackRequest(http.MethodGet, "https://tenant.rp.example.com"+testCallbackPath+"?"+form(s, c), nil, b)
+		}, oidcclient.ErrInvalidCallback},
+		{"another port", oidcclient.ResponseModeQuery, func(s, c string, b *http.Cookie) *http.Request {
+			return callbackRequest(http.MethodGet, "https://rp.example.com:8443"+testCallbackPath+"?"+form(s, c), nil, b)
 		}, oidcclient.ErrInvalidCallback},
 		{"no binding cookie", oidcclient.ResponseModeQuery, func(s, c string, _ *http.Cookie) *http.Request {
 			return callbackRequest(http.MethodGet, testRedirectURL+"?"+form(s, c), nil)

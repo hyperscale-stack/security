@@ -105,11 +105,13 @@ type Config struct {
 	AuthMethod AuthMethod
 
 	// RedirectURL is the callback URL registered at the provider. It MUST
-	// be distinct for every connection of the application: the callback
-	// path is how a response is tied to its connection (RFC 9700 §4.4.2.2),
-	// and Complete refuses a response received on another path. An absolute
-	// https URL (http only for a loopback host), without fragment or
-	// userinfo, whose query does not use a response parameter name.
+	// be distinct from every other connection's redirect URL — by scheme,
+	// host, port, path or query parameter — and should be routed to this
+	// Client only: the URL a response is received on is what ties it to its
+	// connection (RFC 9700 §4.4.2.2), and Complete refuses a response
+	// received on another URL. An absolute https URL (http only for a
+	// loopback host), without fragment or userinfo, whose query does not use
+	// a response parameter name.
 	RedirectURL string
 
 	// Scopes are the requested scopes; "openid" is always sent, first.

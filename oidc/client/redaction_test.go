@@ -40,10 +40,14 @@ func TestSecretsAreRedacted(t *testing.T) {
 	assert.NotContains(t, logged(ar), ar.Binding)
 
 	cb := callbackFor(ar, code)
+	require.Contains(t, cb.URL.RawQuery, code, "the received URL carries the response in query mode")
+
 	out = logged(cb)
 	assert.NotContains(t, out, ar.Binding)
 	assert.NotContains(t, out, code)
 	assert.NotContains(t, out, ar.State)
+	assert.Contains(t, out, testRedirectURL, "the URL is logged without its query")
+	assert.Contains(t, logged(oidcclient.Callback{}), `URL: ""`, "a callback without URL")
 
 	id, err := c.Complete(context.Background(), cb)
 	require.NoError(t, err)

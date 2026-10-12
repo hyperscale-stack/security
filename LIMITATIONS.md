@@ -101,6 +101,12 @@ PKCE. Not supported, and refused where a provider could select them:
   carry one of the requested values; list every acceptable level.
 - **No OpenTelemetry spans** — `oidc/client` and `outbound` return errors
   to the caller and emit no spans.
+- **Reverse proxies** — `HandleCallback` takes the host of the received
+  URL from the Host header and its scheme from the redirect URI: a proxy
+  must preserve the Host header, and one rewriting hosts or paths needs
+  `Complete` with the public URL. Forwarded headers (`X-Forwarded-Host`,
+  RFC 7239) are never read: only the application knows which proxy to
+  trust.
 - **Transaction stores** — the integrity MAC of a transaction is keyed by
   its binding secret, which the user agent of the login holds: an attacker
   with write access to the store can still relax the `max_age` and

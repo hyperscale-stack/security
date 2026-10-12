@@ -67,14 +67,19 @@ func (c *Client) StartLogin(w http.ResponseWriter, r *http.Request, opts AuthOpt
 // at most 64 KiB without response parameters in the query — reads and
 // expires the binding cookie of the response's state, sets Cache-Control:
 // no-store and Referrer-Policy: no-referrer (RFC 9700 §4.2.4), and calls
-// Complete with r.URL.Path as the received path.
+// Complete with the URL the request was received on: the RedirectURL's
+// scheme (TLS is often terminated before the application), the host of
+// the Host header (r.Host), r.URL's path and query.
+//
+// Behind a reverse proxy, preserve the Host header (or restore the public
+// host before HandleCallback, from a header only your proxy sets); a proxy
+// rewriting hosts or paths needs Complete with the public URL instead.
 //
 // The application then writes the response: on success, create a fresh
 // session and answer 303 to a clean URL, so the code leaves the browser
 // history (RFC 9700 §4.3.1). It MUST NOT write headers before. Exempt the
 // callback route from a CSRF middleware in form_post mode: the cross-site
-// POST is the protocol, and the binding cookie is its CSRF defense. Behind
-// a proxy rewriting paths, call Complete with the public path instead.
+// POST is the protocol, and the binding cookie is its CSRF defense.
 func (c *Client) HandleCallback(w http.ResponseWriter, r *http.Request) (*Identity, error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -97,7 +102,13 @@ func (c *Client) HandleCallback(w http.ResponseWriter, r *http.Request) (*Identi
 		}
 	}
 
-	return c.Complete(r.Context(), Callback{Mode: c.cfg.ResponseMode, Path: r.URL.Path, Params: params, Binding: binding})
+	// The scheme is the RedirectURL's: TLS is often terminated before the
+	// application. The host is the Host header the user agent sent.
+	received := &url.URL{
+		Scheme: c.redirect.Scheme, Host: r.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery,
+	}
+
+	return c.Complete(r.Context(), Callback{Mode: c.cfg.ResponseMode, URL: received, Params: params, Binding: binding})
 }
 
 // readCallback reads the response parameters as the response mode

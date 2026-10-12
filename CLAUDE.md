@@ -236,8 +236,10 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
   before any stored field is used; every store persists `Integrity`); a
   transaction is consumed once, in the pinned order of
   `TransactionStore.Consume`;
-  `Callback.Path` must equal the connection's redirect URI path (mix-up
-  defense — redirect URIs are distinct per connection); nothing is returned
+  `Callback.URL` must be the connection's redirect URI — scheme, host,
+  port, path and its query parameters (mix-up defense — redirect URIs are
+  distinct per connection; `HandleCallback` takes the host from `r.Host`
+  and the scheme from the redirect URI); nothing is returned
   before the ID Token is fully validated; every JSON document goes through
   the strict decoder (`strictjson.go`); errors, `String`, `GoString` and
   `LogValue` never carry secrets.

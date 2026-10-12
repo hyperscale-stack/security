@@ -69,12 +69,14 @@ func TestCompleteRootRedirect(t *testing.T) {
 	op := newFakeOP(t)
 	c := op.client(t, func(cfg *oidcclient.Config) { cfg.RedirectURL = "https://rp.example.com" })
 
-	ar, code := op.begin(t, c, oidcclient.AuthOptions{})
-	cb := callbackFor(ar, code)
-	cb.Path = "/"
+	for _, received := range []string{"https://rp.example.com/", "https://rp.example.com"} {
+		ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+		cb := callbackFor(ar, code)
+		cb.URL = receivedOn(received)
 
-	_, err := c.Complete(context.Background(), cb)
-	require.NoError(t, err)
+		_, err := c.Complete(context.Background(), cb)
+		require.NoError(t, err, received)
+	}
 }
 
 func TestCompleteFormPost(t *testing.T) {
@@ -332,6 +334,10 @@ func TestCompleteTransactionMismatch(t *testing.T) {
 				cb.Mode = tc.mode
 			}
 
+			if name == "redirect" {
+				cb.URL.RawQuery = "tenant=other&" + cb.URL.RawQuery
+			}
+
 			_, err := forged.Complete(context.Background(), cb)
 			require.ErrorIs(t, err, oidcclient.ErrTransactionMismatch)
 			assert.Zero(t, op.hitCount("/token"))
@@ -534,14 +540,14 @@ func TestCompleteMixUp(t *testing.T) {
 
 	t.Run("delivered on H's callback", func(t *testing.T) {
 		_, err := clientH.Complete(context.Background(), oidcclient.Callback{
-			Mode: oidcclient.ResponseModeQuery, Path: "/oidc/honest/callback", Params: response, Binding: victimA.Binding,
+			Mode: oidcclient.ResponseModeQuery, URL: receivedOn("https://rp.example.com/oidc/honest/callback"), Params: response, Binding: victimA.Binding,
 		})
 		require.ErrorIs(t, err, oidcclient.ErrTransactionMismatch)
 	})
 
 	t.Run("misrouted to A's client", func(t *testing.T) {
 		_, err := clientA.Complete(context.Background(), oidcclient.Callback{
-			Mode: oidcclient.ResponseModeQuery, Path: "/oidc/honest/callback", Params: response, Binding: victimA.Binding,
+			Mode: oidcclient.ResponseModeQuery, URL: receivedOn("https://rp.example.com/oidc/honest/callback"), Params: response, Binding: victimA.Binding,
 		})
 		require.ErrorIs(t, err, oidcclient.ErrInvalidCallback, "a response received on another connection's path")
 	})
@@ -551,7 +557,7 @@ func TestCompleteMixUp(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = clientA.Complete(context.Background(), oidcclient.Callback{
-			Mode: oidcclient.ResponseModeQuery, Path: "/oidc/tenant-a/callback", Binding: victim2.Binding,
+			Mode: oidcclient.ResponseModeQuery, URL: receivedOn("https://rp.example.com/oidc/tenant-a/callback"), Binding: victim2.Binding,
 			Params: url.Values{"code": {honestCode}, "state": {victim2.State}, "iss": {honestOP.issuer}},
 		})
 		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
@@ -561,8 +567,135 @@ func TestCompleteMixUp(t *testing.T) {
 	assert.Zero(t, honestOP.hitCount("/token"))
 }
 
+// TestCompleteCallbackURL checks RFC 9700 §4.4.2.2: the URL a response was
+// received on must be the connection's redirect URI — scheme, host and
+// port compared as URL parts, the path exactly, and the redirect URI's own
+// query parameters present with their values.
+func TestCompleteCallbackURL(t *testing.T) {
+	t.Parallel()
+
+	const redirect = "https://rp.example.com/oidc/acme/callback?tenant=acme"
+
+	cases := []struct {
+		received string
+		ok       bool
+	}{
+		{"https://rp.example.com/oidc/acme/callback?tenant=acme", true},
+		{"https://rp.example.com:443/oidc/acme/callback?tenant=acme", true},
+		{"https://RP.Example.COM/oidc/acme/callback?tenant=acme", true},
+		{"HTTPS://rp.example.com/oidc/acme/callback?tenant=acme", true},
+		{"https://rp.example.com/oidc/acme/callback?other=1&tenant=acme", true},
+		{"https://rp.example.com/oidc/acme/callback", false},
+		{"https://rp.example.com/oidc/acme/callback?tenant=globex", false},
+		{"https://rp.example.com/oidc/acme/callback?tenant=acme&tenant=globex", false},
+		{"https://rp.example.com/oidc/acme/callback?tenant=", false},
+		{"https://rp.example.com:80/oidc/acme/callback?tenant=acme", false},
+		{"http://rp.example.com:443/oidc/acme/callback?tenant=acme", false},
+		{"https://rp.example.com./oidc/acme/callback?tenant=acme", false},
+		{"https://rp.example.com/oidc/ACME/callback?tenant=acme", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.received, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t, func(cfg *oidcclient.Config) { cfg.RedirectURL = redirect })
+			ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+
+			cb := callbackFor(ar, code)
+			cb.URL = receivedOn(tc.received)
+
+			_, err := c.Complete(context.Background(), cb)
+			if tc.ok {
+				require.NoError(t, err)
+
+				return
+			}
+
+			require.ErrorIs(t, err, oidcclient.ErrInvalidCallback)
+			assert.Zero(t, op.hitCount("/token"))
+		})
+	}
+}
+
+// TestCompleteLoopbackHTTPRedirect checks the default port of an http
+// redirect URI (development on a loopback host).
+func TestCompleteLoopbackHTTPRedirect(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		received string
+		ok       bool
+	}{
+		{"http://localhost/cb", true},
+		{"http://localhost:80/cb", true},
+		{"http://localhost:443/cb", false},
+		{"https://localhost/cb", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.received, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			c := op.client(t, func(cfg *oidcclient.Config) { cfg.RedirectURL = "http://localhost/cb" })
+			ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+
+			cb := callbackFor(ar, code)
+			cb.URL = receivedOn(tc.received)
+
+			_, err := c.Complete(context.Background(), cb)
+			if tc.ok {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, oidcclient.ErrInvalidCallback)
+			}
+		})
+	}
+}
+
+// TestCompleteHostDistinctRedirectURIs replays the code review's probe:
+// two connections sharing a store whose redirect URIs differ only by host
+// (or only by query). A response received on B's URL handed to A's Client —
+// by an application routing callbacks by state, which it must not — is
+// refused.
+func TestCompleteHostDistinctRedirectURIs(t *testing.T) {
+	t.Parallel()
+
+	pairs := map[string][2]string{
+		"host":  {"https://a.rp.example.com/cb", "https://b.rp.example.com/cb"},
+		"port":  {"https://rp.example.com:8443/cb", "https://rp.example.com:9443/cb"},
+		"query": {"https://rp.example.com/cb?tenant=a", "https://rp.example.com/cb?tenant=b"},
+	}
+
+	for name, uris := range pairs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := memory.New()
+			op := newFakeOP(t)
+			clientA := op.client(t, func(cfg *oidcclient.Config) {
+				cfg.ConnectionID, cfg.RedirectURL, cfg.Store = "a", uris[0], store
+			})
+
+			ar, code := op.begin(t, clientA, oidcclient.AuthOptions{})
+			cb := callbackFor(ar, code)
+			cb.URL = receivedOn(uris[1])
+
+			_, err := clientA.Complete(context.Background(), cb)
+			require.ErrorIs(t, err, oidcclient.ErrInvalidCallback)
+			assert.Zero(t, op.hitCount("/token"))
+
+			cb.URL = receivedOn(uris[0])
+			_, err = clientA.Complete(context.Background(), cb)
+			require.NoError(t, err, "the transaction was left untouched")
+		})
+	}
+}
+
 // TestCompleteRefusesMalformedCallbacks checks the callback shape — mode,
-// path, RFC 6749 §3.1 parameter uniqueness, syntax and sizes — before any
+// URL, RFC 6749 §3.1 parameter uniqueness, syntax and sizes — before any
 // transaction is touched.
 func TestCompleteRefusesMalformedCallbacks(t *testing.T) {
 	t.Parallel()
@@ -570,9 +703,27 @@ func TestCompleteRefusesMalformedCallbacks(t *testing.T) {
 	cases := map[string]func(cb *oidcclient.Callback, ar *oidcclient.AuthRequest){
 		"form_post into a query client": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.Mode = oidcclient.ResponseModeFormPost },
 		"unknown mode":                  func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.Mode = "fragment" },
-		"other path":                    func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.Path = "/oidc/other/callback" },
-		"path prefix":                   func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.Path = testCallbackPath + "/x" },
-		"empty path":                    func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.Path = "" },
+		"other path": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("https://rp.example.com/oidc/other/callback")
+		},
+		"path prefix": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.URL = receivedOn(testRedirectURL + "/x") },
+		"empty path": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("https://rp.example.com")
+		},
+		"no URL":       func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.URL = nil },
+		"relative URL": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) { cb.URL = &url.URL{Path: testCallbackPath} },
+		"other host": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("https://other.example.com" + testCallbackPath)
+		},
+		"sub-domain": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("https://tenant.rp.example.com" + testCallbackPath)
+		},
+		"other port": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("https://rp.example.com:8443" + testCallbackPath)
+		},
+		"other scheme": func(cb *oidcclient.Callback, _ *oidcclient.AuthRequest) {
+			cb.URL = receivedOn("http://rp.example.com" + testCallbackPath)
+		},
 		"duplicate state": func(cb *oidcclient.Callback, ar *oidcclient.AuthRequest) {
 			cb.Params["state"] = []string{ar.State, ar.State}
 		},
@@ -713,7 +864,7 @@ func TestCompleteIssParameter(t *testing.T) {
 		ar, _ := op.begin(t, c, oidcclient.AuthOptions{})
 
 		_, err := c.Complete(context.Background(), oidcclient.Callback{
-			Mode: oidcclient.ResponseModeQuery, Path: testCallbackPath, Binding: ar.Binding,
+			Mode: oidcclient.ResponseModeQuery, URL: receivedOn(testRedirectURL), Binding: ar.Binding,
 			Params: url.Values{"error": {"access_denied"}, "state": {ar.State}},
 		})
 		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter, "RFC 9207 §2.4: an error is not trusted either")
@@ -757,7 +908,7 @@ func TestCompleteAuthorizationError(t *testing.T) {
 			params.Set("state", ar.State)
 
 			id, err := c.Complete(context.Background(), oidcclient.Callback{
-				Mode: oidcclient.ResponseModeQuery, Path: testCallbackPath, Params: params, Binding: ar.Binding,
+				Mode: oidcclient.ResponseModeQuery, URL: receivedOn(testRedirectURL), Params: params, Binding: ar.Binding,
 			})
 			require.ErrorIs(t, err, oidcclient.ErrAuthorizationFailed)
 			assert.Nil(t, id)
@@ -769,7 +920,7 @@ func TestCompleteAuthorizationError(t *testing.T) {
 			assert.Zero(t, op.hitCount("/token"))
 
 			_, err = c.Complete(context.Background(), oidcclient.Callback{
-				Mode: oidcclient.ResponseModeQuery, Path: testCallbackPath, Params: params, Binding: ar.Binding,
+				Mode: oidcclient.ResponseModeQuery, URL: receivedOn(testRedirectURL), Params: params, Binding: ar.Binding,
 			})
 			require.ErrorIs(t, err, oidcclient.ErrTransactionNotFound, "the transaction is over")
 		})

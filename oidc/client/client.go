@@ -18,15 +18,16 @@ import (
 // Client is the Relying Party of one connection. It is safe for concurrent
 // use; the application builds one per connection and keeps it.
 type Client struct {
-	cfg          Config
-	callbackPath string
-	md           *providerMetadata
-	authURL      *url.URL
-	algs         []Algorithm
-	joseAlgs     []jose.SignatureAlgorithm
-	keys         *keySet      // fetches with the configured redirect policy
-	send         *http.Client // token and UserInfo: credentials, never redirected
-	now          func() time.Time
+	cfg           Config
+	redirect      *url.URL   // the parsed RedirectURL
+	redirectQuery url.Values // its query parameters
+	md            *providerMetadata
+	authURL       *url.URL
+	algs          []Algorithm
+	joseAlgs      []jose.SignatureAlgorithm
+	keys          *keySet      // fetches with the configured redirect policy
+	send          *http.Client // token and UserInfo: credentials, never redirected
+	now           func() time.Time
 }
 
 // refuseRedirect is the CheckRedirect of credential-bearing requests.
@@ -78,20 +79,16 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		joseAlgs[i] = jose.SignatureAlgorithm(alg)
 	}
 
-	callbackPath := redirect.Path
-	if callbackPath == "" {
-		callbackPath = "/"
-	}
-
 	return &Client{
-		cfg:          cfg,
-		callbackPath: callbackPath,
-		md:           md,
-		authURL:      md.authURL,
-		algs:         algs,
-		joseAlgs:     joseAlgs,
-		keys:         newKeySet(fetch, md.JWKSURI, cfg.Now),
-		send:         &send,
-		now:          cfg.Now,
+		cfg:           cfg,
+		redirect:      redirect,
+		redirectQuery: redirect.Query(),
+		md:            md,
+		authURL:       md.authURL,
+		algs:          algs,
+		joseAlgs:      joseAlgs,
+		keys:          newKeySet(fetch, md.JWKSURI, cfg.Now),
+		send:          &send,
+		now:           cfg.Now,
 	}, nil
 }

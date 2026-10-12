@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -27,11 +28,15 @@ type Callback struct {
 	// Mode is how Params arrived: ResponseModeQuery for the query string
 	// of a GET, ResponseModeFormPost for the form body of a POST.
 	Mode ResponseMode
-	// Path is the URL path the response was received on. It MUST be the
-	// path actually requested (r.URL.Path), not a value derived from the
-	// response: Complete refuses a response received on another path than
-	// the connection's RedirectURL (RFC 9700 §4.4.2.2 mix-up defense).
-	Path string
+	// URL is the URL the response was received on, as the user agent
+	// addressed it: scheme, host (and port), path and query. Complete
+	// requires it to be the connection's RedirectURL (RFC 9700 §4.4.2.2
+	// mix-up defense): same scheme, host and port — case-insensitively, a
+	// missing port being the scheme's default — same path, and the
+	// RedirectURL's query parameters with their values. Build it from the
+	// request, never from the response; behind a reverse proxy, it is the
+	// public URL.
+	URL *url.URL
 	// Params are the response parameters (url.ParseQuery or r.PostForm).
 	Params url.Values
 	// Binding is the browser-binding secret the user agent presented (the
@@ -39,10 +44,10 @@ type Callback struct {
 	Binding string
 }
 
-// String implements fmt.Stringer without the binding secret nor the
-// parameter values.
+// String implements fmt.Stringer without the binding secret, the parameter
+// values nor the URL's query, which carries the response in query mode.
 func (cb Callback) String() string {
-	return fmt.Sprintf("oidcclient.Callback{Mode: %s, Path: %q, Params: %d, Binding: REDACTED}", cb.Mode, cb.Path, len(cb.Params))
+	return fmt.Sprintf("oidcclient.Callback{Mode: %s, URL: %q, Params: %d, Binding: REDACTED}", cb.Mode, withoutQuery(cb.URL), len(cb.Params))
 }
 
 // GoString implements fmt.GoStringer like String.
@@ -50,7 +55,17 @@ func (cb Callback) GoString() string { return cb.String() }
 
 // LogValue implements slog.LogValuer like String.
 func (cb Callback) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("mode", string(cb.Mode)), slog.String("path", cb.Path), slog.String("binding", "REDACTED"))
+	return slog.GroupValue(slog.String("mode", string(cb.Mode)), slog.String("url", withoutQuery(cb.URL)),
+		slog.String("binding", "REDACTED"))
+}
+
+// withoutQuery renders u without its query and fragment.
+func withoutQuery(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
 }
 
 // authorizationResponse is a well-formed authorization response.
@@ -68,9 +83,9 @@ type authorizationResponse struct {
 // Complete finishes a login. In order, and without touching the store
 // before step 3:
 //
-//  1. the response is checked: mode and path of the connection, every
-//     parameter at most once (RFC 6749 §3.1), well-formed state, code or
-//     error, iss — else ErrInvalidCallback;
+//  1. the response is checked: mode and redirect URI of the connection,
+//     every parameter at most once (RFC 6749 §3.1), well-formed state,
+//     code or error, iss — else ErrInvalidCallback;
 //  2. the binding secret is checked for form — else ErrBindingMismatch;
 //  3. the transaction is consumed atomically with the binding's hash (a
 //     wrong binding leaves it stored), then its integrity MAC is verified
@@ -140,8 +155,8 @@ func (c *Client) parseCallback(cb Callback) (authorizationResponse, error) {
 		return authorizationResponse{}, fmt.Errorf("%w: response mode %q, connection uses %s", ErrInvalidCallback, cb.Mode, c.cfg.ResponseMode)
 	}
 
-	if cb.Path != c.callbackPath {
-		return authorizationResponse{}, fmt.Errorf("%w: received on another path than the connection's redirect URI", ErrInvalidCallback)
+	if !c.receivedOnRedirect(cb.URL) {
+		return authorizationResponse{}, fmt.Errorf("%w: received on another URL than the connection's redirect URI", ErrInvalidCallback)
 	}
 
 	values := make(map[string]string, len(responseParams))
@@ -177,6 +192,49 @@ func (c *Client) parseCallback(cb Callback) (authorizationResponse, error) {
 	}
 
 	return resp, nil
+}
+
+// receivedOnRedirect reports whether u is the connection's redirect URI
+// (RFC 9700 §4.4.2.2): same scheme, host and port, compared
+// case-insensitively with a missing port meaning the scheme's default, same
+// path (empty meaning "/"), and the redirect URI's query parameters
+// present with exactly their values.
+func (c *Client) receivedOnRedirect(u *url.URL) bool {
+	if u == nil || !strings.EqualFold(u.Scheme, c.redirect.Scheme) ||
+		!strings.EqualFold(u.Hostname(), c.redirect.Hostname()) || effectivePort(u) != effectivePort(c.redirect) ||
+		pathOrRoot(u.Path) != pathOrRoot(c.redirect.Path) {
+		return false
+	}
+
+	received := u.Query()
+
+	for name, values := range c.redirectQuery {
+		if !slices.Equal(received[name], values) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// effectivePort is the port of u, or the default port of its scheme.
+func effectivePort(u *url.URL) string {
+	switch {
+	case u.Port() != "":
+		return u.Port()
+	case strings.EqualFold(u.Scheme, schemeHTTP):
+		return "80"
+	default:
+		return "443"
+	}
+}
+
+func pathOrRoot(path string) string {
+	if path == "" {
+		return "/"
+	}
+
+	return path
 }
 
 // parseOutcome checks the code, or the error, of the response (RFC 6749

@@ -35,7 +35,7 @@ var (
 	// ErrInvalidAuthRequest reports AuthOptions Begin refuses.
 	ErrInvalidAuthRequest = errors.New("oidcclient: invalid authorization request")
 	// ErrInvalidCallback reports a malformed authorization response, or
-	// one received on another path or in another response mode than the
+	// one received on another URL or in another response mode than the
 	// connection's: no transaction is touched.
 	ErrInvalidCallback = errors.New("oidcclient: invalid callback")
 

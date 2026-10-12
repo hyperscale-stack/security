@@ -385,12 +385,18 @@ are attacker-influenced.
   cannot burn the victim's login. A replayed callback finds nothing and
   never reaches the token endpoint.
 - **Mix-up attacks** (RFC 9700 §4.4) — give every connection its own
-  redirect URI, distinct from every other connection's: `Complete` refuses
-  a response received on another path than the connection's, and a
-  transaction of another connection, issuer, client, redirect URI or
-  response mode. A provider advertising RFC 9207 must also send the `iss`
-  parameter, compared with its issuer. Never route callbacks by the state
-  value.
+  redirect URI, distinct from every other connection's (by scheme, host,
+  port, path or query parameter): `Complete` refuses a response received on
+  another URL than the connection's redirect URI, and a transaction of
+  another connection, issuer, client, redirect URI or response mode. A
+  provider advertising RFC 9207 must also send the `iss` parameter,
+  compared with its issuer. Never route callbacks by the state value.
+  Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names — an
+  attacker registering, at the honest provider, a client with the redirect
+  URI of its own connection; RFC 9207 closes it, so prefer providers that
+  support it. Behind a reverse proxy, `HandleCallback` compares the Host
+  header the proxy forwards: preserve it, or give `Complete` the public
+  URL.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
   is returned: asymmetric algorithms only (HMAC and `none` refused), `typ`
   absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from

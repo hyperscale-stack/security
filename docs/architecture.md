@@ -217,7 +217,7 @@ of the `oauth2` server and of `jwtsec`.
 
 ```
 StartLogin / Begin                          HandleCallback / Complete
-  ├─ binding secret (cookie) ─┐               ├─ response shape + callback path
+  ├─ binding secret (cookie) ─┐               ├─ response shape + callback URL
   ├─ nonce, PKCE verifier  ◄──┘ HMAC          ├─ Consume(state hash, binding hash)
   ├─ TransactionStore.Save                    ├─ transaction ↔ connection checks, iss
   └─ 303 → authorization endpoint             ├─ code exchange (PKCE, client auth)

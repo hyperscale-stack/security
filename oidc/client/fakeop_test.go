@@ -714,12 +714,27 @@ func (op *fakeOP) begin(t *testing.T, c *oidcclient.Client, opts oidcclient.Auth
 	return ar, op.authorize(t, ar.URL)
 }
 
-// callbackFor is the query-mode callback the user agent delivers for ar.
+// receivedOn parses the URL a callback was received on.
+func receivedOn(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+
+	return u
+}
+
+// callbackFor is the query-mode callback the user agent delivers for ar on
+// the test redirect URL.
 func callbackFor(ar *oidcclient.AuthRequest, code string) oidcclient.Callback {
+	params := url.Values{"code": {code}, "state": {ar.State}}
+	received := receivedOn(testRedirectURL)
+	received.RawQuery = params.Encode()
+
 	return oidcclient.Callback{
 		Mode:    oidcclient.ResponseModeQuery,
-		Path:    testCallbackPath,
-		Params:  url.Values{"code": {code}, "state": {ar.State}},
+		URL:     received,
+		Params:  params,
 		Binding: ar.Binding,
 	}
 }

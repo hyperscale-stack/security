@@ -143,10 +143,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   transaction altered in the store fails with `ErrTransactionIntegrity`).
   The transaction is also bound to its connection, issuer, client, redirect
   URI and response mode, expires (10 minutes by default), and is consumed
-  once. `Complete` requires the callback path to be the connection's
-  redirect URI path — a redirect URI distinct per connection is the mix-up
-  defense (RFC 9700 §4.4.2.2) — and checks the RFC 9207 `iss` parameter when
-  the provider advertises it. The ID Token is validated per OpenID Connect
+  once. `Complete` requires the URL the response was received on
+  (`Callback.URL`) to be the connection's redirect URI — scheme, host,
+  port, path and the redirect URI's query parameters; a redirect URI
+  distinct per connection is the mix-up defense (RFC 9700 §4.4.2.2) — and
+  checks the RFC 9207 `iss` parameter when the provider advertises it;
+  `HandleCallback` takes the host from the Host header and the scheme from
+  the redirect URI, so that a TLS-terminating proxy preserving Host works. The ID Token is validated per OpenID Connect
   Core §3.1.3.7: an allow-listed asymmetric algorithm (RS*, PS*, ES*,
   EdDSA; HMAC and `none` refused), `typ` absent or JWT, iss, aud (extra
   audiences only if trusted), azp, exp/iat/nbf with a bounded skew, nonce,

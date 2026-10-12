@@ -59,10 +59,11 @@
 //     max_age or acr_values: an attacker able to write to it can relax
 //     them for logins it runs itself.
 //   - Mix-up defense (RFC 9700 §4.4): every connection MUST have its own
-//     redirect URI — distinct across all connections of the application —
-//     and Complete refuses a response received on another path. Providers
-//     that advertise RFC 9207 are additionally checked on the iss
-//     parameter. Never route callbacks by the state value.
+//     redirect URI — distinct from every other connection's by scheme,
+//     host, port, path or query parameter — and Complete refuses a response
+//     received on another URL than the connection's. Providers that
+//     advertise RFC 9207 are additionally checked on the iss parameter.
+//     Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
 //   - JSON is parsed strictly: duplicate member names, names that differ
