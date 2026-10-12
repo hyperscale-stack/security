@@ -848,7 +848,10 @@ are attacker-influenced.
   mode: the cross-site POST is the protocol, the binding cookie its
   defense. Start logins on a user action from the application's own
   origin (a POST behind `http.CrossOriginProtection` or a CSRF token) and
-  rate limit them: each start writes a transaction.
+  rate limit them: each start writes a transaction, and a non-browser
+  client passes the cross-origin protection. `examples/oidc-client` limits
+  each client address (an IPv6 /64 counting as one) and bounds its
+  in-memory store (`memory.WithCapacity`).
 - **Redirect targets** — `AppState` comes back from the store verbatim;
   validate it before using it as a redirect target. After a successful
   callback, create a fresh session and answer 303 to a clean URL, so the

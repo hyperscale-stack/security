@@ -35,6 +35,14 @@
 // key at startup: logins in progress then fail on a restart and cannot
 // span instances.
 //
+// Login starts are unauthenticated — non-browser clients pass the
+// cross-origin protection — and each stores a pending login for ten
+// minutes: the demo lets each client address (an IPv4 address, an IPv6 /64)
+// start 20 logins a minute, answering 429 Too Many Requests beyond, and
+// keeps at most 10 000 pending logins (memory.WithCapacity), answering 503
+// Service Unavailable beyond. Behind a reverse proxy, key the limit on the
+// client address your proxy forwards, or rate-limit at the edge.
+//
 // Plain http on localhost is for development only: it drops the Secure
 // attribute of the cookies (oidcclient.Config.InsecureCookies and
 // session.WithSecure(false)). Serve https in production. Likewise,
@@ -89,6 +97,12 @@ type config struct {
 	// TransactionKeys protect the pending logins
 	// (oidcclient.Config.TransactionKeys): secret, shared by every instance.
 	TransactionKeys [][]byte
+	// MaxPendingLogins bounds the logins in progress the store keeps
+	// (defaultMaxPendingLogins when not positive).
+	MaxPendingLogins int
+	// LoginStartsPerMinute is how many logins one client address may start
+	// per minute (defaultLoginStartsPerMinute when not positive).
+	LoginStartsPerMinute int
 }
 
 func envOr(name, fallback string) string {
@@ -138,6 +152,21 @@ func loadConfig() (config, error) {
 
 // schemeHTTP is plain http: development on the loopback interface only.
 const schemeHTTP = "http"
+
+// Abuse bounds of the login starts.
+const (
+	// defaultMaxPendingLogins bounds the pending logins of the in-memory
+	// store: about 0.5 KB each, kept for the transaction TTL.
+	defaultMaxPendingLogins = 10_000
+	// defaultLoginStartsPerMinute is the login starts one client address
+	// may make per minute.
+	defaultLoginStartsPerMinute = 20
+	// maxLimitedClients bounds the client addresses the limiter tracks per
+	// minute; the others share one budget.
+	maxLimitedClients = 10_000
+	// retryAfter is the Retry-After of a refused login start, in seconds.
+	retryAfter = "60"
+)
 
 // errHTTPBeyondLoopback refuses plain http to a host off the loopback
 // interface.
@@ -252,6 +281,16 @@ type app struct {
 	connections map[string]*oidcclient.Client
 	sessions    *session.Manager
 	accounts    *accounts
+	limiter     *loginLimiter
+}
+
+// orDefault returns n when it is positive, fallback otherwise.
+func orDefault(n, fallback int) int {
+	if n > 0 {
+		return n
+	}
+
+	return fallback
 }
 
 // newServer discovers every connection's provider and builds the handler.
@@ -276,12 +315,15 @@ func newServer(ctx context.Context, cfg config) (http.Handler, error) {
 		connections: make(map[string]*oidcclient.Client, len(cfg.Connections)),
 		sessions:    session.NewManager(codec, session.WithSecure(!insecure)),
 		accounts:    &accounts{links: make(map[identityKey]string), identities: make(map[string][]identityKey)},
+		limiter: newLoginLimiter(orDefault(cfg.LoginStartsPerMinute, defaultLoginStartsPerMinute), maxLimitedClients,
+			time.Minute, time.Now),
 	}
 
 	// One store serves every connection: a pending login is bound to its
 	// connection. With several instances behind a load balancer, use a
 	// shared store instead: oidc/client/store/sql or oidc/client/store/redis.
-	store := memory.New()
+	// Its capacity bounds what a flood of login starts can hold.
+	store := memory.New(memory.WithCapacity(orDefault(cfg.MaxPendingLogins, defaultMaxPendingLogins)))
 
 	for _, c := range cfg.Connections {
 		method := oidcclient.AuthMethodClientSecretBasic
@@ -381,7 +423,23 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := client.StartLogin(w, r, oidcclient.AuthOptions{}); err != nil {
+	// Each start stores a pending login: limit them per client address
+	// (the store's capacity bounds them all).
+	if !a.limiter.allow(clientPrefix(r.RemoteAddr)) {
+		w.Header().Set("Retry-After", retryAfter)
+		http.Error(w, "too many sign-in attempts, retry in a minute", http.StatusTooManyRequests)
+
+		return
+	}
+
+	err := client.StartLogin(w, r, oidcclient.AuthOptions{})
+
+	switch {
+	case err == nil:
+	case errors.Is(err, memory.ErrFull):
+		w.Header().Set("Retry-After", retryAfter)
+		http.Error(w, "too many sign-ins in progress, retry in a minute", http.StatusServiceUnavailable)
+	default:
 		log.Printf("oidc-client: start login: %v", err)
 		http.Error(w, "cannot start the sign-in", http.StatusInternalServerError)
 	}
