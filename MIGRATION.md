@@ -32,7 +32,7 @@ released on its own cadence.
 | `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
 | `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
-| `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak (private, tests only)        |
+| `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak, shared stores, e2e helper (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -83,7 +83,12 @@ internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/
                            + github.com/chromedp/chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
-internal/interop/saml/  ← (tests only) saml/sp + github.com/crewjam/saml
+internal/interop/saml/  ← (tests only) saml/sp + saml/sp/store/{sql,redis}
+                           + github.com/crewjam/saml + github.com/beevik/etree
+                           + modernc.org/sqlite + github.com/jackc/pgx/v5
+                           + github.com/go-sql-driver/mysql
+                           + github.com/redis/go-redis/v9
+                           + github.com/alicebob/miniredis/v2
 
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module;
 `oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
@@ -109,7 +114,10 @@ The SAML XML signature stack (gosaml2, goxmldsig, etree) is confined to
 `saml/sp`: no other library module imports it, and nothing imports
 `saml/sp` but its stores, the examples and the private interop tests.
 `github.com/crewjam/saml` is a test-only dependency of the private
-`internal/interop/saml` module; it never reaches a library build.
+`internal/interop/saml` module; it never reaches a library build, and
+neither do that module's SQL drivers, Redis clients and miniredis. The
+opt-in browser suite (`e2e/saml`, `make e2e`) runs with the Tales binary
+and Chrome; it adds no Go dependency.
 
 ## Local development
 
@@ -119,6 +127,7 @@ make build        # build all modules
 make test         # race + coverage, aggregated into build/coverage.out
 make lint         # golangci-lint on every module with the shared config
 make tidy         # go mod tidy on every module + go work sync
+make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 ```
 
 The `Makefile` discovers modules dynamically via `find . -name go.mod`, so a

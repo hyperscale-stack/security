@@ -59,6 +59,7 @@ make sync       # go work sync
 make bench      # benchmarks across all modules
 make coverage   # go tool cover -func on the aggregated profile
 make generate   # mockery — currently BROKEN, see "Tooling caveats" below
+make e2e        # opt-in browser suites (Tales + Chrome, e2e/saml), never in CI
 ```
 
 To run a **single test** or work on one module, `cd` into that module first
@@ -110,7 +111,7 @@ is intentionally skipped in CI.
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
-| `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP + pinned Keycloak fixture |
+| `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
 of `oauth2`; likewise `oidc/client/storage/memory` and `oidc/client/storetest`
@@ -134,7 +135,8 @@ the evaluation in `oidc/client/doc.go`). `oidc/provider` depends on core +
 enforces it); go-oidc and x/oauth2 are allowed only in the test-only
 `internal/interop/oidcop` module, as an independent relying party. The
 SAML XML-DSig stack (gosaml2, goxmldsig ≥ v1.6.1, etree) stays inside
-`saml/sp`; `crewjam/saml` is a test-only dependency of
+`saml/sp`; `crewjam/saml`, the SQL drivers (pgx, go-sql-driver/mysql,
+modernc sqlite), go-redis and miniredis are test-only dependencies of
 `internal/interop/saml`. When adding code, check the allowed-dependency
 list in `MIGRATION.md` before adding an import.
 
@@ -315,10 +317,22 @@ by response content).
 - `Storage` implementations: `saml/sp/storage/memory` (dev/tests),
   `saml/sp/store/sql`, `saml/sp/store/redis`; all must pass
   `saml/sp/storetest`.
-- `internal/interop/saml` runs the SP against crewjam's IdP and replays a
-  pinned Keycloak 26.0.7 login (`testdata/`, regenerated with
-  `SAMLSP_KEYCLOAK_URL` and `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` against a
-  disposable Keycloak, see `keycloak_capture_test.go`).
+- `saml/sp/testdata/corpus` pins 314 signed adversarial responses; after a
+  deliberate change regenerate it with `go test -run '^TestCorpusGenerate$'
+  -count=1 . -args -corpus.update` (in `saml/sp`): regeneration is
+  byte-identical, and `TestCorpusCoversEveryRule` requires every refusal
+  rule of the sources in some entry (or in its documented allowlist).
+- `internal/interop/saml` runs the SP against crewjam's IdP, replays the
+  pinned Keycloak responses (`testdata/keycloak-*`), races instances on
+  shared stores and tests metadata retrieval. Opt-in, with
+  `internal/interop/saml/compose.yaml`: `SAMLSP_KEYCLOAK_URL` +
+  `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` (`TestKeycloakLive`, `-args
+  -keycloak.capture` rewrites the captures), `SAMLSP_REDIS_ADDR`,
+  `SAMLSP_POSTGRES_DSN`, `SAMLSP_MYSQL_DSN`.
+- `e2e/saml/*.tales` (`make e2e`, `e2e/saml/run.sh`) drives
+  `examples/saml-sp` in Chrome; its sites are served by
+  `TestE2EHelperProcess` (skipped unless `SAMLSP_E2E_SERVE` is set). The
+  integration guide is `docs/saml-sp.md`.
 
 ## Tooling caveats
 

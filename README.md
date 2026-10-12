@@ -93,6 +93,7 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 - [docs/observability.md](docs/observability.md) — OpenTelemetry span catalog.
 - [docs/security-considerations.md](docs/security-considerations.md) — defaults and threat model.
 - [docs/oidc-provider.md](docs/oidc-provider.md) — OpenID Provider feature matrix and integration guide.
+- [docs/saml-sp.md](docs/saml-sp.md) — SAML Service Provider integration guide.
 - [docs/migration-from-v0.md](docs/migration-from-v0.md) — upgrading from the v0 stack.
 - [MIGRATION.md](MIGRATION.md) — workspace layout and dependency policy.
 - [LIMITATIONS.md](LIMITATIONS.md) — known gaps.
@@ -105,6 +106,7 @@ make sync     # go work sync
 make build    # build every module
 make test     # race + coverage
 make lint     # golangci-lint with the shared config
+make e2e      # opt-in browser suites (Tales and Chrome, see docs/saml-sp.md)
 ```
 
 ## License

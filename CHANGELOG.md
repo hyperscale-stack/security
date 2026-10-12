@@ -135,6 +135,23 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **SAML example and interoperability tests**: `examples/saml-sp`, and the
   private `internal/interop/saml` module, which runs the SP against
   crewjam/saml's IdP over TLS and replays a pinned Keycloak 26.0.7 login.
+- **SAML adversarial and interoperability evidence** (#88), all in tests
+  and documentation:
+  - a pinned corpus of 314 signed responses (`saml/sp/testdata/corpus`)
+    with a deterministic generator. Each entry pins its outcome: the full
+    refusal message or the exact identity. A meta-test requires every
+    refusal rule of the sources in some entry;
+  - a live Keycloak 26.7.4 suite (opt-in, digest-pinned compose) and the
+    replay of its 14 captures in CI, including XSW1–XSW8, signature removal
+    and comment injection on Apache Santuario output;
+  - races across Service Provider instances on shared SQL and Redis stores:
+    SQLite and miniredis in CI, PostgreSQL, MySQL and Redis opt-in;
+  - IdP metadata retrieval behind a Service Provider: key rollover, fetches
+    driven by time only, entity pin, outbound refusals;
+  - an opt-in browser suite (`make e2e`, Tales and Chrome) driving
+    `examples/saml-sp` across sites: cross-site POST correlation, cookie
+    tossing, login CSRF, RelayState integrity, open redirects;
+  - the integration guide [docs/saml-sp.md](docs/saml-sp.md).
 - **OAuth2 code replay error**: `oauth2.CodeReplayError`, the error an
   `AuthorizationCodeStore` returns for a replayed code it still retains. It
   matches `oauth2.ErrCodeAlreadyUsed` (`invalid_grant`) for `errors.Is`,

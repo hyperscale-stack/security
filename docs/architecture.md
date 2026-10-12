@@ -46,7 +46,7 @@ transitive dependencies.
 | `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
 | `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
-| `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak)                      |
+| `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak, shared stores, e2e helper) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
@@ -86,7 +86,9 @@ examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
 internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
                            + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
-internal/interop/saml/  ← (tests only) saml/sp + crewjam/saml
+internal/interop/saml/  ← (tests only) saml/sp + its stores + crewjam/saml + etree
+                          + modernc sqlite + pgx + go-sql-driver/mysql
+                          + go-redis + miniredis
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,

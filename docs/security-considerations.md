@@ -460,7 +460,9 @@ is, never for the protocol rules:
 providers (SP-initiated Web Browser SSO, Profiles §4.1). An assertion is a
 bearer credential delivered through the browser, so the module trusts only
 what the operator configured and refuses whatever it cannot read in exactly
-one way.
+one way. This section is the threat model; the
+[integration guide](saml-sp.md) gives the exact trust tables, the identity
+mapping, the deployment and rollover runbooks, and the test evidence.
 
 ### Trust
 
@@ -548,16 +550,26 @@ IdP to send one assertion carrying a persistent NameID:
 
 ### Browser binding, CSRF and replay
 
-- **Login CSRF.** `BeginLogin` binds the transaction to the browser with a
-  `__Host-samlsp` cookie (`Secure`, `HttpOnly`, `Path=/`, no `Domain`): the
-  prefix keeps sibling subdomains and network attackers from planting it. It
-  is `SameSite=None` because the IdP's POST to the ACS is a cross-site
-  navigation that would not carry a `Lax` or `Strict` cookie. A response is
-  accepted only for the transaction of the same browser, and its signed
-  `SubjectConfirmationData` must answer that transaction's request ID
-  (errata E90). Some legacy browsers (Safari on iOS 12 and macOS 10.14,
-  Chrome 51–66) mishandle `SameSite=None`: their logins fail with
-  `ErrMissingBrowserBinding`.
+- **Login CSRF by response injection.** `BeginLogin` binds the
+  transaction to the browser with a `__Host-samlsp` cookie (`Secure`,
+  `HttpOnly`, `Path=/`, no `Domain`): the prefix keeps sibling subdomains
+  and network attackers from planting it. It is `SameSite=None` because the
+  IdP's POST to the ACS is a cross-site navigation that would not carry a
+  `Lax` or `Strict` cookie. A response is accepted only for the transaction
+  of the same browser, and its signed `SubjectConfirmationData` must answer
+  that transaction's request ID (errata E90). An attacker's own valid
+  response posted into a victim's browser is therefore refused, whatever
+  cookies a sibling host tossed (browser suite, BR3 and BR4). Some legacy
+  browsers (Safari on iOS 12 and macOS 10.14, Chrome 51–66) mishandle
+  `SameSite=None`: their logins fail with `ErrMissingBrowserBinding`.
+- **Login CSRF by forced initiation is the application's to stop.** The
+  binding cannot tell whether the user meant to start a login. A page that
+  navigates the victim to the login of a connection whose IdP signs her in
+  as the attacker, typically the attacker's own tenant, signs the victim in
+  to the attacker's account (browser suite, BR8). Start logins only from a
+  same-origin user gesture: a POST with a CSRF token, or a GET whose
+  `Sec-Fetch-Site` is `same-origin` or `none`
+  ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS must be exempt from the application's CSRF protection**: the
   POST comes from the IdP's page. The binding cookie and `InResponseTo` are
   its CSRF defense.
@@ -967,9 +979,11 @@ span catalog.
 - [ ] SAML: share the transaction store and the replay cache between
       instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
       expired SQL rows.
-- [ ] SAML: exempt the ACS routes from CSRF protection, rate-limit the login
-      entry point, and key accounts on the connection and the persistent
-      NameID — never on an email.
+- [ ] SAML: exempt the ACS routes from CSRF protection, start logins only
+      from a same-origin gesture (a POST with a CSRF token, or
+      `Sec-Fetch-Site` `same-origin` or `none`), rate-limit the login entry
+      point, serve it on the ACS host, and key accounts on the connection
+      and the persistent NameID — never on an email.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and
