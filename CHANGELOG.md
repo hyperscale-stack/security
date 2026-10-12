@@ -1406,3 +1406,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   HMAC secret held as a `jose.JSONWebKey` and private keys carried by
   mistake; the remote JWKS provider and its errors printed the URL with its
   user name and query.
+- `oidc/provider` parses `prompt`, `ui_locales`, `claims_locales` and
+  `acr_values` without allocating per separator: splitting them first made
+  an unauthenticated authorization request allocate about 20 times its
+  body (16 bytes per space, before the 32-value cap). `prompt` is still
+  read whole — bounding it could turn `none … login` into a valid `none` —
+  while `ui_locales`, `claims_locales` and `acr_values` over 2048 bytes are
+  now ignored, like an oversized `display` or `login_hint`; they never fail
+  a request (OIDC Core §3.1.2.1, §15.1).

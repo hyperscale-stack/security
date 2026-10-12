@@ -34,6 +34,9 @@ const (
 	// maxListTokens keeps the first values of ui_locales, claims_locales
 	// and acr_values.
 	maxListTokens = 32
+	// maxListLength bounds ui_locales, claims_locales and acr_values, in
+	// bytes: a longer value is ignored.
+	maxListLength = 2048
 	// maxAgeSeconds clamps max_age (2^31-1 seconds, about 68 years).
 	maxAgeSeconds = 1<<31 - 1
 	// maxAgeDigits is the longest max_age parsed as is; longer is clamped.
@@ -293,14 +296,15 @@ func (v *authRequest) parseParameters(form url.Values) error {
 
 // parsePrompt parses prompt (Core §3.1.2.1): space-delimited,
 // case-sensitive; unknown values are ignored; none with any other value is
-// refused.
+// refused. The whole value is read — bounding it could turn "none … login"
+// into a valid none, or drop a login — without allocating per separator.
 func parsePrompt(raw string) (Prompt, error) {
 	var (
 		prompt Prompt
 		count  int
 	)
 
-	for _, v := range strings.Split(raw, " ") {
+	for v := range strings.SplitSeq(raw, " ") {
 		if v == "" {
 			continue
 		}
@@ -351,18 +355,25 @@ func parseMaxAge(raw string) (*time.Duration, error) {
 	return &maxAge, nil
 }
 
-// tokens splits a space-delimited parameter (Core §14), keeping its first
-// maxListTokens valid UTF-8 values; it never fails.
+// tokens returns the first maxListTokens values of a space-delimited
+// parameter (Core §14) of at most maxListLength bytes of valid UTF-8 — nil
+// for any other value: it never fails, and allocates nothing for the
+// separators.
 func tokens(raw string) []string {
-	if !utf8.ValidString(raw) {
+	if len(raw) > maxListLength || !utf8.ValidString(raw) {
 		return nil
 	}
 
 	var out []string
 
-	for _, v := range strings.Split(raw, " ") {
-		if v != "" && len(out) < maxListTokens {
-			out = append(out, v)
+	for v := range strings.SplitSeq(raw, " ") {
+		if v == "" {
+			continue
+		}
+
+		out = append(out, v)
+		if len(out) == maxListTokens {
+			break
 		}
 	}
 

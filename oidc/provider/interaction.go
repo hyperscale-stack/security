@@ -95,7 +95,8 @@ type Request struct {
 	// have authenticated at most that long before the request.
 	MaxAge *time.Duration
 	// ACRValues are the requested acr_values, by preference: voluntary
-	// (Core §3.1.2.1) — the provider enforces none of them.
+	// (Core §3.1.2.1) — the provider enforces none of them. Its first 32
+	// values; an acr_values over 2048 bytes is ignored.
 	ACRValues []string
 	// EssentialACR lists the acr values of an essential acr claim request
 	// (Core §5.5.1.1): the authentication MUST satisfy one of them.
@@ -109,7 +110,10 @@ type Request struct {
 	Claims ClaimsRequest
 	// LoginHint, Display, UILocales and ClaimsLocales are passed through
 	// (Core §3.1.2.1, §5.2, §15.1): use them or ignore them, they never
-	// fail a request.
+	// fail a request. Oversized or invalid UTF-8 values are ignored: a
+	// login_hint over 1024 bytes, a display over 255 bytes, ui_locales or
+	// claims_locales over 2048 bytes — of which the first 32 values are
+	// kept.
 	LoginHint     string
 	Display       string
 	UILocales     []string

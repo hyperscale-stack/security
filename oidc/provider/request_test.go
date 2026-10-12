@@ -338,6 +338,60 @@ func TestPassthroughParameters(t *testing.T) {
 	assert.Empty(t, req.ClaimsLocales, "invalid UTF-8 is ignored")
 }
 
+// TestOversizedListParametersAreIgnored: ui_locales, claims_locales and
+// acr_values of at most 2048 bytes keep their first 32 values; a longer
+// value is ignored — never refused (Core §3.1.2.1, §15.1) — like an
+// oversized display or login_hint.
+func TestOversizedListParametersAreIgnored(t *testing.T) {
+	t.Parallel()
+
+	atBound := strings.Repeat("fr ", 682) + "fr" // 2048 bytes, 683 values
+	overBound := atBound + " "                   // 2049 bytes
+	require.Len(t, atBound, 2048)
+
+	e := newEnv(t)
+
+	for _, value := range []string{atBound, overBound} {
+		q := with(authorizeQuery(), "ui_locales", value, "claims_locales", value, "acr_values", value)
+		require.NotEmpty(t, redirect(t, e.authorize(q)).Get("code"))
+
+		req := e.lastRequest()
+		if value == atBound {
+			assert.Len(t, req.UILocales, 32)
+			assert.Len(t, req.ClaimsLocales, 32)
+			assert.Len(t, req.ACRValues, 32)
+
+			continue
+		}
+
+		assert.Nil(t, req.UILocales, "an oversized ui_locales is ignored")
+		assert.Nil(t, req.ClaimsLocales, "an oversized claims_locales is ignored")
+		assert.Nil(t, req.ACRValues, "an oversized acr_values is ignored")
+	}
+}
+
+// TestPromptIsReadWhole: prompt has no length bound — truncating or
+// ignoring it could turn "none … login" into a valid prompt=none, or skip a
+// required re-authentication — and is read whole, without allocating per
+// separator.
+func TestPromptIsReadWhole(t *testing.T) {
+	t.Parallel()
+
+	spaces := strings.Repeat(" ", 1<<20)
+
+	e := newEnv(t)
+	require.NotEmpty(t, redirect(t, e.authorize(with(authorizeQuery(), "prompt", spaces+"login"))).Get("code"))
+	assert.Equal(t, oidcprovider.Prompt{Login: true}, e.lastRequest().Prompt)
+
+	refused := newEnv(t)
+	params := redirect(t, refused.authorize(with(authorizeQuery(), "prompt", "none"+spaces+"login")))
+	assert.Equal(t, oauth2.CodeInvalidRequest, params.Get("error"), "none with another value, however far")
+
+	interactive, silent := refused.interaction.calls()
+	assert.Empty(t, interactive)
+	assert.Empty(t, silent)
+}
+
 // TestRequestView pins what the interaction learns about an OpenID request.
 func TestRequestView(t *testing.T) {
 	t.Parallel()
