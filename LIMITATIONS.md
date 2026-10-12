@@ -462,6 +462,20 @@ PKCE. Not supported, and refused where a provider could select them:
   expects the user-id and password in Unicode Normalization Form C; `basic`
   checks them as received.
 
+## Passwords
+
+- **No Unicode normalization** — the hashers hash a password's bytes as
+  given, so a password typed in NFD on one device and NFC on another does
+  not verify. NIST SP 800-63B-4 §3.1.1.2 says verifiers SHOULD apply NFC:
+  wrap the hasher in the decorator shown in the `password` package
+  documentation (it needs `golang.org/x/text`, which the module does not
+  depend on).
+- **bcrypt: 72 bytes** — longer passwords are refused (`ErrPasswordTooLong`),
+  which caps passwords of multi-byte characters below the 64 characters
+  SP 800-63B-4 asks verifiers to permit. Hashes imported from an
+  implementation that truncated silently need the migration wrapper of
+  MIGRATION.md. Prefer Argon2id.
+
 ## Sessions
 
 - The session module is stateless: the whole session lives in an encrypted

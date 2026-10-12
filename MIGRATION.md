@@ -1997,3 +1997,62 @@ To migrate:
    `AllowImplicit` there, and the server would serve the flow to plain OAuth
    2.0 requests and advertise it in its RFC 8414 metadata while the
    discovery document does not — the disagreement RFC 9068 §4 forbids.
+
+### `password`: stored hashes are bounded; truncated and empty passwords are refused
+
+The hashers trusted the parameters encoded in a stored hash. Whoever could
+write or import a hash controlled the cost of every verification against it
+— up to a panic inside `golang.org/x/crypto`, a 4 TiB allocation or days of
+CPU — and could plant an argon2id hash with a 1-byte tag that accepted about
+one random password in 256. bcrypt `Verify` also accepted any password whose
+first 72 bytes matched, and empty passwords hashed and verified. `Verify` now
+checks the stored hash before any hashing:
+
+| | Before | After |
+| --- | --- | --- |
+| argon2id `t=0`, `p=0`, `m < 8p`, missing or repeated parameter, unknown parameter, empty tag | panic or accepted | `ErrMalformedHash` (RFC 9106 §3.1) |
+| argon2id salt or tag outside 16–64 bytes | accepted | `ErrMalformedHash` (library policy) |
+| argon2id `m`, `t`, `p` above the limits (256 MiB, 10, 16 by default) | honored | `ErrCostLimitExceeded`, before any hashing |
+| bcrypt stored cost above the limit (14 by default) | honored up to 31 | `ErrCostLimitExceeded`, before any hashing |
+| bcrypt password longer than 72 bytes | `Hash`: error; `Verify`: first 72 bytes compared | `ErrPasswordTooLong` from both |
+| empty password | hashed and verified | `Hash`: `ErrEmptyPassword`; `Verify`: `(false, nil)` |
+| `NewBCryptHasher(cost)` outside 4–31 | clamped silently | panic |
+| `NewArgon2idHasher` with `m < 8p`, key or salt length outside 16–64 bytes | accepted | panic |
+| `NeedsRehash` | memory, passes, lanes, key length | also the salt length, and `true` for every hash `Verify` refuses |
+
+The limits are inclusive and never refuse the hasher's own parameters. They
+accept the hashes of every mainstream implementation's default profile
+(OWASP, RFC 9106 §4's second option, libsodium interactive and moderate,
+PHP, Spring Security, Keycloak).
+
+To migrate:
+
+1. Hashes made with 1 GiB or more of memory (RFC 9106 §4's first option,
+   libsodium's sensitive profile) or with a bcrypt cost above 14: raise the
+   limits — `password.WithArgon2idLimits(password.Argon2idLimits{MaxMemoryKiB:
+   2 << 20})`, `password.WithBCryptMaxCost(15)` — or configure the hasher
+   with those parameters. Watch for `ErrCostLimitExceeded` after the upgrade.
+2. bcrypt hashes imported from an implementation that silently truncated
+   passwords to 72 bytes — older `golang.org/x/crypto` releases (this
+   library's v0 stack used one), PHP's `password_hash`, Node's `bcrypt` —
+   no longer verify a password longer than 72 bytes. If such accounts exist,
+   wrap the hasher for them and move them to Argon2id at their next login:
+   ```go
+   type truncating struct{ password.Hasher }
+
+   func (t truncating) Verify(ctx context.Context, hash, pw string) (bool, error) {
+       if len(pw) > 72 {
+           pw = pw[:72] // what the truncating system hashed
+       }
+       return t.Hasher.Verify(ctx, hash, pw)
+   }
+   ```
+   then, on success, hash the full password with an `Argon2idHasher` and
+   store it.
+3. Accounts with an empty password can no longer sign in: reset them.
+4. Static configuration errors now panic at start-up: pass a bcrypt cost in
+   4–31 (0 selects 10; costs below 10 are for tests) and argon2id parameters
+   within the documented bounds.
+5. Unicode: the hashers still hash bytes as given. To apply NFC (NIST
+   SP 800-63B-4 §3.1.1.2), use the decorator of the `password` package
+   documentation at enrollment and at login.

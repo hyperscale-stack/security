@@ -65,23 +65,6 @@ func TestBCryptNeedsRehash(t *testing.T) {
 	assert.True(t, lo.NeedsRehash("garbage"))
 }
 
-func TestBCryptCostClamps(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		give, want int
-	}{
-		{0, 10},  // bcrypt.DefaultCost (x/crypto/bcrypt)
-		{3, 4},   // clamp to MinCost
-		{50, 31}, // clamp to MaxCost
-		{7, 7},
-	}
-	for _, c := range cases {
-		got := password.NewBCryptHasher(c.give).Cost()
-		assert.Equal(t, c.want, got, "input %d", c.give)
-	}
-}
-
 func TestBCryptContextCancellation(t *testing.T) {
 	t.Parallel()
 

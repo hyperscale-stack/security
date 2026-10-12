@@ -7,18 +7,46 @@ ships, the attacks it defends against, and the choices left to the operator.
 
 Two `password.Hasher` implementations are shipped:
 
-- **bcrypt** — `NewBCryptHasher(cost)`. Constant-time comparison is provided
-  by `golang.org/x/crypto/bcrypt`.
 - **Argon2id** — `NewArgon2idHasher(params)`. The default profile
-  (`DefaultArgon2idParams`) follows RFC 9106 §4 / OWASP 2024: memory 19 MiB,
-  time 2, parallelism 1, 32-byte key, 16-byte salt.
+  (`DefaultArgon2idParams`) is the minimum of the OWASP Password Storage
+  Cheat Sheet: memory 19 MiB, time 2, parallelism 1, 32-byte key, 16-byte
+  salt. RFC 9106 §4 recommends stronger options (2 GiB, t=1, p=4; or 64 MiB,
+  t=3, p=4 when memory is scarce): raise the parameters towards them when the
+  hardware allows.
+- **bcrypt** — `NewBCryptHasher(cost)`, default cost 10 (`bcrypt.DefaultCost`,
+  the OWASP minimum; lower costs are for tests). bcrypt processes at most 72
+  bytes: a longer password is refused by `Hash` and `Verify`
+  (`ErrPasswordTooLong`) rather than verified on its first 72 bytes — NIST
+  SP 800-63B-4 §3.1.1.2 requires the entire password to be verified. That
+  caps passwords of multi-byte characters below the 64 characters
+  SP 800-63B-4 asks verifiers to permit: prefer Argon2id.
+
+**Stored hashes are untrusted input.** `Verify` decodes the parameters of the
+stored hash and checks them before any hashing: argon2id version 19, each of
+`m`, `t`, `p` exactly once, `t ≥ 1`, `p ≥ 1`, `m ≥ 8p` (RFC 9106 §3.1), salt
+and tag of 16 to 64 bytes (library policy: RFC 9106 sets no salt minimum,
+§4 calls 128-bit salts and tags sufficient) → `ErrMalformedHash`; a cost
+above the hasher's limits → `ErrCostLimitExceeded` (argon2id: 256 MiB, 10
+passes and 16 lanes by default, `WithArgon2idLimits`; bcrypt: cost 14,
+`WithBCryptMaxCost`; both inclusive and raised to the hasher's own
+parameters). A hash imported from an untrusted source or written by an
+attacker can neither crash the process, exhaust its memory or CPU, nor
+accept random passwords. Empty passwords are never hashed nor accepted
+(RFC 8265 §4.1).
 
 `NeedsRehash` lets a login flow transparently upgrade a stored hash when the
 operator raises the cost factor. Call it after a successful `Verify` and
 re-hash if it returns true.
 
-A plain mismatch returns `(false, nil)` — only malformed input or context
-cancellation produces an error. Never store or log the cleartext password.
+A plain mismatch returns `(false, nil)` — only malformed or out-of-bounds
+input, a password too long for the algorithm or context cancellation
+produces an error. Never store or log the cleartext password.
+
+**Unicode.** The hashers hash the password's bytes as given, so they verify
+the hashes of systems that never normalized. NIST SP 800-63B-4 §3.1.1.2 says
+verifiers SHOULD apply NFC to Unicode passwords (RFC 8265 §4.2 too): wrap
+the hasher in the decorator of the `password` package documentation, at
+enrollment and at login.
 
 ## Account enumeration
 
@@ -1458,7 +1486,9 @@ span catalog.
 
 - [ ] Build with Go 1.27.2 or later, the latest patch release, and run
       `govulncheck` on your application.
-- [ ] Pick a password hasher and review its cost against current hardware.
+- [ ] Pick a password hasher and review its cost against current hardware;
+      raise its limits (`WithArgon2idLimits`, `WithBCryptMaxCost`) before
+      importing hashes costlier than the defaults.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.

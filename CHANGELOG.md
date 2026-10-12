@@ -486,6 +486,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `interaction_required`, `account_selection_required`, `consent_required`)
   — are answered with a bare error page instead of a redirect (RFC 9700
   §4.11.2). Without it, every registered client is trusted, as before.
+- `password`: limits on the cost of stored hashes — `Argon2idLimits`,
+  `DefaultArgon2idLimits` (256 MiB, 10 passes, 16 lanes),
+  `WithArgon2idLimits`, `Argon2idHasher.Limits`; `WithBCryptMaxCost`,
+  `DefaultBCryptMaxCost` (14), `BCryptHasher.MaxCost` — and the sentinels
+  `ErrCostLimitExceeded`, `ErrPasswordTooLong` and `ErrEmptyPassword`.
 
 ### Changed
 
@@ -755,6 +760,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     unless `WithOutboundPolicy` allows them, and follows redirects within
     the JWK Set URL's origin only; RFC 9068 access tokens need a non-empty
     audience from the `IssuerResolver`.
+- `password`: `NewArgon2idHasher` panics on a memory cost below 8×lanes or a
+  key or salt length outside 16–64 bytes, and `NewBCryptHasher` on a cost
+  outside 4–31 (it used to clamp it silently); both take options
+  (`WithArgon2idLimits`, `WithBCryptMaxCost`). `Verify` refuses, before any
+  hashing, a stored hash outside the bounds (`ErrMalformedHash`) or above the
+  limits (`ErrCostLimitExceeded`); bcrypt refuses passwords longer than 72
+  bytes (`ErrPasswordTooLong`) instead of verifying their first 72 bytes;
+  `Hash` refuses an empty password (`ErrEmptyPassword`) and `Verify` never
+  accepts one; `NeedsRehash` also flags a shorter salt and every hash
+  `Verify` refuses. See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -956,6 +971,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and deduplicated fetches, and `docs/security-considerations.md` said JWK
   Sets were fetched through `outbound`: none of it held (see Security).
 - `now == exp` was accepted by the JWT verifier (RFC 7519 §4.1.4).
+- `password` documentation: the default bcrypt cost is 10
+  (`bcrypt.DefaultCost`), not 12; `DefaultArgon2idParams` is the OWASP
+  Password Storage Cheat Sheet minimum, not RFC 9106 §4's recommendation;
+  `ErrMismatch` is never returned by the shipped hashers (a mismatch is
+  `(false, nil)`).
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1623,3 +1643,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   while the grants refused them there (OIDC Core §16.15). And without an
   `IntrospectionPolicy`, any confidential client — every resource server —
   could read the claims of any client's refresh token (RFC 6749 §1.5).
+- `password` hashers trusted the parameters of the stored hash: an argon2id
+  hash with `t=0`, `p=0`, a missing parameter or an empty tag panicked
+  inside `golang.org/x/crypto` (fatal in a gRPC server without a recovery
+  interceptor), `m=4294967295` made a single verification try to allocate
+  4 TiB, a 1-byte tag accepted about one random password in 256, and a
+  stored bcrypt cost of 31 asked for days of CPU. Whoever can write or
+  import a hash — a migration, a compromised store — controlled that cost.
+  `Verify` now checks the stored hash before any hashing: RFC 9106 §3.1
+  ranges, each parameter exactly once, salt and tag of 16–64 bytes, and
+  operator limits on the cost.
+- bcrypt `Verify` accepted any password whose first 72 bytes matched,
+  contrary to NIST SP 800-63B-4 §3.1.1.2 ("SHALL verify the entire submitted
+  password"), while `Hash` refused such passwords; it now refuses them.
+  Empty passwords are no longer hashed nor accepted (RFC 8265 §4.1).
