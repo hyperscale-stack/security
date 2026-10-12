@@ -137,7 +137,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   crewjam/saml's IdP over TLS and replays a pinned Keycloak 26.0.7 login.
 - **SAML adversarial and interoperability evidence** (#88), all in tests
   and documentation:
-  - a pinned corpus of 314 signed responses (`saml/sp/testdata/corpus`)
+  - a pinned corpus of 359 signed responses (`saml/sp/testdata/corpus`)
     with a deterministic generator. Each entry pins its outcome: the full
     refusal message or the exact identity. A meta-test requires every
     refusal rule of the sources in some entry;

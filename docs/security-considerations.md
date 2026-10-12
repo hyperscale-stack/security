@@ -562,14 +562,6 @@ IdP to send one assertion carrying a persistent NameID:
   cookies a sibling host tossed (browser suite, BR3 and BR4). Some legacy
   browsers (Safari on iOS 12 and macOS 10.14, Chrome 51–66) mishandle
   `SameSite=None`: their logins fail with `ErrMissingBrowserBinding`.
-- **Login CSRF by forced initiation is the application's to stop.** The
-  binding cannot tell whether the user meant to start a login. A page that
-  navigates the victim to the login of a connection whose IdP signs her in
-  as the attacker, typically the attacker's own tenant, signs the victim in
-  to the attacker's account (browser suite, BR8). Start logins only from a
-  same-origin user gesture: a POST with a CSRF token, or a GET whose
-  `Sec-Fetch-Site` is `same-origin` or `none`
-  ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS must be exempt from the application's CSRF protection**: the
   POST comes from the IdP's page. The binding cookie and `InResponseTo` are
   its CSRF defense.
@@ -596,11 +588,17 @@ IdP to send one assertion carrying a persistent NameID:
 - **Gate login initiation.** A page of another site can send the user's
   browser to the login entry point (forced login initiation, a form of
   login CSRF): with an IdP session alive, the user is logged in, or
-  switched to another session, without asking. Start logins only from
-  same-origin navigations — Fetch Metadata's `Sec-Fetch-Site` is
-  `same-origin` or `none` (typed URL, bookmark); refuse `cross-site` and
-  `same-site` — or from a CSRF-protected POST. `examples/saml-sp` does the
-  former and accepts requests without the header (older browsers).
+  switched to another session, without asking. Through a connection whose
+  IdP the attacker controls, typically her own tenant, the victim ends up
+  in the attacker's account. The browser binding cannot tell: the victim's
+  browser started that login. Start logins only from same-origin
+  navigations — Fetch Metadata's `Sec-Fetch-Site` is `same-origin` or
+  `none` (typed URL, bookmark); refuse `cross-site` and `same-site` — or
+  from a CSRF-protected POST. `examples/saml-sp` does the former and
+  accepts requests without the header, so browsers older than Fetch
+  Metadata keep working but stay exposed; a strict deployment refuses a
+  missing header too. The browser suite (BR8) shows both
+  ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS location is checked**: the request path must be the
   connection's ACS path (Bindings §3.5.5.2); `Destination` (required on a
   signed Response) and `Recipient` must equal the configured ACS URL.

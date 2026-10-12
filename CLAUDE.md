@@ -317,7 +317,8 @@ by response content).
 - `Storage` implementations: `saml/sp/storage/memory` (dev/tests),
   `saml/sp/store/sql`, `saml/sp/store/redis`; all must pass
   `saml/sp/storetest`.
-- `saml/sp/testdata/corpus` pins 314 signed adversarial responses; after a
+- `saml/sp/testdata/corpus` pins 359 signed adversarial responses, stored
+  uncompressed (review them as text diffs); after a
   deliberate change regenerate it with `go test -run '^TestCorpusGenerate$'
   -count=1 . -args -corpus.update` (in `saml/sp`): regeneration is
   byte-identical, and `TestCorpusCoversEveryRule` requires every refusal
@@ -326,12 +327,15 @@ by response content).
   pinned Keycloak responses (`testdata/keycloak-*`), races instances on
   shared stores and tests metadata retrieval. Opt-in, with
   `internal/interop/saml/compose.yaml`: `SAMLSP_KEYCLOAK_URL` +
-  `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` (`TestKeycloakLive`, `-args
-  -keycloak.capture` rewrites the captures), `SAMLSP_REDIS_ADDR`,
-  `SAMLSP_POSTGRES_DSN`, `SAMLSP_MYSQL_DSN`.
+  `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` (`TestKeycloakLive`; `-args
+  -keycloak.capture` rewrites the 26.7.4 captures, and only `-args
+  -keycloak.fixture` against Keycloak 26.0.7 rewrites the 26.0.7 fixture),
+  `SAMLSP_REDIS_ADDR`, `SAMLSP_POSTGRES_DSN`, `SAMLSP_MYSQL_DSN`.
 - `e2e/saml/*.tales` (`make e2e`, `e2e/saml/run.sh`) drives
   `examples/saml-sp` in Chrome; its sites are served by
-  `TestE2EHelperProcess` (skipped unless `SAMLSP_E2E_SERVE` is set). The
+  `TestE2EHelperProcess` (skipped unless `SAMLSP_E2E_SERVE` is set). CI
+  never runs it: re-run `make e2e` after any change to the example or to
+  `samlsp`'s cookie, login or ACS code. The
   integration guide is `docs/saml-sp.md`.
 
 ## Tooling caveats

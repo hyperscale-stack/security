@@ -126,10 +126,17 @@ Keycloak run hit this with a freshly generated realm key.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| refresh interval | `cacheDuration`, or 1 hour | shortened to `validUntil`, clamped to `[MinRefresh, MaxRefresh]` (5 minutes, 24 hours) |
-| `RetryInterval` | 1 minute | spacing of the attempts after a failure, whatever the traffic |
+| refresh interval | `cacheDuration`, or 1 hour when absent | clamped to `[MinRefresh, MaxRefresh]` (5 minutes, 24 hours); an explicit `PT0S` asks for `MinRefresh` |
+| early expiry | — | a document whose `validUntil` comes before its scheduled refresh is refreshed once it expires, at most once per `RetryInterval` |
+| `RetryInterval` | 1 minute | spacing of the attempts after a failure or an early expiry, whatever the traffic |
 | `MaxStale` | 7 days | how long the last good document is served while refreshes fail; never past its `validUntil` |
 | afterwards | — | `BeginLogin` and `CompleteLogin` fail closed with `ErrMetadataExpired` |
+
+  A refresh starts at the first use after it is due and runs in the
+  background: while a usable document is cached, no login waits for it, so
+  a slow or hung metadata endpoint never reaches the login path. Only a
+  caller with nothing usable waits. A new key is therefore trusted from the
+  first login after the refresh completes.
 
 ### 3.5 Single use and replay
 
@@ -240,17 +247,26 @@ CREATE TABLE external_identity (
     sibling host cannot plant the `__Host-` cookie (BR3, BR4).
   - *Forced initiation*: an attacker page navigates the victim to the
     login of a connection whose IdP signs her in as the attacker, typically
-    the attacker's own tenant. The binding cannot tell: the victim's browser
-    started that login. **The application must start logins only from a
-    same-origin user gesture**: a POST carrying a CSRF token, or a GET
-    whose `Sec-Fetch-Site` is `same-origin` or `none` (the address bar).
-    Refuse anything else, including a missing header, or answer with a page
-    whose button starts the login. BR8 shows the attack on the ungated
-    example and the gate refusing it.
+    the attacker's own tenant. `BeginLogin` cannot tell: the victim's
+    browser started that login. **The application must start logins only
+    from a same-origin user gesture**: a GET whose `Sec-Fetch-Site` is
+    `same-origin` or `none` (a link of the site, the address bar), or a POST
+    carrying a CSRF token. Refuse `cross-site` and `same-site`.
+
+  `examples/saml-sp` gates its login this way and also accepts a request
+  without `Sec-Fetch-Site`, which browsers older than Fetch Metadata do not
+  send. That trade-off keeps those browsers working and leaves them open to
+  forced initiation. A strict deployment refuses a missing header too, or
+  starts logins with a CSRF-protected POST. The browser suite (BR8) shows
+  the example refusing a login forced from another site and from a sibling
+  host. It also shows a header-less forced login completing, because the
+  library leaves intent to the application.
 
 ```go
 mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "same-origin" && site != "none" {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none": // add "" to admit browsers without Fetch Metadata
+	default:
 		http.Error(w, "start the sign-in from this site", http.StatusForbidden)
 		return
 	}
@@ -340,8 +356,9 @@ TAB payload lands on the attacker's site.
    E68: any listed key may sign).
 2. The SP learns it. With imported metadata, re-import the document on
    every instance. With a `MetadataSource`, wait one refresh interval
-   (`MaxRefresh` at worst) plus the clock skew: each instance refreshes on
-   its own.
+   (`MaxRefresh` at worst) plus the clock skew. Each instance refreshes on
+   its own, at the first use after the refresh is due, in the background,
+   so an idle instance learns the key at its first login after that.
 3. The IdP switches to the new key. The certificate in its `KeyInfo` must
    equal the imported one exactly, and it is accepted only from its
    `NotBefore + ClockSkew`.
@@ -362,9 +379,9 @@ Keycloak case K4 cover these steps.
 
 **Keycloak** keeps one SP signing certificate per SAML client, so step 1
 does not apply. A request signed by the new key gets no response until the
-client's certificate is replaced (Keycloak case K5). Replace it at the
-moment the SP switches, or let Keycloak read the SP metadata URL (not
-tested here).
+client's certificate is replaced, and once it is, a request signed by the
+previous key gets none (Keycloak case K5). Replace it at the moment the SP
+switches, or let Keycloak read the SP metadata URL (not tested here).
 
 ### Changing or deleting a connection
 
@@ -412,11 +429,11 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | Suite | Where | Covers |
 | --- | --- | --- |
 | Unit tests | `saml/sp` | every rule, with generated fixtures |
-| Pinned adversarial corpus | `saml/sp/testdata/corpus`, `TestCorpus` | 314 signed responses: wrong issuer, audience, destination, recipient and InResponseTo; time windows; statuses; missing fields; untrusted keys; XSW1–XSW8 and wrapping variants; duplicate IDs; substitution; algorithms; malformed XML; size and decompression limits; parser differentials. Each entry pins the full refusal message, or the exact identity. `TestCorpusCoversEveryRule` requires every refusal rule of the sources in some entry |
+| Pinned adversarial corpus | `saml/sp/testdata/corpus`, `TestCorpus` | 359 signed responses: wrong issuer, audience, destination, recipient and InResponseTo; time windows; statuses; missing fields; untrusted keys; XSW1–XSW8 and wrapping variants; duplicate IDs; substitution; algorithms; malformed XML; size and decompression limits; parser differentials. Each entry pins the full refusal message, or the exact identity. `TestCorpusCoversEveryRule` requires every refusal rule of the sources in some entry |
 | crewjam/saml IdP | `internal/interop/saml` | SSO over TLS, metadata exchange both ways, request signatures checked by an independent verifier, IdP and SP key rollover, SHA-1 policy, two IdPs and two connections, cross-tenant substitution, replay, concurrent instances |
 | Keycloak replays | `internal/interop/saml/testdata/keycloak-*` | 15 pinned Keycloak responses (14 from 26.7.4, one from 26.0.7); XSW1–XSW8, signature removal, tampering and comment injection applied to the signed 26.7.4 ones |
 | Shared stores | `internal/interop/saml` | three SP instances with their own handles on a SQLite file (WAL) and on miniredis; 16 contenders per race, held at the store until all arrive |
-| Metadata retrieval | `internal/interop/saml` | a `MetadataSource` behind a connection: key rollover, fetches driven by time only, entity pin, policy refusals |
+| Metadata retrieval | `internal/interop/saml` | a `MetadataSource` behind a connection: key rollover, a hung refresh that never delays a login, fetches driven by time only, entity pin, policy refusals |
 
 Regenerate the corpus after a deliberate change with
 `go test -run '^TestCorpusGenerate$' -count=1 ./saml/sp -args -corpus.update`
@@ -436,7 +453,9 @@ docker compose -f internal/interop/saml/compose.yaml up -d --wait
 cd internal/interop/saml
 
 # Keycloak live (each run creates and deletes a realm with a random user);
-# append "-args -keycloak.capture" to rewrite testdata/keycloak-26.7.4:
+# append "-args -keycloak.capture" to rewrite testdata/keycloak-26.7.4.
+# The 26.0.7 fixture is rewritten only by TestCaptureKeycloakFixture with
+# "-args -keycloak.fixture", against a Keycloak 26.0.7.
 SAMLSP_KEYCLOAK_URL=http://127.0.0.1:18080 go test -count=1 -run '^TestKeycloakLive$' .
 
 # Shared stores on real servers:
@@ -457,6 +476,8 @@ It also needs the ports 8084, 18443 and 18480 free on loopback. A helper
 process serves every site (`sp.test`, `acs.sp.test`, `evil.sp.test`,
 `idp.test`, `attacker.test`) on one TLS port. Its runtime certificate is
 trusted by SPKI hash through Chrome's own flags, so no trust store changes.
+CI does not run this suite: re-run it after any change to the example or
+to the cookie, login or ACS code of `saml/sp`.
 
 | Scenario | Shows |
 | --- | --- |
@@ -466,7 +487,7 @@ trusted by SPKI hash through Chrome's own flags, so no trust store changes.
 | BR5 | tampered, swapped, missing and URL RelayStates are refused, consume nothing and never leave the site |
 | BR6 | a login started on another host than the ACS fails |
 | BR7 | an IdP-initiated response is unsolicited |
-| BR8 | a forced login initiation succeeds without a gate, and the `Sec-Fetch-Site` gate refuses it |
+| BR8 | the example's `Sec-Fetch-Site` gate refuses a login forced from another site or from a sibling host, and a click on the site still signs in; without Fetch Metadata, a forced login completes |
 | BE1 | logout is local: the next login is silent |
 | BE2 | twelve hostile return targets never leave the site |
 
@@ -478,7 +499,7 @@ Recorded on 2026-10-12:
 | --- | --- | --- | --- |
 | crewjam/saml IdP | v0.5.1 | CI, in process | pass |
 | Keycloak (Apache Santuario) | 26.7.4 (`sha256:82a77884…`) | live, K1–K7 | 16/16 subtests pass |
-| Chrome | 154.0.8037.98 | Tales v0.1.0-rc.23, `make e2e` | 15 scenarios, 111 steps pass |
+| Chrome | 154.0.8037.98 | Tales v0.1.0-rc.23, `make e2e` | 16 scenarios, 114 steps pass |
 | PostgreSQL | 16 (`sha256:ca0bd484…`) | conformance suite and races (10 rounds, 16 contenders) | pass |
 | MySQL | 8.0 (`sha256:7dcddc01…`), with and without `clientFoundRows` | conformance suite and races (10 rounds, 16 contenders) | pass |
 | Redis | 7.4 (`sha256:4fa24486…`), `noeviction` | conformance suite and races (10 rounds, 16 contenders) | pass |
@@ -502,7 +523,8 @@ Before going live with an IdP, run `examples/saml-sp` against it:
 
 1. Put the example behind a TLS terminator with a certificate the browser
    trusts, on the host the users will use, and set `SAMLSP_BASE_URL` to its
-   https origin.
+   https origin. The example listens on `127.0.0.1:8084`; set `SAMLSP_ADDR`
+   when the terminator runs elsewhere.
 2. Save the IdP's metadata to a file and set `SAMLSP_IDP_METADATA` to it.
 3. Register `<base>/saml/corp/metadata` at the IdP, then sign in from the
    home page.
