@@ -67,7 +67,9 @@ type Config struct {
 	// on every exchange and atomically mark the presented one consumed;
 	// replaying a consumed token revokes the whole family (RFC 9700
 	// §4.14.2). [oauth2.Profile20BCP] and [oauth2.Profile21Draft] mandate
-	// rotation whatever this field says, so it only matters under
+	// rotation whatever this field says, and the refresh tokens of a client
+	// that is not confidential rotate under every profile (RFC 9700
+	// §4.14.2), so it only matters for confidential clients under
 	// [oauth2.Profile20], where false keeps the legacy behavior: the
 	// refresh token stays reusable until it expires. Rotation requires
 	// RefreshTokens.

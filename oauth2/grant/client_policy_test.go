@@ -230,3 +230,107 @@ func TestAuthorizationCodeRequiresPKCEFromPublicClients(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshRotatesForNonConfidentialClientsUnderEveryProfile pins RFC 9700
+// §4.14.2 ("Authorization servers MUST utilize one of these methods to
+// detect refresh token replay by malicious actors for public clients":
+// sender-constrained refresh tokens or rotation) under Profile20 without
+// RotateRefreshTokens: the refresh token of a public — or untyped — client
+// rotates, its reuse is detected; a confidential client keeps the legacy
+// non-rotating refresh.
+func TestRefreshRotatesForNonConfidentialClientsUnderEveryProfile(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		typ     oauth2.ClientType
+		rotates bool
+	}{
+		"public":       {oauth2.ClientPublic, true},
+		"untyped":      {"", true},
+		"confidential": {oauth2.ClientConfidential, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			store := newStore()
+			seedRefresh(t, store, "legacy-profile-rt", "read:mail", time.Now().Add(time.Hour))
+
+			g := grant.NewRefreshToken(grant.Config{
+				Storage: store, AccessTokens: newAccessGen(), RefreshTokens: newRefreshGen(),
+				AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour,
+			})
+
+			req := refreshReq("legacy-profile-rt", oauth2.Profile20)
+			req.Client = &oauth2.DefaultClient{
+				IDValue: clientID, TypeValue: tc.typ, GrantTypeValues: allGrantTypes, ScopeValues: []string{"read:mail"},
+			}
+
+			resp, err := g.Handle(ctx, req)
+			require.NoError(t, err)
+			assert.Equal(t, tc.rotates, resp.Pair.Refresh != nil, "a replacement refresh token")
+
+			presented, err := store.LookupRefreshToken(ctx, oauth2.HashToken(nil, "legacy-profile-rt"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.rotates, presented.Consumed, "the presented token is consumed when rotating")
+
+			_, err = g.Handle(ctx, req)
+			if tc.rotates {
+				require.ErrorIs(t, err, oauth2.ErrRefreshTokenReused, "reuse is detected")
+
+				return
+			}
+
+			require.NoError(t, err, "the legacy refresh token stays reusable")
+		})
+	}
+}
+
+// TestNonConfidentialRefreshWithoutAGeneratorFailsClosed: a refresh_token
+// grant without a RefreshTokens generator cannot rotate; under Profile20
+// NewServer cannot know it will serve public clients, so their refresh
+// fails with server_error (ErrRotationRequiresGenerator) before anything is
+// minted, while a confidential client's legacy refresh still works.
+func TestNonConfidentialRefreshWithoutAGeneratorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		typ oauth2.ClientType
+		ok  bool
+	}{
+		"public":       {oauth2.ClientPublic, false},
+		"confidential": {oauth2.ClientConfidential, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			seedRefresh(t, store, "no-generator-rt", "read:mail", time.Now().Add(time.Hour))
+
+			spy := &spyAccessGen{}
+			g := grant.NewRefreshToken(grant.Config{
+				Storage: store, AccessTokens: spy, AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour,
+			})
+			require.NoError(t, g.ValidateProfile(oauth2.Profile20), "NewServer accepts the wiring")
+
+			req := refreshReq("no-generator-rt", oauth2.Profile20)
+			req.Client = &oauth2.DefaultClient{
+				IDValue: clientID, TypeValue: tc.typ, GrantTypeValues: allGrantTypes, ScopeValues: []string{"read:mail"},
+			}
+
+			resp, err := g.Handle(t.Context(), req)
+			if tc.ok {
+				require.NoError(t, err)
+				assert.Nil(t, resp.Pair.Refresh)
+
+				return
+			}
+
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			assert.Equal(t, oauth2.CodeServerError, oauth2.IsCode(err))
+			assert.ErrorIs(t, err, grant.ErrRotationRequiresGenerator)
+			assert.Zero(t, spy.calls, "nothing minted")
+		})
+	}
+}

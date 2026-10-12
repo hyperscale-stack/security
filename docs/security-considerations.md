@@ -119,9 +119,12 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   [Token-family revocation](#token-family-revocation-storage-guarantees).
   Clients MUST keep the refresh token returned by each exchange (RFC 6749
   §6) and must not refresh concurrently with the same token, or they lose
-  the family. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`);
-  without it a refresh token stays reusable until it expires, which RFC 9700
-  §2.2.2 forbids for public clients.
+  the family. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`)
+  for confidential clients only: without it their refresh token stays
+  reusable until it expires, while the refresh token of a client that is
+  not confidential — public or untyped — always rotates (RFC 9700 §2.2.2,
+  §4.14.2); a `refresh_token` grant without a `RefreshTokens` generator then
+  fails their refresh with `server_error`, which `NewServer` cannot detect.
 - **Token storage** — access tokens, refresh tokens, and authorization
   codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
   store never sees cleartext, so a database compromise does not yield

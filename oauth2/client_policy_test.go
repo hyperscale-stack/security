@@ -739,3 +739,51 @@ func TestPublicClientsNeedPKCEUnderEveryProfile(t *testing.T) {
 		}
 	}
 }
+
+// TestPublicClientRefreshTokensRotateUnderProfile20 drives the whole flow:
+// under Profile20, without RotateRefreshTokens, a public client's refresh
+// returns a replacement refresh token, and replaying the presented one is
+// detected as reuse and revokes the family (RFC 9700 §4.14.2).
+func TestPublicClientRefreshTokensRotateUnderProfile20(t *testing.T) {
+	t.Parallel()
+
+	spa := &oauth2.DefaultClient{
+		IDValue: "spa", TypeValue: oauth2.ClientPublic, RedirectURIValues: []string{redirectURI},
+		GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken},
+		ScopeValues:     []string{"read"},
+	}
+	env := newPolicyEnv(t, oauth2.Profile20, spa)
+
+	q := authorizeQuery()
+	q.Set("client_id", "spa")
+
+	rec := runAuthorize(env.srv, q, approve)
+	require.Equal(t, http.StatusFound, rec.Code)
+
+	form := codeExchangeForm(mustLocation(t, rec).Query().Get("code"))
+	form.Set("client_id", "spa")
+
+	rec = env.token(form, "", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	first, _ := jsonBody(t, rec)["refresh_token"].(string)
+	require.NotEmpty(t, first)
+
+	refresh := func(rt string) *httptest.ResponseRecorder {
+		return env.token(url.Values{"grant_type": {oauth2.GrantTypeRefreshToken}, "refresh_token": {rt}, "client_id": {"spa"}}, "", "")
+	}
+
+	rec = refresh(first)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	second, _ := jsonBody(t, rec)["refresh_token"].(string)
+	require.NotEmpty(t, second, "a replacement refresh token")
+	assert.NotEqual(t, first, second)
+
+	rec = refresh(first)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, oauth2.CodeInvalidGrant, jsonBody(t, rec)["error"], "the replay is reuse")
+
+	rec = refresh(second)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "the reuse revoked the family")
+}

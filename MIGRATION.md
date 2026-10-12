@@ -1015,6 +1015,7 @@ asked for. It now enforces a fail-closed client policy:
 | a grant type the client does not declare, custom grants included | refused inside the shipped grants only — after a code was consumed — and never for a custom grant | `400 unauthorized_client` before the grant runs: a code or refresh token presented stays untouched |
 | `/authorize` with `response_type=code` (`token`) by a client not declaring `authorization_code` (`implicit`) | code (implicit token) issued; a code was refused only at `/token` | redirected `unauthorized_client` in the flow's response mode, before the extension and the `ConsentFunc` run (RFC 6749 §4.1.2.1, §4.2.2.1; RFC 7591 §2.1) |
 | `Profile20`: a public or untyped client without `code_challenge` | code issued and redeemed without PKCE | `/authorize`: redirected `invalid_request` (`code_challenge is required`, RFC 7636 §4.4.1); `/token`: a code issued without challenge is refused to it (`invalid_grant`, `PKCE required`) — RFC 9700 §2.1.1 |
+| `Profile20` without `RotateRefreshTokens`: refresh of a public or untyped client | the refresh token stayed reusable until it expired | rotated like under the default profiles: a new refresh token with every refresh, reuse of the old one revokes the family (RFC 9700 §4.14.2); without a `RefreshTokens` generator the refresh fails with `server_error` |
 | `Scopes()` empty (`DefaultClient.ScopeValues` unset) | any scope allowed | no scope allowed: a request carrying one is `invalid_scope`; one without scope gets the empty scope |
 | refresh token at a code exchange or a password grant | issued whenever the grant has a `RefreshTokens` generator | issued only to a client declaring `refresh_token` (RFC 9700 §4.14.2) |
 | a refusal caused by an empty declaration | — | `OnError` gets `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` as cause |
@@ -1062,6 +1063,9 @@ To migrate:
    registration shrank — stop refreshing beyond it: the user authorizes
    again, or the client narrows its refresh requests to declared scopes.
 7. Under `Profile20`, public and untyped clients send PKCE (S256) in their
-   authorization requests, as the default profiles always required.
+   authorization requests, as the default profiles always required, and
+   keep the refresh token each refresh returns (RFC 6749 §6): theirs now
+   rotate. Give the `refresh_token` grant a `RefreshTokens` generator when
+   such clients refresh.
 8. No storage change: the policy applies per request, and instances may be
    upgraded one at a time.

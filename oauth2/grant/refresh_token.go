@@ -28,10 +28,11 @@ import (
 //     require the access token's scope within the client's current scope
 //     registration (invalid_scope otherwise, nothing consumed).
 //  4. Decide rotation before minting anything: mandatory under
-//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
-//     [Config.RotateRefreshTokens] under [oauth2.Profile20]. A rotation
-//     that cannot be honored fails with server_error
-//     ([ErrRotationRequiresGenerator]).
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], and under every
+//     profile for a client that is not confidential (RFC 9700 §4.14.2);
+//     opt-in via [Config.RotateRefreshTokens] for confidential clients
+//     under [oauth2.Profile20]. A rotation that cannot be honored fails
+//     with server_error ([ErrRotationRequiresGenerator]).
 //  5. Mint a fresh access token.
 //  6. When rotating, mint a fresh refresh token in the same family with
 //     the presented token's scope (RFC 6749 §6) — every minted token keeps
@@ -49,10 +50,13 @@ type RefreshToken struct {
 
 // ErrRotationRequiresGenerator reports a refresh_token grant that has to
 // rotate refresh tokens but has no [Config.RefreshTokens] generator to mint
-// the replacement. [oauth2.NewServer] refuses such a grant; should
-// [RefreshToken.Handle] run anyway — called directly, or behind a decorator
-// hiding [RefreshToken.ValidateProfile] — it fails with server_error
-// carrying it as cause, before any token is minted or persisted.
+// the replacement. [oauth2.NewServer] refuses such a grant when the profile
+// or [Config.RotateRefreshTokens] makes every refresh rotate; should
+// [RefreshToken.Handle] have to rotate anyway — the refresh of a client that
+// is not confidential, which rotates under every profile, or a grant called
+// directly or behind a decorator hiding [RefreshToken.ValidateProfile] — it
+// fails with server_error carrying it as cause, before any token is minted
+// or persisted.
 var ErrRotationRequiresGenerator = errors.New("oauth2/grant: refresh-token rotation requires a RefreshTokens generator")
 
 // Compile-time interface check: renaming ValidateProfile would otherwise
@@ -142,13 +146,22 @@ func checkRegisteredScope(client oauth2.Client, scope string) error {
 	return refusal
 }
 
-// rotates reports whether the exchange rotates the refresh token. The
-// profile can only tighten [Config.RotateRefreshTokens], never relax it —
-// the rule authorization_code applies to PKCE. Rotating needs a
-// [Config.RefreshTokens] generator; without one it returns
-// [ErrRotationRequiresGenerator].
-func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
-	if !g.cfg.RotateRefreshTokens && !p.RequiresRefreshRotation() {
+// rotatesEveryClient reports whether every exchange rotates under p: the
+// profile mandates it, or [Config.RotateRefreshTokens] opts in. The profile
+// can only tighten the option, never relax it — the rule authorization_code
+// applies to PKCE.
+func (g *RefreshToken) rotatesEveryClient(p oauth2.Profile) bool {
+	return g.cfg.RotateRefreshTokens || p.RequiresRefreshRotation()
+}
+
+// rotates reports whether the exchange of client rotates the refresh token
+// under p: when every exchange does, and under every profile for a client
+// that is not confidential — RFC 9700 §4.14.2: the refresh tokens of public
+// clients MUST be sender-constrained or rotated, and this library rotates
+// them. Rotating needs a [Config.RefreshTokens] generator; without one it
+// returns [ErrRotationRequiresGenerator].
+func (g *RefreshToken) rotates(p oauth2.Profile, client oauth2.Client) (bool, error) {
+	if !g.rotatesEveryClient(p) && client.Type() == oauth2.ClientConfidential {
 		return false, nil
 	}
 
@@ -160,19 +173,24 @@ func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
 }
 
 // ValidateProfile implements [oauth2.ProfileValidator]: it returns
-// [ErrRotationRequiresGenerator] when the grant would have to rotate under
-// p without a [Config.RefreshTokens] generator, so [oauth2.NewServer] fails
-// at boot rather than on the first refresh.
+// [ErrRotationRequiresGenerator] when the grant would have to rotate every
+// refresh token under p without a [Config.RefreshTokens] generator, so
+// [oauth2.NewServer] fails at boot rather than on the first refresh. It
+// cannot know whether the server serves clients that are not confidential,
+// whose refresh tokens rotate under every profile: without a generator,
+// their refresh fails with server_error before anything is minted.
 func (g *RefreshToken) ValidateProfile(p oauth2.Profile) error {
-	_, err := g.rotates(p)
+	if g.rotatesEveryClient(p) && g.cfg.RefreshTokens == nil {
+		return ErrRotationRequiresGenerator
+	}
 
-	return err
+	return nil
 }
 
 func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth2.RefreshToken, scope string) (*Response, error) {
 	// Decided before anything is minted: a rotation that cannot be honored
 	// must not mint an access token.
-	rotate, err := g.rotates(req.Profile)
+	rotate, err := g.rotates(req.Profile, req.Client)
 	if err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}

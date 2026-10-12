@@ -61,7 +61,8 @@ func (p Profile) RequiresPKCE() bool { return p != Profile20 }
 // sender-constrained refresh tokens) for public clients. True for BCP and
 // 21-draft: the refresh_token grant then rotates whatever
 // grant.Config.RotateRefreshTokens says, and [NewServer] refuses a refresh
-// grant that cannot rotate.
+// grant that cannot rotate. Under every profile, the refresh tokens of a
+// client that is not confidential rotate anyway.
 func (p Profile) RequiresRefreshRotation() bool { return p != Profile20 }
 
 // AllowsPKCEPlain reports whether the profile tolerates the "plain" PKCE

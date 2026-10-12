@@ -1008,3 +1008,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   documentation said public clients MUST use it. `/authorize` now answers
   `invalid_request` without `code_challenge` (RFC 7636 §4.4.1), and `/token`
   refuses such a client a code issued without challenge.
+- The refresh tokens of OAuth2 public clients rotate under every profile
+  (RFC 9700 §4.14.2: "Authorization servers MUST utilize one of these
+  methods to detect refresh token replay by malicious actors for public
+  clients" — sender-constrained tokens or rotation). Under `Profile20`
+  without `RotateRefreshTokens`, a public — or untyped — client's refresh
+  token stayed reusable until it expired, so a stolen one could be replayed
+  undetected. Confidential clients keep the opt-in.
