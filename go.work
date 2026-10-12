@@ -17,6 +17,7 @@ use (
 	./oidc/client
 	./oidc/client/store/redis
 	./oidc/client/store/sql
+	./oidc/provider
 	./password
 	./session
 )
