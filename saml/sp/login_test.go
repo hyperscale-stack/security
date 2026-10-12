@@ -248,6 +248,8 @@ func TestBeginLogin_PersistsBoundTransaction(t *testing.T) {
 
 	assert.Equal(t, bindingKey(res.cookie.Value), rec.BindingHash)
 	assert.True(t, rec.ExpiresAt.Equal(t0.Add(samlsp.DefaultTransactionTTL)))
+	assert.Equal(t, integrityHex(testTransactionKeys[0], rec), rec.Integrity,
+		"the documented MAC under the first transaction key, computed independently")
 	assert.NotContains(t, rec.Payload, res.relayState, "the raw handle is never stored")
 	assert.NotContains(t, rec.Payload, res.cookie.Value, "the cookie value is never stored")
 
@@ -358,7 +360,7 @@ func TestBeginLogin_Failures(t *testing.T) {
 		{name: "relative context", opts: samlsp.LoginOptions{RequestedAuthnContext: []string{"mfa"}}, target: samlsp.ErrInvalidLoginOptions},
 		{name: "context too long", opts: samlsp.LoginOptions{RequestedAuthnContext: []string{longContext}}, target: samlsp.ErrInvalidLoginOptions},
 		{name: "store failure", setup: func(e *env) {
-			sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: failingStore{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+			sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: failingStore{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 			require.NoError(t, err)
 			e.sp = sp
 		}, target: boom},

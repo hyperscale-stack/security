@@ -28,12 +28,19 @@
 // prefixed cookies there. The server listens on 127.0.0.1:8084 (SAMLSP_ADDR
 // changes it) with read, write and idle timeouts, and refuses logins
 // started from another site (Sec-Fetch-Site).
+//
+// SAMLSP_TRANSACTION_KEYS holds the keys protecting the pending logins in
+// the transaction store (samlsp.Config.TransactionKeys): hex-encoded keys
+// of at least 32 bytes, separated by commas, the same on every instance and
+// kept in a secret store (openssl rand -hex 32). Unset, a random key is
+// drawn for this process only.
 package main
 
 import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -57,7 +64,10 @@ type appConfig struct {
 	baseURL      string // e.g. http://localhost:8084
 	connectionID string
 	idpMetadata  []byte // trusted IdP metadata (administrator-provided)
-	now          func() time.Time
+	// transactionKeys protect the pending logins in the transaction store
+	// (samlsp.Config.TransactionKeys): secret, the same on every instance.
+	transactionKeys [][]byte
+	now             func() time.Time
 }
 
 // mailAttribute is the SAML V2.0 X.500/LDAP attribute profile name of
@@ -117,10 +127,11 @@ func newServer(cfg appConfig) (http.Handler, error) {
 	store := memory.New() // swap for sqlstore / redisstore in production
 
 	sp, err := samlsp.New(samlsp.Config{
-		Connections:  connections,
-		Transactions: store,
-		ReplayCache:  store,
-		Now:          cfg.now,
+		Connections:     connections,
+		Transactions:    store,
+		ReplayCache:     store,
+		TransactionKeys: cfg.transactionKeys,
+		Now:             cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new service provider: %w", err)
@@ -363,7 +374,12 @@ func main() {
 		baseURL = "http://localhost:8084"
 	}
 
-	handler, err := newServer(appConfig{baseURL: baseURL, connectionID: "corp", idpMetadata: metadata})
+	keys, err := transactionKeys(os.Getenv("SAMLSP_TRANSACTION_KEYS"))
+	if err != nil {
+		log.Fatalf("saml-sp: %v", err)
+	}
+
+	handler, err := newServer(appConfig{baseURL: baseURL, connectionID: "corp", idpMetadata: metadata, transactionKeys: keys})
 	if err != nil {
 		log.Fatalf("saml-sp: %v", err)
 	}
@@ -375,6 +391,39 @@ func main() {
 
 	log.Print("saml-sp: listening")
 	log.Fatal(newHTTPServer(addr, handler).ListenAndServe())
+}
+
+// errKeyNotHex reports a malformed SAMLSP_TRANSACTION_KEYS entry.
+var errKeyNotHex = errors.New("not hex-encoded")
+
+// transactionKeys decodes SAMLSP_TRANSACTION_KEYS: hex-encoded keys
+// separated by commas. Unset, it draws one random key — for a single
+// development instance only: the logins in progress do not survive a
+// restart.
+func transactionKeys(raw string) ([][]byte, error) {
+	if strings.TrimSpace(raw) == "" {
+		key := make([]byte, samlsp.MinTransactionKeySize)
+		_, _ = rand.Read(key) // crypto/rand.Read never fails
+
+		log.Print("saml-sp: SAMLSP_TRANSACTION_KEYS is not set: using a random per-process transaction key " +
+			"(logins in progress fail on a restart and cannot span instances)")
+
+		return [][]byte{key}, nil
+	}
+
+	var keys [][]byte
+
+	for part := range strings.SplitSeq(raw, ",") {
+		key, err := hex.DecodeString(strings.TrimSpace(part))
+		if err != nil {
+			// Not wrapped: the decoder's error would echo a character of the key.
+			return nil, fmt.Errorf("SAMLSP_TRANSACTION_KEYS: key %d: %w", len(keys)+1, errKeyNotHex)
+		}
+
+		keys = append(keys, key)
+	}
+
+	return keys, nil
 }
 
 // defaultAddr is the listening address: the loopback interface. Set

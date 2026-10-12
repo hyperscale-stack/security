@@ -376,7 +376,7 @@ func (s *kcSP) rebuild(idpMetadata []byte) {
 
 			return &c, nil
 		}),
-		Transactions: s.store, ReplayCache: s.store,
+		Transactions: s.store, ReplayCache: s.store, TransactionKeys: testTransactionKeys,
 		SigningKey: s.key.signer, SigningCertificate: s.key.cert,
 		ClockSkew: liveClockSkew,
 	})
@@ -726,7 +726,7 @@ func TestKeycloakLive(t *testing.T) {
 
 				return &c, nil
 			}),
-			Transactions: memory.New(), ReplayCache: memory.New(),
+			Transactions: memory.New(), ReplayCache: memory.New(), TransactionKeys: testTransactionKeys,
 		})
 		require.NoError(t, err)
 

@@ -83,6 +83,7 @@ var reasons = []struct {
 	{ErrTransactionConsumed, "transaction_consumed"},
 	{ErrTransactionExpired, "transaction_expired"},
 	{ErrTransactionMismatch, "transaction_mismatch"},
+	{ErrTransactionIntegrity, "transaction_integrity"},
 	{ErrMalformedResponse, "malformed_response"},
 	{ErrEncryptedAssertionUnsupported, "encrypted_assertion"},
 	{ErrUnsupportedAlgorithm, "unsupported_algorithm"},

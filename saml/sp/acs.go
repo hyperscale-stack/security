@@ -60,9 +60,11 @@ type LoginResult struct {
 //     SubjectConfirmation without NotBefore, one AuthnStatement, understood
 //     Conditions only;
 //  6. the transaction (connection, RelayState) is looked up: it must exist,
-//     be unconsumed, belong to this browser (constant-time comparison of the
-//     cookie digest), be unexpired, and its connection, IdP entity ID, SP
-//     entity ID and ACS must still match;
+//     be unconsumed, carry a valid integrity MAC under one of
+//     Config.TransactionKeys (verified before any stored field is used),
+//     belong to this browser (constant-time comparison of the cookie
+//     digest), be unexpired, and its connection, IdP entity ID, SP entity
+//     ID and ACS must still match;
 //  7. a non-Success status yields a [*StatusError] carrying the AppState;
 //     a Success Response must answer the transaction's request in its own
 //     InResponseTo (Core §3.2.2);
@@ -114,7 +116,7 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 		return nil, err
 	}
 
-	rec, tx, err := sp.loadTransaction(ctx, conn, in, now)
+	st, tx, err := sp.loadTransaction(ctx, conn, in, now)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +129,7 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 		return nil, err
 	}
 
-	return sp.finish(ctx, raw, conn, rec, tx, now)
+	return sp.finish(ctx, raw, conn, st, tx, now)
 }
 
 // acsInput is the decoded HTTP-POST binding request.
@@ -312,12 +314,25 @@ func defaultPort(scheme string) string {
 	return "443"
 }
 
+// storedTransaction is a transaction record whose integrity verified.
+type storedTransaction struct {
+	// id is the store key derived from the connection and the handle.
+	id string
+	// bindingHash is the digest of the cookie the browser presented.
+	bindingHash string
+	// expiresAt is the expiry the MAC covers (whole seconds).
+	expiresAt time.Time
+}
+
 // loadTransaction looks up the transaction of (connection, handle) without
-// consuming it, and checks the browser binding, the expiry and that the
-// connection did not change since BeginLogin.
+// consuming it, verifies its integrity MAC before any of its fields is used
+// (the MAC covers the ID derived here, not the one the store returns), and
+// checks the browser binding, the expiry and that the connection did not
+// change since BeginLogin.
 func (sp *ServiceProvider) loadTransaction(ctx context.Context, conn *Connection, in *acsInput, now time.Time,
-) (*TransactionRecord, *transaction, error) {
-	rec, err := sp.cfg.Transactions.LookupTransaction(ctx, transactionID(conn.ID, in.handle))
+) (*storedTransaction, *transaction, error) {
+	id := transactionID(conn.ID, in.handle)
+	rec, err := sp.cfg.Transactions.LookupTransaction(ctx, id)
 
 	switch {
 	case errors.Is(err, ErrRejected):
@@ -328,11 +343,23 @@ func (sp *ServiceProvider) loadTransaction(ctx context.Context, conn *Connection
 		return nil, nil, reject(ErrTransactionNotFound, "", nil)
 	}
 
-	if subtle.ConstantTimeCompare([]byte(rec.BindingHash), []byte(bindingHash(in.binding))) != 1 {
+	if !verifyIntegrity(sp.cfg.TransactionKeys, id, rec) {
+		return nil, nil, reject(ErrTransactionIntegrity, "", nil)
+	}
+
+	st := &storedTransaction{
+		id:          id,
+		bindingHash: bindingHash(in.binding),
+		// The MAC covers whole seconds: a store returning a fraction more
+		// cannot extend the transaction (plan review F4).
+		expiresAt: time.Unix(rec.ExpiresAt.Unix(), 0).UTC(),
+	}
+
+	if subtle.ConstantTimeCompare([]byte(rec.BindingHash), []byte(st.bindingHash)) != 1 {
 		return nil, nil, reject(ErrBrowserBindingMismatch, "", nil)
 	}
 
-	if !now.Before(rec.ExpiresAt) {
+	if !now.Before(st.expiresAt) {
 		return nil, nil, reject(ErrTransactionExpired, "", nil)
 	}
 
@@ -346,7 +373,7 @@ func (sp *ServiceProvider) loadTransaction(ctx context.Context, conn *Connection
 		return nil, nil, reject(ErrTransactionMismatch, "", nil)
 	}
 
-	return rec, tx, nil
+	return st, tx, nil
 }
 
 // checkResponseInResponseTo requires a Success response to name the request
@@ -382,7 +409,7 @@ func statusError(raw *rawResponse, tx *transaction, conn *Connection) error {
 
 // finish verifies the signatures, applies the processing rules, consumes
 // the transaction and records the assertion.
-func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *Connection, rec *TransactionRecord,
+func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *Connection, st *storedTransaction,
 	tx *transaction, now time.Time,
 ) (*LoginResult, error) {
 	resp, err := sp.verifyResponse(raw, conn, now)
@@ -390,14 +417,16 @@ func (sp *ServiceProvider) finish(ctx context.Context, raw *rawResponse, conn *C
 		return nil, err
 	}
 
-	v := &verified{resp: resp, raw: raw, tx: tx, conn: conn, txExpiry: rec.ExpiresAt, now: now, skew: sp.cfg.ClockSkew}
+	v := &verified{resp: resp, raw: raw, tx: tx, conn: conn, txExpiry: st.expiresAt, now: now, skew: sp.cfg.ClockSkew}
 
 	identity, replayExpiry, err := v.check()
 	if err != nil {
 		return nil, err
 	}
 
-	if err := sp.cfg.Transactions.ConsumeTransaction(ctx, rec.ID, rec.BindingHash); err != nil {
+	// The store compares the presented binding with the stored one again,
+	// under its own atomicity (audit SAML-I8).
+	if err := sp.cfg.Transactions.ConsumeTransaction(ctx, st.id, st.bindingHash); err != nil {
 		if errors.Is(err, ErrRejected) {
 			return nil, reject(err, "", nil)
 		}

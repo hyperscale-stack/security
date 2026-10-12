@@ -35,6 +35,12 @@ const (
 	DefaultMetadataCacheDuration = 24 * time.Hour
 	// DefaultCookieName is the default browser-binding cookie name.
 	DefaultCookieName = "__Host-samlsp"
+	// MinTransactionKeySize is the minimum size of a transaction key, in
+	// bytes: 256 bits, the output size of the HMAC-SHA256 it keys.
+	MinTransactionKeySize = 32
+	// MaxTransactionKeys bounds Config.TransactionKeys: the active key and
+	// the keys of a rotation in progress.
+	MaxTransactionKeys = 4
 )
 
 // Config configures a [ServiceProvider]. The SP entity IDs and ACS URLs are
@@ -67,6 +73,28 @@ type Config struct {
 	// ReplayCache records consumed assertions (Profiles §4.1.4.5). Required;
 	// shared by every instance.
 	ReplayCache ReplayCache
+
+	// TransactionKeys are the server-held keys of the transactions'
+	// integrity MAC. REQUIRED: 1 to MaxTransactionKeys keys of at least
+	// MinTransactionKeySize bytes from a cryptographic source, secret like a
+	// session key, the same on every instance, and distinct from the keys of
+	// other modules (oidcclient's transaction keys, session keys).
+	// TransactionKeys[0] protects the transactions BeginLogin stores;
+	// CompleteLogin accepts any of them. The MAC covers the whole stored
+	// record — its key, browser binding, payload (request ID, options,
+	// AppState) and expiry — and is verified, in constant time, before any
+	// stored field is used: whoever can write to the transaction store
+	// cannot rebind a transaction to another browser or request, nor relax
+	// its ForceAuthn or RequestedAuthnContext (ErrTransactionIntegrity). The
+	// keys are the only integrity protection of the records: a leaked key
+	// together with write access to the store makes the store trusted again
+	// — replace the key at once (the logins in progress then fail once).
+	//
+	// Rotate without failing a login: add the new key last on every
+	// instance, then move it first, then remove the old key once
+	// TransactionTTL has elapsed. A key removed earlier fails the logins it
+	// protected with ErrTransactionIntegrity.
+	TransactionKeys [][]byte
 
 	// TransactionTTL is the lifetime of a login transaction (0 means
 	// DefaultTransactionTTL); at most MaxTransactionTTL.
@@ -137,6 +165,8 @@ func (c Config) validate() error {
 		return fmt.Errorf("%w: Transactions is required", ErrInvalidConfig)
 	case c.ReplayCache == nil:
 		return fmt.Errorf("%w: ReplayCache is required", ErrInvalidConfig)
+	case len(c.TransactionKeys) == 0 || len(c.TransactionKeys) > MaxTransactionKeys:
+		return fmt.Errorf("%w: TransactionKeys must hold 1 to %d keys", ErrInvalidConfig, MaxTransactionKeys)
 	case c.TransactionTTL < time.Second || c.TransactionTTL > MaxTransactionTTL:
 		return fmt.Errorf("%w: TransactionTTL must be between 1s and %s", ErrInvalidConfig, MaxTransactionTTL)
 	case c.ClockSkew < 0 || c.ClockSkew > MaxClockSkew:
@@ -146,6 +176,13 @@ func (c Config) validate() error {
 			ErrInvalidConfig, MinMaxResponseSize, MaxMaxResponseSize)
 	case c.MetadataCacheDuration < time.Minute || c.MetadataCacheDuration > 30*24*time.Hour:
 		return fmt.Errorf("%w: MetadataCacheDuration must be between 1m and 720h", ErrInvalidConfig)
+	}
+
+	for _, key := range c.TransactionKeys {
+		if len(key) < MinTransactionKeySize {
+			// The error never carries key material.
+			return fmt.Errorf("%w: every TransactionKeys entry must be at least %d bytes", ErrInvalidConfig, MinTransactionKeySize)
+		}
 	}
 
 	if err := validateCookieName(c.CookieName); err != nil {

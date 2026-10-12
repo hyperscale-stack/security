@@ -561,7 +561,7 @@ func TestSharedStorePayloadRoundTrip(t *testing.T) {
 
 					return &c, nil
 				}),
-				Transactions: store, ReplayCache: store,
+				Transactions: store, ReplayCache: store, TransactionKeys: testTransactionKeys,
 			})
 			require.NoError(t, err)
 
@@ -578,6 +578,7 @@ func TestSharedStorePayloadRoundTrip(t *testing.T) {
 			require.Equal(t, saved.Payload, got.Payload, "the payload round-trips byte for byte")
 			require.True(t, saved.ExpiresAt.Equal(got.ExpiresAt))
 			require.Equal(t, saved.BindingHash, got.BindingHash)
+			require.Equal(t, saved.Integrity, got.Integrity)
 		})
 	}
 }

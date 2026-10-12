@@ -63,7 +63,7 @@ const (
 // (same binding and payload) is recognized.
 //
 //	KEYS[1] tx; ARGV[1] binding; ARGV[2] payload; ARGV[3] expiry (Unix s);
-//	ARGV[4] expiry (Unix ms)
+//	ARGV[4] expiry (Unix ms); ARGV[5] integrity
 var saveScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 1 then
   if redis.call('HGET', KEYS[1], 'b') == ARGV[1] and redis.call('HGET', KEYS[1], 'p') == ARGV[2] then
@@ -71,7 +71,7 @@ if redis.call('EXISTS', KEYS[1]) == 1 then
   end
   return 'exists'
 end
-redis.call('HSET', KEYS[1], 'b', ARGV[1], 'p', ARGV[2], 'e', ARGV[3])
+redis.call('HSET', KEYS[1], 'b', ARGV[1], 'p', ARGV[2], 'e', ARGV[3], 'i', ARGV[5])
 redis.call('PEXPIREAT', KEYS[1], ARGV[4])
 return 'ok'
 `)
@@ -121,7 +121,7 @@ func (s *Store) SaveTransaction(ctx context.Context, rec *samlsp.TransactionReco
 	}
 
 	reply, err := saveScript.Run(ctx, s.rdb, []string{s.txKey(rec.ID)},
-		rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix(), rec.ExpiresAt.UnixMilli()).Text()
+		rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix(), rec.ExpiresAt.UnixMilli(), rec.Integrity).Text()
 	if err != nil {
 		return fmt.Errorf("redisstore: save transaction: %w", err)
 	}
@@ -142,7 +142,7 @@ func (s *Store) LookupTransaction(ctx context.Context, id string) (*samlsp.Trans
 		return nil, fmt.Errorf("redisstore: lookup transaction: %w", err)
 	}
 
-	values, err := s.rdb.HMGet(ctx, s.txKey(id), "b", "p", "e", "c").Result()
+	values, err := s.rdb.HMGet(ctx, s.txKey(id), "b", "p", "e", "c", "i").Result()
 	if err != nil {
 		return nil, fmt.Errorf("redisstore: lookup transaction: %w", err)
 	}
@@ -150,6 +150,7 @@ func (s *Store) LookupTransaction(ctx context.Context, id string) (*samlsp.Trans
 	binding, okB := values[0].(string)
 	payload, okP := values[1].(string)
 	expiry, okE := values[2].(string)
+	integrity, _ := values[4].(string) // absent: refused by the SP (ErrTransactionIntegrity)
 
 	switch {
 	case !okB || !okP || !okE:
@@ -163,7 +164,9 @@ func (s *Store) LookupTransaction(ctx context.Context, id string) (*samlsp.Trans
 		return nil, fmt.Errorf("redisstore: lookup transaction: corrupt expiry: %w", err)
 	}
 
-	return &samlsp.TransactionRecord{ID: id, BindingHash: binding, Payload: payload, ExpiresAt: time.Unix(seconds, 0)}, nil
+	return &samlsp.TransactionRecord{
+		ID: id, BindingHash: binding, Payload: payload, ExpiresAt: time.Unix(seconds, 0), Integrity: integrity,
+	}, nil
 }
 
 // ConsumeTransaction implements samlsp.TransactionStore.

@@ -900,6 +900,7 @@ func TestMetadataSource_DrivesALogin(t *testing.T) {
 	base := *e.conn
 
 	sp, err := samlsp.New(samlsp.Config{
+		TransactionKeys: testTransactionKeys,
 		Connections: samlsp.ConnectionResolverFunc(func(ctx context.Context, id string) (*samlsp.Connection, error) {
 			idp, err := src.IdentityProvider(ctx)
 			if err != nil {

@@ -13,12 +13,15 @@ import (
 //
 //   - samlsp_transactions: one row per login transaction, keyed by the
 //     digest of (connection, RelayState handle); binding_hash is the digest
-//     of the browser-binding cookie; payload is opaque SP state; consumed is
-//     0 or 1; expires_at is in Unix seconds.
+//     of the browser-binding cookie; payload is opaque SP state (ASCII);
+//     consumed is 0 or 1; expires_at is in Unix seconds; integrity is the
+//     record's MAC under a server-held key (samlsp.Config.TransactionKeys).
 //   - samlsp_used_assertions: one row per consumed assertion, keyed by the
-//     digest of (issuer, assertion ID), kept at least until expires_at.
+//     digest of (connection, issuer, assertion ID), kept at least until
+//     expires_at.
 //
-// No secret is stored: keys and binding values are SHA-256 digests. The DDL
+// No secret is stored: keys and binding values are SHA-256 digests, and
+// the MAC's key never reaches the database. Every column holds ASCII. The DDL
 // is the same for every Dialect (portable types, no BOOLEAN, no index);
 // the argument is accepted for API stability. The statements are
 // idempotent (CREATE TABLE IF NOT EXISTS).
@@ -29,7 +32,8 @@ func Schema(_ Dialect) []string {
 			binding_hash VARCHAR(64) NOT NULL,
 			payload      TEXT        NOT NULL,
 			consumed     SMALLINT    NOT NULL DEFAULT 0,
-			expires_at   BIGINT      NOT NULL
+			expires_at   BIGINT      NOT NULL,
+			integrity    VARCHAR(64) NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS samlsp_used_assertions (
 			assertion_key VARCHAR(64) PRIMARY KEY,

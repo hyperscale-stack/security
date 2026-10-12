@@ -22,6 +22,9 @@
 //		Connections:  resolver, // the application's connections
 //		Transactions: store,    // shared by every instance
 //		ReplayCache:  store,
+//		// Secret, the same on every instance: protects the stored
+//		// transactions against tampering (32 random bytes or more).
+//		TransactionKeys: [][]byte{transactionKey},
 //		// Optional: sign AuthnRequests (required by IdPs that want them).
 //		SigningKey:         key,
 //		SigningCertificate: cert,
@@ -48,11 +51,14 @@
 // the options and an opaque AppState) under a random RelayState handle and
 // binds it to the browser with a __Host- prefixed cookie: SameSite=None,
 // because the IdP's POST to the ACS is cross-site and would not carry a Lax
-// or Strict cookie. CompleteLogin accepts a Response only for an unexpired,
-// unconsumed transaction of the same browser and connection, whose signed
-// SubjectConfirmationData answers its request ID; it consumes the
-// transaction atomically (one winner across instances) and records the
-// assertion in the replay cache. Unsolicited (IdP-initiated) responses are
+// or Strict cookie. The stored record carries a MAC under a server-held key
+// ([Config].TransactionKeys), verified before any stored field is used: a
+// writer of the store can neither rebind a transaction nor relax its
+// checks ([ErrTransactionIntegrity]). CompleteLogin accepts a Response only
+// for an unexpired, unconsumed transaction of the same browser and
+// connection, whose signed SubjectConfirmationData answers its request ID;
+// it consumes the transaction atomically (one winner across instances) and
+// records the assertion in the replay cache. Unsolicited (IdP-initiated) responses are
 // refused, and RelayState is never a URL: the application's return target
 // stays server-side in [LoginOptions].AppState (no open redirect).
 //

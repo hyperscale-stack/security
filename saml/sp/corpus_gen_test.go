@@ -200,10 +200,11 @@ func (g *corpusGen) begin(name, connID string, opts samlsp.LoginOptions, cookie,
 	store := &recordingStore{Store: memory.New()}
 
 	sp, err := samlsp.New(samlsp.Config{
-		Connections:  newResolver(conn),
-		Transactions: store,
-		ReplayCache:  store,
-		Now:          func() time.Time { return t0 },
+		TransactionKeys: corpusTransactionKeys,
+		Connections:     newResolver(conn),
+		Transactions:    store,
+		ReplayCache:     store,
+		Now:             func() time.Time { return t0 },
 	})
 	require.NoError(g.t, err)
 

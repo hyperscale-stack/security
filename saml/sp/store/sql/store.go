@@ -49,8 +49,8 @@ func (s *Store) SaveTransaction(ctx context.Context, rec *samlsp.TransactionReco
 		return fmt.Errorf("sqlstore: save transaction: %w", err)
 	}
 
-	_, err := s.exec(ctx, `INSERT INTO samlsp_transactions (id, binding_hash, payload, consumed, expires_at)
-		VALUES (?, ?, ?, 0, ?)`, rec.ID, rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix())
+	_, err := s.exec(ctx, `INSERT INTO samlsp_transactions (id, binding_hash, payload, consumed, expires_at, integrity)
+		VALUES (?, ?, ?, 0, ?, ?)`, rec.ID, rec.BindingHash, rec.Payload, rec.ExpiresAt.Unix(), rec.Integrity)
 	if err == nil {
 		return nil
 	}
@@ -87,8 +87,8 @@ func (s *Store) LookupTransaction(ctx context.Context, id string) (*samlsp.Trans
 		expires  int64
 	)
 
-	err := s.queryRow(ctx, `SELECT binding_hash, payload, consumed, expires_at FROM samlsp_transactions WHERE id = ?`, id).
-		Scan(&rec.BindingHash, &rec.Payload, &consumed, &expires)
+	err := s.queryRow(ctx, `SELECT binding_hash, payload, consumed, expires_at, integrity FROM samlsp_transactions WHERE id = ?`, id).
+		Scan(&rec.BindingHash, &rec.Payload, &consumed, &expires, &rec.Integrity)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

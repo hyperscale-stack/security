@@ -295,9 +295,10 @@ func (s *serviceProvider) configure(t testing.TB, o spOptions) {
 	store := memory.New()
 
 	cfg := samlsp.Config{
-		Connections:  samlsp.ConnectionResolverFunc(s.resolve),
-		Transactions: store,
-		ReplayCache:  store,
+		Connections:     samlsp.ConnectionResolverFunc(s.resolve),
+		Transactions:    store,
+		ReplayCache:     store,
+		TransactionKeys: testTransactionKeys,
 	}
 
 	if o.key != nil {

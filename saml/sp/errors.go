@@ -94,8 +94,15 @@ var (
 	ErrBrowserBindingMismatch = newRejection("browser binding mismatch")
 
 	// ErrAssertionReplayed reports an assertion ID already consumed for its
-	// issuer (Profiles §4.1.4.5).
+	// issuer at the connection (Profiles §4.1.4.5).
 	ErrAssertionReplayed = newRejection("assertion replayed")
+
+	// ErrTransactionIntegrity reports a transaction record that does not
+	// match its integrity MAC under any of Config.TransactionKeys: altered
+	// in the store, or written under a key no longer configured (instances
+	// that do not share the keys, a key removed before TransactionTTL
+	// elapsed). Nothing is consumed.
+	ErrTransactionIntegrity = newRejection("transaction altered in the store")
 )
 
 // Rejections of [ServiceProvider.CompleteLogin]; every one matches

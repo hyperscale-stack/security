@@ -5,6 +5,7 @@
 package samlsp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 )
@@ -28,6 +29,14 @@ func New(cfg Config) (*ServiceProvider, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+
+	// The ServiceProvider never shares key bytes with its caller.
+	keys := make([][]byte, len(cfg.TransactionKeys))
+	for i, key := range cfg.TransactionKeys {
+		keys[i] = bytes.Clone(key)
+	}
+
+	cfg.TransactionKeys = keys
 
 	sp := &ServiceProvider{cfg: cfg}
 

@@ -17,7 +17,7 @@ func TestTransactionRecord_Validate(t *testing.T) {
 	t.Parallel()
 
 	key := strings.Repeat("ab", 32)
-	valid := samlsp.TransactionRecord{ID: key, BindingHash: key, Payload: "{}", ExpiresAt: t0}
+	valid := samlsp.TransactionRecord{ID: key, BindingHash: key, Payload: "{}", ExpiresAt: t0, Integrity: key}
 	require.NoError(t, valid.Validate())
 
 	cases := map[string]func(*samlsp.TransactionRecord){
@@ -29,6 +29,9 @@ func TestTransactionRecord_Validate(t *testing.T) {
 		"payload UTF8":      func(r *samlsp.TransactionRecord) { r.Payload = "\xc3" },
 		"payload not ASCII": func(r *samlsp.TransactionRecord) { r.Payload = "{\"app\":\"\u00e9\"}" },
 		"payload byte 0x80": func(r *samlsp.TransactionRecord) { r.Payload = "\x80" },
+		"no integrity":      func(r *samlsp.TransactionRecord) { r.Integrity = "" },
+		"integrity case":    func(r *samlsp.TransactionRecord) { r.Integrity = strings.ToUpper(r.Integrity) },
+		"integrity short":   func(r *samlsp.TransactionRecord) { r.Integrity = r.Integrity[:63] },
 		"zero expiry":       func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Time{} },
 		"epoch":             func(r *samlsp.TransactionRecord) { r.ExpiresAt = time.Unix(0, 0) },
 		"sub-second":        func(r *samlsp.TransactionRecord) { r.ExpiresAt = t0.Add(time.Nanosecond) },

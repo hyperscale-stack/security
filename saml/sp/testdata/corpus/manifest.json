@@ -60,7 +60,8 @@
         "ID": "2a274e399d98a42da46179e1de2cb87efd2b58832b731dd2b401f117e15d352b",
         "BindingHash": "eb39a4be397ac0f161f33f75d18d945eafd3dddcdd9767365f795f4b14206a79",
         "Payload": "{\"v\":1,\"req\":\"_cde984e39445313f8001f6ad6f2d5dd4f5a73e1642a2c469065474141e143da3\",\"conn\":\"acme\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/acme\",\"acs\":\"https://sp.example.com/saml/acme/acs\",\"iat\":1791799200,\"app\":\"/after\"}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "58d78bac2c1b7aea8114181cf4dc989ba194ff53ad9ee295cec4d55d1735fddb"
       }
     },
     "acme-2": {
@@ -72,7 +73,8 @@
         "ID": "d839496e9d27167123fa999f05389a1a74786e819a3ef28a82dc23c6240d1c0f",
         "BindingHash": "eb39a4be397ac0f161f33f75d18d945eafd3dddcdd9767365f795f4b14206a79",
         "Payload": "{\"v\":1,\"req\":\"_e6176a0d3aee72624eba2988381b08c23c5c518676aabd4ae0bf4b2bfc7b0f59\",\"conn\":\"acme\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/acme\",\"acs\":\"https://sp.example.com/saml/acme/acs\",\"iat\":1791799200,\"app\":\"/second\"}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "54be17fb1802185c382d82d67196b88f3560bf15b567c365919aefebd589a6c6"
       }
     },
     "acme-authncontext": {
@@ -84,7 +86,8 @@
         "ID": "c9afbd97150af48e8abe83bbf5c89ab7f3e74ee18f7d35c8ec7461b15d87c1c0",
         "BindingHash": "fc45de452c13f923123afda159ca894ad705d5282e4a9b8d46b4a18a13bcdefb",
         "Payload": "{\"v\":1,\"req\":\"_37b6597d263d0171faaa08c5a6adfe6f17c07bcc68e74b1fb0e5263340974f49\",\"conn\":\"acme\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/acme\",\"acs\":\"https://sp.example.com/saml/acme/acs\",\"iat\":1791799200,\"ac\":[\"urn:oasis:names:tc:SAML:2.0:ac:classes:X509\"]}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "949f71195164d3a29fa2a5a4d36bb56796fbaa31ccd84487f2d4138dc315daf3"
       }
     },
     "acme-forceauthn": {
@@ -96,7 +99,8 @@
         "ID": "89cb5e45c8d21ad6292db47bcaab3bdb5440c29ef3e13537e385d4f464ae934c",
         "BindingHash": "3d8905426bce44cad4e391b532719eaeaaf1b0ded8f3d4886b861ec87281d20e",
         "Payload": "{\"v\":1,\"req\":\"_2f8577a155659dc404f0ff4301c57bc3ff98c8672e328990140e0ade7ccb3913\",\"conn\":\"acme\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/acme\",\"acs\":\"https://sp.example.com/saml/acme/acs\",\"iat\":1791799200,\"fa\":true}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "c5203f644a5b2bec10e6be7f93ac230c340684fae6c00f8e33ec0cf42ec91f8e"
       }
     },
     "acme-persistent": {
@@ -108,7 +112,8 @@
         "ID": "bdf2582dfcbcfcfc90de949632b106a87c9a5d6a0c477069e6c593d0793c9733",
         "BindingHash": "970fa21c290b90ddd2b9c200f333a386583dadbb0346209b40b3554fa9ecfd6f",
         "Payload": "{\"v\":1,\"req\":\"_f5ba4fcf847b1d7453bbc45038bc7859b673b11201307a8266dbf003e24a7656\",\"conn\":\"acme\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/acme\",\"acs\":\"https://sp.example.com/saml/acme/acs\",\"iat\":1791799200,\"nidf\":\"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent\"}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "ac60456dba98a8593e73d9f71485c06bf6e4e94a626a442c20e6e3b0f775874c"
       }
     },
     "globex": {
@@ -120,7 +125,8 @@
         "ID": "a9c9d7d7ac72375db46f3144f894b11877797afc71b8ed866dd1d846bcf9bea3",
         "BindingHash": "5766525badb0b6ab6f99c59720651cd434f6550ed141f4393ba7c3ad23f8daee",
         "Payload": "{\"v\":1,\"req\":\"_28259cc406f0910a8c8a8e9a631f11916594865a7fdde6cc959684de74ae1a70\",\"conn\":\"globex\",\"idp\":\"https://idp.example.com/globex\",\"sp\":\"https://sp.example.com/saml/globex\",\"acs\":\"https://sp.example.com/saml/globex/acs\",\"iat\":1791799200}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "7cb7d668e40dab2bf726cfd372077518c78154dbe9a602b4d382a1a511b6d0cf"
       }
     },
     "initech": {
@@ -132,7 +138,8 @@
         "ID": "18c2c7aea8e7dcbeab4d4d8cd4b9bb8e6ce4d55ad06a5958950bbe0bf6cbfe08",
         "BindingHash": "dbd7edde4437e88cb87b2b8b720c7bc30becc8665daffed90f3b0d423bd813d6",
         "Payload": "{\"v\":1,\"req\":\"_5e672cf02297ff5fb8f641f91d2bd5543b3f3b35d45dcea2d73391896506bd25\",\"conn\":\"initech\",\"idp\":\"https://idp.example.com/acme\",\"sp\":\"https://sp.example.com/saml/initech\",\"acs\":\"https://sp.example.com/saml/initech/acs\",\"iat\":1791799200}",
-        "ExpiresAt": "2026-10-12T10:10:00Z"
+        "ExpiresAt": "2026-10-12T10:10:00Z",
+        "Integrity": "6d294616b14db17c045bcfcca6dc80483614045b4e58fac48a2dc8eccf4c301d"
       }
     }
   },
@@ -9140,6 +9147,46 @@
       "expect": {
         "outcome": "rejected",
         "sentinel": "ErrBrowserBindingMismatch"
+      }
+    },
+    {
+      "id": "replay/record-rebound-in-the-store",
+      "category": "replay",
+      "attack": "a writer of the transaction store binds the pending login to the attacker's cookie, which posts it",
+      "refs": [
+        "SAML Profiles §4.1.4.5",
+        "SAML errata E90",
+        "audit STORE-02 (transaction integrity MAC)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "cookie": "other",
+        "tamper": "rebind"
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrTransactionIntegrity"
+      }
+    },
+    {
+      "id": "replay/record-relaxed-in-the-store",
+      "category": "replay",
+      "attack": "a writer of the transaction store drops ForceAuthn from the pending login; the IdP reuses an hour-old session",
+      "refs": [
+        "SAML Core §3.4.1",
+        "audit STORE-02 (transaction integrity MAC)"
+      ],
+      "file": "time/stale-authentication-with-forceauthn.xml",
+      "sha256": "f52ffec3e94ec1697b4eebd76dda1c02609bda71a4b49b9a58b0e2d51bc10e44",
+      "transaction": "acme-forceauthn",
+      "knobs": {
+        "tamper": "relax"
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrTransactionIntegrity"
       }
     }
   ]

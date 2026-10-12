@@ -175,7 +175,7 @@ func newSpyEnv(t *testing.T, spy *spyCache, opts ...envOption) *env {
 	e := newEnv(t, opts...)
 	spy.ReplayCache = e.store
 
-	sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: e.store, ReplayCache: spy, Now: e.clock.Now})
+	sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: e.store, ReplayCache: spy, Now: e.clock.Now})
 	require.NoError(t, err)
 
 	e.sp = sp
@@ -239,7 +239,7 @@ func TestCompleteLogin_ConcurrentConsumptionAcrossInstances(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	other, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: e.store, ReplayCache: e.store, Now: e.clock.Now})
+	other, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: e.store, ReplayCache: e.store, Now: e.clock.Now})
 	require.NoError(t, err)
 
 	instances := []*samlsp.ServiceProvider{e.sp, other}
@@ -327,7 +327,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: lookupFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: lookupFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)
@@ -342,7 +342,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: consumeFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: consumeFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)
@@ -356,13 +356,17 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
+		// A payload the SP cannot decode, under a valid MAC: written with
+		// the key, so a store failure, not a rejection.
 		store := memory.New()
-		require.NoError(t, store.SaveTransaction(context.Background(), &samlsp.TransactionRecord{
+		rec := &samlsp.TransactionRecord{
 			ID: txKey(connID, lr.relayState), BindingHash: bindingKey(lr.cookie.Value),
 			Payload: `{"v":99}`, ExpiresAt: t0.Add(time.Hour),
-		}))
+		}
+		rec.Integrity = integrityHex(testTransactionKeys[0], rec)
+		require.NoError(t, store.SaveTransaction(context.Background(), rec))
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: store, ReplayCache: store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: store, ReplayCache: store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)

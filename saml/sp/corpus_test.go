@@ -42,6 +42,10 @@ import (
 // corpusDir holds the pinned corpus, relative to the package directory.
 const corpusDir = "testdata/corpus"
 
+// corpusTransactionKeys protect the corpus transactions: the manifest pins
+// their records, Integrity included, so the key is fixed (test only).
+var corpusTransactionKeys = [][]byte{[]byte("samlsp corpus transaction key, 32+ bytes, test only")}
+
 // corpusManifest is testdata/corpus/manifest.json.
 type corpusManifest struct {
 	Version       int                         `json:"version"`
@@ -118,6 +122,10 @@ type corpusKnobs struct {
 	// MetadataExpired makes the posted connection's IdP metadata expire at
 	// the corpus instant (Metadata §4.3.2, errata E94).
 	MetadataExpired bool `json:"metadataExpired,omitempty"`
+	// Tamper edits the stored transaction record as a writer of the store
+	// would: "relax" drops its ForceAuthn, "rebind" binds it to the "other"
+	// cookie (audit STORE-02).
+	Tamper string `json:"tamper,omitempty"`
 }
 
 // corpusReplayKey names a replay-cache entry.
@@ -216,6 +224,7 @@ var corpusSentinels = map[string]error{
 	"ErrMissingBrowserBinding":         samlsp.ErrMissingBrowserBinding,
 	"ErrTransactionExpired":            samlsp.ErrTransactionExpired,
 	"ErrTransactionMismatch":           samlsp.ErrTransactionMismatch,
+	"ErrTransactionIntegrity":          samlsp.ErrTransactionIntegrity,
 	"ErrMalformedResponse":             samlsp.ErrMalformedResponse,
 	"ErrEncryptedAssertionUnsupported": samlsp.ErrEncryptedAssertionUnsupported,
 	"ErrUnsupportedAlgorithm":          samlsp.ErrUnsupportedAlgorithm,
@@ -363,7 +372,8 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 
 	store := &countingStore{Store: memory.New()}
 	ctx := context.Background()
-	require.NoError(t, store.SaveTransaction(ctx, &tx.Record))
+	rec := tamperRecord(t, tx.Record, f.Knobs.Tamper)
+	require.NoError(t, store.SaveTransaction(ctx, &rec))
 
 	if pk := f.Knobs.PreMarked; pk != nil {
 		require.NoError(t, store.Store.MarkAssertionUsed(ctx, replayKeyHex(cmpOr(pk.Connection, postTo), pk.Issuer, pk.AssertionID),
@@ -379,6 +389,7 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 	}
 
 	sp, err := samlsp.New(samlsp.Config{
+		TransactionKeys: corpusTransactionKeys,
 		Connections:     conns,
 		Transactions:    store,
 		ReplayCache:     store,
@@ -400,6 +411,24 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 		result: res, err: cerr, consumes: store.consumes, marks: store.marks,
 		consumed: errors.Is(lerr, samlsp.ErrTransactionConsumed),
 	}
+}
+
+// tamperRecord returns the record edited as the Tamper knob says.
+func tamperRecord(t testing.TB, rec samlsp.TransactionRecord, how string) samlsp.TransactionRecord {
+	t.Helper()
+
+	switch how {
+	case "":
+	case "relax":
+		require.Contains(t, rec.Payload, `,"fa":true`, "a ForceAuthn transaction")
+		rec.Payload = strings.Replace(rec.Payload, `,"fa":true`, "", 1)
+	case "rebind":
+		rec.BindingHash = bindingKey(otherHandle)
+	default:
+		t.Fatalf("unknown Tamper knob %q", how)
+	}
+
+	return rec
 }
 
 // corpusResolver resolves the manifest's connections, with the knobs

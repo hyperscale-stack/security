@@ -226,10 +226,11 @@ func newHarness(t *testing.T) *harness {
 	h.base = "http://" + srv.Listener.Addr().String()
 
 	handler, err := newServer(appConfig{
-		baseURL:      h.base,
-		connectionID: "corp",
-		idpMetadata:  h.idp.metadata(),
-		now:          func() time.Time { return time.Now().Add(time.Duration(h.offset.Load())) },
+		baseURL:         h.base,
+		connectionID:    "corp",
+		idpMetadata:     h.idp.metadata(),
+		transactionKeys: testTransactionKeys,
+		now:             func() time.Time { return time.Now().Add(time.Duration(h.offset.Load())) },
 	})
 	require.NoError(t, err)
 
@@ -563,4 +564,40 @@ func TestNewServerRejectsBadMetadata(t *testing.T) {
 
 	_, err = newServer(appConfig{baseURL: "ftp://example.com", connectionID: "corp", idpMetadata: newTestIdP(t).metadata()})
 	require.Error(t, err)
+}
+
+// testTransactionKeys protect the example's transactions in the tests.
+var testTransactionKeys = [][]byte{[]byte("saml-sp example test key, 32+ bytes")}
+
+func TestTransactionKeysFromEnvironment(t *testing.T) {
+	keys, err := transactionKeys("")
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "a random development key when none is configured")
+	assert.Len(t, keys[0], samlsp.MinTransactionKeySize)
+
+	other, err := transactionKeys("  ")
+	require.NoError(t, err)
+	assert.NotEqual(t, keys, other, "drawn at random")
+
+	k1, k2 := strings.Repeat("ab", 32), strings.Repeat("cd", 48)
+
+	keys, err = transactionKeys(k1 + ", " + k2)
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, keys)
+
+	// A malformed key is reported by its position: the decoder's error would
+	// echo one of its characters into the log.
+	_, err = transactionKeys(k1 + "," + strings.Repeat("ab", 31) + "zQ")
+	require.ErrorIs(t, err, errKeyNotHex)
+	assert.EqualError(t, err, "SAMLSP_TRANSACTION_KEYS: key 2: not hex-encoded")
+}
+
+func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
+	t.Parallel()
+
+	_, err := newServer(appConfig{
+		baseURL: "http://127.0.0.1:1", connectionID: "corp", idpMetadata: newTestIdP(t).metadata(),
+		transactionKeys: [][]byte{[]byte("too short")},
+	})
+	require.ErrorIs(t, err, samlsp.ErrInvalidConfig)
 }

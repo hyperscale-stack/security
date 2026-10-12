@@ -31,7 +31,8 @@ type Factory func() samlsp.Storage
 
 // RunConformance executes the storage contract stated on
 // [samlsp.TransactionStore] and [samlsp.ReplayCache] against the stores
-// produced by newStore: exact round trips, single consumption, the error
+// produced by newStore: exact round trips (Integrity included), single
+// consumption, the error
 // precedence, a binding mismatch that consumes nothing, insert-if-absent
 // saves and replay marks, input validation before I/O, retention until
 // expiry, and the atomicity of consumption, saves and replay marks under
@@ -95,6 +96,7 @@ func record(label string) *samlsp.TransactionRecord {
 	return &samlsp.TransactionRecord{
 		ID:          key("tx/" + label),
 		BindingHash: key("binding/" + label),
+		Integrity:   key("integrity/" + label),
 		Payload:     `{"v":1,"label":"` + label + `","escaped":"\u00e9\u2713"}`,
 		ExpiresAt:   expiry(),
 	}
@@ -126,7 +128,7 @@ func mustEqualRecord(t *testing.T, got, want *samlsp.TransactionRecord, msg stri
 	}
 
 	if got.ID != want.ID || got.BindingHash != want.BindingHash || got.Payload != want.Payload ||
-		!got.ExpiresAt.Equal(want.ExpiresAt) {
+		!got.ExpiresAt.Equal(want.ExpiresAt) || got.Integrity != want.Integrity {
 		t.Fatalf("%s: got %+v, want %+v", msg, *got, *want)
 	}
 }
@@ -277,6 +279,7 @@ func testDuplicateSave(t *testing.T, s samlsp.Storage) {
 	other := *rec
 	other.BindingHash = key("intruder")
 	other.Payload = `{"v":1,"label":"intruder"}`
+	other.Integrity = key("intruder integrity")
 
 	err := s.SaveTransaction(ctx(), &other)
 	mustErrorIs(t, err, samlsp.ErrTransactionExists, "second save with the same ID")
@@ -296,6 +299,9 @@ func testRejectsInvalidRecord(t *testing.T, s samlsp.Storage) {
 		{"short ID", func(r *samlsp.TransactionRecord) { r.ID = r.ID[:63] }},
 		{"uppercase ID", func(r *samlsp.TransactionRecord) { r.ID = strings.ToUpper(r.ID) }},
 		{"bad binding", func(r *samlsp.TransactionRecord) { r.BindingHash = "zz" + r.BindingHash[2:] }},
+		{"empty integrity", func(r *samlsp.TransactionRecord) { r.Integrity = "" }},
+		{"upper-case integrity", func(r *samlsp.TransactionRecord) { r.Integrity = strings.ToUpper(r.Integrity) }},
+		{"short integrity", func(r *samlsp.TransactionRecord) { r.Integrity = r.Integrity[:63] }},
 		{"empty payload", func(r *samlsp.TransactionRecord) { r.Payload = "" }},
 		{"oversized payload", func(r *samlsp.TransactionRecord) {
 			r.Payload = strings.Repeat("x", samlsp.MaxTransactionPayloadSize+1)

@@ -77,7 +77,8 @@ func (o LoginOptions) validate() error {
 //     handle — never application data — and, when the SP has a signing key,
 //     the SigAlg and Signature parameters (rsa-sha256);
 //  3. stores the transaction (insert-if-absent, keyed by the connection and
-//     the handle, bound to the browser, expiring after the TTL);
+//     the handle, bound to the browser, expiring after the TTL), with its
+//     integrity MAC under the first of Config.TransactionKeys;
 //  4. sets the browser-binding cookie on w: __Host- prefixed, Secure,
 //     HttpOnly, SameSite=None (the IdP's response is a cross-site POST that
 //     a Lax or Strict cookie would not reach), Path=/, Max-Age = TTL; an
@@ -161,6 +162,7 @@ func (sp *ServiceProvider) BeginLogin(ctx context.Context, w http.ResponseWriter
 		Payload:     payload,
 		ExpiresAt:   now.Add(sp.cfg.TransactionTTL),
 	}
+	rec.Integrity = integrityFor(sp.cfg.TransactionKeys[0], rec.ID, rec)
 
 	if err := sp.cfg.Transactions.SaveTransaction(ctx, rec); err != nil {
 		return "", fmt.Errorf("samlsp: save transaction: %w", err)

@@ -803,11 +803,7 @@ func (g *corpusGen) timeSpecs() []corpusSpec {
 		{
 			id: "time/stale-authentication-with-forceauthn", tx: "acme-forceauthn",
 			attack: "ForceAuthn requested, AuthnInstant an hour before the request", refs: []string{"SAML Core §3.4.1"},
-			build: func() []byte {
-				return g.xml("acme-forceauthn", onAssertion(func(a *etree.Element) {
-					child(a, "AuthnStatement").CreateAttr("AuthnInstant", ts(-time.Hour))
-				}))
-			},
+			build:  g.staleForceAuthn,
 			expect: rejected("ErrStaleAuthentication", ""),
 		},
 		{
@@ -817,6 +813,14 @@ func (g *corpusGen) timeSpecs() []corpusSpec {
 			expect: rejected("ErrTransactionExpired", ""),
 		},
 	}
+}
+
+// staleForceAuthn answers the ForceAuthn transaction with an
+// authentication an hour old.
+func (g *corpusGen) staleForceAuthn() []byte {
+	return g.xml("acme-forceauthn", onAssertion(func(a *etree.Element) {
+		child(a, "AuthnStatement").CreateAttr("AuthnInstant", ts(-time.Hour))
+	}))
 }
 
 func (g *corpusGen) statusSpecs() []corpusSpec {
@@ -2531,6 +2535,20 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 			id: "replay/other-browser", attack: "posted by another browser's binding cookie (login CSRF)", refs: refs,
 			knobs: corpusKnobs{Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrBrowserBindingMismatch", ""),
+		},
+		{
+			id:     "replay/record-rebound-in-the-store",
+			attack: "a writer of the transaction store binds the pending login to the attacker's cookie, which posts it",
+			refs:   append(refs, "audit STORE-02 (transaction integrity MAC)"),
+			knobs:  corpusKnobs{Tamper: "rebind", Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrTransactionIntegrity", ""),
+		},
+		{
+			id: "replay/record-relaxed-in-the-store", tx: "acme-forceauthn",
+			attack: "a writer of the transaction store drops ForceAuthn from the pending login; the IdP reuses an hour-old session",
+			refs:   []string{"SAML Core §3.4.1", "audit STORE-02 (transaction integrity MAC)"},
+			knobs:  corpusKnobs{Tamper: "relax"}, build: g.staleForceAuthn, file: "time/stale-authentication-with-forceauthn.xml",
+			expect: rejected("ErrTransactionIntegrity", ""),
 		},
 	}
 }

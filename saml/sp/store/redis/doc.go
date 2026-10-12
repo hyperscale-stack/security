@@ -14,9 +14,9 @@
 // default):
 //
 //   - tx:{id}: a transaction, as a hash with the fields b (binding digest),
-//     p (opaque payload), e (expiry, Unix seconds) and, once consumed, c
-//     (the nonce of the consuming call). The key expires at the transaction
-//     expiry (PEXPIREAT: the Redis clock decides).
+//     p (opaque payload), e (expiry, Unix seconds), i (integrity MAC) and,
+//     once consumed, c (the nonce of the consuming call). The key expires
+//     at the transaction expiry (PEXPIREAT: the Redis clock decides).
 //   - as:{key}: a consumed assertion, holding the nonce of the recording
 //     call, until its retention expiry.
 //

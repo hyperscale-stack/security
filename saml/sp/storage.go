@@ -21,7 +21,10 @@ const storeKeyLen = 64
 // SP-initiated login. The store treats Payload as opaque: only the
 // [ServiceProvider] encodes and decodes it. No secret is stored: ID and
 // BindingHash are SHA-256 digests of the RelayState handle and of the
-// browser-binding cookie, which never reach the store.
+// browser-binding cookie, which never reach the store, and Integrity is a
+// MAC whose key the store never sees. A record altered in the store fails
+// its login (ErrTransactionIntegrity): the store is trusted for
+// availability and single consumption only.
 type TransactionRecord struct {
 	// ID is the store key: 64 lowercase hex characters.
 	ID string
@@ -36,6 +39,11 @@ type TransactionRecord struct {
 	// ExpiresAt is the expiry, in whole seconds. Stores MUST return it
 	// unchanged.
 	ExpiresAt time.Time
+	// Integrity is the record's MAC under a server-held transaction key
+	// (Config.TransactionKeys), over ID, BindingHash, Payload and ExpiresAt:
+	// 64 lowercase hex characters. Stores persist and return it unchanged;
+	// they never compute or check it.
+	Integrity string
 }
 
 // Validate checks the record before any store I/O; it returns an error
@@ -51,6 +59,10 @@ func (r *TransactionRecord) Validate() error {
 
 	if err := ValidateStoreKey(r.BindingHash); err != nil {
 		return fmt.Errorf("binding hash: %w", err)
+	}
+
+	if err := ValidateStoreKey(r.Integrity); err != nil {
+		return fmt.Errorf("integrity: %w", err)
 	}
 
 	switch {
@@ -118,13 +130,15 @@ type TransactionStore interface {
 	// ID yields ErrTransactionExists.
 	SaveTransaction(ctx context.Context, rec *TransactionRecord) error
 
-	// LookupTransaction returns the record without consuming it. It returns
-	// ErrTransactionNotFound for an unknown (or purged) ID and
-	// ErrTransactionConsumed for a consumed one.
+	// LookupTransaction returns the record, every field unchanged, without
+	// consuming it. It returns ErrTransactionNotFound for an unknown (or
+	// purged) ID and ErrTransactionConsumed for a consumed one.
 	LookupTransaction(ctx context.Context, id string) (*TransactionRecord, error)
 
 	// ConsumeTransaction marks the record consumed if, and only if, it
-	// exists, is not consumed yet and bindingHash equals its BindingHash.
+	// exists, is not consumed yet and bindingHash — the digest of the
+	// binding cookie the consuming browser presented — equals its
+	// BindingHash.
 	// Among any number of concurrent callers on any number of instances, at
 	// most one gets nil. Others get, in this precedence:
 	// ErrTransactionNotFound, ErrTransactionConsumed, then
