@@ -48,6 +48,14 @@ future refactor phases.
   PKCE verifier) can make the legitimate exchange fail with
   `invalid_grant`; it obtains nothing. A deliberate trade-off, see
   [docs/security-considerations.md](docs/security-considerations.md).
+- **Every registered client is trusted to receive error redirects** — an
+  error `/authorize` detects before the resource owner authenticated is
+  redirected to the client's registered redirect URI unless
+  `AuthorizeConfig.TrustedRedirect` says the client is not trusted (RFC
+  9700 §4.11.2); set it when clients are registered by third parties. An
+  explicit denial after authentication (`access_denied`) is redirected to
+  every client — RFC 9700 §4.11.2's second attack: a `ConsentFunc` may warn
+  the resource owner about a client it does not trust.
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels

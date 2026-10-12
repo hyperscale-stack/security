@@ -236,6 +236,32 @@ type AuthorizeConfig struct {
 	ImplicitTokens OpaqueTokenGenerator
 	// ImplicitTTL is the implicit access-token lifetime. Defaults to 1h.
 	ImplicitTTL time.Duration
+	// TrustedRedirect, when set, reports whether the handler may redirect
+	// an error to client's validated redirectURI before the resource owner
+	// has authenticated: RFC 9700 §4.11.2 — "The authorization server MUST
+	// always authenticate the user first … SHOULD only automatically
+	// redirect the user agent if it trusts the redirection URI" — lest it
+	// serve as a redirector to a phishing page a registered client controls.
+	// It is asked at most once per request, and only when the request
+	// fails before the resource owner authenticated: the issuer
+	// resolution, a repeated parameter, the state, the response type, the
+	// client's grant types, the scope, PKCE, the nonce, the Extension's
+	// checks, a ConsentFunc error — and a Consent.Refusal stating that the
+	// request cannot complete without showing a user interface
+	// (login_required, interaction_required, account_selection_required,
+	// consent_required: OpenID Connect Core §3.1.2.6, what a prompt=none
+	// request is refused with). For a client it reports untrusted, such an
+	// error is answered with a bare error page, never redirected: status
+	// 400, or what the error code maps to ([Error.HTTPStatus]: 500
+	// server_error, 403 access_denied, 503 temporarily_unavailable). Once
+	// the ConsentFunc returned any other decision, the resource owner has
+	// authenticated: the code, access_denied, other refusals and later
+	// failures are redirected for every client. Nil trusts every
+	// registered client: errors are redirected as soon as the redirect URI
+	// is validated (RFC 6749 §4.1.2.1). ctx is the request's. It runs on the
+	// request goroutine, MUST be fast and safe for concurrent use, and MUST
+	// NOT panic.
+	TrustedRedirect func(ctx context.Context, client Client, redirectURI string) bool
 }
 
 // AuthorizeHandler returns the http.Handler for the RFC 6749 §3.1
@@ -292,7 +318,9 @@ type AuthorizeConfig struct {
 // incorporating errata set 2, §3.1.2.6). Every later error is redirected
 // back to the client — in the query string for the code flow, in the
 // fragment for the implicit flow — and only with an error code the
-// authorization endpoint defines.
+// authorization endpoint defines; before the resource owner authenticated,
+// only to a client [AuthorizeConfig.TrustedRedirect] trusts (RFC 9700
+// §4.11.2).
 //
 // Every response carries X-Frame-Options: DENY, Content-Security-Policy:
 // frame-ancestors 'none' (added to any policy already set), Cache-Control:
@@ -460,6 +488,12 @@ type authorizeState struct {
 	// redirectURIOmitted reports that the request named no redirect_uri:
 	// its code may be redeemed without one (RFC 6749 §4.1.3).
 	redirectURIOmitted bool
+	// trust decides whether errors travel to the client before the
+	// resource owner authenticated.
+	trust *redirectTrust
+	// authenticated reports that the ConsentFunc returned a decision other
+	// than an interaction refusal: every later answer is redirected.
+	authenticated bool
 }
 
 // authorizeTarget is where and how an authorization response travels: the
@@ -472,6 +506,24 @@ type authorizeTarget struct {
 	// the IssuerResolver failed.
 	issuer   string
 	fragment bool
+	// trust decides whether an error before authentication travels to the
+	// client ([AuthorizeConfig.TrustedRedirect]).
+	trust *redirectTrust
+}
+
+// redirectTrust is what [AuthorizeConfig.TrustedRedirect] decides from: the
+// hook, the client and the redirect URI of one request. A request answers
+// once, so the hook is asked at most once.
+type redirectTrust struct {
+	hook        func(context.Context, Client, string) bool
+	client      Client
+	redirectURI string
+}
+
+// allows reports whether errors before authentication may be redirected:
+// always without a hook, otherwise what the hook answers.
+func (t *redirectTrust) allows(ctx context.Context) bool {
+	return t == nil || t.hook == nil || t.hook(ctx, t.client, t.redirectURI)
 }
 
 // responseParams returns the parameters every authorization response to t
@@ -502,7 +554,9 @@ func (t authorizeTarget) redirect(w http.ResponseWriter, r *http.Request, params
 // target returns the authorization-response target of the validated
 // request.
 func (st *authorizeState) target() authorizeTarget {
-	return authorizeTarget{redirectURI: st.ar.RedirectURI, state: st.ar.State, issuer: st.ar.Issuer, fragment: st.fragment}
+	return authorizeTarget{
+		redirectURI: st.ar.RedirectURI, state: st.ar.State, issuer: st.ar.Issuer, fragment: st.fragment, trust: st.trust,
+	}
 }
 
 // request returns a copy of the validated request for a callback.
@@ -599,6 +653,7 @@ func (s *Server) validateAuthorize(
 	target := authorizeTarget{
 		redirectURI: in.redirectURI,
 		fragment:    flowErr == nil && flow == flowImplicit,
+		trust:       &redirectTrust{hook: cfg.TrustedRedirect, client: in.client, redirectURI: in.redirectURI},
 	}
 
 	if stateValid {
@@ -608,7 +663,7 @@ func (s *Server) validateAuthorize(
 	// Without an issuer the answer cannot name one (RFC 9207 §2): the
 	// server_error travels without iss.
 	if resolved.err != nil {
-		s.redirectAuthorizeError(w, r, target, ErrServerError.WithCause(resolved.err))
+		s.refuseUnauthenticated(w, r, target, ErrServerError.WithCause(resolved.err))
 
 		return nil, false
 	}
@@ -619,32 +674,32 @@ func (s *Server) validateAuthorize(
 	// RFC 6749 §4.1.2.1: invalid_request "includes a parameter more than
 	// once".
 	if in.repeated != "" {
-		s.redirectAuthorizeError(w, r, target, repeatedParameter(in.repeated))
+		s.refuseUnauthenticated(w, r, target, repeatedParameter(in.repeated))
 
 		return nil, false
 	}
 
 	if !stateValid {
-		s.redirectAuthorizeError(w, r, target, errMalformedState)
+		s.refuseUnauthenticated(w, r, target, errMalformedState)
 
 		return nil, false
 	}
 
 	if flowErr != nil {
-		s.redirectAuthorizeError(w, r, target, flowErr)
+		s.refuseUnauthenticated(w, r, target, flowErr)
 
 		return nil, false
 	}
 
 	if oerr := flowRefusal(in.client, flow); oerr != nil {
-		s.redirectAuthorizeError(w, r, target, oerr)
+		s.refuseUnauthenticated(w, r, target, oerr)
 
 		return nil, false
 	}
 
 	ar, oerr := s.parseAuthorizeRequest(in, flow)
 	if oerr != nil {
-		s.redirectAuthorizeError(w, r, target, oerr)
+		s.refuseUnauthenticated(w, r, target, oerr)
 
 		return nil, false
 	}
@@ -652,7 +707,7 @@ func (s *Server) validateAuthorize(
 	ar.Issuer = issuer
 	st := &authorizeState{
 		ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment,
-		redirectURIOmitted: in.params.Get(paramRedirectURI) == "",
+		redirectURIOmitted: in.params.Get(paramRedirectURI) == "", trust: target.trust,
 	}
 
 	if s.cfg.Extension == nil {
@@ -716,6 +771,10 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 		// The ConsentFunc rendered its own response (login / consent page).
 		return
 	}
+
+	// A decision means the resource owner authenticated — unless it says
+	// the request cannot complete without a user interface.
+	st.authenticated = !interactionRefused(decision)
 
 	if st.modified(cp) {
 		s.refuseModified(w, r, st, nil)
@@ -833,10 +892,48 @@ func (s *Server) completeAuthorization(
 	return true
 }
 
-// refuseAuthorize redirects oerr back to the client of the validated
-// request st, in the flow's response mode.
+// refuseAuthorize answers oerr to the client of the validated request st:
+// redirected, in the flow's response mode — before the resource owner
+// authenticated, only to a client [AuthorizeConfig.TrustedRedirect]
+// trusts.
 func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *authorizeState, oerr *Error) {
-	s.redirectAuthorizeError(w, r, st.target(), oerr)
+	if st.authenticated {
+		s.redirectAuthorizeError(w, r, st.target(), oerr)
+
+		return
+	}
+
+	s.refuseUnauthenticated(w, r, st.target(), oerr)
+}
+
+// refuseUnauthenticated answers an error detected before the resource owner
+// authenticated: redirected when target's client is trusted
+// ([AuthorizeConfig.TrustedRedirect]), otherwise a bare page with the status
+// of its code (RFC 9700 §4.11.2) — the envelope reported to the
+// [ErrorHook] either way.
+func (s *Server) refuseUnauthenticated(w http.ResponseWriter, r *http.Request, target authorizeTarget, oerr *Error) {
+	if target.trust.allows(r.Context()) {
+		s.redirectAuthorizeError(w, r, target, oerr)
+
+		return
+	}
+
+	oerr = authorizeWireError(oerr)
+	s.notifyError(r.Context(), oerr)
+	http.Error(w, "oauth2: authorization request refused: "+oerr.Code, oerr.HTTPStatus())
+}
+
+// interactionCodes are the OpenID Connect Core §3.1.2.6 refusals of a
+// request that cannot complete without displaying a user interface — the
+// answers to prompt=none: no resource owner authenticated.
+var interactionCodes = []string{
+	CodeLoginRequired, CodeInteractionRequired, CodeAccountSelectionRequired, CodeConsentRequired,
+}
+
+// interactionRefused reports whether d refuses the request with one of the
+// interactionCodes.
+func interactionRefused(d *Consent) bool {
+	return d.Refusal != nil && slices.Contains(interactionCodes, d.Refusal.Code)
 }
 
 // responseModeSupported reports whether the request's response_mode is

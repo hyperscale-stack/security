@@ -368,6 +368,19 @@ keys by `kid` against a JWKS provider (static or remote).
   (RFC 6749 §3.1.2.4); run the same function when registering clients.
   Responses keep the registered query byte for byte (RFC 6749 §3.1.2),
   and the implicit flow appends its fragment to a URI that has none.
+- **Open redirection** — RFC 9700 §4.11.2: a registered client controlling
+  its redirect URI could send users an erroneous request (an invalid scope)
+  or a `prompt=none` one, and have the authorization server redirect them
+  to its phishing page without anyone authenticating. Set
+  `AuthorizeConfig.TrustedRedirect`: for a client it does not trust, every
+  error detected before the resource owner authenticated — and a
+  `Consent.Refusal` stating the request cannot complete without a user
+  interface (`login_required`, `interaction_required`,
+  `account_selection_required`, `consent_required`) — is a bare error page,
+  never redirected. Without it, every registered client is trusted (RFC 6749
+  §4.1.2.1 redirects errors once the redirect URI is validated). Once the
+  resource owner authenticated, the code and an explicit `access_denied` are
+  redirected to every client.
 - **Authorization endpoint pages** — the `ConsentFunc` renders the login
   and consent pages, but every response of `/authorize` carries
   `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`
@@ -1406,6 +1419,9 @@ span catalog.
       `ScopeValues` — an empty list allows nothing — and watch `OnError`
       for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
       upgrade.
+- [ ] When third parties register clients, set
+      `AuthorizeConfig.TrustedRedirect`, so that errors before
+      authentication never redirect to a client you do not trust.
 - [ ] Validate every redirect URI at registration with
       `oauth2.ValidateRedirectURI`; register native apps with a reverse
       domain name scheme (`com.example.app:/cb`) or a loopback IP literal

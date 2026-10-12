@@ -94,7 +94,9 @@ The hook fires for:
   `oauth2.Extension` hook — a protocol code as returned, anything else as a
   `server_error` (`authorization extension failed`) carrying it. An error
   whose code the endpoint cannot send reaches the hook as a `server_error`
-  whose cause is the original;
+  whose cause is the original. An error answered with a bare page because
+  `AuthorizeConfig.TrustedRedirect` does not trust the client reaches the
+  hook exactly as it would have been redirected;
 - at `/token`, an `ExtendTokenResponse` failure: its `invalid_grant` as
   returned, anything else as a `server_error` carrying it.
 

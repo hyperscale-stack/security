@@ -479,6 +479,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   userinfo for http(s), "." in a private-use scheme (RFC 8252 §8.4), no
   response parameter in its query; `/authorize` applies it to the URI a
   request resolves to.
+- **`oauth2.AuthorizeConfig.TrustedRedirect`**: for a client it does not
+  trust, the errors `/authorize` detects before the resource owner
+  authenticated — and `prompt=none`-style refusals (`login_required`,
+  `interaction_required`, `account_selection_required`, `consent_required`)
+  — are answered with a bare error page instead of a redirect (RFC 9700
+  §4.11.2). Without it, every registered client is trusted, as before.
 
 ### Changed
 
@@ -1540,3 +1546,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   safe ones: a relative URI, one with a fragment, a `javascript:` or `data:`
   URI, or a query naming a response parameter (which then traveled twice)
   were used as registered.
+- OAuth2 `/authorize` can stop redirecting to clients it does not trust
+  before the resource owner authenticated (RFC 9700 §4.11.2: the
+  authorization server "MUST always authenticate the user first"). Any
+  registered client could send users an erroneous or `prompt=none` request
+  and have the server redirect them — without any authentication — to its
+  redirect URI: `AuthorizeConfig.TrustedRedirect` answers such requests of
+  untrusted clients with a bare error page.
