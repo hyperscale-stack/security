@@ -334,6 +334,7 @@ func TestParseIdentityProviderMetadata_Refusals(t *testing.T) {
 		{"bad WantAuthnRequestsSigned", idpMetadataSpec{roleAttrs: ` WantAuthnRequestsSigned="yes"`}.render(t), samlsp.MetadataOptions{}},
 		{"bad validUntil", idpMetadataSpec{entityExtra: ` validUntil="soon"`}.render(t), samlsp.MetadataOptions{}},
 		{"bad cacheDuration", idpMetadataSpec{entityExtra: ` cacheDuration="1h"`}.render(t), samlsp.MetadataOptions{}},
+		{"cacheDuration of 2^63 ns", idpMetadataSpec{entityExtra: ` cacheDuration="PT9223372036.854775808S"`}.render(t), samlsp.MetadataOptions{}},
 		{"bad root cacheDuration", idpMetadataSpec{root: `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" cacheDuration="x">ENTITY</md:EntitiesDescriptor>`}.render(t), samlsp.MetadataOptions{}},
 		{"bad role validUntil", idpMetadataSpec{roleAttrs: ` validUntil="x"`}.render(t), samlsp.MetadataOptions{}},
 		{"relative entity ID", idpMetadataSpec{entityID: "idp"}.render(t), samlsp.MetadataOptions{}},

@@ -114,6 +114,34 @@ func TestParseXSDuration(t *testing.T) {
 	}
 }
 
+// TestParseXSDurationOverflow pins the int64 bound: float64(math.MaxInt64)
+// is exactly 2^63, so a total of 2^63 ns passes a ">" guard and its
+// conversion to int64 is implementation-defined (MinInt64 on amd64,
+// MaxInt64 on arm64). Such durations must be refused on every platform.
+func TestParseXSDurationOverflow(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{
+		"PT9223372036.854775808S",      // exactly 2^63 ns
+		"PT9223372036.854775807S",      // 2^63 - 1 ns, rounded up to 2^63 by float64
+		"P106751DT23H47M16.854775808S", // 2^63 ns spelled in days
+		"PT2562047H47M16.854775808S",   // 2^63 ns spelled in hours
+		"PT153722867M16.854775808S",    // 2^63 ns spelled in minutes
+		"P106751DT23H47M16.854775809S", // above, rounded down to 2^63
+		"PT9223372036.9S",              // above
+		"PT9223372037S",                // above
+		"P293Y",                        // above
+	} {
+		d, err := parseXSDuration(in)
+		require.ErrorIs(t, err, errBadDuration, "%s parsed as %d", in, int64(d))
+	}
+
+	// The largest float64 below 2^63 ns still converts exactly.
+	d, err := parseXSDuration("PT9223372036.854774S")
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(9223372036854774784), d)
+}
+
 func TestFormatXSDuration(t *testing.T) {
 	t.Parallel()
 
