@@ -609,6 +609,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   rewrite its `AppState`. Such a transaction now fails with
   `ErrTransactionIntegrity` before the code is redeemed; the store is
   trusted for availability and single consumption only.
+- An `oauth2.DefaultClient` printed with `fmt` or logged with `slog`
+  revealed its cleartext secret; it now prints and logs its registration
+  with the secret redacted, whatever the verb (#86).
 - An `oidcclient.Client` printed with `fmt` revealed its client secret and
   transaction keys (fmt prints the unexported fields of a struct pointer),
   and `Config`, `AuthRequest`, `Callback`, `Identity` and `Tokens` revealed

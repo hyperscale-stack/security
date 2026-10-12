@@ -127,6 +127,9 @@ type DefaultClient struct {
 	// (a public client using "none", or a client authenticated by another
 	// method): an empty Secret matches nothing, so client_secret_basic and
 	// client_secret_post never authenticate it.
+	//
+	// A DefaultClient prints and logs without it (String, Format,
+	// LogValue).
 	Secret            string //nolint:gosec // dev/test convenience
 	TypeValue         ClientType
 	RedirectURIValues []string
