@@ -181,7 +181,12 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   Security BCP: it refuses the `implicit` grant. `Profile21Draft`
   additionally refuses the `password` grant. Legacy grants are opt-in and
   refused outright under the stricter profile.
-- **Client authentication** — `client_secret_basic` / `client_secret_post`
+- **Client authentication** — one method per request (RFC 6749 §2.3): an
+  `Authorization` header with a body `client_secret`, several
+  `Authorization` fields, or a repeated `client_id` / `client_secret` are
+  `invalid_request` before any client is loaded, and a body `client_id`
+  naming another client than the one authenticated is refused.
+  `client_secret_basic` / `client_secret_post`
   compare secrets in constant time and never accept an empty one. Basic
   form-decodes the user-id and password (RFC 6749 §2.3.1, Appendix B) after
   splitting them at the first colon, refuses an invalid escape as a

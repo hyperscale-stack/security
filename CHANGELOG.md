@@ -1024,3 +1024,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   parameter the server reads an `invalid_request`; an empty occurrence is
   omitted and never hides the value that follows. The `unsupported_grant_type`
   description no longer echoes the request. See [MIGRATION.md](MIGRATION.md).
+- OAuth2 client authentication accepts one method per request (RFC 6749
+  §2.3). A request carrying a valid HTTP Basic header and a wrong
+  `client_secret` in its body was authenticated by the header — the body
+  secret ignored — and one authenticated with Basic as client A naming
+  `client_id=B` in its body was served as A. Both, and several
+  `Authorization` fields, are now `invalid_request` (RFC 6749 §5.2) at
+  `/token`, `/revoke` and `/introspect`.

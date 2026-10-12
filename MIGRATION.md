@@ -1085,12 +1085,17 @@ were not refused. The parameters each endpoint reads are now single-valued:
 | `/token` repeating `grant_type`, `code`, `redirect_uri`, `code_verifier`, `refresh_token`, `scope`, `username`, `password`, `client_id` or `client_secret` | the first value used | `400 invalid_request` before the grant runs: a code presented stays redeemable |
 | `/revoke`, `/introspect` repeating `token`, `token_type_hint`, `client_id` or `client_secret` | the first value used | `400 invalid_request` |
 | a parameter repeated with an empty first occurrence (`scope=&scope=read`) | the empty first value used | the value: an empty occurrence is omitted (RFC 6749 §3.1) |
+| `Authorization` header and a `client_secret` in the body | the header authenticated the client, the body secret was ignored | `400 invalid_request` (`more than one client authentication method`, RFC 6749 §2.3, §5.2), before any client is loaded |
+| several `Authorization` header fields | the first one used | `400 invalid_request` (`more than one Authorization header`) |
+| a body `client_id` naming another client than the one authenticated (Basic as A, `client_id=B`) | the authenticated client served | `400 invalid_request` (`client_id does not name the authenticated client`); the authenticated client's own `client_id` stays accepted (RFC 6749 §3.2.1) |
 | an unrecognized parameter repeated | ignored | unchanged |
 | `unsupported_grant_type` description | echoed the `grant_type` sent | a fixed text |
 
 To migrate:
 
-1. Clients send each parameter once. A consent form posting back to
+1. Clients send each parameter once, and authenticate with one method: an
+   HTTP Basic header, or `client_id` and `client_secret` in the body — not
+   both. A consent form posting back to
    `/authorize` must not repeat in its body a parameter the query already
    carries.
 2. A `ConsentFunc` or an `Extension` reads the core's parameters from the

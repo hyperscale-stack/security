@@ -12,6 +12,13 @@
 //   - client_secret_post  — RFC 6749 §2.3.1 (form parameters)
 //   - none                — public clients (PKCE-only authentication)
 //
+// The server runs the first method whose Match accepts the request, after
+// refusing a request that carries client credentials more than once (RFC
+// 6749 §2.3: one method per request) — an Authorization header with a body
+// client_secret, several Authorization fields, a repeated client_id or
+// client_secret — and refuses a body client_id naming another client than
+// the one authenticated.
+//
 // Adding private_key_jwt requires the JWT module; it lives behind a small
 // adapter in the jwt sub-module so this package stays JOSE-free.
 package clientauth

@@ -71,12 +71,13 @@ func (s *Server) authenticateClientAt(ctx context.Context, r *http.Request) (Cli
 // authenticateClient runs the configured client-authentication methods in
 // order and returns the first match, the clients of other issuers hidden.
 // An authenticator that does not load the client through the store it is
-// handed is checked again on its result.
+// handed is checked again on its result. A request carrying its client's
+// credentials more than once is refused first (singleCredential), and one
+// whose body client_id names another client than the one authenticated
+// after.
 func (s *Server) authenticateClient(ctx context.Context, r *http.Request, issuer string) (Client, error) {
-	// A repeated client_id or client_secret "includes multiple credentials"
-	// (RFC 6749 §5.2): refused before any client is loaded.
-	if _, repeated := param.SingleValued(r.PostForm, clientAuthParameters); repeated != "" {
-		return nil, repeatedParameter(repeated)
+	if oe := singleCredential(r); oe != nil {
+		return nil, oe
 	}
 
 	clients := &issuerClients{store: s.cfg.ClientStore, issuer: issuer}
@@ -100,10 +101,47 @@ func (s *Server) authenticateClient(ctx context.Context, r *http.Request, issuer
 			return nil, errUnknownClient.WithCause(ErrClientNotAtIssuer)
 		}
 
+		// RFC 6749 §3.2.1 lets a client name itself with client_id: never
+		// another client than the one authenticated.
+		if id := param.Value(r.PostForm, paramClientID); id != "" && id != c.ID() {
+			return nil, errClientIDMismatch
+		}
+
 		return c, nil
 	}
 
 	return nil, ErrInvalidClient.WithDescription("no client authentication method matched")
+}
+
+// The refusals of a request authenticating its client more than once: RFC
+// 6749 §2.3 ("The client MUST NOT use more than one authentication method
+// in each request") and §5.2 (invalid_request: "includes multiple
+// credentials, utilizes more than one mechanism for authenticating the
+// client").
+var (
+	errSeveralAuthorizations = ErrInvalidRequest.WithDescription("more than one Authorization header")
+	errSeveralAuthMethods    = ErrInvalidRequest.WithDescription("more than one client authentication method")
+	errClientIDMismatch      = ErrInvalidRequest.WithDescription("client_id does not name the authenticated client")
+)
+
+// singleCredential refuses, before any client is loaded, a request that
+// carries client credentials more than once: a client_id or client_secret
+// repeated with a value, several Authorization fields (RFC 9110 §5.3: a
+// field that is not a list is not repeated), or an Authorization header and
+// a client_secret in the body.
+func singleCredential(r *http.Request) *Error {
+	if _, repeated := param.SingleValued(r.PostForm, clientAuthParameters); repeated != "" {
+		return repeatedParameter(repeated)
+	}
+
+	switch authorization := r.Header.Values("Authorization"); {
+	case len(authorization) > 1:
+		return errSeveralAuthorizations
+	case len(authorization) == 1 && authorization[0] != "" && param.Value(r.PostForm, paramClientSecret) != "":
+		return errSeveralAuthMethods
+	default:
+		return nil
+	}
 }
 
 // errUnknownClient is how client authentication answers an unknown client
