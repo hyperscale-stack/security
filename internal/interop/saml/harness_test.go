@@ -138,6 +138,36 @@ func newIdentityProvider(t testing.TB, key testKey, signatureMethod string) *ide
 // entityID is the IdP entity ID (crewjam uses its metadata URL).
 func (i *identityProvider) entityID() string { return i.srv.URL + "/metadata" }
 
+// pinnedAssertionID makes crewjam issue every assertion with the same ID,
+// as a buggy or replaying IdP would (the replay cache must catch it).
+type pinnedAssertionID struct{ id string }
+
+// MakeAssertion implements saml.AssertionMaker.
+func (p pinnedAssertionID) MakeAssertion(req *saml.IdpAuthnRequest, session *saml.Session) error {
+	if err := (saml.DefaultAssertionMaker{}).MakeAssertion(req, session); err != nil {
+		return err
+	}
+
+	req.Assertion.ID = p.id
+
+	return nil
+}
+
+// pinAssertionID makes the IdP reuse id as the ID of every assertion (""
+// restores fresh IDs).
+func (i *identityProvider) pinAssertionID(id string) {
+	i.cfgMu.Lock()
+	defer i.cfgMu.Unlock()
+
+	if id == "" {
+		i.idp.AssertionMaker = nil
+
+		return
+	}
+
+	i.idp.AssertionMaker = pinnedAssertionID{id: id}
+}
+
 // useKey makes the IdP sign with key (a rollover step).
 func (i *identityProvider) useKey(key testKey) {
 	i.cfgMu.Lock()
@@ -216,6 +246,7 @@ type serviceProvider struct {
 
 	mu       sync.Mutex
 	conns    map[string]samlsp.Connection
+	sources  map[string]*samlsp.MetadataSource // connections whose IdP comes from a source
 	outcomes []outcome
 }
 
@@ -226,32 +257,21 @@ type outcome struct {
 }
 
 type spOptions struct {
-	key       *testKey // SP signing key; nil: unsigned AuthnRequests
-	instances int      // 0 means 1
+	key *testKey // SP signing key; nil: unsigned AuthnRequests
+	// next are certificates announced next to the signing key (SP key
+	// rollover, errata E68).
+	next      []*x509.Certificate
+	instances int // 0 means 1
+	// storage returns the store of instance i, each instance with its own
+	// handle on a shared backend; nil shares one memory store.
+	storage func(i int) samlsp.Storage
 }
 
 func newServiceProvider(t testing.TB, o spOptions) *serviceProvider {
 	t.Helper()
 
-	s := &serviceProvider{conns: map[string]samlsp.Connection{}}
-	store := memory.New()
-
-	cfg := samlsp.Config{
-		Connections:  samlsp.ConnectionResolverFunc(s.resolve),
-		Transactions: store,
-		ReplayCache:  store,
-	}
-
-	if o.key != nil {
-		cfg.SigningKey, cfg.SigningCertificate = o.key.signer, o.key.cert
-	}
-
-	for n := max(o.instances, 1); n > 0; n-- {
-		sp, err := samlsp.New(cfg)
-		require.NoError(t, err)
-
-		s.instances = append(s.instances, sp)
-	}
+	s := &serviceProvider{conns: map[string]samlsp.Connection{}, sources: map[string]*samlsp.MetadataSource{}}
+	s.configure(t, o)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login/{conn}", s.login)
@@ -266,21 +286,87 @@ func newServiceProvider(t testing.TB, o spOptions) *serviceProvider {
 	return s
 }
 
-// pick returns the next instance.
-func (s *serviceProvider) pick() *samlsp.ServiceProvider {
-	return s.instances[(s.next.Add(1)-1)%uint64(len(s.instances))]
+// configure (re)builds the instances with o, keeping the server, the
+// connections and, unless o says otherwise, a fresh shared memory store: a
+// redeployment of the same SP with a new configuration.
+func (s *serviceProvider) configure(t testing.TB, o spOptions) {
+	t.Helper()
+
+	store := memory.New()
+
+	cfg := samlsp.Config{
+		Connections:  samlsp.ConnectionResolverFunc(s.resolve),
+		Transactions: store,
+		ReplayCache:  store,
+	}
+
+	if o.key != nil {
+		cfg.SigningKey, cfg.SigningCertificate = o.key.signer, o.key.cert
+		cfg.AdditionalSigningCertificates = o.next
+	}
+
+	instances := make([]*samlsp.ServiceProvider, 0, max(o.instances, 1))
+
+	for i := range max(o.instances, 1) {
+		if o.storage != nil {
+			st := o.storage(i)
+			cfg.Transactions, cfg.ReplayCache = st, st
+		}
+
+		sp, err := samlsp.New(cfg)
+		require.NoError(t, err)
+
+		instances = append(instances, sp)
+	}
+
+	s.mu.Lock()
+	s.instances = instances
+	s.mu.Unlock()
 }
 
-func (s *serviceProvider) resolve(_ context.Context, id string) (*samlsp.Connection, error) {
+// pick returns the next instance.
+func (s *serviceProvider) pick() *samlsp.ServiceProvider {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.instances[(s.next.Add(1)-1)%uint64(len(s.instances))]
+}
+
+func (s *serviceProvider) resolve(ctx context.Context, id string) (*samlsp.Connection, error) {
+	s.mu.Lock()
 	c, ok := s.conns[id]
+	src := s.sources[id]
+	s.mu.Unlock()
+
 	if !ok {
 		return nil, samlsp.ErrUnknownConnection
 	}
 
+	if src != nil {
+		// The documented pattern: the connection trusts what the source
+		// currently holds for its pinned IdP.
+		idp, err := src.IdentityProvider(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("connection %s: %w", id, err)
+		}
+
+		c.IdentityProvider = *idp
+	}
+
 	return &c, nil
+}
+
+// addSourcedConnection resolves connection id's IdP through src on every
+// use; the SP entity ID and ACS URL derive as in addConnection.
+func (s *serviceProvider) addSourcedConnection(id string, src *samlsp.MetadataSource) samlsp.Connection {
+	c := samlsp.Connection{ID: id, SPEntityID: s.srv.URL + "/saml/" + id, ACSURL: s.srv.URL + "/saml/" + id + "/acs"}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.conns[id], s.sources[id] = c, src
+
+	return c
 }
 
 // addConnection (re)imports the IdP metadata under connection id; the SP

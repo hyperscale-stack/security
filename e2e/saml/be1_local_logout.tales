@@ -1,0 +1,151 @@
+version = 1
+
+# BE1: logging out of the example ends the local session only. It is not
+# SAML Single Logout: the IdP session lives on, and the next login is a
+# silent re-authentication without any credential.
+scenario "BE1 local logout is not Single Logout" {
+  tags = ["saml", "browser", "be1"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  step "browser" "sign_in_link" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/"
+      }
+
+      click {
+        selector = "a[href='/login']"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim"
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "browser" "log_out" {
+    target = "victim"
+
+    actions {
+      click {
+        selector = "form[action='/logout'] button"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Welcome"
+      }
+    }
+  }
+
+  step "http" "logged_out" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 1
+        credential_posts = 1
+        logout = {
+          set_cookies = {
+            session = {
+              cleared = true
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # The IdP session is still there: no credential form this time.
+  step "browser" "silent_sign_in" {
+    target = "victim"
+
+    actions {
+      click {
+        selector = "a[href='/login']"
+      }
+    }
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+
+      text {
+        selector = "p"
+        value    = contains("alice-pairwise-id")
+      }
+    }
+  }
+
+  step "http" "silent" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 2
+        credential_posts = 1
+      }
+    }
+  }
+}

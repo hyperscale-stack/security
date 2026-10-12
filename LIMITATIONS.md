@@ -234,7 +234,8 @@ PKCE. Not supported, and refused where a provider could select them:
   of group memberships is refused with `ErrResponseTooLarge`. Filter the
   groups the IdP releases to the application.
 - **SHA-1** is refused unless the connection sets `InsecureAllowSHA1`;
-  inclusive C14N is never accepted.
+  inclusive C14N and RSASSA-PSS (Keycloak's `RSA_SHA256_MGF1`) are never
+  accepted.
 - **ECDSA** signature values are verified as ASN.1 DER (goxmldsig): IdPs
   emitting the XML Signature 1.1 raw `r‖s` encoding fail closed. The SP
   signs AuthnRequests with RSA only.
@@ -253,13 +254,25 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Legacy browsers** that mishandle `SameSite=None` (Safari on iOS 12 and
   macOS 10.14, Chrome 51–66) drop the binding cookie: their logins fail
   with `ErrMissingBrowserBinding`.
+- **Login CSRF by forced initiation** — `BeginLogin` cannot tell whether
+  the user meant to start a login: the application must start logins only
+  from a same-origin gesture (see
+  [docs/saml-sp.md](docs/saml-sp.md#5-sessions-and-logout)).
 - **Stores** — `saml/sp/storage/memory` never purges anything (development
   and tests only); `saml/sp/store/sql` ships no expiry job (its package
-  documentation gives the cleanup statements) and is tested on SQLite only.
-- **Interoperability** is tested against crewjam/saml's IdP, which signs
-  with the library the SP verifies with, and against one pinned Keycloak
-  26.0.7 response. Live runs against Keycloak and real browsers are tracked
-  in #88.
+  documentation gives the cleanup statements). CI runs the stores on
+  SQLite and miniredis; PostgreSQL 16, MySQL 8.0 and Redis 7.4 are covered
+  by an opt-in suite (`internal/interop/saml/compose.yaml`).
+- **SP key rollover with Keycloak** — a Keycloak SAML client keeps one SP
+  signing certificate: `AdditionalSigningCertificates` cannot announce the
+  next key there, and the client's certificate must be replaced when the
+  SP switches.
+- **Interoperability** — CI runs the SP against crewjam/saml's IdP and
+  replays 15 pinned Keycloak responses (26.7.4 and 26.0.7). Live runs
+  against Keycloak 26.7.4 and the browser suite (Chrome 154) are opt-in;
+  no other IdP (AD FS, Entra ID, Okta, Shibboleth) and no other browser
+  engine is tested. See
+  [docs/saml-sp.md](docs/saml-sp.md#interoperability-evidence).
 
 ## Transports
 

@@ -1,0 +1,98 @@
+version = 1
+
+# BR7: IdP-initiated SSO is refused. A response the IdP sends on its own,
+# without RelayState, answers no transaction of this browser.
+scenario "BR7 an IdP-initiated response is unsolicited" {
+  tags = ["saml", "browser", "br7"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  # A first, SP-initiated login opens the IdP session.
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim"
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "browser" "idp_initiated" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.idp}/_e2e/unsolicited"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/saml/corp/acs"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Sign-in failed"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 1
+        rejection_count = 1
+        last_rejection  = contains("samlsp: unsolicited response:")
+      }
+    }
+  }
+}

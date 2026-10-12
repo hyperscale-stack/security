@@ -460,7 +460,9 @@ is, never for the protocol rules:
 providers (SP-initiated Web Browser SSO, Profiles §4.1). An assertion is a
 bearer credential delivered through the browser, so the module trusts only
 what the operator configured and refuses whatever it cannot read in exactly
-one way.
+one way. This section is the threat model; the
+[integration guide](saml-sp.md) gives the exact trust tables, the identity
+mapping, the deployment and rollover runbooks, and the test evidence.
 
 ### Trust
 
@@ -548,16 +550,18 @@ IdP to send one assertion carrying a persistent NameID:
 
 ### Browser binding, CSRF and replay
 
-- **Login CSRF.** `BeginLogin` binds the transaction to the browser with a
-  `__Host-samlsp` cookie (`Secure`, `HttpOnly`, `Path=/`, no `Domain`): the
-  prefix keeps sibling subdomains and network attackers from planting it. It
-  is `SameSite=None` because the IdP's POST to the ACS is a cross-site
-  navigation that would not carry a `Lax` or `Strict` cookie. A response is
-  accepted only for the transaction of the same browser, and its signed
-  `SubjectConfirmationData` must answer that transaction's request ID
-  (errata E90). Some legacy browsers (Safari on iOS 12 and macOS 10.14,
-  Chrome 51–66) mishandle `SameSite=None`: their logins fail with
-  `ErrMissingBrowserBinding`.
+- **Login CSRF by response injection.** `BeginLogin` binds the
+  transaction to the browser with a `__Host-samlsp` cookie (`Secure`,
+  `HttpOnly`, `Path=/`, no `Domain`): the prefix keeps sibling subdomains
+  and network attackers from planting it. It is `SameSite=None` because the
+  IdP's POST to the ACS is a cross-site navigation that would not carry a
+  `Lax` or `Strict` cookie. A response is accepted only for the transaction
+  of the same browser, and its signed `SubjectConfirmationData` must answer
+  that transaction's request ID (errata E90). An attacker's own valid
+  response posted into a victim's browser is therefore refused, whatever
+  cookies a sibling host tossed (browser suite, BR3 and BR4). Some legacy
+  browsers (Safari on iOS 12 and macOS 10.14, Chrome 51–66) mishandle
+  `SameSite=None`: their logins fail with `ErrMissingBrowserBinding`.
 - **The ACS must be exempt from the application's CSRF protection**: the
   POST comes from the IdP's page. The binding cookie and `InResponseTo` are
   its CSRF defense.
@@ -584,11 +588,17 @@ IdP to send one assertion carrying a persistent NameID:
 - **Gate login initiation.** A page of another site can send the user's
   browser to the login entry point (forced login initiation, a form of
   login CSRF): with an IdP session alive, the user is logged in, or
-  switched to another session, without asking. Start logins only from
-  same-origin navigations — Fetch Metadata's `Sec-Fetch-Site` is
-  `same-origin` or `none` (typed URL, bookmark); refuse `cross-site` and
-  `same-site` — or from a CSRF-protected POST. `examples/saml-sp` does the
-  former and accepts requests without the header (older browsers).
+  switched to another session, without asking. Through a connection whose
+  IdP the attacker controls, typically her own tenant, the victim ends up
+  in the attacker's account. The browser binding cannot tell: the victim's
+  browser started that login. Start logins only from same-origin
+  navigations — Fetch Metadata's `Sec-Fetch-Site` is `same-origin` or
+  `none` (typed URL, bookmark); refuse `cross-site` and `same-site` — or
+  from a CSRF-protected POST. `examples/saml-sp` does the former and
+  accepts requests without the header, so browsers older than Fetch
+  Metadata keep working but stay exposed; a strict deployment refuses a
+  missing header too. The browser suite (BR8) shows both
+  ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS location is checked**: the request path must be the
   connection's ACS path (Bindings §3.5.5.2); `Destination` (required on a
   signed Response) and `Recipient` must equal the configured ACS URL.
@@ -632,7 +642,9 @@ elements (`MaxResponseElements`, sized from goxmldsig's 1000-node
 canonicalization budget; gosaml2 verifies up to about 500), 4096 tokens,
 depth 64, 16 attributes and 16 namespace declarations per element, 32
 in-scope prefixes, 8 KiB attribute values; no DTD, entity or processing
-instruction. Measured on an Apple M-series machine (Go 1.26): a typical
+instruction, and only namespace-well-formed names (Namespaces in XML 1.0
+§3, §7: no empty prefix or local part, which encoding/xml would keep whole
+in no namespace). Measured on an Apple M-series machine (Go 1.26): a typical
 login costs about 1.1 ms and 1.1 MB; the most expensive response within the
 default limits about 25–33 ms and 21–28 MiB, about 61–69 ms and 33–43 MiB at
 the 1 MiB ceiling; inputs aimed at amplification are refused within 10 ms
@@ -967,9 +979,11 @@ span catalog.
 - [ ] SAML: share the transaction store and the replay cache between
       instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
       expired SQL rows.
-- [ ] SAML: exempt the ACS routes from CSRF protection, rate-limit the login
-      entry point, and key accounts on the connection and the persistent
-      NameID — never on an email.
+- [ ] SAML: exempt the ACS routes from CSRF protection, start logins only
+      from a same-origin gesture (a POST with a CSRF token, or
+      `Sec-Fetch-Site` `same-origin` or `none`), rate-limit the login entry
+      point, serve it on the ACS host, and key accounts on the connection
+      and the persistent NameID — never on an email.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and

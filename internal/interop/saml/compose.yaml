@@ -1,0 +1,67 @@
+# Disposable services for the opt-in SAML interoperability and persistence
+# tests of this module (never used by routine CI). Images are pinned by
+# digest; credentials come from the environment and nothing is persisted.
+#
+#   export SAMLSP_KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+#   export SAMLSP_DB_PASSWORD="$(openssl rand -hex 16)"
+#   docker compose -f internal/interop/saml/compose.yaml up -d --wait
+#
+# then run the tests with the variables documented in docs/saml-sp.md
+# ("Testing your integration"), and stop everything with
+# docker compose -f internal/interop/saml/compose.yaml down.
+#
+# Every port is bound to 127.0.0.1 on a non-default port.
+
+name: samlsp-interop
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    command: ["start-dev", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SAMLSP_KEYCLOAK_ADMIN_PASSWORD:?set SAMLSP_KEYCLOAK_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  postgres:
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    environment:
+      POSTGRES_USER: samlsp
+      POSTGRES_PASSWORD: ${SAMLSP_DB_PASSWORD:?set SAMLSP_DB_PASSWORD}
+      POSTGRES_DB: samlsp
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U samlsp -d samlsp"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SAMLSP_DB_PASSWORD:?set SAMLSP_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:13306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  redis:
+    image: redis:7.4@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

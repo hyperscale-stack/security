@@ -1,0 +1,144 @@
+version = 1
+
+# BR2: with third-party cookies blocked, the login still completes. The ACS
+# request is a top-level cross-site navigation, not a third-party
+# subresource, so the SameSite=None binding cookie is still sent. The pixel
+# is the control: the same cookie is withheld from a cross-site subresource.
+scenario "BR2 the login works with third-party cookies blocked" {
+  tags = ["saml", "browser", "br2"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  step "browser" "control_cookies" {
+    target = "victim_3pc"
+
+    actions {
+      goto {
+        url = "${config.sp}/_e2e/controls"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='sp.controls']"
+      }
+    }
+  }
+
+  step "browser" "pixel_probe" {
+    target = "victim_3pc"
+
+    actions {
+      goto {
+        url = "${config.attacker}/pixel"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='attacker.pixel']"
+      }
+    }
+  }
+
+  step "http" "pixel_evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        pixel = {
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-ctl-none" = not_exists()
+          }
+        }
+      }
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim_3pc"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?from=br2")}"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim_3pc"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim_3pc"
+
+    expect {
+      url {
+        value = "${config.sp}/?from=br2"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in       = 1
+        rejection_count = 0
+        acs = {
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-samlsp"   = true
+            "__Host-ctl-none" = true
+          }
+        }
+      }
+    }
+  }
+}

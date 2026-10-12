@@ -1,0 +1,293 @@
+version = 1
+
+# BE2: the example's return target is never an open redirect. After a
+# silent re-authentication, every hostile return target ends on sp.test,
+# and attacker.test is never reached. The payloads are the decoded values of
+# the return parameter. Browsers drop TAB, LF and CR inside URLs and read a
+# backslash as a slash: "/<TAB>/attacker.test" or "/<backslash>attacker.test"
+# would leave the site if the example let them through.
+scenario "BE2 hostile return targets never leave the site" {
+  tags = ["saml", "browser", "be2"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim"
+
+    expect {
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+    }
+  }
+
+  step "browser" "absolute_url" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("https://attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "scheme_relative" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("//attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "backslash" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/\\attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "encoded_backslash" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/%5Cattacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "tab" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/\t/attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "line_feed" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/\n/attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "carriage_return" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/\r/attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "encoded_tab" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/%09/attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "encoded_slash" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/%2F/attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "encoded_scheme_relative" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("%2F%2Fattacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "javascript_url" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("javascript:alert(1)")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  step "browser" "dot_segment" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/.//attacker.test:18443/x")}"
+      }
+    }
+
+    expect {
+      url {
+        value = matches("^https://sp\\.test:18443/")
+      }
+    }
+  }
+
+  # Control: a local return target is kept.
+  step "browser" "local_target" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?ok=1")}"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?ok=1"
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 14
+        rejection_count  = 0
+        credential_posts = 1
+        attacker_landing = 0
+        hits = {
+          "attacker.test" = not_exists()
+        }
+      }
+    }
+  }
+}

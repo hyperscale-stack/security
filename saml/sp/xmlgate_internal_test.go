@@ -107,6 +107,16 @@ func TestCheckXML_Hygiene(t *testing.T) {
 		{"element in the xml namespace", `<xml:r/>`, "malformed"},
 		{"element in the xmlns namespace", `<xmlns:r/>`, "malformed"},
 		{"invalid character reference", `<r>&#0;</r>`, "malformed"},
+		// Namespaces in XML 1.0 §3: a prefix and a local part are non-empty
+		// NCNames. encoding/xml keeps a name with an empty part whole, colon
+		// included, in no namespace: such documents are not
+		// namespace-well-formed (§7) and are refused.
+		{"attribute with an empty local part", `<r xmlns:p="urn:p" p:="1"/>`, "malformed"},
+		{"attribute with an empty prefix", `<r :x="1"/>`, "malformed"},
+		{"attribute named by a colon", `<r :="1"/>`, "malformed"},
+		{"element with an empty prefix", `<:r/>`, "malformed"},
+		{"element with an empty local part", `<r xmlns:p="urn:p"><p:/></r>`, "malformed"},
+		{"declaration with an empty prefix", `<r xmlns:="urn:x"/>`, "malformed"},
 		{"not XML", `{"json":true}`, "malformed"},
 	}
 

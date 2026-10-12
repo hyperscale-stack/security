@@ -1,0 +1,196 @@
+version = 1
+
+# BR1: the SP-initiated login completes although the ACS request is a
+# cross-site POST from the IdP. Only the SameSite=None binding cookie
+# correlates it: Lax and Strict cookies of sp.test are not sent with it.
+scenario "BR1 cross-site POST to the ACS carries the binding cookie" {
+  tags = ["saml", "browser", "br1"]
+
+  skip_unless {
+    env_set = ["SAMLSP_E2E_SPKI"]
+    reason  = "run through e2e/saml/run.sh"
+  }
+
+  step "keyword" "helper" {
+    name = "reset_helper"
+    inputs = {
+      mode = ""
+    }
+  }
+
+  # First-party control cookies on sp.test, one per SameSite value.
+  step "browser" "control_cookies" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/_e2e/controls"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='sp.controls']"
+      }
+    }
+  }
+
+  step "browser" "start_login" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?from=br1")}"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+
+      url {
+        value = contains("${config.idp}/sso?")
+      }
+    }
+  }
+
+  step "keyword" "alice" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "victim"
+      user     = "alice"
+      password = result.helper.alice_password
+    }
+  }
+
+  step "browser" "signed_in" {
+    target = "victim"
+
+    actions {
+      wait_visible {
+        selector = "h1"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?from=br1"
+      }
+
+      text {
+        selector = "h1"
+        value    = "Signed in"
+      }
+
+      text {
+        selector = "p"
+        value    = contains("alice-pairwise-id")
+      }
+    }
+  }
+
+  step "http" "evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        signed_in        = 1
+        rejection_count  = 0
+        credential_posts = 1
+
+        # The binding cookie: host-only, Secure, HttpOnly, SameSite=None.
+        login = {
+          host = "sp.test"
+          set_cookies = {
+            "__Host-samlsp" = {
+              path      = "/"
+              domain    = ""
+              secure    = true
+              http_only = true
+              same_site = "None"
+              max_age   = 600
+            }
+          }
+        }
+
+        # The ACS request: cross-site, with the binding cookie and the
+        # SameSite=None control, without the Lax and Strict controls.
+        acs = {
+          host           = "sp.test"
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-samlsp"     = true
+            "__Host-ctl-none"   = true
+            "__Host-ctl-lax"    = not_exists()
+            "__Host-ctl-strict" = not_exists()
+          }
+        }
+
+        # The redirect after the ACS is still cross-site: it carries the
+        # Lax session cookie minted at the ACS, not a Strict one.
+        after_acs = {
+          path           = "/"
+          sec_fetch_site = "cross-site"
+          cookies = {
+            session             = true
+            "__Host-acs-lax"    = true
+            "__Host-acs-strict" = not_exists()
+          }
+        }
+      }
+    }
+  }
+
+  # A cross-site subresource carries the SameSite=None cookie while the
+  # browser allows third-party cookies (the control of BR2).
+  step "browser" "pixel_probe" {
+    target = "victim"
+
+    actions {
+      goto {
+        url = "${config.attacker}/pixel"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='attacker.pixel']"
+      }
+    }
+  }
+
+  step "http" "pixel_evidence" {
+    retry {
+      attempts = 20
+      interval = "250ms"
+    }
+
+    request {
+      method = "GET"
+      url    = "${config.control}/state"
+    }
+
+    expect {
+      status = 200
+      json = {
+        pixel = {
+          sec_fetch_site = "cross-site"
+          cookies = {
+            "__Host-ctl-none" = true
+            "__Host-ctl-lax"  = not_exists()
+          }
+        }
+      }
+    }
+  }
+}

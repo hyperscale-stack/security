@@ -1,0 +1,228 @@
+version = 1
+
+# Browser suite of the SAML Service Provider, run against the real
+# examples/saml-sp binary by run.sh (`make e2e`). The helper process serves
+# every site on 127.0.0.1:18443 with one runtime certificate:
+#   - sp.test and acs.sp.test: the example, behind a recording proxy;
+#   - evil.sp.test: a sibling of sp.test that tosses cookies at it;
+#   - idp.test: the IdP (crewjam), with a credential form and its session;
+#   - attacker.test: cross-site pages.
+# Chrome maps the names to loopback and trusts the runtime certificate by
+# its SPKI hashes (SAMLSP_E2E_SPKI, exported by run.sh). The control API
+# (plain HTTP on loopback) resets the helper, switches the IdP behaviour and
+# returns the server-side evidence: the cookies each request carried, its
+# Sec-Fetch-Site, the cookies each response set and the example's log of
+# refused logins.
+#
+# Scenarios share the helper: run them one at a time (--parallel 1).
+
+config {
+  sp       = "https://sp.test:18443"
+  acs_host = "https://acs.sp.test:18443"
+  evil_sp  = "https://evil.sp.test:18443"
+  idp      = "https://idp.test:18443"
+  attacker = "https://attacker.test:18443"
+  control  = "http://127.0.0.1:18480"
+
+  browser = {
+    targets = {
+      victim = {
+        browser  = "chrome"
+        headless = true
+        timeout  = "20s"
+        args = [
+          "--host-resolver-rules=MAP sp.test 127.0.0.1, MAP acs.sp.test 127.0.0.1, MAP evil.sp.test 127.0.0.1, MAP idp.test 127.0.0.1, MAP attacker.test 127.0.0.1",
+          "--ignore-certificate-errors-spki-list=${env("SAMLSP_E2E_SPKI", "")}",
+        ]
+      }
+
+      # The attacker's own browser.
+      mallory = {
+        browser  = "chrome"
+        headless = true
+        timeout  = "20s"
+        args = [
+          "--host-resolver-rules=MAP sp.test 127.0.0.1, MAP acs.sp.test 127.0.0.1, MAP evil.sp.test 127.0.0.1, MAP idp.test 127.0.0.1, MAP attacker.test 127.0.0.1",
+          "--ignore-certificate-errors-spki-list=${env("SAMLSP_E2E_SPKI", "")}",
+        ]
+      }
+
+      # A victim whose browser blocks third-party cookies.
+      victim_3pc = {
+        browser  = "chrome"
+        headless = true
+        timeout  = "20s"
+        args = [
+          "--host-resolver-rules=MAP sp.test 127.0.0.1, MAP acs.sp.test 127.0.0.1, MAP evil.sp.test 127.0.0.1, MAP idp.test 127.0.0.1, MAP attacker.test 127.0.0.1",
+          "--ignore-certificate-errors-spki-list=${env("SAMLSP_E2E_SPKI", "")}",
+          "--test-third-party-cookie-phaseout",
+        ]
+      }
+    }
+  }
+}
+
+# Resets the helper (evidence, held responses, IdP sessions) and sets the
+# IdP mode; returns the per-run passwords.
+keyword "reset_helper" {
+  inputs {
+    mode = string
+  }
+
+  step "http" "reset" {
+    request {
+      method = "POST"
+      url    = "${config.control}/reset"
+
+      body {
+        json = {
+          mode = input.mode
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        alice_password   = is_string()
+        mallory_password = is_string()
+      }
+    }
+  }
+
+  outputs {
+    alice_password   = result.reset.response.json.alice_password
+    mallory_password = result.reset.response.json.mallory_password
+  }
+}
+
+# Switches the IdP mode (see deliver in internal/interop/saml/e2e_helper_test.go).
+keyword "set_idp_mode" {
+  inputs {
+    mode = string
+  }
+
+  step "http" "set_mode" {
+    request {
+      method = "POST"
+      url    = "${config.control}/config"
+
+      body {
+        json = {
+          mode = input.mode
+        }
+      }
+    }
+
+    expect {
+      status = 200
+      json = {
+        mode = input.mode
+      }
+    }
+  }
+}
+
+# Fills and submits the IdP credential form shown in browser.
+keyword "idp_sign_in" {
+  inputs {
+    browser  = string
+    user     = string
+    password = string
+  }
+
+  step "browser" "idp_credentials" {
+    target = input.browser
+
+    actions {
+      wait_visible {
+        selector = "[data-testid='idp.login']"
+      }
+
+      fill {
+        selector = "[data-testid='idp.user']"
+        value    = input.user
+      }
+
+      fill {
+        selector = "[data-testid='idp.password']"
+        value    = input.password
+        secure   = true
+      }
+
+      click {
+        selector = "[data-testid='idp.submit']"
+      }
+    }
+  }
+}
+
+# Mallory starts her own login in her own browser while the IdP is in the
+# hold mode: her valid response is kept, not posted (slot "held").
+keyword "mallory_holds_her_response" {
+  inputs {
+    password = string
+  }
+
+  step "browser" "mallory_starts_login" {
+    target = "mallory"
+
+    actions {
+      goto {
+        url = "${config.sp}/login?return=${url_encode("/?who=mallory")}"
+      }
+    }
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.login']"
+      }
+    }
+  }
+
+  step "keyword" "mallory_credentials" {
+    name = "idp_sign_in"
+    inputs = {
+      browser  = "mallory"
+      user     = "mallory"
+      password = input.password
+    }
+  }
+
+  step "browser" "mallory_response_held" {
+    target = "mallory"
+
+    expect {
+      visible {
+        selector = "[data-testid='idp.held']"
+      }
+    }
+  }
+}
+
+# Mallory posts her held response from her own browser: it signs her in,
+# so the attempts made with it in another browser consumed nothing.
+keyword "mallory_completes_her_login" {
+  inputs {}
+
+  step "browser" "mallory_releases" {
+    target = "mallory"
+
+    actions {
+      goto {
+        url = "${config.idp}/_e2e/release?slot=held"
+      }
+    }
+
+    expect {
+      url {
+        value = "${config.sp}/?who=mallory"
+      }
+
+      text {
+        selector = "p"
+        value    = contains("mallory-pairwise-id")
+      }
+    }
+  }
+}
