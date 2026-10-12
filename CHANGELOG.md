@@ -432,6 +432,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   no refresh token outlives the deadline and a later refresh is
   `invalid_grant`. `RefreshTTL` keeps its inactivity semantics (RFC 9700
   §4.14.2).
+- Core sentinels `security.ErrAuthenticationRequired` (no credential the
+  server could validate, or an unauthenticated principal refused by an
+  access decision), `security.ErrInvalidRequest` (a malformed authentication
+  request, such as a repeated `Authorization` field) and
+  `security.ErrUnavailable` (the credentials could not be checked because a
+  dependency — key set, user store, introspection endpoint — is temporarily
+  unavailable; not a verdict on the credentials).
 
 ### Changed
 
@@ -598,6 +605,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and SQL schemas)**: every store persists it (`store/sql`: a
   `family_issued_at BIGINT NOT NULL DEFAULT 0` column existing databases add
   with the `ALTER TABLE` of [MIGRATION.md](MIGRATION.md)).
+- `Engine.Process` and `Manager.Authenticate` return `security.Anonymous()`
+  on every failure, and the Engine stores the anonymous authentication in
+  the returned context: the extracted credentials never flow back to the
+  caller. The `Manager` treats an authenticator error wrapping
+  `ErrUnsupportedCredential` as an abstention (the documented runtime
+  bail-out) rather than a refusal joined with the others, and a "success"
+  without an authenticated value as a refusal. `NewEngine`, `NewManager`
+  and the three `AccessDecisionManager` constructors panic on a nil
+  dependency. See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -710,6 +726,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `application/x-www-form-urlencoded` body and does not check the content
   type; client grant types are compared exactly, not case-insensitively; and
   `Profile20BCP` refuses the legacy `password` grant as well as `implicit`.
+- Contract violations no longer panic the request path: an authenticator or
+  a custom `Manager` returning no authenticated value without an error, a
+  nil `Attribute`, a nil `Authentication` passed to `Decide`, and a voter
+  returning an undefined `Decision` now fail closed (an error, a denial, the
+  anonymous authentication, a deny vote).
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1132,3 +1153,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `client_id=B` in its body was served as A. Both, and several
   `Authorization` fields, are now `invalid_request` (RFC 6749 §5.2) at
   `/token`, `/revoke` and `/introspect`.
+- After a failed authentication the `Engine` stored the extracted
+  `Authentication` — a cleartext password, a bearer token — in the request
+  context; it now stores the anonymous authentication.

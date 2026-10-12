@@ -10,6 +10,10 @@ package security
 //
 // The unexported method securityError() prevents foreign types from
 // accidentally satisfying the interface.
+//
+// An error that wraps none of these sentinels is an internal error (a broken
+// contract, a misconfiguration): the transport adapters answer it with
+// HTTP 500 / Internal, never as a verdict on the credentials.
 type SecurityError interface {
 	error
 	securityError()
@@ -20,45 +24,78 @@ type SecurityError interface {
 var (
 	// ErrInvalidCredentials indicates that the supplied credentials could not
 	// be validated (bad password, unknown user, malformed token). Maps to
-	// HTTP 401 / gRPC Unauthenticated.
+	// HTTP 401 — with error="invalid_token" when the request carried a bearer
+	// token (RFC 6750 §3.1) — and gRPC/Connect Unauthenticated.
 	ErrInvalidCredentials = newSentinel("security: invalid credentials")
 
 	// ErrClientSecretMismatch indicates that an OAuth2 client presented a
-	// secret that did not match the registered value. Maps to HTTP 401.
+	// secret that did not match the registered value. Maps like
+	// [ErrInvalidCredentials].
 	ErrClientSecretMismatch = newSentinel("security: oauth2 client secret mismatch")
 
 	// ErrTokenExpired indicates that a valid token has passed its expiry.
-	// Maps to HTTP 401.
+	// Maps like [ErrInvalidCredentials].
 	ErrTokenExpired = newSentinel("security: token expired")
 
 	// ErrTokenNotFound indicates that the presented token does not exist in
-	// the configured storage. Maps to HTTP 401.
+	// the configured storage. Maps like [ErrInvalidCredentials].
 	ErrTokenNotFound = newSentinel("security: token not found")
 
-	// ErrUnsupportedCredential indicates that no provider recognized the
-	// credential type. Maps to HTTP 400.
+	// ErrUnsupportedCredential indicates that no authenticator recognized the
+	// credential type. The request carries no credential the server can
+	// validate: it maps to HTTP 401 with a challenge that carries no error
+	// code (RFC 6750 §3.1, RFC 9110 §15.5.2) and to gRPC/Connect
+	// Unauthenticated. An [Authenticator] returning it from Authenticate
+	// bails out: the [Manager] counts that as an abstention, not a refusal.
 	ErrUnsupportedCredential = newSentinel("security: unsupported credential type")
 
 	// ErrNoExtractor indicates that the [Engine] was configured without any
 	// [Extractor]. The Engine returns the anonymous authentication and this
 	// error so that the caller can distinguish "no extractor" from "all
-	// extractors found nothing".
+	// extractors found nothing". Unless the transport tolerates it (anonymous
+	// fallback), it is a server misconfiguration: HTTP 500 / Internal.
 	ErrNoExtractor = newSentinel("security: no extractor configured")
 
 	// ErrAuthenticatorRefused is the umbrella error returned by [Manager]
 	// when every supporting [Authenticator] rejected the credential. The
 	// individual errors are joined via errors.Join and reachable through
-	// errors.Is / errors.As.
+	// errors.Is / errors.As; transports classify the joined causes.
 	ErrAuthenticatorRefused = newSentinel("security: every authenticator refused the credential")
 
 	// ErrAccessDenied indicates that authorisation voting denied access.
-	// Maps to HTTP 403 / gRPC PermissionDenied.
+	// Maps to HTTP 403 / gRPC PermissionDenied for an authenticated
+	// principal; the transports answer 401 / Unauthenticated
+	// ([ErrAuthenticationRequired]) when the refused principal is not
+	// authenticated (RFC 9110 §15.5.2, §15.5.4).
 	ErrAccessDenied = newSentinel("security: access denied")
 
 	// ErrInsufficientScope indicates that the principal is authenticated but
-	// does not carry the OAuth2 scope required for the resource. Maps to
-	// HTTP 403 with the "insufficient_scope" WWW-Authenticate parameter.
+	// does not carry the OAuth2 scope required for the resource. Maps like
+	// [ErrAccessDenied], with error="insufficient_scope" when the request
+	// carried a bearer token (RFC 6750 §3.1).
 	ErrInsufficientScope = newSentinel("security: insufficient scope")
+
+	// ErrAuthenticationRequired indicates that the request carries no
+	// credential the server could validate while the resource requires an
+	// authenticated principal, or that an access decision refused an
+	// unauthenticated principal. Maps to HTTP 401 with a challenge that
+	// carries no error code (RFC 6750 §3.1, RFC 9110 §15.5.2) and to
+	// gRPC/Connect Unauthenticated.
+	ErrAuthenticationRequired = newSentinel("security: authentication required")
+
+	// ErrInvalidRequest indicates a malformed authentication request, such as
+	// a singleton credential field (Authorization) sent more than once
+	// (RFC 9110 §5.3, §5.5). Maps to HTTP 400 — with error="invalid_request"
+	// when the request carried a bearer token (RFC 6750 §3.1) — and to
+	// gRPC/Connect InvalidArgument.
+	ErrInvalidRequest = newSentinel("security: invalid authentication request")
+
+	// ErrUnavailable indicates that the credentials could not be checked
+	// because a dependency (key set, user store, introspection endpoint) is
+	// temporarily unavailable. It is not a verdict on the credentials. Maps
+	// to HTTP 503 / gRPC Unavailable / Connect CodeUnavailable, even when it
+	// is joined with a credential failure of another authenticator.
+	ErrUnavailable = newSentinel("security: authentication temporarily unavailable")
 )
 
 // sentinelError is the concrete type backing every package-level sentinel.

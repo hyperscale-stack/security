@@ -83,10 +83,10 @@ func TestEnginePropagatesManagerError(t *testing.T) {
 	ctx, got, err := e.Process(context.Background(), newMapCarrier())
 
 	assert.ErrorIs(t, err, security.ErrInvalidCredentials)
-	assert.Equal(t, Authentication(pending), got,
-		"failed auth returns the pre-authentication value so adapters can craft a challenge")
+	assert.Equal(t, security.Anonymous(), got,
+		"a failed authentication returns Anonymous: the extracted credentials never leave the Engine")
 	stored, _ := security.FromContext(ctx)
-	assert.Equal(t, Authentication(pending), stored)
+	assert.Equal(t, security.Anonymous(), stored)
 }
 
 func TestEngineSpanRecordsExtractorAndAuthenticationFlags(t *testing.T) {

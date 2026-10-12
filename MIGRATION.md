@@ -1260,3 +1260,38 @@ To migrate:
    key last on every instance; once all of them run with it, move it first;
    remove the old key once `TransactionTTL` (10 minutes by default) has
    elapsed.
+
+### core: failures return the anonymous authentication; contract violations fail closed
+
+After a failed authentication, `Engine.Process` stored the extracted
+`Authentication` — a cleartext password, a bearer token — in the request
+context and returned it, and `Manager.Authenticate` returned it too. A
+component breaking its contract made the request path panic: an
+authenticator returning `(nil, nil)`, a nil `Attribute`, a nil
+`Authentication` passed to `Decide`. And an authenticator bailing out at
+runtime with `ErrUnsupportedCredential` — the documented way to do so — had
+its error joined with the other authenticators' refusals, so a wrong password
+could be answered as an unsupported credential.
+
+| Situation | Before | After |
+| --- | --- | --- |
+| `Engine.Process` / `Manager.Authenticate` fail | return (and store) the extracted value | return (and store) `security.Anonymous()` |
+| An authenticator returns `(nil, nil)` | panic | refusal; the next authenticator is tried |
+| An authenticator returns an unauthenticated value and no error | success | refusal (contract violation) |
+| A custom `Manager` returns no authenticated value and no error | panic / success | `Process` fails |
+| An authenticator returns an error wrapping `ErrUnsupportedCredential` | joined into `ErrAuthenticatorRefused` | abstention; `ErrUnsupportedCredential` when every supporting authenticator bails out |
+| `Decide` with a nil `Attribute` | panic | `ErrAccessDenied` |
+| `Decide` with a nil `Authentication` | panic | evaluated as `security.Anonymous()` |
+| A voter returns an undefined `Decision` | ignored (abstention) | counted as `DecisionDeny` |
+| `NewEngine(nil, …)`, a nil extractor, authenticator or voter | panic on the first request | panic at construction |
+
+To migrate:
+
+1. Do not read the presented credentials from the value `Engine.Process`
+   returns on failure: it is `security.Anonymous()`. Per-username throttling
+   or lockout belongs in an `Authenticator` wrapper, which sees the
+   credentials before they are checked.
+2. Make every `Authenticator` (and `bearer.TokenVerifier`) return an
+   authenticated value on success, and an error wrapping a security sentinel
+   otherwise.
+3. Pass non-nil managers, extractors, authenticators, voters and attributes.

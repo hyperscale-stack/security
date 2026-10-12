@@ -22,6 +22,13 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		security.ErrTokenExpired,
 		security.ErrTokenNotFound,
 		security.ErrUnsupportedCredential,
+		security.ErrNoExtractor,
+		security.ErrAuthenticatorRefused,
+		security.ErrAccessDenied,
+		security.ErrInsufficientScope,
+		security.ErrAuthenticationRequired,
+		security.ErrInvalidRequest,
+		security.ErrUnavailable,
 	}
 
 	for i, a := range sentinels {

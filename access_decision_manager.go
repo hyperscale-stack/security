@@ -6,6 +6,7 @@ package security
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"go.opentelemetry.io/otel/codes"
@@ -51,18 +52,19 @@ func WithAbstainFallback(d Decision) admOption { //nolint:revive // exported via
 }
 
 // NewAffirmativeDecisionManager returns an [AccessDecisionManager] that
-// grants access as soon as one voter does, and denies otherwise.
+// grants access as soon as one voter does, and denies otherwise. It panics
+// if one of the voters is nil.
 func NewAffirmativeDecisionManager(voters ...Voter) AccessDecisionManager {
 	return &accessDecisionManager{
 		strategy: "affirmative",
-		voters:   cloneVoters(voters),
+		voters:   cloneVoters("NewAffirmativeDecisionManager", voters),
 		decide:   affirmative,
 	}
 }
 
 // NewConsensusDecisionManager returns an [AccessDecisionManager] that
 // follows majority rule. Pass [WithTieBreak] to override the default
-// (deny-on-tie) behavior.
+// (deny-on-tie) behavior. It panics if one of the voters is nil.
 func NewConsensusDecisionManager(voters []Voter, opts ...admOption) AccessDecisionManager {
 	cfg := admConfig{tieBreak: DecisionDeny}
 	for _, o := range opts {
@@ -71,14 +73,15 @@ func NewConsensusDecisionManager(voters []Voter, opts ...admOption) AccessDecisi
 
 	return &accessDecisionManager{
 		strategy: "consensus",
-		voters:   cloneVoters(voters),
+		voters:   cloneVoters("NewConsensusDecisionManager", voters),
 		decide:   consensus(cfg.tieBreak),
 	}
 }
 
 // NewUnanimousDecisionManager returns an [AccessDecisionManager] that
 // refuses on a single deny and otherwise grants when at least one voter
-// grants. Pass [WithAbstainFallback] to control the all-abstain case.
+// grants. Pass [WithAbstainFallback] to control the all-abstain case. It
+// panics if one of the voters is nil.
 func NewUnanimousDecisionManager(voters []Voter, opts ...admOption) AccessDecisionManager {
 	cfg := admConfig{abstainFallback: DecisionDeny}
 	for _, o := range opts {
@@ -87,7 +90,7 @@ func NewUnanimousDecisionManager(voters []Voter, opts ...admOption) AccessDecisi
 
 	return &accessDecisionManager{
 		strategy: "unanimous",
-		voters:   cloneVoters(voters),
+		voters:   cloneVoters("NewUnanimousDecisionManager", voters),
 		decide:   unanimous(cfg.abstainFallback),
 	}
 }
@@ -99,6 +102,11 @@ type accessDecisionManager struct {
 }
 
 // Decide implements [AccessDecisionManager].
+//
+// Contract violations fail closed: a nil auth is treated as [Anonymous], a
+// nil attribute denies the request before any voter runs, and a voter
+// returning a value other than [DecisionGrant] or [DecisionAbstain] is
+// counted as [DecisionDeny].
 func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication, attrs []Attribute) error {
 	ctx, span := tracer().Start(ctx, "security.AccessDecisionManager.Decide")
 	defer span.End()
@@ -108,19 +116,15 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 		AttrAttributes.String(joinAttributes(attrs)),
 	)
 
-	votes := make([]Decision, 0, len(m.voters))
-
-	for _, v := range m.voters {
-		if !anySupported(v, attrs) {
-			votes = append(votes, DecisionAbstain)
-
-			continue
-		}
-
-		votes = append(votes, v.Vote(ctx, auth, attrs))
+	if auth == nil {
+		auth = Anonymous()
 	}
 
-	final := m.decide(votes)
+	final := DecisionDeny
+	if !containsNil(attrs) {
+		final = m.decide(m.votes(ctx, auth, attrs))
+	}
+
 	span.SetAttributes(AttrDecision.String(final.String()))
 
 	if final == DecisionGrant {
@@ -130,6 +134,38 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 	span.SetStatus(codes.Error, ErrAccessDenied.Error())
 
 	return ErrAccessDenied
+}
+
+// votes collects one normalized vote per voter: an abstention for a voter
+// that supports none of the attributes, the voter's verdict otherwise.
+func (m *accessDecisionManager) votes(ctx context.Context, auth Authentication, attrs []Attribute) []Decision {
+	votes := make([]Decision, 0, len(m.voters))
+
+	for _, v := range m.voters {
+		if !anySupported(v, attrs) {
+			votes = append(votes, DecisionAbstain)
+
+			continue
+		}
+
+		votes = append(votes, normalize(v.Vote(ctx, auth, attrs)))
+	}
+
+	return votes
+}
+
+// normalize maps every value but Grant and Abstain to Deny, so an undefined
+// Decision can never be mistaken for an abstention (which a fallback could
+// turn into a grant).
+func normalize(d Decision) Decision {
+	switch d {
+	case DecisionGrant, DecisionAbstain:
+		return d
+	case DecisionDeny:
+		return DecisionDeny
+	default:
+		return DecisionDeny
+	}
 }
 
 // affirmative returns Grant on first grant, Deny otherwise. Abstentions are
@@ -209,6 +245,17 @@ func unanimous(allAbstainFallback Decision) func([]Decision) Decision {
 	}
 }
 
+// containsNil reports whether attrs holds a nil Attribute.
+func containsNil(attrs []Attribute) bool {
+	for _, a := range attrs {
+		if a == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
 func anySupported(v Voter, attrs []Attribute) bool {
 	for _, a := range attrs {
 		if v.Supports(a) {
@@ -226,13 +273,27 @@ func joinAttributes(attrs []Attribute) string {
 
 	parts := make([]string, len(attrs))
 	for i, a := range attrs {
+		if a == nil {
+			parts[i] = "<nil>"
+
+			continue
+		}
+
 		parts[i] = a.String()
 	}
 
 	return strings.Join(parts, ",")
 }
 
-func cloneVoters(in []Voter) []Voter {
+// cloneVoters copies the voter list, panicking on a nil voter: it would
+// otherwise surface as a nil dereference on the first request.
+func cloneVoters(constructor string, in []Voter) []Voter {
+	for i, v := range in {
+		if v == nil {
+			panic(fmt.Sprintf("security: %s: nil Voter at index %d", constructor, i))
+		}
+	}
+
 	cp := make([]Voter, len(in))
 	copy(cp, in)
 
