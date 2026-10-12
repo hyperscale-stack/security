@@ -717,7 +717,7 @@ never sees:
 | a store writer relaxing a login it runs itself | login completed | `ErrTransactionIntegrity`, the code is never redeemed |
 | transactions stored before the upgrade | — | fail once with `ErrTransactionIntegrity` (the user signs in again) |
 | SQL and Redis stores | — | unchanged: `Integrity` is still 64 hex digits |
-| `fmt` / `log/slog` of a `Config` | every field, client secret included | identifying fields only; client secret and keys redacted |
+| `fmt` / `log/slog` of a `Config` or a `*Client` | every field, client secret included | identifying fields only, with every `fmt` verb; client secret and keys redacted |
 
 To migrate:
 

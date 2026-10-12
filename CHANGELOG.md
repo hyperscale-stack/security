@@ -510,8 +510,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   callbacks; the first protects new login transactions, all are accepted
   (rotation). `New` fails with `ErrInvalidConfig` without them, and the
   logins in flight during the upgrade fail once with
-  `ErrTransactionIntegrity`. `Config` now prints and logs without its
-  client secret and keys (`String`, `GoString`, `LogValue`). The example
+  `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
+  without the client secret and the keys, whatever the `fmt` verb. The example
   reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
@@ -609,6 +609,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   rewrite its `AppState`. Such a transaction now fails with
   `ErrTransactionIntegrity` before the code is redeemed; the store is
   trusted for availability and single consumption only.
+- An `oidcclient.Client` printed with `fmt` revealed its client secret and
+  transaction keys (fmt prints the unexported fields of a struct pointer),
+  and `Config`, `AuthRequest`, `Callback`, `Identity` and `Tokens` revealed
+  their secrets with the verbs their `String` method does not cover (`%d`,
+  `%t`…). Every one now prints its redacted form with every verb
+  (`fmt.Formatter`) and logs without secrets in `slog` (#86).
 - Multi-issuer deployments can keep each client in its realm: with the
   `oauth2.IssuerBoundClient` capability (see Added), a client of one issuer
   can no longer send another issuer's end-users to that issuer's login page

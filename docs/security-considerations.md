@@ -787,8 +787,8 @@ are attacker-influenced.
   browser. The store is trusted for availability and single consumption
   only. The transaction keys are secrets like a session key: 32 bytes or
   more from a cryptographic source, shared by every instance serving
-  callbacks, never logged (`Config`'s `String`, `GoString` and `LogValue`
-  redact them). Rotate them in three steps — add the new key last on every
+  callbacks, never logged (`Config` and `*Client` redact them with every
+  `fmt` verb and in `slog`). Rotate them in three steps — add the new key last on every
   instance, move it first, remove the old one once `TransactionTTL` has
   elapsed: the first key protects new transactions, every key is accepted.
 - **Single use** — `TransactionStore.Consume` removes the transaction
@@ -862,8 +862,10 @@ are attacker-influenced.
 - **Tokens** — token and UserInfo requests never follow redirects;
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
-  their `sub` is the identity's. `String`, `GoString` and `LogValue` redact
-  secrets, but `json.Marshal` of an `Identity` serializes its tokens.
+  their `sub` is the identity's. Every `fmt` verb and `slog` redact
+  secrets (`%p` of a non-pointer value excepted: fmt prints the fields
+  before any method), but `json.Marshal` of an `Identity` serializes its
+  tokens.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:
