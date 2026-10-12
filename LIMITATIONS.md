@@ -310,6 +310,23 @@ PKCE. Not supported, and refused where a provider could select them:
   case without server state, but a session cannot be revoked server-side
   before its cookie expires. A server-side store (Redis/SQL) is not shipped.
 
+## Logging
+
+- **What `fmt` cannot redact** — the types that hold secrets
+  (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
+  keys, signers and key sets, `session.Codec`…) print redacted with every
+  `fmt` verb and in `slog` output, but fmt prints some values without
+  calling any of their methods: `%p` of a value that is not a pointer, a
+  value held in an unexported field of your own types, and — for the verbs
+  a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
+  Log these types directly or through exported fields, with `%v`.
+- **Credentials and tokens in flight are not redacted yet** — `basic` and
+  `bearer` authentications print the password (before authentication) and
+  the bearer token they carry, and the `oauth2` records
+  (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the `GrantResponse`
+  holding them) the raw code and tokens they carry during issuance: never
+  log them.
+
 ## Tooling
 
 - `.mockery.yaml` targets mockery v3 syntax while the tool pinned in the
