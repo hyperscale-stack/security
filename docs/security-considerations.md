@@ -581,6 +581,14 @@ IdP to send one assertion carrying a persistent NameID:
   and read from the primary.
 - **`BeginLogin` writes to the store without authentication**: rate-limit
   the login entry point.
+- **Gate login initiation.** A page of another site can send the user's
+  browser to the login entry point (forced login initiation, a form of
+  login CSRF): with an IdP session alive, the user is logged in, or
+  switched to another session, without asking. Start logins only from
+  same-origin navigations — Fetch Metadata's `Sec-Fetch-Site` is
+  `same-origin` or `none` (typed URL, bookmark); refuse `cross-site` and
+  `same-site` — or from a CSRF-protected POST. `examples/saml-sp` does the
+  former and accepts requests without the header (older browsers).
 - **The ACS location is checked**: the request path must be the
   connection's ACS path (Bindings §3.5.5.2); `Destination` (required on a
   signed Response) and `Recipient` must equal the configured ACS URL.
@@ -651,13 +659,19 @@ network as hostile:
   [Outbound requests](#outbound-requests-ssrf)): publicly routable
   destinations only, judged on the address dialed, no redirect, no proxy,
   no cookie, no credentials, 10 s, and the smaller of `MaxSize` (1 MiB) and
-  the policy's body limit, counted after decompression. Only a 200 answer
-  is read; no error carries the response body. An on-premises IdP needs its
+  the policy's body limit, counted after decompression. When the policy
+  allows redirects, none may leave the configured URL's origin (scheme,
+  host and port): keys can only come from that origin. A host or port that
+  `outbound` always refuses (`127.1`, a trailing dot, an underscore, port
+  0) fails at construction with `ErrInvalidConfig`. Only a 200 answer is
+  read; no error carries the response body. An on-premises IdP needs its
   subnet in `Outbound.AllowedPrefixes`; pin its host in `CheckURL`, and its
   private CA in `RootCAs`.
-- **Trust** rests on TLS to the configured host and on the pinned entity
+- **Trust** rests on TLS to the configured origin and on the pinned entity
   ID (`MetadataSourceConfig.EntityID` is required): a document of another
-  entity is refused. Keys and endpoints change only through a valid
+  entity is refused. `FetchOptions.EntityID` is optional, to discover a new
+  IdP's entity ID: pin it whenever a fetch replaces keys already
+  configured. Keys and endpoints change only through a valid
   document of that entity fetched from that URL, so an IdP key rollover is
   picked up at the next refresh — announce the new key in the metadata
   before signing with it. Signed metadata is not supported: the embedded
@@ -665,11 +679,15 @@ network as hostile:
   its signature, must not be used as a source. Where TLS to the IdP's
   metadata host is not trusted enough, import the metadata out of band.
 - **Bounded refresh**: at the document's `cacheDuration` (one hour when
-  absent), shortened to its `validUntil` and clamped to `[MinRefresh,
-  MaxRefresh]` (5 minutes, 24 hours by default); concurrent callers share
-  one fetch, which runs detached from the caller that started it and is
-  bounded by the outbound timeout; failed attempts are spaced by
-  `RetryInterval` (one minute). While refreshes fail, the last good
+  absent, the shortest interval for `PT0S`) clamped to `[MinRefresh,
+  MaxRefresh]` (5 minutes, 24 hours by default), and when it expires;
+  concurrent callers share one fetch, which runs detached from the caller
+  that started it and is bounded by the outbound timeout; fetches are
+  spaced by `RetryInterval` (one minute) after a failure or an early
+  expiry. A due refresh never delays a login while a usable document is
+  cached: it runs in the background, and only a caller with nothing usable
+  waits for it, so a slow or hostile metadata endpoint cannot put its
+  latency on the login path. While refreshes fail, the last good
   document is served for at most `MaxStale` (7 days) after it was fetched
   and never past its `validUntil` (Metadata §4.3.2, errata E94); then
   logins fail closed with `ErrMetadataExpired`. Failures surface as

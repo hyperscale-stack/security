@@ -317,7 +317,8 @@ by response content).
   `saml/sp/storetest`.
 - `internal/interop/saml` runs the SP against crewjam's IdP and replays a
   pinned Keycloak 26.0.7 login (`testdata/`, regenerated with
-  `SAMLSP_KEYCLOAK_URL`, see `keycloak_capture_test.go`).
+  `SAMLSP_KEYCLOAK_URL` and `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` against a
+  disposable Keycloak, see `keycloak_capture_test.go`).
 
 ## Tooling caveats
 

@@ -220,9 +220,9 @@ PKCE. Not supported, and refused where a provider could select them:
   entity ID, so federation aggregates (whose trust comes from their
   signature) must not be used as metadata sources.
 - **Metadata refresh** — a `MetadataSource` refreshes lazily, on use: an
-  idle connection is refreshed at its next login, and a document whose
-  `validUntil` is nearer than `MinRefresh` fails closed from its
-  `validUntil` until the next refresh.
+  idle connection is refreshed at its next login. A document that expires
+  is refreshed at once but at most once per `RetryInterval`, so a document
+  valid for less than that fails closed for the rest of the interval.
 - **Legal but ambiguous responses are refused** — several assertions,
   `SubjectConfirmation`s or `AuthnStatement`s, an assertion without
   `NameID`, a Response without `Issuer`. Configure the IdP to send one
