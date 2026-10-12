@@ -420,12 +420,12 @@ func (g *corpusGen) encodingLimitSpecs() []corpusSpec {
 	return []corpusSpec{
 		{
 			id: "limits/deflated-post", attack: "DEFLATE-encoded SAMLResponse on the POST binding (never inflated)", refs: refs,
-			knobs: corpusKnobs{Encoding: "deflate"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Encoding: "deflate"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMalformedResponse", "not well-formed XML"),
 		},
 		{
 			id: "limits/gzip-post", attack: "gzip-encoded SAMLResponse", refs: refs,
-			knobs: corpusKnobs{Encoding: "gzip"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Encoding: "gzip"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMalformedResponse", "not well-formed XML"),
 		},
 		{
@@ -446,17 +446,17 @@ func (g *corpusGen) encodingLimitSpecs() []corpusSpec {
 		},
 		{
 			id: "limits/not-base64", attack: "SAMLResponse that is not base64", refs: refs,
-			knobs: corpusKnobs{Encoding: "garbage"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Encoding: "garbage"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMalformedResponse", "SAMLResponse is not base64"),
 		},
 		{
 			id: "limits/spaces-in-base64", attack: "spaces inside the base64", refs: refs,
-			knobs: corpusKnobs{Encoding: "spaces"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Encoding: "spaces"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMalformedResponse", "SAMLResponse is not base64"),
 		},
 		{
 			id: "limits/line-wrapped-base64", attack: "base64 wrapped at 76 characters with CRLF (Bindings §3.5.4 tolerance)",
-			refs: refs, knobs: corpusKnobs{Encoding: "wrapped76"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			refs: refs, knobs: corpusKnobs{Encoding: "wrapped76"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: accepted(baselineIdentity()),
 		},
 	}

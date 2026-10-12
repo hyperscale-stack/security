@@ -16,7 +16,6 @@ package samlsp_test
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -36,6 +35,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -406,6 +406,34 @@ func describeOutcome(o entryOutcome) string {
 	return fmt.Sprintf("%q consumes=%d marks=%d consumed=%v", o.err.Error(), o.consumes, o.marks, o.consumed)
 }
 
+// generatedWith records the toolchain and the XML-DSig stack the corpus is
+// generated with: the module versions the go command selects for this
+// build (a test binary records no dependency in its build information).
+func generatedWith(t *testing.T) map[string]string {
+	t.Helper()
+
+	names := map[string]string{
+		"github.com/beevik/etree": "etree", "github.com/russellhaering/gosaml2": "gosaml2",
+		"github.com/russellhaering/goxmldsig": "goxmldsig",
+	}
+
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Path}} {{.Version}}", //nolint:gosec // constant arguments
+		"github.com/beevik/etree", "github.com/russellhaering/gosaml2", "github.com/russellhaering/goxmldsig").Output()
+	require.NoError(t, err, "go list -m")
+
+	versions := map[string]string{"go": runtime.Version()}
+
+	for line := range strings.Lines(string(out)) {
+		path, version, ok := strings.Cut(strings.TrimSpace(line), " ")
+		require.True(t, ok, "go list -m: %q", line)
+		versions[names[path]] = version
+	}
+
+	require.Len(t, versions, len(names)+1, "every XML-DSig dependency is listed")
+
+	return versions
+}
+
 // manifest returns the manifest header (without entries).
 func (g *corpusGen) manifest() *corpusManifest {
 	keys := map[string]string{}
@@ -414,15 +442,13 @@ func (g *corpusGen) manifest() *corpusManifest {
 	}
 
 	return &corpusManifest{
-		Version:   1,
-		Instant:   t0,
-		Generator: "go test -run '^TestCorpusGenerate$' -count=1 ./saml/sp -args -corpus.update",
-		GeneratedWith: map[string]string{
-			"go": runtime.Version(), "goxmldsig": "v1.6.1", "gosaml2": "v0.12.0", "etree": "v1.8.1",
-		},
-		Keys:         keys,
-		Connections:  g.conns,
-		Transactions: g.txs,
+		Version:       1,
+		Instant:       t0,
+		Generator:     "go test -run '^TestCorpusGenerate$' -count=1 ./saml/sp -args -corpus.update",
+		GeneratedWith: generatedWith(g.t),
+		Keys:          keys,
+		Connections:   g.conns,
+		Transactions:  g.txs,
 	}
 }
 
@@ -433,13 +459,13 @@ func (g *corpusGen) entry(s corpusSpec) (corpusEntry, []byte) {
 	data := s.build()
 	sum := sha256.Sum256(data)
 
-	// Every fixture is stored gzipped: the corpus stays small, and the
-	// pinned hash covers the XML itself (stable across compressors).
+	// Fixtures are stored as they are, so that a regenerated corpus is
+	// reviewed as a text diff; the pinned hash covers those bytes.
 	file := s.file
 	if file == "" {
-		ext := ".xml.gz"
+		ext := ".xml"
 		if s.knobs.Encoding == "asis" {
-			ext = ".txt.gz"
+			ext = ".txt"
 		}
 
 		file = s.id + ext
@@ -467,19 +493,6 @@ func (g *corpusGen) write(m *corpusManifest, files map[string][]byte) {
 	for name, data := range files {
 		target := filepath.Join(corpusDir, filepath.FromSlash(name))
 		require.NoError(g.t, os.MkdirAll(filepath.Dir(target), 0o750))
-
-		if strings.HasSuffix(name, ".gz") {
-			var buf bytes.Buffer
-
-			zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-			require.NoError(g.t, err)
-			zw.ModTime = time.Time{} // reproducible archives
-			_, err = zw.Write(data)
-			require.NoError(g.t, err)
-			require.NoError(g.t, zw.Close())
-
-			data = buf.Bytes()
-		}
 
 		require.NoError(g.t, os.WriteFile(target, data, 0o600))
 	}

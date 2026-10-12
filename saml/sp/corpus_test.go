@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,7 +80,7 @@ type corpusEntry struct {
 	Attack      string       `json:"attack"`
 	Refs        []string     `json:"refs,omitempty"`
 	File        string       `json:"file"`
-	SHA256      string       `json:"sha256"` // of the XML (decompressed for .gz)
+	SHA256      string       `json:"sha256"` // of the file's bytes
 	Transaction string       `json:"transaction"`
 	Knobs       corpusKnobs  `json:"knobs"`
 	Expect      corpusExpect `json:"expect"`
@@ -273,14 +272,6 @@ func readCorpusFile(t testing.TB, f corpusEntry) []byte {
 
 	data, err := os.ReadFile(filepath.Join(corpusDir, filepath.FromSlash(f.File)))
 	require.NoError(t, err)
-
-	if strings.HasSuffix(f.File, ".gz") {
-		zr, err := gzip.NewReader(bytes.NewReader(data))
-		require.NoError(t, err)
-
-		data, err = io.ReadAll(zr)
-		require.NoError(t, err)
-	}
 
 	sum := sha256.Sum256(data)
 	require.Equal(t, f.SHA256, hex.EncodeToString(sum[:]), "%s: the pinned bytes changed", f.File)
@@ -746,6 +737,12 @@ func TestCorpusIntegrity(t *testing.T) {
 		if f.Expect.Outcome == outcomeStatus {
 			require.NotNil(t, f.Expect.Status, f.ID)
 		}
+
+		// An accepted entry pins its exact identity: an attack yielding a
+		// wrong identity without the attacker's markers must not pass.
+		if f.Expect.Outcome == outcomeAccepted {
+			require.NotNil(t, f.Expect.Identity, "%s: an accepted entry pins its identity", f.ID)
+		}
 	}
 
 	for category := range corpusCategories {
@@ -812,17 +809,6 @@ func TestTestdataHoldsNoPrivateKey(t *testing.T) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
-		}
-
-		if strings.HasSuffix(path, ".gz") {
-			zr, err := gzip.NewReader(bytes.NewReader(data))
-			if err != nil {
-				return err
-			}
-
-			if data, err = io.ReadAll(zr); err != nil {
-				return err
-			}
 		}
 
 		for _, marker := range []string{"PRIVATE KEY", "private.key"} {

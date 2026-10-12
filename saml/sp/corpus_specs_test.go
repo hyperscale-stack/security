@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/beevik/etree"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
@@ -181,6 +182,26 @@ func dupAttr(name, value string, prefixedFirst bool) func(el *etree.Element) {
 		el.CreateAttr(name, orig)
 		el.CreateAttr("evil:"+name, value)
 	}
+}
+
+// kebab renders a CamelCase attribute name in lower case, words separated
+// by hyphens: SPNameQualifier is sp-name-qualifier.
+func kebab(name string) string {
+	var b strings.Builder
+
+	for i, r := range name {
+		upper := unicode.IsUpper(r)
+		prevLower := i > 0 && unicode.IsLower(rune(name[i-1]))
+		nextLower := i+1 < len(name) && unicode.IsLower(rune(name[i+1]))
+
+		if i > 0 && upper && (prevLower || (nextLower && unicode.IsUpper(rune(name[i-1])))) {
+			b.WriteByte('-')
+		}
+
+		b.WriteRune(unicode.ToLower(r))
+	}
+
+	return b.String()
 }
 
 // rawRS converts an ASN.1 DER ECDSA signature value to XML Signature 1.1
@@ -569,13 +590,13 @@ func (g *corpusGen) correlationSpecs() []corpusSpec {
 		{
 			id: "correlation/posted-to-other-connection", attack: "acme's response and RelayState posted to globex's ACS",
 			refs: []string{"#87 decision D1 (per-connection SP)"}, knobs: corpusKnobs{PostTo: "globex"},
-			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml.gz",
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrTransactionNotFound", ""),
 		},
 		{
 			id: "correlation/received-outside-acs", attack: "response received at another path than the connection's ACS",
 			refs: []string{"SAML Bindings §3.5.5.2"}, knobs: corpusKnobs{Path: "other"},
-			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml.gz",
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrDestinationMismatch", "request received outside the connection's ACS path"),
 		},
 		{
@@ -631,13 +652,13 @@ func (g *corpusGen) timeSpecs() []corpusSpec {
 		{
 			id: "time/subject-confirmation-expired", attack: "bearer confirmation well past NotOnOrAfter + skew",
 			refs: []string{refProfiles}, knobs: corpusKnobs{At: "9m"},
-			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml.gz",
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrAssertionExpired", ""),
 		},
 		{
 			id: "time/subject-confirmation-expiry-boundary", attack: "clock exactly at NotOnOrAfter + skew (exclusive bound)",
 			refs: []string{refProfiles, "SAML errata E92"}, knobs: corpusKnobs{At: "8m"},
-			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml.gz",
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrAssertionExpired", "subject confirmation expired"),
 		},
 		{
@@ -1818,6 +1839,14 @@ func (g *corpusGen) differentialSpecs() []corpusSpec {
 			"NotOnOrAfter", ts(24 * time.Hour)},
 		{"authn-instant", func(a *etree.Element) *etree.Element { return child(a, "AuthnStatement") }, "AuthnInstant", ts(-24 * time.Hour)},
 		{"session-index", func(a *etree.Element) *etree.Element { return child(a, "AuthnStatement") }, "SessionIndex", "_evil-session"},
+		{"session-not-on-or-after", func(a *etree.Element) *etree.Element { return child(a, "AuthnStatement") },
+			"SessionNotOnOrAfter", ts(30 * 24 * time.Hour)},
+		{"issuer-format", func(a *etree.Element) *etree.Element { return child(a, "Issuer") },
+			"Format", samlsp.NameIDFormatTransient},
+		{"nameid-name-qualifier", func(a *etree.Element) *etree.Element { return path(a, "Subject", "NameID") },
+			"NameQualifier", evilIssuer},
+		{"nameid-sp-name-qualifier", func(a *etree.Element) *etree.Element { return path(a, "Subject", "NameID") },
+			"SPNameQualifier", "https://sp.attacker.example"},
 	}
 
 	// Response attributes (unsigned envelope).
@@ -1877,6 +1906,40 @@ func (g *corpusGen) differentialSpecs() []corpusSpec {
 				expect: rejected("ErrMalformedResponse", twoLocalNames),
 			})
 		}
+	}
+
+	// Every SAML and XML-DSig attribute name, prefixed and alone on the
+	// Status, which carries no attribute: only the prefixed-name rule
+	// refuses it (the gate refuses a prefixed ID first).
+	for _, name := range []string{
+		"Address", "Algorithm", "Consent", "Count", "DNSName", "Decision", "Destination", "Format",
+		"FriendlyName", "ID", "Id", "InResponseTo", "IssueInstant", "Method", "Name", "NameFormat",
+		"NameQualifier", "Namespace", "NotBefore", "NotOnOrAfter", "PrefixList", "Recipient", "Resource",
+		"SPNameQualifier", "SPProvidedID", "SessionIndex", "SessionNotOnOrAfter", "Type", "URI", "Value",
+		"Version", "AuthnInstant",
+	} {
+		detail := prefixedSAML
+		if name == "ID" || name == "Id" {
+			detail = "prefixed ID attribute"
+		}
+
+		suffix := kebab(name)
+		if name == "Id" {
+			suffix = "xmldsig-id" // ID and Id differ by case only
+		}
+
+		specs = append(specs, corpusSpec{
+			id:     "differential/lone-prefixed-on-status-" + suffix,
+			attack: fmt.Sprintf("evil:%s alone on the Status (unsigned envelope)", name), refs: refs,
+			build: func() []byte {
+				return g.xml("acme", compact(onResponse(func(r *etree.Element) {
+					st := child(r, "Status")
+					st.CreateAttr("xmlns:evil", "urn:evil:attacker.example")
+					st.CreateAttr("evil:"+name, "_evil")
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", detail),
+		})
 	}
 
 	return append(specs,
@@ -2156,43 +2219,43 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 		{
 			id: "replay/assertion-already-consumed", attack: "assertion ID already in the replay cache (re-issued or replayed assertion)",
 			refs: refs, knobs: corpusKnobs{PreMarked: &corpusReplayKey{Issuer: idpEntity, AssertionID: assertionID}},
-			build: baseline, file: "baseline/assertion-signed.xml.gz",
+			build: baseline, file: "baseline/assertion-signed.xml",
 			expect: corpusExpect{Outcome: outcomeRejected, Sentinel: "ErrAssertionReplayed", Consumed: true},
 		},
 		{
 			id: "replay/without-relay-state", attack: "IdP-initiated style POST without RelayState", refs: append(refs, "SAML Profiles §4.1.5"),
-			knobs: corpusKnobs{RelayState: "none"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{RelayState: "none"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrUnsolicitedResponse", "RelayState is not a handle issued by BeginLogin"),
 		},
 		{
 			id: "replay/relay-state-url", attack: "RelayState carrying an attacker URL (open-redirect style)", refs: refs,
-			knobs: corpusKnobs{RelayState: "url"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{RelayState: "url"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrUnsolicitedResponse", "RelayState is not a handle issued by BeginLogin"),
 		},
 		{
 			id: "replay/relay-state-of-no-transaction", attack: "well-formed RelayState handle never issued", refs: refs,
-			knobs: corpusKnobs{RelayState: "other"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{RelayState: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrTransactionNotFound", ""),
 		},
 		{
 			id: "replay/without-binding-cookie", attack: "posted without the browser-binding cookie (other browser, Lax-only design)", refs: refs,
-			knobs: corpusKnobs{Cookie: "none"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Cookie: "none"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMissingBrowserBinding", ""),
 		},
 		{
 			id: "replay/malformed-binding-cookie", attack: "a binding cookie that is not a handle", refs: refs,
-			knobs: corpusKnobs{Cookie: "malformed"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Cookie: "malformed"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMissingBrowserBinding", ""),
 		},
 		{
 			id: "replay/idp-metadata-expired", attack: "the IdP metadata expired between the two legs (Metadata §4.3.2, errata E94)",
 			refs: []string{"SAML Metadata §4.3.2", "SAML errata E94"}, knobs: corpusKnobs{MetadataExpired: true},
-			build: baseline, file: "baseline/assertion-signed.xml.gz",
+			build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrMetadataExpired", ""),
 		},
 		{
 			id: "replay/other-browser", attack: "posted by another browser's binding cookie (login CSRF)", refs: refs,
-			knobs: corpusKnobs{Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml.gz",
+			knobs: corpusKnobs{Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrBrowserBindingMismatch", ""),
 		},
 	}
