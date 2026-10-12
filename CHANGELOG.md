@@ -367,7 +367,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   test-only): the provider against `github.com/coreos/go-oidc/v3` and
   `golang.org/x/oauth2` as an independent relying party, over TLS — code
   flow with S256 PKCE, the three client authentication methods, path
-  issuers, refresh, key rotation, `prompt=none` and the advertised URLs.
+  issuers, refresh, key rotation, `prompt=none` and the advertised URLs;
+  and (#86) the `claims` parameter with consent filtering, a narrowed
+  granted scope, re-authentication (`prompt=login`, `max_age`),
+  `id_token_hint`, PS256/RS512/ES256/ES384 ID Tokens verified by go-oidc,
+  RFC 9068 access tokens refused by go-oidc's ID Token verifier (audience),
+  code replay and refresh-token reuse revoking the tokens.
 - **Example** `examples/oidc-provider`: a runnable OpenID Provider with its
   own login and consent pages (CSRF tokens, anti-framing headers),
   cookie sessions, `prompt` handling and offline access.
