@@ -21,26 +21,28 @@ transitive dependencies.
 
 ## Module map
 
-| Path                      | Import path                                                  | Purpose                                                              |
-| ------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `.`                       | `github.com/hyperscale-stack/security`                       | Core: `Authentication`, `Engine`, `Manager`, `Voter`, `AccessDecisionManager` |
-| `./http`                  | `…/security/http`                                            | `httpsec` — `net/http` middleware + carrier                          |
-| `./grpc`                  | `…/security/grpc`                                            | `grpcsec` — unary/stream interceptors + carrier                      |
-| `./connectrpc`            | `…/security/connectrpc`                                      | `connectrpcsec` — ConnectRPC auth + authorize interceptors           |
-| `./basic`                 | `…/security/basic`                                           | HTTP Basic extractor + authenticator                                 |
-| `./bearer`                | `…/security/bearer`                                          | Bearer extractor + `TokenVerifier`-based authenticator               |
-| `./password`              | `…/security/password`                                        | BCrypt + Argon2id hashers (`NeedsRehash`)                            |
-| `./jwt`                   | `…/security/jwt`                                             | `jwtsec` — JWT signer/verifier, JWKS, bearer adapter                 |
-| `./session`               | `…/security/session`                                         | Stateless encrypted cookie sessions + CSRF                           |
-| `./oauth2`                | `…/security/oauth2`                                          | OAuth2 server: profiles, grants, client auth, endpoints              |
-| `./oauth2/store/sql`      | `…/security/oauth2/store/sql`                                | Production `oauth2.Storage` on `database/sql`                        |
-| `./oauth2/store/redis`    | `…/security/oauth2/store/redis`                              | Production `oauth2.Storage` on Redis (Lua atomicity)                 |
-| `./oidc/client`           | `…/security/oidc/client`                                     | `oidcclient` — OpenID Connect Relying Party                          |
-| `./oidc/client/store/sql` | `…/security/oidc/client/store/sql`                           | OIDC `TransactionStore` on `database/sql`                            |
-| `./oidc/client/store/redis` | `…/security/oidc/client/store/redis`                       | OIDC `TransactionStore` on Redis (Lua atomicity)                     |
-| `./examples`              | `…/security/examples`                                        | Runnable use-case demos                                              |
-| `./internal/integrations` | (private)                                                    | Cross-module end-to-end tests                                        |
-| `./internal/interop/oidcrp` | (private)                                                  | OIDC client interoperability tests (zitadel/oidc, headless Chrome)   |
+| Path                        | Import path                            | Purpose                                                                       |
+| --------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- |
+| `.`                         | `github.com/hyperscale-stack/security` | Core: `Authentication`, `Engine`, `Manager`, `Voter`, `AccessDecisionManager` |
+| `./http`                    | `…/security/http`                      | `httpsec` — `net/http` middleware + carrier                                   |
+| `./grpc`                    | `…/security/grpc`                      | `grpcsec` — unary/stream interceptors + carrier                               |
+| `./connectrpc`              | `…/security/connectrpc`                | `connectrpcsec` — ConnectRPC auth + authorize interceptors                    |
+| `./basic`                   | `…/security/basic`                     | HTTP Basic extractor + authenticator                                          |
+| `./bearer`                  | `…/security/bearer`                    | Bearer extractor + `TokenVerifier`-based authenticator                        |
+| `./password`                | `…/security/password`                  | BCrypt + Argon2id hashers (`NeedsRehash`)                                     |
+| `./jwt`                     | `…/security/jwt`                       | `jwtsec` — JWT signer/verifier, JWKS, bearer adapter                          |
+| `./session`                 | `…/security/session`                   | Stateless encrypted cookie sessions + CSRF                                    |
+| `./oauth2`                  | `…/security/oauth2`                    | OAuth2 server: profiles, grants, client auth, endpoints                       |
+| `./oauth2/store/sql`        | `…/security/oauth2/store/sql`          | Production `oauth2.Storage` on `database/sql`                                 |
+| `./oauth2/store/redis`      | `…/security/oauth2/store/redis`        | Production `oauth2.Storage` on Redis (Lua atomicity)                          |
+| `./oidc/client`             | `…/security/oidc/client`               | `oidcclient` — OpenID Connect Relying Party                                   |
+| `./oidc/client/store/sql`   | `…/security/oidc/client/store/sql`     | OIDC `TransactionStore` on `database/sql`                                     |
+| `./oidc/client/store/redis` | `…/security/oidc/client/store/redis`   | OIDC `TransactionStore` on Redis (Lua atomicity)                              |
+| `./oidc/provider`           | `…/security/oidc/provider`             | `oidcprovider` — OpenID Provider: ID Tokens, UserInfo, Discovery, JWKS        |
+| `./examples`                | `…/security/examples`                  | Runnable use-case demos                                                       |
+| `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
+| `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
+| `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
@@ -70,8 +72,11 @@ oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 oidc/client/            ← core + github.com/go-jose/go-jose/v4
 oidc/client/store/sql/  ← oidc/client + database/sql
 oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
+oidc/provider/          ← core + oauth2 + jwt (go-jose stays behind jwt)
 examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + zitadel/oidc + chromedp
+internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
+                           + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,
@@ -191,7 +196,7 @@ The `oauth2` module is an authorization server, not just a provider:
   `authorization_code` and `refresh_token` grants refuse them at another
   issuer.
 - **Extension points** — `ServerConfig.Extension` plugs an optional protocol
-  extension, the `oidc/provider` OpenID Provider, into the authorization-code
+  extension, the `oidc/provider` OpenID Provider (below), into the authorization-code
   flow without a second `/token` endpoint and without `oauth2` depending on
   OIDC or JOSE:
 
@@ -209,6 +214,30 @@ The `oauth2` module is an authorization server, not just a provider:
 
 Tokens and authorization codes are **never stored in cleartext** — the
 store only ever sees a hash.
+
+## OpenID Provider
+
+`oidc/provider` (package `oidcprovider`) is the `oauth2.Extension` of an
+OpenID Provider. `oidcprovider.New` builds the `oauth2.Server` with the
+provider as its extension and its own `ConsentFunc`; the application plugs
+in through three interfaces — `Interaction` (end-user sessions, login and
+consent pages), `ClaimsSource` (end-user claims) and `KeySource` (per-issuer
+signing and published keys):
+
+```
+/authorize  core checks ─► ValidateAuthorizeRequest: OpenID parameters, hint, claims ─► view
+            ─► Interaction.Authorize (or AuthorizeSilently for prompt=none) ─► Decision
+            ─► CompleteAuthorization: Request.Check, event, offline_access ─► context {auth event, released claims}
+/token      grant checks ─► ExtendTokenResponse: context, account (ClaimsSource), ID Token signed (KeySource)
+/userinfo   bearer token ─► store lookup: issuer, context, openid ─► ClaimsSource ─► released claims
+/.well-known/openid-configuration, /.well-known/jwks.json  ◄─ server configuration + key ring
+```
+
+The grant context — the authentication event and the released claims —
+travels in the core's `ExtensionData`, unchanged across refreshes: no store
+of its own. `Paths` derives every mount path from the issuer and the
+server's route prefix; the discovery document advertises exactly those.
+See [oidc-provider.md](oidc-provider.md) for the feature matrix.
 
 ## OpenID Connect client
 

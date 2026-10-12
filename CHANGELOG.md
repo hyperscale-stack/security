@@ -252,6 +252,35 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   so a client talking to several authorization servers or realms can detect
   a mix-up (RFC 9700 §4.4.2.1). The `server_error` answering an
   `IssuerResolver` failure is the one response without it.
+- **OpenID Provider** (`oidc/provider`, package `oidcprovider`): OpenID
+  Connect Core 1.0 (errata set 2) on the `oauth2` extension points — the
+  Authorization Code flow with PKCE, signed ID Tokens at the code exchange
+  and at every refresh (Core §12.2: the original `auth_time`, `acr` and
+  `amr`, no `nonce`), UserInfo (Core §5.3, RFC 6750 errors), Discovery
+  (path issuers, only what is served, consistent with RFC 8414) and the
+  issuer's public JWK Set. `New` builds the `oauth2.Server` it extends,
+  `Paths` tells where to mount each handler. The provider validates
+  authentication requests — `prompt`, `max_age`, `nonce`, the `claims`
+  parameter, `id_token_hint`; `request`, `request_uri` and `registration`
+  refused with their Core §3.1.2.6 codes — and re-checks every approval
+  itself: realm, `prompt=login` and `max_age` freshness, designated
+  end-user, essential `acr`, `offline_access` consent (Core §11). The
+  application keeps the end-user side through typed interfaces:
+  `Interaction` (login and consent UI; `prompt=none` gets no
+  `ResponseWriter`), `ClaimsSource` (released claims only;
+  `ErrUnknownSubject` stops a grant) and `KeySource` (rings validated on
+  every use: RS256 required, RSA of at least 2048 bits, private keys never
+  published). Access-token audiences equal to a client ID are refused
+  (RFC 9068 §5). [docs/oidc-provider.md](docs/oidc-provider.md) is the exact
+  feature matrix; no certification is claimed.
+- **OpenID interoperability tests** (`internal/interop/oidcop`, private and
+  test-only): the provider against `github.com/coreos/go-oidc/v3` and
+  `golang.org/x/oauth2` as an independent relying party, over TLS — code
+  flow with S256 PKCE, the three client authentication methods, path
+  issuers, refresh, key rotation, `prompt=none` and the advertised URLs.
+- **Example** `examples/oidc-provider`: a runnable OpenID Provider with its
+  own login and consent pages (CSRF tokens, anti-framing headers),
+  cookie sessions, `prompt` handling and offline access.
 
 ### Changed
 

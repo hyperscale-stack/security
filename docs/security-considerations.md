@@ -353,6 +353,74 @@ window:
   server shares the store — rather than offline;
 - or issue opaque access tokens, which only the store can validate.
 
+## OpenID Provider
+
+`oidc/provider` trusts the application's `Interaction` for who the end-user
+is, never for the protocol rules:
+
+- **Requests are checked before any interaction.** A repeated `client_id`,
+  `redirect_uri` or `response_mode`, or a missing `redirect_uri`, answers a
+  bare `400` that is never redirected; request objects and `registration`
+  are refused; `nonce`, `claims`, `max_age` and hints are bounded; an
+  `id_token_hint` must be an ID Token this issuer issued to this client,
+  signed by a key it publishes.
+- **Every approval is re-checked.** Before a code is issued, the provider
+  checks the approval against the request — realm, `prompt=login` and
+  `max_age` freshness, designated end-user, essential `acr` — and the
+  authentication event itself (a subject of 1 to 255 printable ASCII
+  characters, a time at most 5 s in the future, bounded `acr` and `amr`),
+  and requires `openid` in the granted scope. A violation issues nothing.
+  Freshness is compared at the second of `auth_time`; an application that
+  must re-authenticate on `prompt=login` shows its login page itself.
+- **`prompt=none` shows no UI**: `AuthorizeSilently` gets no
+  `ResponseWriter`, and an OpenID request served outside
+  `Provider.AuthorizeHandler` is refused before any `ConsentFunc` runs.
+- **Realm-bound authentications.** An authentication counts in the realm
+  (issuer) it was established in only. The realm is the issuer: where
+  tenancy is finer — one issuer, several organizations — the `Interaction`
+  must also check the session's tenant against `Request.Client`, or each
+  tenant must get its own issuer.
+- **`InteractionStartedAt`** must come from server-side state bound to the
+  authorization request, never from the session or the request parameters:
+  a forged value makes a stale session look fresh. The provider bounds it to
+  `[ReceivedAt − 15 min, ReceivedAt + 5 s]` and ignores it under
+  `prompt=none`.
+- **Offline access needs consent** (OIDC Core §11): `offline_access` is
+  dropped unless the end-user consented, and a refresh token issued without
+  that consent fails closed. Wire `grant.Config.RefreshTokenScope =
+  oidcprovider.ScopeOfflineAccess`.
+- **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
+  is the client ID, and an access token whose audience equals a client ID is
+  refused at issuance; JWT access tokens are typed `at+jwt`. Resource
+  servers should require that type (`jwtsec.WithType(jwtsec.TypeAccessToken)`)
+  so an ID Token is never accepted as an access token.
+- **Keys.** Key rings are validated on every use (RS256 required, one key
+  per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
+  bound to algorithms) and fail closed; private and symmetric keys are never
+  published. The keys of JWT access tokens belong in `KeyRing.Published`:
+  one `jwks_uri` serves both (RFC 9068 §4).
+- **Claims and accounts.** Only the claims the request and the end-user
+  allow are released, and a `ClaimsSource` cannot override a protocol claim.
+  `ErrUnknownSubject` stops an OpenID grant at its next exchange; plain
+  OAuth 2.0 grants carry no context and are not checked, so disabling an
+  end-user must also revoke their token families.
+- **UserInfo serves personal data** to bearer tokens of OpenID grants of the
+  request's issuer only, with `Cache-Control: no-store`. Allow browser
+  origins (CORS) deliberately.
+- **Issuers.** The issuer is an https URL without query or fragment
+  (`http` only for an explicit loopback development opt-in). Discovery and
+  the JWK Set are cacheable (`max-age=300`): an `IssuerResolver` must never
+  derive the issuer from an unvalidated `Host` header.
+- **The application's pages.** Login and consent pages need CSRF tokens and
+  anti-framing headers (`X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`), must validate the URL
+  they return to after a login (open redirect), and must never redirect with
+  `307` — it would replay the posted credentials (OIDC Core §16.22).
+  `examples/oidc-provider` does all of this.
+- **Errors.** Refusals reach the `ErrorHook` with their cause; causes never
+  carry a token, an `id_token_hint`, a `nonce`, a `login_hint` or a claim
+  value.
+
 ## Sessions
 
 `session` issues a **stateless encrypted cookie** — there is no server-side
@@ -548,7 +616,8 @@ span catalog.
 ## Operator checklist
 
 - [ ] Pick a password hasher and review its cost against current hardware.
-- [ ] Rotate JWT signing keys; expose them through a JWKS endpoint.
+- [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
+      (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
 - [ ] Use `Profile20BCP` or stricter; do not enable the `implicit` /
       `password` legacy grants without a documented reason.
@@ -577,6 +646,14 @@ span catalog.
       (MIGRATION.md) before deploying it; keep PostgreSQL databases in
       `UTF8` and MySQL tables in `utf8mb4` with a strict `sql_mode` — a
       non-strict MySQL truncates an over-long value instead of refusing it.
+- [ ] With `oidc/provider`: an https issuer the `IssuerResolver` never takes
+      from an unvalidated `Host`; a `KeySource` backed by your key store,
+      rotated through `KeyRing.Published` (publish, sign, retire once the ID
+      Tokens it signed have expired); access-token audiences that are never
+      client IDs; `RefreshTokenScope = offline_access`; sessions scoped to
+      their realm (and tenant); CSRF tokens and anti-framing headers on the
+      login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
+      for disabled end-users, whose token families you also revoke.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

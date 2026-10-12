@@ -7,26 +7,28 @@ released on its own cadence.
 
 ## Modules
 
-| Path                      | Module                                                          | Purpose                                                              |
-| ------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `.`                       | `github.com/hyperscale-stack/security`                          | Core: transport-agnostic primitives (Authentication, Engine, Voter…) |
-| `./http`                  | `github.com/hyperscale-stack/security/http`                     | `httpsec` — `net/http` adapter                                       |
-| `./grpc`                  | `github.com/hyperscale-stack/security/grpc`                     | `grpcsec` — gRPC unary/stream interceptors                           |
-| `./connectrpc`            | `github.com/hyperscale-stack/security/connectrpc`               | `connectrpcsec` — ConnectRPC auth + authorize interceptors           |
-| `./basic`                 | `github.com/hyperscale-stack/security/basic`                    | HTTP Basic extractor + authenticator                                 |
-| `./bearer`                | `github.com/hyperscale-stack/security/bearer`                   | Bearer extractor + `TokenVerifier`-based authenticator               |
-| `./password`              | `github.com/hyperscale-stack/security/password`                 | BCrypt + Argon2id hashers                                            |
-| `./jwt`                   | `github.com/hyperscale-stack/security/jwt`                      | `jwtsec` — JWT signer/verifier + JWKS                                |
-| `./session`               | `github.com/hyperscale-stack/security/session`                  | Stateless encrypted cookie sessions + CSRF                           |
-| `./oauth2`                | `github.com/hyperscale-stack/security/oauth2`                   | OAuth2 server (profiles, grants, endpoints)                          |
-| `./oauth2/store/sql`      | `github.com/hyperscale-stack/security/oauth2/store/sql`         | Production storage on `database/sql`                                 |
-| `./oauth2/store/redis`    | `github.com/hyperscale-stack/security/oauth2/store/redis`       | Production storage on Redis (Lua atomicity)                          |
-| `./oidc/client`           | `github.com/hyperscale-stack/security/oidc/client`              | `oidcclient` — OpenID Connect Relying Party (Authorization Code + PKCE) |
-| `./oidc/client/store/sql` | `github.com/hyperscale-stack/security/oidc/client/store/sql`    | OIDC transaction store on `database/sql`                             |
-| `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                      |
-| `./examples`              | `github.com/hyperscale-stack/security/examples`                 | Runnable use-case demos (one sub-package per scenario)               |
-| `./internal/integrations` | `github.com/hyperscale-stack/security/internal/integrations`    | Cross-module end-to-end tests (private)                              |
-| `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only) |
+| Path                        | Module                                                         | Purpose                                                                              |
+| --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `.`                         | `github.com/hyperscale-stack/security`                         | Core: transport-agnostic primitives (Authentication, Engine, Voter…)                 |
+| `./http`                    | `github.com/hyperscale-stack/security/http`                    | `httpsec` — `net/http` adapter                                                       |
+| `./grpc`                    | `github.com/hyperscale-stack/security/grpc`                    | `grpcsec` — gRPC unary/stream interceptors                                           |
+| `./connectrpc`              | `github.com/hyperscale-stack/security/connectrpc`              | `connectrpcsec` — ConnectRPC auth + authorize interceptors                           |
+| `./basic`                   | `github.com/hyperscale-stack/security/basic`                   | HTTP Basic extractor + authenticator                                                 |
+| `./bearer`                  | `github.com/hyperscale-stack/security/bearer`                  | Bearer extractor + `TokenVerifier`-based authenticator                               |
+| `./password`                | `github.com/hyperscale-stack/security/password`                | BCrypt + Argon2id hashers                                                            |
+| `./jwt`                     | `github.com/hyperscale-stack/security/jwt`                     | `jwtsec` — JWT signer/verifier + JWKS                                                |
+| `./session`                 | `github.com/hyperscale-stack/security/session`                 | Stateless encrypted cookie sessions + CSRF                                           |
+| `./oauth2`                  | `github.com/hyperscale-stack/security/oauth2`                  | OAuth2 server (profiles, grants, endpoints)                                          |
+| `./oauth2/store/sql`        | `github.com/hyperscale-stack/security/oauth2/store/sql`        | Production storage on `database/sql`                                                 |
+| `./oauth2/store/redis`      | `github.com/hyperscale-stack/security/oauth2/store/redis`      | Production storage on Redis (Lua atomicity)                                          |
+| `./oidc/client`             | `github.com/hyperscale-stack/security/oidc/client`             | `oidcclient` — OpenID Connect Relying Party (Authorization Code + PKCE)              |
+| `./oidc/client/store/sql`   | `github.com/hyperscale-stack/security/oidc/client/store/sql`   | OIDC transaction store on `database/sql`                                             |
+| `./oidc/client/store/redis` | `github.com/hyperscale-stack/security/oidc/client/store/redis` | OIDC transaction store on Redis (Lua atomicity)                                      |
+| `./oidc/provider`           | `github.com/hyperscale-stack/security/oidc/provider`           | `oidcprovider` — OpenID Provider on the `oauth2` extension points                    |
+| `./examples`                | `github.com/hyperscale-stack/security/examples`                | Runnable use-case demos (one sub-package per scenario)                               |
+| `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
+| `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
+| `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -63,9 +65,12 @@ oauth2/store/redis/     ← oauth2 + github.com/redis/go-redis/v9
 oidc/client/            ← core + github.com/go-jose/go-jose/v4
 oidc/client/store/sql/  ← oidc/client + database/sql
 oidc/client/store/redis/ ← oidc/client + github.com/redis/go-redis/v9
+oidc/provider/          ← core + oauth2 + jwt (go-jose stays behind jwt)
 examples/               ← may depend on every module above
 internal/interop/oidcrp/ ← (tests only) oidc/client + github.com/zitadel/oidc/v3
                            + github.com/chromedp/chromedp
+internal/interop/oidcop/ ← (tests only) oidc/provider + oauth2 + jwt
+                           + github.com/coreos/go-oidc/v3 + golang.org/x/oauth2
 
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module;
 `oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
@@ -74,13 +79,17 @@ of the `oidc/client` module.)
 
 `oidc/client` depends on neither `oauth2` nor `jwt`: the Relying Party
 validates ID Tokens itself on top of go-jose. `github.com/coreos/go-oidc`
-and `golang.org/x/oauth2` are not dependencies of any module (see the
-package documentation of `oidc/client` for the evaluation).
+and `golang.org/x/oauth2` are not dependencies of any production module
+(see the package documentation of `oidc/client` for the evaluation).
 
 The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
 SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly
 stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify` scoped to its own
-tests). The policy is enforced by review.
+tests). The policy is enforced by review. `oauth2` never imports OIDC or JOSE:
+`oidc/provider` plugs into its extension points, and imports no relying-party
+library, store driver or template engine (`TestDependencyPolicy`). go-oidc
+and x/oauth2 are confined to the test-only `internal/interop/oidcop` module,
+as an independent relying party.
 
 ## Local development
 
@@ -109,9 +118,10 @@ pushed.
 ## Replace directives
 
 Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
-(or `=> ../../` for the SQL/Redis sub-modules) so local development and CI
-work without published versions. Releases are cut per module with
-`module/vX.Y.Z` tags.
+(`=> ../../` for `oidc/provider` and `internal/integrations`, `=> ../../../`
+for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
+for the OIDC client stores), plus one for each in-repo module of its graph,
+so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
 
 ## Breaking changes before the first v2 release
 
