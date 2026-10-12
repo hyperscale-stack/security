@@ -626,6 +626,26 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- **CI and release supply chain**:
+  - every workflow runs with a read-only `GITHUB_TOKEN`
+    (`permissions: contents: read`);
+  - every action is pinned to a full commit SHA, which Dependabot keeps
+    current;
+  - checkouts no longer persist credentials;
+  - Coveralls uploads from a separate, non-blocking job, instead of an
+    action referenced as `@master` and handed the token;
+  - the release workflow is split: a read-only job verifies the tag
+    (`scripts/release-check.sh`, build, test, lint, govulncheck), then a
+    minimal job publishes with `gh release create`, without checkout or
+    third-party action. The tag reaches the scripts through the environment,
+    and tags of nested modules (`oidc/client/v…`) now trigger it;
+  - a new `govulncheck` workflow scans every module on every change and
+    weekly;
+  - Dependabot also covers the tool modules and the actions, groups related
+    updates, and waits 7 days before proposing a version.
+- `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of
+  v0.58.0: HTTP/2 advisories GO-2026-6603, -6610, -6611, -6612 and -6617.
+
 - The OAuth2 token endpoint refuses a `code_verifier` presented for an
   authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
   §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is

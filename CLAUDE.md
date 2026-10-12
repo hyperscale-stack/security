@@ -81,10 +81,16 @@ cd jwt    && go test ./...
 `make test` aggregates coverage but **excludes example `main()` programs**
 (they bind a socket and block); examples are still built, tested, and linted.
 
-CI: `.github/workflows/go.yml` runs `make sync build test lint` against the
-whole workspace in one job. `.github/workflows/release.yml` validates the
-workspace and cuts a GitHub release on a `module/vX.Y.Z` tag. `make generate`
-is intentionally skipped in CI.
+CI (read-only token, every action pinned to a commit SHA, credentials never
+persisted; keep it `actionlint`- and `zizmor`-clean):
+- `.github/workflows/go.yml` runs `make tools generate check-modules build
+  test lint` against the whole workspace, then uploads the coverage to
+  Coveralls from a separate, non-blocking job;
+- `govulncheck.yml` runs `make vuln` on every change and weekly;
+- `release.yml`, on a `v*` or `**/v*` tag: a read-only `verify` job
+  (`scripts/release-check.sh` + the whole gate), then a `publish` job
+  (`contents: write`, environment `release`, `gh release create`, no
+  checkout). See `docs/releasing.md`.
 
 ## Module layout & dependency policy
 

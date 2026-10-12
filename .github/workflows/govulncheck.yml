@@ -1,0 +1,40 @@
+name: govulncheck
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Weekly, so that an advisory published against the pinned toolchain or a
+  # dependency surfaces even when nothing changes here.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  govulncheck:
+    name: govulncheck (every module)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      # Every module outside the workspace (its own requirements: what a
+      # consumer resolves), tests included, with the toolchain go.work pins.
+      - name: Scan every module
+        run: make vuln

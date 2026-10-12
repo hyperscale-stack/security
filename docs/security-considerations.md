@@ -958,7 +958,42 @@ No secret is ever placed on a span attribute or log line. See
 [observability.md](observability.md) for the secrets policy and the full
 span catalog.
 
+## Toolchain and supply chain
+
+- **Go toolchain.** Every module requires Go 1.27.2 (its `go` line). The
+  library cannot be built with a toolchain carrying the standard-library
+  advisories fixed up to go1.27.2: HTTP/2 server crashes and request
+  smuggling in `net/http`, `crypto/tls`, `encoding/asn1`, `net/url`,
+  `encoding/xml`. Build and ship with the latest Go patch release, and run
+  `govulncheck` on your application: which advisories matter depends on the
+  code you call.
+- **Vulnerability scanning.** The `govulncheck` workflow scans every module
+  outside the workspace (its own requirements, tests included) on every
+  change, weekly and before every release; the release workflow never
+  publishes over a reachable advisory. Known and not reachable:
+  GO-2026-5932 (`golang.org/x/crypto/openpgp` is unmaintained, no fix) is
+  reported at module level for the modules that require
+  `golang.org/x/crypto`; none imports `openpgp`. Accepted reachable
+  advisories (ID, reason, owner, review date): none.
+- **Dependencies.** Dependabot proposes version updates for every module
+  after a 7-day cooldown (security updates are not delayed). The
+  development tools (golangci-lint, govulncheck, mockery) are pinned in
+  modules of their own under `tools/` and never reach a library's module
+  graph.
+- **CI and releases.**
+  - Every workflow runs with a read-only token, every action is pinned to a
+    full commit SHA, and checkouts keep no credentials.
+  - A release is verified with a read-only token (`scripts/release-check.sh`,
+    build, test, lint, govulncheck) before a separate job publishes the
+    GitHub release, without checkout or third-party code.
+  - Module tags are not signed: verify the modules through the Go checksum
+    database (`sum.golang.org`), as `go get` does by default. Never disable
+    it (`GONOSUMDB`, `GONOSUMCHECK`, `GOFLAGS=-insecure`) for these modules.
+
 ## Operator checklist
+
+- [ ] Build with Go 1.27.2 or later, the latest patch release, and run
+      `govulncheck` on your application.
 
 - [ ] Pick a password hasher and review its cost against current hardware.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
