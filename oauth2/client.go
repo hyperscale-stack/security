@@ -59,13 +59,19 @@ type Client interface {
 	// Authorization code requests MUST match one of these exactly per
 	// RFC 6749 §3.1.2.3 / OAuth 2.0 BCP §2.1.4.
 	RedirectURIs() []string
-	// GrantTypes lists the grant types the client is allowed to use.
-	// Compared with strings.EqualFold; common values are
-	// "authorization_code", "refresh_token", "client_credentials".
+	// GrantTypes lists the grant types the client may use, compared exactly
+	// with RFC 7591 §2 values — the GrantType constants
+	// ("authorization_code", "implicit", "refresh_token",
+	// "client_credentials", "password") or a custom grant's type. An empty
+	// list allows no grant: nothing is implied, unlike the RFC 7591 §2
+	// registration default (authorization_code). See
+	// [ClientAllowsGrantType].
 	GrantTypes() []string
-	// Scopes lists the maximum set of scopes the client may request. An
-	// empty list means "no scope restriction" and SHOULD be reserved for
-	// internal clients only.
+	// Scopes lists the scopes the client may request, compared exactly (RFC
+	// 6749 §3.3: case-sensitive). An empty list allows no scope: a request
+	// carrying one is refused with invalid_scope, and one without scope
+	// gets the empty scope. A scope outside the RFC 6749 §3.3 syntax
+	// (printable ASCII but '"' and '\\', no space) can never be requested.
 	Scopes() []string
 	// AuthMethods lists the client_authentication_method values supported
 	// for this client (see clientauth package). "none" implies a public
@@ -137,6 +143,17 @@ func ClientAllowsIssuer(c Client, issuer string) bool {
 	return true
 }
 
+// ClientAllowsGrantType reports whether c may use grantType: one of its
+// [Client.GrantTypes], compared exactly. A client declaring none may use no
+// grant — the fail-closed default: register what each client needs. The
+// token endpoint checks it for every grant type before the grant runs,
+// custom grants included; the authorization endpoint for the grant of the
+// response type (GrantTypeAuthorizationCode for code, GrantTypeImplicit for
+// token); and the shipped grants check it again when called directly.
+func ClientAllowsGrantType(c Client, grantType string) bool {
+	return slices.Contains(c.GrantTypes(), grantType)
+}
+
 // DefaultClient is a minimal in-memory [Client] implementation handy for
 // tests, examples, and small static deployments. Production deployments
 // SHOULD plug a database-backed Client implementation instead.
@@ -156,9 +173,13 @@ type DefaultClient struct {
 	Secret            string //nolint:gosec // dev/test convenience
 	TypeValue         ClientType
 	RedirectURIValues []string
-	GrantTypeValues   []string
-	ScopeValues       []string
-	AuthMethodValues  []string
+	// GrantTypeValues lists the grant types the client may use (see
+	// [Client.GrantTypes]): empty, none.
+	GrantTypeValues []string
+	// ScopeValues lists the scopes the client may request (see
+	// [Client.Scopes]): empty, none.
+	ScopeValues      []string
+	AuthMethodValues []string
 	// IssuerValues lists the issuers the client is registered at (see
 	// [IssuerBoundClient]); empty: every issuer the server resolves.
 	IssuerValues []string

@@ -29,6 +29,13 @@ const (
 	testClientSecret = "secret-xyz"
 )
 
+// allGrantTypes declares every shipped grant type: the fixtures' clients
+// may use any of them (a client declaring none may use none).
+var allGrantTypes = []string{
+	oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeImplicit, oauth2.GrantTypeRefreshToken,
+	oauth2.GrantTypeClientCredentials, oauth2.GrantTypePassword,
+}
+
 // staticClientStore is a tiny in-memory [oauth2.ClientStore].
 type staticClientStore struct{ clients map[string]oauth2.Client }
 
@@ -63,10 +70,11 @@ func newTestServer(t *testing.T) (*oauth2.Server, *memory.Store) {
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
-			IDValue:     testClientID,
-			Secret:      testClientSecret,
-			TypeValue:   oauth2.ClientConfidential,
-			ScopeValues: []string{"api:read"},
+			GrantTypeValues: allGrantTypes,
+			IDValue:         testClientID,
+			Secret:          testClientSecret,
+			TypeValue:       oauth2.ClientConfidential,
+			ScopeValues:     []string{"api:read"},
 		},
 	}}
 
@@ -255,9 +263,9 @@ func TestTokenEndpointIssuerError(t *testing.T) {
 	}
 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
-		Storage:     store,
+		Storage: store,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-			testClientID: &oauth2.DefaultClient{IDValue: testClientID, Secret: testClientSecret},
+			testClientID: &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: testClientID, Secret: testClientSecret},
 		}},
 		IssuerResolver: failingIssuer{},
 		Grants:         []oauth2.Grant{grant.NewClientCredentials(cfg)},
@@ -586,7 +594,8 @@ func TestTokenEndpointLegacyPasswordGrant(t *testing.T) {
 		Storage: store,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			testClientID: &oauth2.DefaultClient{
-				IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+				GrantTypeValues: allGrantTypes,
+				IDValue:         testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
 			},
 		}},
 		IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),

@@ -38,6 +38,7 @@ func newRealmServer(t *testing.T, resolver oauth2.IssuerResolver) (*oauth2.Serve
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
+			GrantTypeValues:   allGrantTypes,
 			IDValue:           testClientID,
 			Secret:            testClientSecret,
 			TypeValue:         oauth2.ClientConfidential,
@@ -169,7 +170,8 @@ func TestAuthorizeIssuerFailureAnswersBeforeConsent(t *testing.T) {
 				Profile: oauth2.Profile20, Storage: memory.New(), IssuerResolver: failingIssuer{},
 				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 					testClientID: &oauth2.DefaultClient{
-						IDValue: testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
+						GrantTypeValues: allGrantTypes,
+						IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
 					},
 				}},
 				ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},

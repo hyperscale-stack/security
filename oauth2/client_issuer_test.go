@@ -47,7 +47,8 @@ func newTenantServer(t *testing.T, sink *errorSink, auth ...oauth2.ClientAuthent
 	grants := []string{"authorization_code", "refresh_token", "client_credentials"}
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
-			IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
 			RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read", "write"},
 		},
 		boundClientID: &oauth2.DefaultClient{
@@ -261,7 +262,7 @@ func TestUnboundClientsServeEveryIssuer(t *testing.T) {
 func TestClientBindingSurvivesCustomAuthenticators(t *testing.T) {
 	t.Parallel()
 
-	bound := &oauth2.DefaultClient{IDValue: boundClientID, TypeValue: oauth2.ClientConfidential, IssuerValues: []string{issuerA}}
+	bound := &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: boundClientID, TypeValue: oauth2.ClientConfidential, IssuerValues: []string{issuerA}}
 	sink := &errorSink{}
 	srv := newTenantServer(t, sink, fixedAuthenticator{client: bound})
 
@@ -314,8 +315,8 @@ func (a fixedAuthenticator) Authenticate(context.Context, *http.Request, oauth2.
 func TestClientAllowsIssuer(t *testing.T) {
 	t.Parallel()
 
-	anywhere := &oauth2.DefaultClient{IDValue: "c"}
-	bound := &oauth2.DefaultClient{IDValue: "c", IssuerValues: []string{issuerA, "https://a.example/t1"}}
+	anywhere := &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "c"}
+	bound := &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "c", IssuerValues: []string{issuerA, "https://a.example/t1"}}
 
 	assert.True(t, oauth2.ClientAllowsIssuer(anywhere, "https://b.example"), "no issuers listed: every issuer")
 	assert.True(t, oauth2.ClientAllowsIssuer(bound, issuerA))

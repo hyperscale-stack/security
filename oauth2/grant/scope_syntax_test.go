@@ -66,9 +66,8 @@ func TestPasswordGrantScopeSyntax(t *testing.T) {
 	assert.Equal(t, "write:mail read:mail", resp.Scope)
 }
 
-// TestClientCredentialsScopeIsCanonical: whatever the client's registration,
-// the scope a client_credentials token carries is canonical — single-SP
-// joined, duplicates dropped.
+// TestClientCredentialsScopeIsCanonical: the scope a client_credentials
+// token carries is canonical — single-SP joined, duplicates dropped.
 func TestClientCredentialsScopeIsCanonical(t *testing.T) {
 	t.Parallel()
 
@@ -76,15 +75,11 @@ func TestClientCredentialsScopeIsCanonical(t *testing.T) {
 		Storage: newStore(), AccessTokens: newAccessGen(), AccessTTL: time.Hour,
 	})
 
-	unrestricted := &oauth2.DefaultClient{IDValue: clientID, TypeValue: oauth2.ClientConfidential}
-
-	for name, client := range map[string]oauth2.Client{"registered scopes": newClient(), "no registration": unrestricted} {
-		resp, err := g.Handle(context.Background(), grant.Request{
-			Client: client, Form: url.Values{"scope": {"write:mail  read:mail write:mail"}}, Now: time.Now(),
-		})
-		require.NoError(t, err, name)
-		assert.Equal(t, "write:mail read:mail", resp.Scope, name)
-	}
+	resp, err := g.Handle(context.Background(), grant.Request{
+		Client: newClient(), Form: url.Values{"scope": {"write:mail  read:mail write:mail"}}, Now: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "write:mail read:mail", resp.Scope)
 }
 
 // TestRefreshKeepsALegacyStoredScope: a refresh token stored before scopes

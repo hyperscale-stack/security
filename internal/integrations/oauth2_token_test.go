@@ -55,15 +55,16 @@ func newServer(t *testing.T) (*oauth2.Server, *memory.Store) {
 		TypeValue:         oauth2.ClientConfidential,
 		RedirectURIValues: []string{"https://connect.myservice.tld"},
 		ScopeValues:       []string{"api:read"},
+		GrantTypeValues:   []string{oauth2.GrantTypeClientCredentials, oauth2.GrantTypeRefreshToken},
 	}
 	clients := &staticClientStore{clients: map[string]oauth2.Client{clientID: client}}
 
 	cfg := grant.Config{
-		Storage:       store,
-		AccessTokens:  token.NewOpaque(32),
-		RefreshTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
-		AccessTTL:     time.Hour,
-		RefreshTTL:    24 * time.Hour,
+		Storage:             store,
+		AccessTokens:        token.NewOpaque(32),
+		RefreshTokens:       token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
+		AccessTTL:           time.Hour,
+		RefreshTTL:          24 * time.Hour,
 		RotateRefreshTokens: true,
 	}
 

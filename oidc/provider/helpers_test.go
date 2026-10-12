@@ -229,21 +229,32 @@ func (s staticClients) LoadClient(_ context.Context, id string) (oauth2.Client, 
 	return c, nil
 }
 
+// The grant types the test clients declare: a client may use only those
+// (an empty list allows none). The confidential web clients also run
+// client_credentials and the legacy implicit flow in some tests.
+var (
+	webGrantTypes = []string{
+		oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken,
+		oauth2.GrantTypeClientCredentials, oauth2.GrantTypeImplicit,
+	}
+	spaGrantTypes = []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken}
+)
+
 func testClients() staticClients {
 	scopes := []string{"openid", "profile", "email", "address", "phone", "offline_access", "read"}
 
 	return staticClients{
 		webClientID: &oauth2.DefaultClient{
 			IDValue: webClientID, Secret: webClientSecret, TypeValue: oauth2.ClientConfidential,
-			RedirectURIValues: []string{webRedirectURI}, ScopeValues: scopes,
+			RedirectURIValues: []string{webRedirectURI}, ScopeValues: scopes, GrantTypeValues: webGrantTypes,
 		},
 		spaClientID: &oauth2.DefaultClient{
 			IDValue: spaClientID, TypeValue: oauth2.ClientPublic, AuthMethodValues: []string{"none"},
-			RedirectURIValues: []string{spaRedirectURI}, ScopeValues: scopes,
+			RedirectURIValues: []string{spaRedirectURI}, ScopeValues: scopes, GrantTypeValues: spaGrantTypes,
 		},
 		es256ClientID: &es256Client{oauth2.DefaultClient{
 			IDValue: es256ClientID, Secret: webClientSecret, TypeValue: oauth2.ClientConfidential,
-			RedirectURIValues: []string{webRedirectURI}, ScopeValues: scopes,
+			RedirectURIValues: []string{webRedirectURI}, ScopeValues: scopes, GrantTypeValues: webGrantTypes,
 		}},
 	}
 }
@@ -616,5 +627,6 @@ func newAlgClient(id string, alg jwtsec.Algorithm) *algClient {
 	return &algClient{DefaultClient: oauth2.DefaultClient{
 		IDValue: id, Secret: webClientSecret, TypeValue: oauth2.ClientConfidential,
 		RedirectURIValues: []string{webRedirectURI}, ScopeValues: []string{"openid", "profile", "email", "offline_access"},
+		GrantTypeValues: webGrantTypes,
 	}, alg: alg}
 }

@@ -569,6 +569,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   duplicates dropped, refresh narrowing included, and the `/token`
   `invalid_scope` description no longer echoes the request. See
   [MIGRATION.md](MIGRATION.md).
+- **OAuth2 clients get only what they declare (breaking)**: an empty
+  `Client.GrantTypes()` allows no grant and an empty `Client.Scopes()` no
+  scope — both meant "anything" before. `/token` checks the client's grant
+  types for every grant, custom ones included, before the grant runs
+  (`unauthorized_client`; a code or refresh token presented stays untouched),
+  and a code exchange or password grant issues a refresh token only to a
+  client declaring `refresh_token`. Refusals caused by an empty declaration
+  carry `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` to
+  `OnError`. New: `oauth2.ClientAllowsGrantType` and the `GrantTypeImplicit`,
+  `GrantTypeClientCredentials`, `GrantTypePassword` constants. Every client
+  must declare its grant types and scopes. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -969,3 +980,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   subject is the client, with any scope when the client registered none.
   Untyped clients are refused too: the server cannot know they keep a
   secret.
+- OAuth2 client registrations fail closed: a client registered without
+  `GrantTypeValues` could use every grant — `client_credentials` and the
+  legacy `password` grant included — and one without `ScopeValues` could
+  request any scope, `admin` included. Both now allow nothing. The token
+  endpoint checks the client's grant types for every grant before it runs,
+  so a custom grant can no longer forget the check, and a code presented by
+  a client not allowed `authorization_code` is no longer consumed.

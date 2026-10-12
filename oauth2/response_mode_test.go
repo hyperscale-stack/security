@@ -50,7 +50,8 @@ func responseModeServer(t *testing.T, resolver oauth2.IssuerResolver, sink *erro
 		Profile: oauth2.Profile20, Storage: store, IssuerResolver: resolver,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			testClientID: &oauth2.DefaultClient{
-				IDValue: testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
+				GrantTypeValues: allGrantTypes,
+				IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
 			},
 		}},
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},

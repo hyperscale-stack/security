@@ -65,7 +65,8 @@ func ExampleExtension() {
 		Storage: store,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			"app": &oauth2.DefaultClient{
-				IDValue: "app", Secret: "app-secret", TypeValue: oauth2.ClientConfidential,
+				GrantTypeValues: allGrantTypes,
+				IDValue:         "app", Secret: "app-secret", TypeValue: oauth2.ClientConfidential,
 				RedirectURIValues: []string{"https://app.example/cb"},
 			},
 		}},

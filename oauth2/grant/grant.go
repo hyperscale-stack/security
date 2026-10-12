@@ -36,8 +36,9 @@ type Config struct {
 	// AccessTokens issues access tokens (opaque or JWT).
 	AccessTokens token.AccessTokenGenerator
 	// RefreshTokens issues refresh tokens. Optional for authorization_code
-	// and password, which emit no refresh token without it — nor for a
-	// grant missing RefreshTokenScope, when that is set. Required by
+	// and password, which emit no refresh token without it — nor to a client
+	// not declaring the refresh_token grant, nor for a grant missing
+	// RefreshTokenScope, when that is set. Required by
 	// refresh_token whenever it rotates — always under
 	// [oauth2.Profile20BCP] and [oauth2.Profile21Draft] — since the
 	// replacement is minted with it; see [ErrRotationRequiresGenerator].
@@ -82,15 +83,35 @@ type Config struct {
 	OnError oauth2.ErrorHook
 }
 
-// issuesRefreshFor reports whether an exchange granting scope gets a
-// refresh token: the config carries a generator and, when
-// RefreshTokenScope is set, scope holds it.
-func (c Config) issuesRefreshFor(scope string) bool {
-	if c.RefreshTokens == nil {
+// issuesRefreshFor reports whether an exchange by client granting scope
+// gets a refresh token: the config carries a generator, the client declares
+// the refresh_token grant — RFC 9700 §4.14.2: the server decides which
+// clients get refresh tokens — and, when RefreshTokenScope is set, scope
+// holds it.
+func (c Config) issuesRefreshFor(client oauth2.Client, scope string) bool {
+	if c.RefreshTokens == nil || !oauth2.ClientAllowsGrantType(client, oauth2.GrantTypeRefreshToken) {
 		return false
 	}
 
 	return c.RefreshTokenScope == "" || slices.Contains(strings.Fields(scope), c.RefreshTokenScope)
+}
+
+// checkGrantType returns nil when client declares grantType
+// ([oauth2.ClientAllowsGrantType]), otherwise unauthorized_client (RFC 6749
+// §5.2) — with [oauth2.ErrNoGrantTypesDeclared] as cause when client
+// declares no grant type at all. The server checks it before a grant runs;
+// the grants check it again for direct calls and decorators.
+func checkGrantType(client oauth2.Client, grantType string) error {
+	if oauth2.ClientAllowsGrantType(client, grantType) {
+		return nil
+	}
+
+	refusal := oauth2.ErrUnauthorizedClient.WithDescription("client cannot use " + grantType)
+	if len(client.GrantTypes()) == 0 {
+		return refusal.WithCause(oauth2.ErrNoGrantTypesDeclared)
+	}
+
+	return refusal
 }
 
 // notifyError hands err to the configured [oauth2.ErrorHook], if any.

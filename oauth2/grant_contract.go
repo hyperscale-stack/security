@@ -52,7 +52,10 @@ type GrantResponse struct {
 
 // Grant validates and processes one OAuth2 grant_type value. Each Grant is
 // invoked exclusively by the server's /token endpoint; the server
-// authenticates the client beforehand.
+// authenticates the client beforehand and checks that it declares the grant
+// type ([ClientAllowsGrantType]). A custom grant applies the client's scope
+// registration itself: [Client.Scopes], compared exactly, an empty list
+// allowing no scope.
 type Grant interface {
 	// Type returns the grant_type identifier.
 	Type() string

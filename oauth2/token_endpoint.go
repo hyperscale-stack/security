@@ -19,7 +19,10 @@ import (
 //  2. Resolves the issuer and authenticates the client at it via the
 //     configured ClientAuthenticators (a client bound to other issuers is
 //     unknown, see [IssuerBoundClient]).
-//  3. Looks up the grant_type and dispatches to the matching Grant.
+//  3. Looks up the grant_type, checks that the client declares it
+//     ([ClientAllowsGrantType]; unauthorized_client otherwise, before the
+//     grant runs, custom grants included) and dispatches to the matching
+//     Grant.
 //  4. Serializes the response per RFC 6749 §5.1 (success) — plus the
 //     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
 //     (error).
@@ -69,6 +72,14 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client's declaration is checked for every grant type, custom ones
+	// included, before the grant runs: a refused request consumes nothing.
+	if !ClientAllowsGrantType(client, grantType) {
+		s.writeOAuthError(r.Context(), w, grantTypeRefusal(client))
+
+		return
+	}
+
 	// One clock read for the whole exchange: the grant stamps the expiry
 	// from it, and expires_in is measured against the very same instant, so
 	// the advertised lifetime is exactly the configured TTL.
@@ -90,6 +101,20 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeTokenResponse(w, resp, now)
+}
+
+// errGrantTypeNotDeclared answers a grant type the client does not declare
+// (RFC 6749 §5.2 unauthorized_client).
+var errGrantTypeNotDeclared = ErrUnauthorizedClient.WithDescription("the client may not use this grant type")
+
+// grantTypeRefusal returns errGrantTypeNotDeclared for c, with
+// [ErrNoGrantTypesDeclared] as cause when c declares no grant type at all.
+func grantTypeRefusal(c Client) *Error {
+	if len(c.GrantTypes()) == 0 {
+		return errGrantTypeNotDeclared.WithCause(ErrNoGrantTypesDeclared)
+	}
+
+	return errGrantTypeNotDeclared
 }
 
 // tokenResponse is the on-wire JSON body per RFC 6749 §5.1. The

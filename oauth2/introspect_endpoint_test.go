@@ -70,6 +70,7 @@ func introspectClients() *staticClientStore {
 	return &staticClientStore{clients: map[string]oauth2.Client{
 		// A public SPA: "none" + PKCE at /token.
 		spaClientID: &oauth2.DefaultClient{
+			GrantTypeValues:   allGrantTypes,
 			IDValue:           spaClientID,
 			TypeValue:         oauth2.ClientPublic,
 			RedirectURIValues: []string{redirectURI},
@@ -77,18 +78,21 @@ func introspectClients() *staticClientStore {
 		},
 		// Two confidential resource servers.
 		rsAPIClientID: &oauth2.DefaultClient{
-			IDValue: rsAPIClientID, Secret: rsAPISecret, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         rsAPIClientID, Secret: rsAPISecret, TypeValue: oauth2.ClientConfidential,
 		},
 		rsBillingClientID: &oauth2.DefaultClient{
-			IDValue: rsBillingClientID, Secret: rsBillingSecret, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         rsBillingClientID, Secret: rsBillingSecret, TypeValue: oauth2.ClientConfidential,
 		},
 		// A public client provisioned with a secret all the same.
 		publicSecretClientID: &oauth2.DefaultClient{
-			IDValue: publicSecretClientID, Secret: publicSecret, TypeValue: oauth2.ClientPublic,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         publicSecretClientID, Secret: publicSecret, TypeValue: oauth2.ClientPublic,
 		},
 		// Clients with no declared type, with and without a secret.
-		untypedClientID:   &oauth2.DefaultClient{IDValue: untypedClientID, Secret: untypedSecret},
-		untypedNoSecretID: &oauth2.DefaultClient{IDValue: untypedNoSecretID},
+		untypedClientID:   &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: untypedClientID, Secret: untypedSecret},
+		untypedNoSecretID: &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: untypedNoSecretID},
 	}}
 }
 

@@ -115,8 +115,8 @@ func TestProfilePredicates(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		profile                                        oauth2.Profile
-		legacy, pkce, rotation, plainPKCE              bool
+		profile                           oauth2.Profile
+		legacy, pkce, rotation, plainPKCE bool
 	}{
 		{oauth2.Profile20, true, false, false, true},
 		{oauth2.Profile20BCP, false, true, true, false},

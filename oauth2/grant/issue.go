@@ -51,7 +51,7 @@ func issueTokenPair(ctx context.Context, cfg Config, req Request, iss issuance) 
 
 	pair := &oauth2.TokenPair{Access: *access}
 
-	if cfg.issuesRefreshFor(iss.refreshScope) {
+	if cfg.issuesRefreshFor(req.Client, iss.refreshScope) {
 		if pair.Refresh, err = mintRefresh(ctx, cfg, req, iss); err != nil {
 			return nil, err
 		}

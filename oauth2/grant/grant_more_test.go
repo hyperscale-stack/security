@@ -67,7 +67,7 @@ func TestAuthorizationCodeClientMismatch(t *testing.T) {
 
 	store := newStore()
 	g, req := newAuthCodeReq(context.Background(), store, true)
-	req.Client = &oauth2.DefaultClient{IDValue: "another-client", TypeValue: oauth2.ClientConfidential}
+	req.Client = &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "another-client", TypeValue: oauth2.ClientConfidential}
 
 	_, err := g.Handle(context.Background(), req)
 	require.Error(t, err)
@@ -249,21 +249,31 @@ func TestClientCredentialsGrantTypeNotAllowed(t *testing.T) {
 	assert.Equal(t, oauth2.CodeUnauthorizedClient, oauth2.IsCode(err))
 }
 
-func TestClientCredentialsNoScopeRestriction(t *testing.T) {
+// TestClientCredentialsEmptyScopeListAllowsNoScope: a client declaring no
+// scope may request none — any requested scope is invalid_scope, with
+// ErrNoScopesDeclared as cause — and gets the empty scope without one.
+func TestClientCredentialsEmptyScopeListAllowsNoScope(t *testing.T) {
 	t.Parallel()
 
 	g := grant.NewClientCredentials(grant.Config{
 		Storage: newStore(), AccessTokens: newAccessGen(), AccessTTL: time.Hour,
 	})
 
-	// A client with no Scopes() list accepts any requested scope verbatim.
-	client := &oauth2.DefaultClient{IDValue: clientID, TypeValue: oauth2.ClientConfidential}
-	form := url.Values{}
-	form.Set("scope", "anything:goes")
+	client := &oauth2.DefaultClient{
+		IDValue: clientID, TypeValue: oauth2.ClientConfidential,
+		GrantTypeValues: []string{oauth2.GrantTypeClientCredentials},
+	}
 
-	resp, err := g.Handle(context.Background(), grant.Request{Client: client, Form: form, Now: time.Now()})
+	_, err := g.Handle(context.Background(), grant.Request{
+		Client: client, Form: url.Values{"scope": {"anything:goes"}}, Now: time.Now(),
+	})
+	require.Error(t, err)
+	assert.Equal(t, oauth2.CodeInvalidScope, oauth2.IsCode(err))
+	assert.ErrorIs(t, err, oauth2.ErrNoScopesDeclared)
+
+	resp, err := g.Handle(context.Background(), grant.Request{Client: client, Form: url.Values{}, Now: time.Now()})
 	require.NoError(t, err)
-	assert.Equal(t, "anything:goes", resp.Scope)
+	assert.Empty(t, resp.Scope)
 }
 
 func TestClientCredentialsDefaultsToFirstScope(t *testing.T) {
@@ -351,7 +361,7 @@ func TestRefreshTokenClientMismatch(t *testing.T) {
 	form.Set("refresh_token", "other-client-rt")
 
 	_, err := g.Handle(context.Background(), grant.Request{
-		Client: &oauth2.DefaultClient{IDValue: "intruder", TypeValue: oauth2.ClientConfidential},
+		Client: &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "intruder", TypeValue: oauth2.ClientConfidential},
 		Form:   form, Now: time.Now(),
 	})
 	require.Error(t, err)

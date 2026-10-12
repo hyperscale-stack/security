@@ -926,16 +926,22 @@ var (
 // scopes and returns it canonical: single-SP joined, duplicates dropped. The
 // value is parsed strictly (RFC 6749 §3.3: SP-separated NQCHAR tokens), at
 // most 100 tokens and 4096 bytes — anything else is invalid_scope
-// ("malformed", §4.1.2.1), with the scopes sentinel as cause. An empty
-// allowed set means the client carries no scope restriction.
+// ("malformed", §4.1.2.1), with the scopes sentinel as cause. Every token
+// must be allowed: an empty allowed set admits none ([ErrNoScopesDeclared]
+// as cause), and a request without scope gets the empty scope.
 func authorizeScope(requested string, allowed []string) (string, *Error) {
 	tokens, err := scopes.Parse(requested)
 	if err != nil {
 		return "", ErrInvalidScope.WithDescription(errScopeMalformed.Error()).WithCause(err)
 	}
 
-	if len(allowed) > 0 && !scopes.NewSet(allowed).Admits(tokens) {
-		return "", ErrInvalidScope.WithDescription(errScopeNotAllowed.Error())
+	if !scopes.NewSet(allowed).Admits(tokens) {
+		refusal := ErrInvalidScope.WithDescription(errScopeNotAllowed.Error())
+		if len(allowed) == 0 {
+			refusal = refusal.WithCause(ErrNoScopesDeclared)
+		}
+
+		return "", refusal
 	}
 
 	return scopes.Join(tokens), nil

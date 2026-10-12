@@ -325,7 +325,8 @@ func TestAuthorizationCodeUnprovenReplayRevokesNothing(t *testing.T) {
 	}{
 		{"another confidential client", func(r grant.Request) grant.Request {
 			r.Client = &oauth2.DefaultClient{
-				IDValue: "client-2", Secret: "secret-2", TypeValue: oauth2.ClientConfidential,
+				GrantTypeValues: allGrantTypes,
+				IDValue:         "client-2", Secret: "secret-2", TypeValue: oauth2.ClientConfidential,
 				RedirectURIValues: []string{redirectURI},
 			}
 

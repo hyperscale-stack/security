@@ -146,11 +146,7 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 		return err
 	}
 
-	if !grantTypeAllowed(req.Client, "authorization_code") {
-		return oauth2.ErrUnauthorizedClient.WithDescription("client cannot use authorization_code")
-	}
-
-	return nil
+	return checkGrantType(req.Client, oauth2.GrantTypeAuthorizationCode)
 }
 
 // revokeReplayed answers the replay of a consumed code (RFC 6749 §4.1.2).
@@ -216,18 +212,6 @@ func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCo
 	}
 
 	return nil
-}
-
-// grantTypeAllowed reports whether the client is configured for grant.
-// An empty GrantTypes() list means "any grant" — common in single-tenant
-// deployments where the client list is curated.
-func grantTypeAllowed(c oauth2.Client, grant string) bool {
-	all := c.GrantTypes()
-	if len(all) == 0 {
-		return true
-	}
-
-	return slices.Contains(all, grant)
 }
 
 // codeFamilyPrefix domain-separates the token family derived from a code

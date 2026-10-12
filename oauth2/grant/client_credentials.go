@@ -51,8 +51,8 @@ func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response,
 		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client_credentials requires a confidential client")
 	}
 
-	if !grantTypeAllowed(req.Client, oauth2.GrantTypeClientCredentials) {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use client_credentials")
+	if err := checkGrantType(req.Client, oauth2.GrantTypeClientCredentials); err != nil {
+		return nil, err
 	}
 
 	scope, err := narrowScopes(req.Form.Get("scope"), req.Client.Scopes())
@@ -114,10 +114,11 @@ func parseRequestedScope(requested string) ([]string, error) {
 
 // narrowScopes checks a requested scope value against the client's allowed
 // scopes and returns it canonical: single-SP joined, duplicates dropped.
-// When the client has no allowed list, any well-formed scope is accepted.
-// When requested holds no scope and the client has at least one, the first
-// one is returned as the default — the common UX of "no scope -> default
-// scope" (RFC 6749 §3.3 lets the server use a pre-defined default).
+// Every token must be allowed: a client allowing none can request none
+// (invalid_scope, oauth2.ErrNoScopesDeclared as cause). When requested holds
+// no scope and the client has at least one, the first one is returned as the
+// default — the common UX of "no scope -> default scope" (RFC 6749 §3.3 lets
+// the server use a pre-defined default); without any, the scope is empty.
 func narrowScopes(requested string, allowed []string) (string, error) {
 	tokens, err := parseRequestedScope(requested)
 	if err != nil {
@@ -125,12 +126,15 @@ func narrowScopes(requested string, allowed []string) (string, error) {
 	}
 
 	switch {
-	case len(allowed) == 0:
-		return scopes.Join(tokens), nil
-	case len(tokens) == 0:
+	case len(tokens) == 0 && len(allowed) > 0:
 		return allowed[0], nil
 	case !scopes.NewSet(allowed).Admits(tokens):
-		return "", oauth2.ErrInvalidScope.WithDescription(scopeNotAllowed)
+		refusal := oauth2.ErrInvalidScope.WithDescription(scopeNotAllowed)
+		if len(allowed) == 0 {
+			refusal = refusal.WithCause(oauth2.ErrNoScopesDeclared)
+		}
+
+		return "", refusal
 	default:
 		return scopes.Join(tokens), nil
 	}

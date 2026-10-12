@@ -184,6 +184,11 @@ The `oauth2` module is an authorization server, not just a provider:
 - **Grants** — `authorization_code` (PKCE), `client_credentials`,
   `refresh_token` (rotation + reuse detection), plus the opt-in legacy
   `password` grant (`grant.NewLegacyPassword`, refused outside `Profile20`).
+- **Client policy** — fail closed: a client uses only the grant types
+  (`Client.GrantTypes`, checked at `/token` for every grant before it runs)
+  and requests only the scopes (`Client.Scopes`) it declares, an empty list
+  allowing nothing; `client_credentials` is for confidential clients only;
+  refresh tokens go to clients declaring `refresh_token`.
 - **Client authentication** — `client_secret_basic`, `client_secret_post`,
   `none` (public clients, PKCE required). `/introspect` answers
   confidential clients only.

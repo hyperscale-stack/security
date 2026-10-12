@@ -36,6 +36,7 @@ func newAuthorizeServer(t *testing.T, profile oauth2.Profile) *oauth2.Server {
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
+			GrantTypeValues:   allGrantTypes,
 			IDValue:           testClientID,
 			Secret:            testClientSecret,
 			TypeValue:         oauth2.ClientConfidential,

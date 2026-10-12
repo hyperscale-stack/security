@@ -40,7 +40,8 @@ func redeemCode(t *testing.T, s oauth2.Storage, g *grant.AuthorizationCode, raw 
 	req := grant.Request{
 		Client: &oauth2.DefaultClient{
 			IDValue: testClientID, TypeValue: oauth2.ClientConfidential,
-			RedirectURIValues: []string{testRedirectURI},
+			RedirectURIValues: []string{testRedirectURI}, ScopeValues: []string{testScope},
+			GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken},
 		},
 		Form:    url.Values{"code": {raw}, "redirect_uri": {testRedirectURI}, "code_verifier": {replayVerifier}},
 		Issuer:  testIssuer,

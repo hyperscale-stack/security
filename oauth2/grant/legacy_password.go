@@ -57,8 +57,8 @@ func (g *LegacyPassword) Type() string { return oauth2.GrantTypePassword }
 
 // Handle implements [oauth2.Grant].
 func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "password") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use the password grant")
+	if err := checkGrantType(req.Client, oauth2.GrantTypePassword); err != nil {
+		return nil, err
 	}
 
 	username := req.Form.Get("username")

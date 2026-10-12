@@ -72,6 +72,19 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   counts as absent (RFC 6749 §3.1). The refusal burns the code but revokes
   nothing: a replay of a code redeemed without PKCE still revokes its
   tokens, whatever `code_verifier` it carries.
+- **Client policy** — fail closed: a client may use only the grant types it
+  declares (`Client.GrantTypes`, compared exactly; empty allows none) and
+  request only the scopes it declares (`Client.Scopes`; empty allows none).
+  `/token` checks the grant type for every grant, custom ones included,
+  before the grant runs, so a refused request consumes nothing;
+  `client_credentials` refuses every client that is not confidential (RFC
+  6749 §4.4); a consent narrows the requested scope, never broadens it; a
+  refresh token goes only to a client declaring `refresh_token` (RFC 9700
+  §4.14.2). Refusals caused by an empty declaration reach `OnError` with
+  `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` as cause. Unlike RFC
+  7591 §2, an empty grant-type list implies nothing, and scopes outside the
+  registration are refused rather than ignored (OpenID Connect Core
+  §3.1.2.1 says unknown scope values SHOULD be ignored).
 - **Scope values** — every scope a client or a callback sends (the `scope`
   of `/authorize` and `/token`, `Consent.Scope`, `ExtensionGrant.Scope`) is
   parsed strictly as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`
@@ -1045,8 +1058,10 @@ span catalog.
       `password` legacy grants without a documented reason.
 - [ ] Give every confidential client that authenticates with a secret a
       high-entropy one. Register a client that cannot keep a secret as
-      public (`none` + PKCE), and list its `GrantTypeValues`: an empty
-      list allows every grant, `client_credentials` included.
+      public (`none` + PKCE). Declare every client's `GrantTypeValues` and
+      `ScopeValues` — an empty list allows nothing — and watch `OnError`
+      for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
+      upgrade.
 - [ ] Register the resource servers calling `/introspect` as confidential
       clients, and set `ServerConfig.IntrospectionPolicy` when several
       resource servers or tenants share the authorization server.

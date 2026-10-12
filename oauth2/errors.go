@@ -188,6 +188,20 @@ var (
 // triggers fails; match it with errors.Is.
 var ErrTokenFamilyRevocationFailed = errors.New("oauth2: token family revocation failed")
 
+// ErrNoGrantTypesDeclared is the cause the [ErrorHook] gets when a client
+// declaring no grant type at all — an empty [Client.GrantTypes] — is refused
+// a grant: unauthorized_client on the wire, like any grant type the client
+// does not declare. It tells a registration that declares nothing from a
+// request using the wrong grant: watch for it after upgrading. A plain
+// sentinel that never reaches the wire; match it with errors.Is.
+var ErrNoGrantTypesDeclared = errors.New("oauth2: the client declares no grant type")
+
+// ErrNoScopesDeclared is the cause the [ErrorHook] gets when a client
+// declaring no scope at all — an empty [Client.Scopes] — requests one:
+// invalid_scope on the wire. A plain sentinel that never reaches the wire;
+// match it with errors.Is.
+var ErrNoScopesDeclared = errors.New("oauth2: the client declares no scope")
+
 // ErrClientNotAtIssuer is the cause the [ErrorHook] gets when a client
 // bound to other issuers ([IssuerBoundClient]) is refused at the issuer a
 // request resolved to. It is a plain sentinel that never reaches the

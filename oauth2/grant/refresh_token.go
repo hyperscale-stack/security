@@ -71,8 +71,8 @@ func (g *RefreshToken) Type() string { return oauth2.GrantTypeRefreshToken }
 
 // Handle implements [Grant].
 func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "refresh_token") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use refresh_token")
+	if err := checkGrantType(req.Client, oauth2.GrantTypeRefreshToken); err != nil {
+		return nil, err
 	}
 
 	raw := req.Form.Get("refresh_token")

@@ -82,6 +82,8 @@ func hookServerConfig(store oauth2.Storage) oauth2.ServerConfig {
 		Storage: store,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			testClientID: &oauth2.DefaultClient{
+				// The shipped grants, and the custom grant of the error tests.
+				GrantTypeValues:   append([]string{"urn:test:failing"}, allGrantTypes...),
 				IDValue:           testClientID,
 				Secret:            testClientSecret,
 				TypeValue:         oauth2.ClientConfidential,

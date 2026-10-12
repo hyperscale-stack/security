@@ -5,10 +5,12 @@
 package oauth2_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,4 +243,275 @@ func TestClientCredentialsRequiresAConfidentialClient(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		assert.Equal(t, "admin superuser", jsonBody(t, rec)["scope"])
 	})
+}
+
+// confidentialClient returns the confidential client "machine" (secret
+// "machine-secret", the canonical redirect URI) declaring grants and scopes.
+func confidentialClient(grants, scopes []string) *oauth2.DefaultClient {
+	return &oauth2.DefaultClient{
+		IDValue: "machine", Secret: "machine-secret", TypeValue: oauth2.ClientConfidential,
+		RedirectURIValues: []string{redirectURI}, GrantTypeValues: grants, ScopeValues: scopes,
+	}
+}
+
+// machineQuery is the canonical /authorize query of the client "machine".
+func machineQuery() url.Values {
+	q := authorizeQuery()
+	q.Set("client_id", "machine")
+
+	return q
+}
+
+// seedGrants stores, behind env's counter, a code ("seeded-code", S256 PKCE)
+// and a refresh token ("seeded-rt") of the client "machine" with scope, as
+// an earlier registration of the client could have issued them.
+func seedGrants(t *testing.T, env *policyEnv, scope string) {
+	t.Helper()
+
+	now := time.Now()
+	require.NoError(t, env.store.Store.SaveAuthorizationCode(t.Context(), &oauth2.AuthorizationCode{
+		Code: "seeded-code", CodeHash: oauth2.HashToken(nil, "seeded-code"), ClientID: "machine", Subject: "alice",
+		RedirectURI: redirectURI, Scope: scope, CodeChallenge: pkceChallenge, CodeChallengeMethod: "S256",
+		IssuedAt: now, ExpiresAt: now.Add(time.Minute), Issuer: "https://auth.example",
+	}))
+	require.NoError(t, env.store.Store.SaveTokenPair(t.Context(), &oauth2.TokenPair{
+		Access: oauth2.AccessToken{
+			TokenHash: "seeded-at", ClientID: "machine", Subject: "alice", Scope: scope, FamilyID: "fam-seeded",
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour), Issuer: "https://auth.example",
+		},
+		Refresh: &oauth2.RefreshToken{
+			TokenHash: oauth2.HashToken(nil, "seeded-rt"), ClientID: "machine", Subject: "alice", Scope: scope,
+			FamilyID: "fam-seeded", IssuedAt: now, ExpiresAt: now.Add(time.Hour), Issuer: "https://auth.example",
+		},
+	}))
+}
+
+func TestClientAllowsGrantType(t *testing.T) {
+	t.Parallel()
+
+	declared := &oauth2.DefaultClient{GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken}}
+	assert.True(t, oauth2.ClientAllowsGrantType(declared, oauth2.GrantTypeAuthorizationCode))
+	assert.True(t, oauth2.ClientAllowsGrantType(declared, oauth2.GrantTypeRefreshToken))
+	assert.False(t, oauth2.ClientAllowsGrantType(declared, oauth2.GrantTypeClientCredentials))
+	assert.False(t, oauth2.ClientAllowsGrantType(declared, "Authorization_Code"), "compared exactly")
+
+	assert.False(t, oauth2.ClientAllowsGrantType(&oauth2.DefaultClient{}, oauth2.GrantTypeAuthorizationCode),
+		"a client declaring no grant type may use none")
+}
+
+// TestEmptyGrantTypesAllowNoGrant pins the fail-closed client policy at
+// /token: a client may only use the grant types it declares — none when it
+// declares none (RFC 6749 §5.2 unauthorized_client). The server refuses
+// before the grant runs, so a code or a refresh token the client presents
+// stays untouched, and OnError gets ErrNoGrantTypesDeclared, the diagnosis
+// of a registration that declares nothing.
+func TestEmptyGrantTypesAllowNoGrant(t *testing.T) {
+	t.Parallel()
+
+	env := newPolicyEnv(t, oauth2.Profile20BCP, confidentialClient(nil, []string{"read"}))
+	seedGrants(t, env, "read")
+
+	forms := map[string]url.Values{
+		"client_credentials": {"grant_type": {oauth2.GrantTypeClientCredentials}},
+		"authorization_code": codeExchangeForm("seeded-code"),
+		"refresh_token":      {"grant_type": {oauth2.GrantTypeRefreshToken}, "refresh_token": {"seeded-rt"}},
+	}
+
+	for name, form := range forms {
+		rec := env.token(form, "machine", "machine-secret")
+		require.Equal(t, http.StatusBadRequest, rec.Code, name)
+		assert.Equal(t, oauth2.CodeUnauthorizedClient, jsonBody(t, rec)["error"], name)
+		assert.NotContains(t, rec.Body.String(), "access_token", name)
+	}
+
+	assert.Zero(t, env.store.writes.Load(), "nothing issued")
+	assert.True(t, env.sink.matches(oauth2.ErrNoGrantTypesDeclared))
+
+	_, err := env.store.ConsumeAuthorizationCode(t.Context(), oauth2.HashToken(nil, "seeded-code"))
+	require.NoError(t, err, "the code was not consumed")
+
+	rt, err := env.store.LookupRefreshToken(t.Context(), oauth2.HashToken(nil, "seeded-rt"))
+	require.NoError(t, err)
+	assert.False(t, rt.Consumed, "the refresh token was not consumed")
+}
+
+// TestGrantTypesAreComparedExactly: a declaration lists grant types by their
+// exact RFC 7591 §2 value; another grant type, or a case variant, is not
+// declared — and the refusal does not read as an empty declaration.
+func TestGrantTypesAreComparedExactly(t *testing.T) {
+	t.Parallel()
+
+	for name, grants := range map[string][]string{
+		"another grant type": {oauth2.GrantTypeAuthorizationCode},
+		"a case variant":     {"Client_Credentials"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newPolicyEnv(t, oauth2.Profile20BCP, confidentialClient(grants, []string{"read"}))
+
+			rec := env.token(url.Values{"grant_type": {oauth2.GrantTypeClientCredentials}}, "machine", "machine-secret")
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Equal(t, oauth2.CodeUnauthorizedClient, jsonBody(t, rec)["error"])
+			assert.False(t, env.sink.matches(oauth2.ErrNoGrantTypesDeclared))
+		})
+	}
+}
+
+// stubGrant is a custom grant counting its calls.
+type stubGrant struct {
+	typ   string
+	calls atomic.Int32
+}
+
+func (g *stubGrant) Type() string { return g.typ }
+
+func (g *stubGrant) Handle(_ context.Context, req oauth2.GrantRequest) (*oauth2.GrantResponse, error) {
+	g.calls.Add(1)
+
+	return &oauth2.GrantResponse{
+		Pair:      oauth2.TokenPair{Access: oauth2.AccessToken{Token: "custom", TokenHash: "custom", ExpiresAt: req.Now.Add(time.Hour)}},
+		TokenType: oauth2.TokenTypeBearer,
+	}, nil
+}
+
+// TestCustomGrantsAreGatedByTheClientDeclaration: the server checks the
+// client's declaration for every grant type, custom ones included, before
+// the grant runs — a custom grant cannot forget the policy.
+func TestCustomGrantsAreGatedByTheClientDeclaration(t *testing.T) {
+	t.Parallel()
+
+	const custom = "urn:example:params:oauth:grant-type:custom"
+
+	stub := &stubGrant{typ: custom}
+	clients := map[string]oauth2.Client{
+		"declares": &oauth2.DefaultClient{IDValue: "declares", Secret: "s1", TypeValue: oauth2.ClientConfidential, GrantTypeValues: []string{custom}},
+		"nothing":  &oauth2.DefaultClient{IDValue: "nothing", Secret: "s2", TypeValue: oauth2.ClientConfidential},
+		"other": &oauth2.DefaultClient{
+			IDValue: "other", Secret: "s3", TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: []string{oauth2.GrantTypeClientCredentials},
+		},
+	}
+
+	srv, err := oauth2.NewServer(oauth2.ServerConfig{
+		Storage: memory.New(), ClientStore: &staticClientStore{clients: clients},
+		IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
+		Grants:         []oauth2.Grant{stub},
+		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+	})
+	require.NoError(t, err)
+
+	call := func(id, secret string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(url.Values{"grant_type": {custom}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth(id, secret)
+
+		rec := httptest.NewRecorder()
+		srv.TokenHandler().ServeHTTP(rec, req)
+
+		return rec
+	}
+
+	for id, secret := range map[string]string{"nothing": "s2", "other": "s3"} {
+		rec := call(id, secret)
+		require.Equal(t, http.StatusBadRequest, rec.Code, id)
+		assert.Equal(t, oauth2.CodeUnauthorizedClient, jsonBody(t, rec)["error"], id)
+	}
+
+	assert.Zero(t, stub.calls.Load(), "the grant never ran for a client not declaring it")
+
+	rec := call("declares", "s1")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, int32(1), stub.calls.Load())
+}
+
+// TestEmptyScopesAllowNoScope pins the fail-closed client policy on scopes: a
+// client may request only the scopes it declares — none when it declares
+// none. A request carrying a scope is invalid_scope (OnError gets
+// ErrNoScopesDeclared); one without scope gets the empty scope, the
+// server's default (RFC 6749 §3.3).
+func TestEmptyScopesAllowNoScope(t *testing.T) {
+	t.Parallel()
+
+	grants := []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeClientCredentials}
+
+	t.Run("token endpoint", func(t *testing.T) {
+		t.Parallel()
+
+		env := newPolicyEnv(t, oauth2.Profile20BCP, confidentialClient(grants, nil))
+
+		rec := env.token(url.Values{"grant_type": {oauth2.GrantTypeClientCredentials}, "scope": {"admin superuser"}}, "machine", "machine-secret")
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, oauth2.CodeInvalidScope, jsonBody(t, rec)["error"])
+		assert.True(t, env.sink.matches(oauth2.ErrNoScopesDeclared))
+
+		rec = env.token(url.Values{"grant_type": {oauth2.GrantTypeClientCredentials}}, "machine", "machine-secret")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.NotContains(t, jsonBody(t, rec), "scope")
+	})
+
+	t.Run("authorization endpoint", func(t *testing.T) {
+		t.Parallel()
+
+		env := newPolicyEnv(t, oauth2.Profile20BCP, confidentialClient(grants, nil))
+
+		consented := false
+		consent := func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+			consented = true
+
+			return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
+		}
+
+		q := machineQuery()
+		q.Set("scope", "read")
+
+		rec := runAuthorize(env.srv, q, consent)
+		require.Equal(t, http.StatusFound, rec.Code)
+		assert.Equal(t, oauth2.CodeInvalidScope, mustLocation(t, rec).Query().Get("error"))
+		assert.False(t, consented, "the ConsentFunc never runs")
+		assert.True(t, env.sink.matches(oauth2.ErrNoScopesDeclared))
+
+		q.Del("scope")
+
+		rec = runAuthorize(env.srv, q, approve)
+		require.Equal(t, http.StatusFound, rec.Code)
+
+		code := mustLocation(t, rec).Query().Get("code")
+		require.NotEmpty(t, code)
+
+		rec = env.token(codeExchangeForm(code), "machine", "machine-secret")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.NotContains(t, jsonBody(t, rec), "scope")
+	})
+}
+
+// TestRefreshTokenOnlyForClientsAllowedTheRefreshGrant pins RFC 9700
+// §4.14.2 ("Authorization servers MUST determine, based on a risk
+// assessment, whether to issue refresh tokens to a certain client"): a code
+// exchange issues a refresh token only to a client declaring refresh_token.
+func TestRefreshTokenOnlyForClientsAllowedTheRefreshGrant(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		grants  []string
+		refresh bool
+	}{
+		"without refresh_token": {[]string{oauth2.GrantTypeAuthorizationCode}, false},
+		"with refresh_token":    {[]string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken}, true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newPolicyEnv(t, oauth2.Profile20BCP, confidentialClient(tc.grants, []string{"read"}))
+
+			rec := runAuthorize(env.srv, machineQuery(), approve)
+			require.Equal(t, http.StatusFound, rec.Code)
+
+			rec = env.token(codeExchangeForm(mustLocation(t, rec).Query().Get("code")), "machine", "machine-secret")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Equal(t, tc.refresh, jsonBody(t, rec)["refresh_token"] != nil)
+		})
+	}
 }

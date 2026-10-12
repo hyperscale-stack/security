@@ -260,7 +260,8 @@ func withSecondClient() envOption {
 	return func(s *oauth2.ServerConfig, _ *grant.Config) {
 		clients := s.ClientStore.(*staticClientStore) //nolint:forcetypeassert // test wiring
 		clients.clients[otherClientID] = &oauth2.DefaultClient{
-			IDValue: otherClientID, Secret: otherClientSecret, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         otherClientID, Secret: otherClientSecret, TypeValue: oauth2.ClientConfidential,
 			RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"openid", "read", "write"},
 		}
 	}
@@ -279,7 +280,10 @@ func TestExtensionNotCalledByGrantsWithoutAuthorization(t *testing.T) {
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
 		Profile: oauth2.Profile20, Storage: store, Extension: ext,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-			testClientID: &oauth2.DefaultClient{IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential},
+			testClientID: &oauth2.DefaultClient{
+				GrantTypeValues: allGrantTypes, IDValue: testClientID, Secret: testClientSecret,
+				TypeValue: oauth2.ClientConfidential, ScopeValues: []string{"openid"},
+			},
 		}},
 		IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
 		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},

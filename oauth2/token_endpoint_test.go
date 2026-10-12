@@ -54,9 +54,10 @@ func newClockedServer(t *testing.T, now func() time.Time, g oauth2.Grant) *oauth
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
-			IDValue:   testClientID,
-			Secret:    testClientSecret,
-			TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         testClientID,
+			Secret:          testClientSecret,
+			TypeValue:       oauth2.ClientConfidential,
 		},
 	}}
 

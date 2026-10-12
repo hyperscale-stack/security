@@ -444,9 +444,8 @@ To migrate:
    `ClientAuthenticator` using another credential (e.g. `private_key_jwt`,
    mTLS). Register a client as public only if it cannot keep a secret — a
    browser or native app using `authorization_code` + PKCE — and then set
-   its `GrantTypeValues`: an empty list allows every grant
-   (`client_credentials` excepted: only confidential clients may use it, RFC
-   6749 §4.4).
+   its `GrantTypeValues` (an empty list allows no grant; see "a client gets
+   only what it declares and what it asked for" below).
 3. **Custom `SecretMatcher`s** must return `false` when no secret is
    registered or the presented one is empty, whatever they compare
    against: a bcrypt hash of `""` matches `""`.
@@ -1012,6 +1011,11 @@ asked for. It now enforces a fail-closed client policy:
 | `Consent.Scope` adding scopes to a request without `scope` | granted — even scopes outside the client's `ScopeValues` | `invalid_scope`, nothing issued: a consent only narrows the request (RFC 6749 §3.3) |
 | `Consent.Scope` made of spaces only | an empty grant | exactly what was requested, like an empty `Consent.Scope` |
 | `client_credentials` by a public client (authenticated with `none`, its `client_id` alone) or an untyped one | issued, with the scope requested when `ScopeValues` was empty | `400 unauthorized_client` whatever the client declares: only confidential clients may use it (RFC 6749 §4.4) |
+| `GrantTypes()` empty (`DefaultClient.GrantTypeValues` unset) | every grant allowed | no grant allowed: `400 unauthorized_client` at `/token` |
+| a grant type the client does not declare, custom grants included | refused inside the shipped grants only — after a code was consumed — and never for a custom grant | `400 unauthorized_client` before the grant runs: a code or refresh token presented stays untouched |
+| `Scopes()` empty (`DefaultClient.ScopeValues` unset) | any scope allowed | no scope allowed: a request carrying one is `invalid_scope`; one without scope gets the empty scope |
+| refresh token at a code exchange or a password grant | issued whenever the grant has a `RefreshTokens` generator | issued only to a client declaring `refresh_token` (RFC 9700 §4.14.2) |
+| a refusal caused by an empty declaration | — | `OnError` gets `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` as cause |
 
 To migrate:
 
@@ -1021,3 +1025,34 @@ To migrate:
 2. Register every machine-to-machine client as confidential
    (`TypeValue: oauth2.ClientConfidential`) with a high-entropy secret:
    `client_credentials` refuses public and untyped clients.
+3. **Declare, for every client, the grant types it uses and the scopes it
+   may request** — before upgrading: a client declaring none can no longer
+   obtain anything. With `DefaultClient`:
+
+   ```go
+   &oauth2.DefaultClient{
+       // ...
+       GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken},
+       ScopeValues:     []string{"openid", "profile", "offline_access", "api:read"},
+   }
+   ```
+
+   Grant types are compared exactly with the RFC 7591 §2 values (the
+   `oauth2.GrantType*` constants: `authorization_code`, `implicit`,
+   `refresh_token`, `client_credentials`, `password`, or a custom grant's
+   type); `implicit` gates the legacy `response_type=token`. A client that
+   should receive refresh tokens declares `refresh_token`. An OpenID
+   Connect client declares `openid` — plus `offline_access`, `profile`,
+   `email`… as it requests them — and `authorization_code` (with
+   `refresh_token` for offline access). Custom `Client` implementations: an
+   empty `GrantTypes()` or `Scopes()` now means none.
+4. Custom grants: the server checks the client's declaration before
+   calling `Handle` (declare the custom grant type on the clients using
+   it); a custom grant applies `Client.Scopes()` itself — exact match,
+   empty meaning none — and can call `oauth2.ClientAllowsGrantType`.
+5. After the upgrade, watch `ServerConfig.OnError` for
+   `errors.Is(err, oauth2.ErrNoGrantTypesDeclared)` and
+   `oauth2.ErrNoScopesDeclared`: they name the refusals of clients whose
+   registration declares nothing.
+6. No storage change: the policy applies per request, and instances may be
+   upgraded one at a time.

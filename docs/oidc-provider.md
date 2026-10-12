@@ -244,8 +244,12 @@ serves both (RFC 9068 §4). Their audiences must never be client IDs.
 
 ### Clients
 
-Clients are static (`oauth2.ClientStore`). An OpenID client has `openid`
-among its scopes, exact redirect URIs, and optionally implements
+Clients are static (`oauth2.ClientStore`) and get only what they declare:
+an OpenID client declares `openid` among its scopes — plus every other
+scope it requests (`offline_access`, `profile`, `email`…), an empty list
+allowing none — and `authorization_code` among its grant types, with
+`refresh_token` to receive refresh tokens (an empty list allows no grant).
+It has exact redirect URIs, and optionally implements
 `IDTokenSigningClient` to choose its ID Token algorithm — the issuer's ring
 must then hold a key of that algorithm.
 

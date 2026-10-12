@@ -245,6 +245,13 @@ configurable via `ServerConfig.RoutePrefix`).
   `refresh_token` with rotation + reuse detection, opt-in legacy `password`),
   `clientauth/` (`client_secret_basic` / `_post` / `none`), `token/` (opaque +
   JWT generators), `pkce/`.
+- **Fail-closed client policy**: a client uses only the grant types
+  (`GrantTypes`, checked at `/token` for every grant before `Handle`) and
+  requests only the scopes (`Scopes`) it declares — an empty list allows
+  nothing (`oauth2.ClientAllowsGrantType`, `ErrNoGrantTypesDeclared`,
+  `ErrNoScopesDeclared`); `client_credentials` is confidential-only; refresh
+  tokens go to clients declaring `refresh_token`. Every test client fixture
+  must declare its grant types and scopes.
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
 - Every authorization is **bound to its issuer**: every endpoint resolves it
   first (the `IssuerResolver` is the realm), codes and tokens record it, and

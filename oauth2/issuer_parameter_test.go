@@ -160,7 +160,8 @@ func TestIssuerResolverFailureCannotNameTheIssuer(t *testing.T) {
 		Profile: oauth2.Profile20, Storage: memory.New(), IssuerResolver: failingIssuer{},
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			testClientID: &oauth2.DefaultClient{
-				IDValue: testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
+				GrantTypeValues: allGrantTypes,
+				IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
 			},
 		}},
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
