@@ -1,0 +1,349 @@
+// Copyright 2026 Hyperscale. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
+// Command oidc-client signs users in through external OpenID Providers
+// with the oidc/client module — one oidcclient.Client per connection — and
+// keeps them signed in with a cookie session.
+//
+// The library runs the protocol; the application owns everything around
+// it, as an identity broker would: which connections exist (here,
+// environment variables; in a broker, its tenant configuration), where
+// pending logins are stored, how an external identity maps to a local
+// account, and the local session.
+//
+// Run, with a client registered at an OpenID Provider with the redirect
+// URI http://localhost:8083/oidc/default/callback:
+//
+//	OIDC_DEFAULT_ISSUER=https://accounts.example.com \
+//	OIDC_DEFAULT_CLIENT_ID=my-client OIDC_DEFAULT_CLIENT_SECRET=my-secret \
+//	go run ./oidc-client
+//
+// then open http://localhost:8083. More connections:
+// OIDC_CONNECTIONS=acme,globex with OIDC_ACME_ISSUER, OIDC_ACME_CLIENT_ID,
+// OIDC_ACME_CLIENT_SECRET, … Each connection gets its own callback route,
+// /oidc/{connection}/callback: a redirect URI distinct per connection is
+// the mix-up defense (RFC 9700 §4.4.2.2). An empty client secret makes a
+// public client; OIDC_{ID}_RESPONSE_MODE=form_post needs https (BASE_URL).
+//
+// Plain http on localhost is for development only: it drops the Secure
+// attribute of the cookies (oidcclient.Config.InsecureCookies and
+// session.WithSecure(false)). Serve https in production.
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"html"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	httpsec "github.com/hyperscale-stack/security/http"
+	oidcclient "github.com/hyperscale-stack/security/oidc/client"
+	"github.com/hyperscale-stack/security/oidc/client/storage/memory"
+	"github.com/hyperscale-stack/security/outbound"
+	"github.com/hyperscale-stack/security/session"
+)
+
+// connectionConfig is the application's record of one connection.
+type connectionConfig struct {
+	ID           string
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	ResponseMode string // "" (query) or "form_post"
+}
+
+// config is the demo's configuration.
+type config struct {
+	// BaseURL is the public origin of the application.
+	BaseURL     string
+	Connections []connectionConfig
+	// Outbound is the policy of the requests to the providers; the zero
+	// value reaches public https destinations only.
+	Outbound outbound.Policy
+}
+
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+
+	return fallback
+}
+
+// loadConfig reads the configuration from the environment.
+func loadConfig() config {
+	cfg := config{BaseURL: envOr("BASE_URL", "http://localhost:8083")}
+
+	for id := range strings.SplitSeq(envOr("OIDC_CONNECTIONS", "default"), ",") {
+		id = strings.TrimSpace(id)
+		prefix := "OIDC_" + strings.ToUpper(id) + "_"
+		cfg.Connections = append(cfg.Connections, connectionConfig{
+			ID:           id,
+			Issuer:       os.Getenv(prefix + "ISSUER"),
+			ClientID:     os.Getenv(prefix + "CLIENT_ID"),
+			ClientSecret: os.Getenv(prefix + "CLIENT_SECRET"),
+			ResponseMode: os.Getenv(prefix + "RESPONSE_MODE"),
+		})
+	}
+
+	return cfg
+}
+
+// principal is the local account a session belongs to.
+type principal struct{ subject string }
+
+func (p principal) Subject() string { return p.subject }
+
+// identityKey identifies an external user: the issuer and subject pair is
+// the only stable identifier OpenID Connect gives (Core §5.7), and the
+// connection keeps two connections to one issuer — two tenants of a
+// multi-tenant provider — apart. Never link accounts on the email, which a
+// provider may let users change, or assert unverified.
+type identityKey struct{ connection, issuer, subject string }
+
+// accounts links external identities to local accounts, creating an
+// account at the first login of an identity.
+type accounts struct {
+	mu         sync.Mutex
+	links      map[identityKey]string
+	identities map[string][]identityKey
+}
+
+func (a *accounts) link(id *oidcclient.Identity) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	key := identityKey{connection: id.ConnectionID, issuer: id.Issuer, subject: id.Subject}
+	if account, ok := a.links[key]; ok {
+		return account
+	}
+
+	account := fmt.Sprintf("account-%d", len(a.links)+1)
+	a.links[key] = account
+	a.identities[account] = append(a.identities[account], key)
+
+	return account
+}
+
+// linked returns the identities linked to account.
+func (a *accounts) linked(account string) []identityKey {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return slices.Clone(a.identities[account])
+}
+
+// app holds the demo's dependencies.
+type app struct {
+	connections map[string]*oidcclient.Client
+	sessions    *session.Manager
+	accounts    *accounts
+}
+
+// newServer discovers every connection's provider and builds the handler.
+// It is separate from main so the test drives the same wiring.
+func newServer(ctx context.Context, cfg config) (http.Handler, error) {
+	base, err := url.Parse(cfg.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("BASE_URL: %w", err)
+	}
+
+	insecure := base.Scheme == "http" // local development only
+
+	key := make([]byte, 32)
+	_, _ = rand.Read(key) // crypto/rand.Read never fails
+
+	codec, err := session.NewCodec(key)
+	if err != nil {
+		return nil, fmt.Errorf("session codec: %w", err)
+	}
+
+	a := &app{
+		connections: make(map[string]*oidcclient.Client, len(cfg.Connections)),
+		sessions:    session.NewManager(codec, session.WithSecure(!insecure)),
+		accounts:    &accounts{links: make(map[identityKey]string), identities: make(map[string][]identityKey)},
+	}
+
+	// One store serves every connection: a pending login is bound to its
+	// connection. With several instances behind a load balancer, use a
+	// shared store instead: oidc/client/store/sql or oidc/client/store/redis.
+	store := memory.New()
+
+	for _, c := range cfg.Connections {
+		method := oidcclient.AuthMethodClientSecretBasic
+		if c.ClientSecret == "" {
+			method = oidcclient.AuthMethodNone
+		}
+
+		client, err := oidcclient.New(ctx, oidcclient.Config{
+			ConnectionID:    c.ID,
+			Issuer:          c.Issuer,
+			ClientID:        c.ClientID,
+			ClientSecret:    c.ClientSecret,
+			AuthMethod:      method,
+			RedirectURL:     cfg.BaseURL + "/oidc/" + c.ID + "/callback",
+			Scopes:          []string{"openid", "profile", "email"},
+			ResponseMode:    oidcclient.ResponseMode(c.ResponseMode),
+			Store:           store,
+			Outbound:        cfg.Outbound,
+			InsecureCookies: insecure,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("connection %q: %w", c.ID, err)
+		}
+
+		a.connections[c.ID] = client
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", a.home)
+	mux.HandleFunc("POST /login/{connection}", a.login)
+	mux.HandleFunc("GET /oidc/{connection}/callback", a.callback)
+	mux.HandleFunc("POST /oidc/{connection}/callback", a.callback) // form_post
+	mux.HandleFunc("POST /logout", a.logout)
+
+	// Cross-origin POSTs are refused: login starts and logouts come from
+	// this origin. The callbacks are exempt — a form_post response is a
+	// cross-site POST by design, which the binding cookie defends.
+	csrf := http.NewCrossOriginProtection()
+	csrf.AddInsecureBypassPattern("POST /oidc/{connection}/callback")
+
+	return csrf.Handler(mux), nil
+}
+
+// home renders the signed-in page, or the sign-in page with one button per
+// connection.
+func (a *app) home(w http.ResponseWriter, r *http.Request) {
+	s, err := a.sessions.Get(r.Context(), httpsec.NewCarrier(w, r))
+	if err != nil {
+		ids := make([]string, 0, len(a.connections))
+		for id := range a.connections {
+			ids = append(ids, id)
+		}
+
+		slices.Sort(ids)
+
+		var b strings.Builder
+
+		b.WriteString("<h1>Sign in</h1>\n")
+
+		for _, id := range ids {
+			fmt.Fprintf(&b, "<form method=\"post\" action=\"/login/%s\"><button type=\"submit\">Sign in with %[1]s</button></form>\n",
+				html.EscapeString(id))
+		}
+
+		_, _ = fmt.Fprint(w, b.String())
+
+		return
+	}
+
+	account := s.GetString("sub")
+
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "<h1>Signed in as %s</h1>\n<ul>\n", html.EscapeString(account))
+
+	for _, id := range a.accounts.linked(account) {
+		fmt.Fprintf(&b, "<li>%s: %s, subject %s</li>\n",
+			html.EscapeString(id.connection), html.EscapeString(id.issuer), html.EscapeString(id.subject))
+	}
+
+	fmt.Fprintf(&b, `</ul>
+<form method="post" action="/logout">
+<input type="hidden" name="csrf_token" value="%s">
+<button type="submit">Sign out</button>
+</form>`, html.EscapeString(session.CSRFToken(s)))
+
+	_, _ = fmt.Fprint(w, b.String())
+}
+
+// login starts a login through the requested connection.
+func (a *app) login(w http.ResponseWriter, r *http.Request) {
+	client, ok := a.connections[r.PathValue("connection")]
+	if !ok {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	if err := client.StartLogin(w, r, oidcclient.AuthOptions{}); err != nil {
+		log.Printf("oidc-client: start login: %v", err)
+		http.Error(w, "cannot start the sign-in", http.StatusInternalServerError)
+	}
+}
+
+// callback completes a login: the identity is linked to a local account,
+// which gets a fresh session.
+func (a *app) callback(w http.ResponseWriter, r *http.Request) {
+	client, ok := a.connections[r.PathValue("connection")]
+	if !ok {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	id, err := client.HandleCallback(w, r)
+	if err != nil {
+		// Log the cause, never show it: the text of a provider's error
+		// response is untrusted (an *oidcclient.AuthorizationError prints
+		// its code only).
+		log.Printf("oidc-client: sign-in failed: %v", err)
+		http.Error(w, "sign-in failed", http.StatusBadRequest)
+
+		return
+	}
+
+	account := a.accounts.link(id)
+
+	// A new session (a fresh ID defeats session fixation), then 303 to a
+	// clean URL: the code leaves the browser history (RFC 9700 §4.3.1).
+	if _, err := a.sessions.Login(r.Context(), httpsec.NewCarrier(w, r), principal{subject: account}); err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// logout ends the local session after checking the CSRF token.
+func (a *app) logout(w http.ResponseWriter, r *http.Request) {
+	carrier := httpsec.NewCarrier(w, r)
+
+	s, err := a.sessions.Get(r.Context(), carrier)
+	if err == nil && !session.VerifyCSRF(s, r.FormValue("csrf_token")) {
+		http.Error(w, "bad CSRF token", http.StatusForbidden)
+
+		return
+	}
+
+	a.sessions.Logout(r.Context(), carrier)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func main() {
+	cfg := loadConfig()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	handler, err := newServer(ctx, cfg) // discovers every provider
+
+	cancel()
+
+	if err != nil {
+		log.Fatalf("oidc-client: %v", err)
+	}
+
+	server := &http.Server{Addr: envOr("ADDR", ":8083"), Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+
+	log.Printf("oidc-client: listening on %s", server.Addr)
+	log.Fatal(server.ListenAndServe())
+}
