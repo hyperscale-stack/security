@@ -88,13 +88,6 @@ func TestBearerVerifierPropagatesVerifierError(t *testing.T) {
 	assert.ErrorIs(t, err, jwtsec.ErrInvalidSignature)
 }
 
-// foreignVerifier is a Verifier the package did not build.
-type foreignVerifier struct{}
-
-func (foreignVerifier) Verify(context.Context, string, any) (*jwtsec.StandardClaims, error) {
-	return &jwtsec.StandardClaims{Subject: "anyone"}, nil
-}
-
 // TestBearerVerifierRefusesAnUnsafeVerifier pins decision 9 and RFC 9068
 // §4 — the resource server MUST check typ (at+jwt), iss and aud, and that
 // the current time is before exp (audit JWT-05: the defaults and the
@@ -112,7 +105,7 @@ func TestBearerVerifierRefusesAnUnsafeVerifier(t *testing.T) {
 		opts []jwtsec.BearerOption
 		why  string // in the panic message
 	}{
-		"not built by NewVerifier": {v: foreignVerifier{}, why: "built by NewVerifier"},
+		"not built by NewVerifier": {v: jwtsec.NewMockVerifier(t), why: "built by NewVerifier"},
 		"nil verifier":             {v: nil, why: "built by NewVerifier"},
 		"typed nil verifier":       {v: jwtsec.TypedNilVerifier, why: "built by NewVerifier"},
 		"no issuer":                {v: jwtsec.NewVerifier(keys, aud, typ), why: "WithIssuer"},

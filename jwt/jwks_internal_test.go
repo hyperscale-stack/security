@@ -21,6 +21,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,17 +32,6 @@ func TestCurveAlgorithm(t *testing.T) {
 	assert.Equal(t, ES384, curveAlgorithm(elliptic.P384()))
 	assert.Equal(t, ES512, curveAlgorithm(elliptic.P521()))
 	assert.Equal(t, Algorithm(""), curveAlgorithm(elliptic.P224()), "no JWS algorithm for P-224")
-}
-
-// refreshingProvider serves an empty set and fails to refresh.
-type refreshingProvider struct{ refreshes int }
-
-func (p *refreshingProvider) KeySet(context.Context) (KeySet, error) { return &staticKeySet{}, nil }
-
-func (p *refreshingProvider) refreshKeySet(context.Context) (KeySet, error) {
-	p.refreshes++
-
-	return nil, errors.New("upstream down")
 }
 
 // TestVerifierReportsRefreshFailures pins that an unknown kid whose
@@ -59,11 +49,21 @@ func TestVerifierReportsRefreshFailures(t *testing.T) {
 	tok, err := signer.Sign(context.Background(), map[string]any{"sub": "a", "exp": 4102444800})
 	require.NoError(t, err)
 
-	p := &refreshingProvider{}
+	// A provider that can refresh: an empty set, then a failing refresh,
+	// which the verifier attempts once.
+	keys := NewMockJWKSProvider(t)
+	keys.EXPECT().KeySet(mock.Anything).Return(&staticKeySet{}, nil).Once()
+
+	refresher := NewMockkeyRefresher(t)
+	refresher.EXPECT().refreshKeySet(mock.Anything).Return(nil, errors.New("upstream down")).Once()
+
+	p := struct {
+		*MockJWKSProvider
+		*MockkeyRefresher
+	}{keys, refresher}
 
 	_, err = NewVerifier(p).Verify(context.Background(), tok, nil)
 	require.ErrorIs(t, err, ErrKeySetUnavailable)
-	assert.Equal(t, 1, p.refreshes)
 }
 
 // FuzzParseJWKS checks the JWK Set parser on hostile documents: it never

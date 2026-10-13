@@ -23,6 +23,7 @@ import (
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -940,19 +941,18 @@ func TestVerifierMapsKeySetFailuresToErrKeySetUnavailable(t *testing.T) {
 	priv, _ := ecKey(t, "k")
 	tok := tokenFor(t, priv, "k")
 
-	for name, provider := range map[string]jwtsec.JWKSProvider{
-		"failing provider": providerFunc(func(context.Context) (jwtsec.KeySet, error) { return nil, errors.New("database down") }),
-		"nil key set":      providerFunc(func(context.Context) (jwtsec.KeySet, error) { return nil, nil }),
+	for name, outcome := range map[string]error{
+		"failing provider": errors.New("database down"),
+		"nil key set":      nil,
 	} {
+		provider := jwtsec.NewMockJWKSProvider(t)
+		provider.EXPECT().KeySet(mock.Anything).Return(nil, outcome).Once()
+
 		_, err := jwtsec.NewVerifier(provider).Verify(context.Background(), tok, nil)
 		require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, name)
 		notCredentialFailure(t, err)
 	}
 }
-
-type providerFunc func(context.Context) (jwtsec.KeySet, error)
-
-func (f providerFunc) KeySet(ctx context.Context) (jwtsec.KeySet, error) { return f(ctx) }
 
 // panickyTransport panics on every request.
 type panickyTransport struct{}
