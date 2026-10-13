@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,8 +47,11 @@ import (
 //
 // Authenticate MUST return:
 //   - (client, nil)                  on success.
-//   - (nil, oauth2.ErrInvalidClient) on credential mismatch.
-//   - (nil, other)                   on storage / unexpected errors.
+//   - (nil, oauth2.ErrInvalidClient) on credential mismatch, or an unknown
+//     client.
+//   - (nil, other)                   on storage / unexpected errors: the
+//     server answers server_error (temporarily_unavailable at /revoke),
+//     never invalid_client.
 type ClientAuthenticator interface {
 	// Method returns the RFC 6749 / OIDC method identifier
 	// ("client_secret_basic", "client_secret_post", "none",
@@ -148,6 +152,15 @@ func formValue(r *http.Request, name string) string {
 	}
 
 	return param.Value(r.PostForm, name)
+}
+
+// loadFailure returns the error a client lookup failed with, wrapped: an
+// error carrying invalid_client keeps it — the store reports an unknown
+// client so (the [oauth2.ClientStore] contract) — and any other is a
+// failure of the store, which the server answers as an outage, never as
+// invalid_client: that would tell the client its credentials are wrong.
+func loadFailure(err error) error {
+	return fmt.Errorf("clientauth: load client: %w", err)
 }
 
 // errSecretMismatch is the typed error returned by secret-matcher

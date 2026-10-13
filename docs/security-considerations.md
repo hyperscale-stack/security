@@ -413,6 +413,15 @@ keys by `kid` against a JWKS provider (static or remote).
   redirect answering a POST is a `303` (RFC 9700 §4.12: only 303
   unambiguously turns the POST, and the credentials it may carry, into a
   GET), never a `307`.
+- **Failures are outages, not refusals** — a `ClientStore` that fails is
+  not an unknown client: answering `invalid_client` would tell a client its
+  credentials are wrong (and push it to rotate them). `/authorize` answers a
+  bare 500, `/token` and `/introspect` a `server_error`, `/revoke` a 503
+  `temporarily_unavailable` (RFC 7009 §2.2.1), each reported to `OnError`;
+  a store reports an unknown client with `(nil, nil)` or an error carrying
+  `invalid_client`. A token lookup that fails at `/introspect` answers
+  `{"active":false}` — a resource server fails closed (RFC 7662 §2.1) — and
+  reaches `OnError`.
 - **Request bounds** — RFC 6749 bounds no parameter, and `net/http` alone
   reads 10 MB of form. Every endpoint bounds the query and the body it
   parses to `ServerConfig.MaxRequestBytes` (64 KiB by default) —

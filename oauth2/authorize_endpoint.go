@@ -401,6 +401,14 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	// (the redirect target is not yet trusted). The refusal is deliberately
 	// opaque on the wire, so the hook is the only place the cause shows up.
 	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), params.Get(paramClientID))
+	if err != nil && IsCode(err) != CodeInvalidClient {
+		// The store failed: an outage, not an unknown client.
+		s.notifyError(r.Context(), ErrServerError.WithDescription("client lookup failed").WithCause(err))
+		http.Error(w, "oauth2: server error", http.StatusInternalServerError)
+
+		return
+	}
+
 	if err != nil || client == nil {
 		s.notifyError(r.Context(), resolved.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)

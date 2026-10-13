@@ -798,6 +798,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   description "client authentication failed"; the reason ("unknown client",
   "method not allowed for client"…) moved to the cause `OnError` receives.
   See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 client-store failures are outages (breaking for stores reporting
+  "not found" with an error)**: a `ClientStore` error not carrying
+  `invalid_client` is answered as a failure — a bare 500 at `/authorize`,
+  `server_error` at `/token` and `/introspect`, `temporarily_unavailable` at
+  `/revoke` — and reported to `OnError`, instead of an unknown client. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -968,6 +974,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`http://127.0.0.1`, `http://[::1]`), as RFC 8252 §7.3 requires for native
   apps: the request is otherwise matched exactly, and the code bound to the
   URI requested.
+- OAuth2 storage failures stop hiding: a token lookup that failed at
+  `/introspect` answered `{"active":false}` without reaching `OnError` (it
+  still answers so — RFC 7662 §2.1 — and is now reported), and a failing
+  `ClientStore` read as an unknown client — `invalid_client`, which tells a
+  client its credentials are wrong — although the `ClientAuthenticator`
+  contract asked to return store failures as such.
 
 ### Removed
 

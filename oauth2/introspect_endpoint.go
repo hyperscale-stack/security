@@ -34,7 +34,10 @@ const introspectionCallerRefused = "introspection requires confidential client a
 // An active token is disclosed — "active":true plus its claims — when the
 // [ServerConfig.IntrospectionPolicy] allows it, or when no policy is set.
 // Anything else (an unknown, expired or consumed token, or one the policy
-// withholds) answers a bare {"active":false} (RFC 7662 §2.2).
+// withholds) answers a bare {"active":false} (RFC 7662 §2.2) — so does a
+// token whose lookup failed (RFC 7662 §2.1: a server that cannot determine
+// the state of a token SHOULD answer it is not active), the failure reported
+// to the [ErrorHook].
 //
 // token and token_type_hint, like the client credentials, are
 // single-valued: a request including one more than once with a value is
@@ -135,12 +138,17 @@ func (s *Server) introspect(ctx context.Context, caller Client, rawToken string)
 
 // lookupActiveToken resolves rawToken as an access token, then as a
 // refresh token, and reports whether it is active: an expired token or a
-// consumed refresh token is not.
+// consumed refresh token is not, and neither is one whose lookup failed —
+// RFC 7662 §2.1: a server unable to determine the state of a token SHOULD
+// answer it is not active — the failure reported to the [ErrorHook].
 func (s *Server) lookupActiveToken(ctx context.Context, rawToken string) (IntrospectedToken, bool) {
+	const what = "introspect: token lookup failed"
+
 	hash := HashToken(nil, rawToken)
 	now := s.cfg.Now()
 
-	if at, err := s.cfg.Storage.LookupAccessToken(ctx, hash); err == nil {
+	at, err := s.cfg.Storage.LookupAccessToken(ctx, hash)
+	if err == nil {
 		if at.IsExpired(now) {
 			return IntrospectedToken{}, false
 		}
@@ -157,7 +165,12 @@ func (s *Server) lookupActiveToken(ctx context.Context, rawToken string) (Intros
 		}, true
 	}
 
-	if rt, err := s.cfg.Storage.LookupRefreshToken(ctx, hash); err == nil {
+	if !s.lookupMissed(ctx, err, what) {
+		return IntrospectedToken{}, false
+	}
+
+	rt, err := s.cfg.Storage.LookupRefreshToken(ctx, hash)
+	if err == nil {
 		if rt.IsExpired(now) || rt.Consumed {
 			return IntrospectedToken{}, false
 		}
@@ -172,6 +185,8 @@ func (s *Server) lookupActiveToken(ctx context.Context, rawToken string) (Intros
 			ExpiresAt: rt.ExpiresAt,
 		}, true
 	}
+
+	s.lookupMissed(ctx, err, what)
 
 	return IntrospectedToken{}, false
 }

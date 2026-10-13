@@ -50,7 +50,7 @@ func (postAuth) Authenticate(ctx context.Context, r *http.Request, store oauth2.
 
 	client, err := store.LoadClient(ctx, id)
 	if err != nil {
-		return nil, errInvalid(err)
+		return nil, loadFailure(err)
 	}
 
 	if client == nil {

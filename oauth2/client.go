@@ -104,6 +104,13 @@ type SecretMatcher interface {
 // for caching policy; the Server invokes LoadClient once per request that
 // needs client authentication.
 //
+// LoadClient returns (nil, nil) — or an error carrying invalid_client
+// ([IsCode]) — for an unknown client, which the server answers as such. Any
+// other error is a failure of the store: /authorize answers a bare 500,
+// /token and /introspect server_error, /revoke temporarily_unavailable, and
+// the error reaches the [ErrorHook] — never invalid_client, which would tell
+// the client its credentials are wrong.
+//
 // One store serving an [IssuerResolver] with several issuers makes every
 // client known at every issuer: a deployment where each client belongs to
 // one realm (tenant) gives its clients the [IssuerBoundClient] capability,

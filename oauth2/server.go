@@ -70,7 +70,7 @@ type ServerConfig struct {
 	// OnError, when set, observes every error the server turns into an
 	// RFC 6749 §5.2 response — including the cause of a server_error, which
 	// never reaches the wire — plus the errors behind an answer that cannot
-	// carry them (the storage failures of /revoke, a failed
+	// carry them (the storage failures of /revoke and /introspect, a failed
 	// [IntrospectionPolicy]). Optional; see [ErrorHook].
 	OnError ErrorHook
 	// IntrospectionPolicy, when set, decides which active tokens each

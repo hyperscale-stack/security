@@ -1901,3 +1901,21 @@ its type and authentication methods.
 To migrate: clients and tests that branched on the `error_description` of an
 `invalid_client` use the `error` code only; diagnostics read the detail from
 `OnError`.
+
+### `oauth2`: client-store and token-lookup failures are reported as failures
+
+| | Before | After |
+| --- | --- | --- |
+| `ClientStore.LoadClient` error (other than one carrying `invalid_client`) at `/authorize` | bare `400` "unknown or invalid client" | bare `500` "oauth2: server error", `OnError` `server_error` |
+| … at `/token`, `/introspect` | `401 invalid_client` | `500 server_error`, `OnError` |
+| … at `/revoke` (and an `IssuerResolver` failure there) | `401 invalid_client` (`500` for the resolver) | `503 temporarily_unavailable` (RFC 7009 §2.2.1), `OnError` |
+| a failed token lookup at `/introspect` | `{"active":false}`, unreported | `{"active":false}`, reported to `OnError` |
+
+To migrate:
+
+1. A `ClientStore` reports an unknown client with `(nil, nil)` — or with an
+   error carrying `invalid_client` (`oauth2.ErrInvalidClient`): one returning
+   a plain "not found" error (`sql.ErrNoRows`…) now makes every unknown
+   `client_id` a 500 — map it.
+2. Custom `ClientAuthenticator`s return their store's failures as such,
+   not wrapped in `invalid_client` (the contract already said so).

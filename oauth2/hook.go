@@ -17,8 +17,11 @@ import "context"
 //     failure at /revoke, reported as a server_error — when it leaves the
 //     revocation unfinished, /revoke answers a bare 503
 //     temporarily_unavailable (RFC 7009 §2.2.1) that is not reported
-//     again — or an [IntrospectionPolicy] that failed (the token is
-//     withheld behind a bare {"active":false}, RFC 7662 §2.2).
+//     again — a failed token lookup at /introspect, or an
+//     [IntrospectionPolicy] that failed (the token is withheld behind a
+//     bare {"active":false}, RFC 7662 §2.1, §2.2), and a [ClientStore]
+//     that failed (a server_error carrying its error, whatever the
+//     endpoint answers: 500, or 503 at /revoke).
 //
 // A failed client authentication at /token, /revoke or /introspect reaches
 // it as the invalid_client the wire carries — "client authentication

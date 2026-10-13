@@ -90,6 +90,16 @@ The hook fires for:
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain
   refusal by the policy is an expected outcome and is not reported;
+- a token lookup that failed at `/introspect` — not one that missed: the
+  token answers `{"active":false}` (RFC 7662 §2.1) and the failure is
+  reported as a `server_error` (`introspect: token lookup failed`, cause
+  attached);
+- a `ClientStore` that failed — an error not carrying `invalid_client`:
+  `/authorize` answers a bare 500 (`client lookup failed`), `/token` and
+  `/introspect` a 500 `server_error`, `/revoke` a 503
+  `temporarily_unavailable` (`revoke: client authentication failed`, which
+  also covers an `IssuerResolver` failure there) — one `server_error`
+  carrying the store's error;
 - at `/authorize`, an unsupported `response_mode` (`invalid_request`, answered
   with a bare 400), a failing `IssuerResolver`, a failing `ConsentFunc`
   (`consent handler failed`, its error as cause), a `Consent.Refusal` (as
