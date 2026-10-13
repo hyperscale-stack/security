@@ -29,6 +29,12 @@ type PrincipalLoader interface {
 	// scopes one security.ScopePrefix + scope authority each
 	// ("scope:read"): that is what voter.HasRole and voter.HasScope match.
 	//
+	// A session without a subject — opened with Manager.Login(ctx, c, nil)
+	// — MUST be refused with security.ErrInvalidCredentials, never mapped
+	// to a principal (anonymous or guest): the Authenticator would return
+	// an authenticated value that voter.Authenticated grants. Keep such
+	// sessions (a sign-in form's) on a Manager no Extractor reads.
+	//
 	// Returning an error fails authentication, and its sentinel tells the
 	// transports how to answer: wrap security.ErrInvalidCredentials for a
 	// session that must be refused (unknown or disabled user: 401),

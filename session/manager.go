@@ -266,6 +266,11 @@ func probe(name, path, domain string) *http.Cookie {
 // Login mints a fresh authenticated session for principal, stores its
 // subject under the "sub" value, and writes the session cookie via the
 // carrier. Any prior session is replaced (a fresh ID defeats fixation).
+//
+// A nil principal opens a session without a subject — no "sub" value, not
+// signed in — such as the one a sign-in form takes its CSRF token from:
+// open it on a dedicated Manager that no [Extractor] reads (see
+// [VerifyCSRF]), never on the Manager behind the Engine.
 func (m *Manager) Login(ctx context.Context, c security.Carrier, principal security.Principal) (*Session, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "session.Manager.Login")
 	defer span.End()

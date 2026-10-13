@@ -1208,13 +1208,22 @@ session store to compromise or scale.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
   compares tokens in constant time, but it is a check, not a policy: call
   `VerifyCSRF` on every state-changing request a cookie session
-  authenticates — the sign-in form included, through a session opened for
-  the form (`Login` with a nil principal), against login CSRF — never change
-  state on GET, and put `net/http`'s `CrossOriginProtection` (Sec-Fetch-Site
-  and Origin checks) in front of the handlers. `SameSite=Lax` does not stop
-  same-site requests from a sibling subdomain. The cookie is `HttpOnly`, but
-  the token is rendered into the page: an XSS reads it — no CSRF defense
-  survives XSS.
+  authenticates, never change state on GET, and put `net/http`'s
+  `CrossOriginProtection` (Sec-Fetch-Site and Origin checks) in front of the
+  handlers. `SameSite=Lax` does not stop same-site requests from a sibling
+  subdomain. The cookie is `HttpOnly`, but the token is rendered into the
+  page: an XSS reads it — no CSRF defense survives XSS.
+- **Sign-in form** — protect it too, against login CSRF, with the token of a
+  session opened for the form (`Login` with a nil principal) on a
+  **dedicated `Manager`**: its own cookie name and purpose, a short TTL
+  (`WithCookieName("__Host-signin")`, `WithPurpose("sign-in form")`,
+  `WithTTL(15*time.Minute)`), read by no `Extractor`. On the `Manager`
+  behind the Engine, the Engine would extract that subject-less session on
+  every request and the `PrincipalLoader` refuse it: every page, the
+  sign-in form included, would answer 401. Do not work around that by
+  mapping a session without a subject to a principal — anonymous or guest:
+  the `Authenticator` would return an **authenticated** value, which
+  `voter.Authenticated` grants. The session-web example shows the pattern.
 - **Size** — the whole session is JSON-encoded into the cookie, and browsers
   ignore a cookie whose name and value exceed 4096 bytes (rfc6265bis §5.6):
   `Login`, `Touch` and `Rotate` refuse it with `ErrCookieTooLarge` instead

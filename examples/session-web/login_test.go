@@ -187,3 +187,32 @@ func TestNewHTTPServerBoundsSlowClients(t *testing.T) {
 	assert.Positive(t, srv.IdleTimeout)
 	assert.Positive(t, srv.MaxHeaderBytes)
 }
+
+// Review finding 1: the sign-in form's session lives on a Manager of its own
+// (cookie __Host-signin, purpose "sign-in form", 15 minutes), never on the
+// session cookie: behind a session Engine, a session without a subject on
+// __Host-session is refused by the PrincipalLoader on every request, the
+// sign-in form included. The form's session is cleared at sign-in.
+func TestSessionWebSignInFormHasItsOwnSession(t *testing.T) {
+	t.Parallel()
+
+	b := newBrowser(t)
+	token := b.loginToken()
+
+	u, err := url.Parse(b.srv.URL)
+	require.NoError(t, err)
+
+	names := func() []string {
+		var out []string
+		for _, c := range b.client.Jar.Cookies(u) {
+			out = append(out, c.Name)
+		}
+
+		return out
+	}
+
+	assert.Equal(t, []string{"__Host-signin"}, names(), "the form's session only")
+
+	require.Equal(t, http.StatusSeeOther, b.signIn("alice", "alice-secret", token, nil))
+	assert.Equal(t, []string{"__Host-session"}, names(), "the signed-in session only")
+}

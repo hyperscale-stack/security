@@ -21,8 +21,10 @@
 // ErrCookieTooLarge rather than silently dropped by the browser.
 //
 // CSRF: VerifyCSRF checks a synchronizer token; the application must call it
-// on every state-changing request (the sign-in form included) and should
-// put net/http's CrossOriginProtection in front of its handlers.
+// on every state-changing request and should put net/http's
+// CrossOriginProtection in front of its handlers. The sign-in form takes
+// its token from a session on a dedicated Manager (its own cookie name and
+// purpose) that no Extractor reads — see VerifyCSRF.
 //
 // A session lives at most its TTL from its creation: the Manager enforces
 // CreatedAt + TTL on every read, and neither Rotate nor Touch extends it.

@@ -1790,5 +1790,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   site could sign a victim into the attacker's account (login CSRF), and it
   verified the password of known users only, so its response time told
   which accounts exist. The form now carries the token of a session opened
-  for it, cross-origin posts are refused (`http.CrossOriginProtection`) and
-  the credentials go through `basic.Authenticator`.
+  for it on a `Manager` of its own (cookie `__Host-signin`), cross-origin
+  posts are refused (`http.CrossOriginProtection`) and the credentials go
+  through `basic.Authenticator`.

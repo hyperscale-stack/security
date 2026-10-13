@@ -7,11 +7,14 @@
 // It is a tiny login-form application: a successful login mints an
 // encrypted session cookie, the home page reads it, and logout clears it.
 // Both forms are protected against CSRF: the sign-in form by the token of a
-// session opened for it (against login CSRF), the logout form by the
-// session's token; net/http's CrossOriginProtection also refuses
-// cross-origin form posts. The credentials are checked by a
-// basic.Authenticator, which spends one password verification on every
-// attempt, so the response time does not tell which accounts exist.
+// session opened for it on a Manager of its own (cookie __Host-signin,
+// against login CSRF), the logout form by the session's token; net/http's
+// CrossOriginProtection also refuses cross-origin form posts. The form's
+// session never shares the session cookie: behind a session Engine, a
+// session without a subject would be refused on every request. The
+// credentials are checked by a basic.Authenticator, which spends one
+// password verification on every attempt, so the response time does not
+// tell which accounts exist.
 //
 // Run:
 //
@@ -66,8 +69,9 @@ func (u users) LoadByUsername(_ context.Context, username string) (basic.Passwor
 
 // app holds the demo dependencies.
 type app struct {
-	manager *session.Manager
-	login   *basic.Authenticator
+	manager *session.Manager     // signed-in sessions
+	form    *session.Manager     // the sign-in form's session (its CSRF token)
+	login   *basic.Authenticator // password verification
 }
 
 // newServer builds the demo handler. It is separate from main so the
@@ -92,7 +96,13 @@ func newServer() (http.Handler, error) {
 
 	a := &app{
 		manager: session.NewManager(codec),
-		login:   basic.NewAuthenticator(users{demoUser: {subject: demoUser, hash: aliceHash}}, hasher),
+		// Its own cookie name and purpose: the sign-in form's session is
+		// never read as a signed-in session.
+		form: session.NewManager(codec,
+			session.WithCookieName("__Host-signin"),
+			session.WithPurpose("sign-in form"),
+			session.WithTTL(15*time.Minute)),
+		login: basic.NewAuthenticator(users{demoUser: {subject: demoUser, hash: aliceHash}}, hasher),
 	}
 
 	mux := http.NewServeMux()
@@ -110,7 +120,7 @@ func newServer() (http.Handler, error) {
 // request carries no signed-in session.
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
 	s, err := a.manager.Get(r.Context(), httpsec.NewCarrier(w, r))
-	if err != nil || s.GetString("sub") == "" { // a session opened for the form is not signed in
+	if err != nil || s.GetString("sub") == "" { // a session without a subject is never signed in
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 
 		return
@@ -124,16 +134,16 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 </form>`, html.EscapeString(s.GetString("sub")), html.EscapeString(session.CSRFToken(s)))
 }
 
-// loginForm renders the login form with the CSRF token of the browser's
-// session, opening one for the form when there is none: without it another
-// site could post its own credentials and sign the victim into the
-// attacker's account (login CSRF).
+// loginForm renders the login form with the CSRF token of the form's
+// session, opening one when there is none: without it another site could
+// post its own credentials and sign the victim into the attacker's account
+// (login CSRF).
 func (a *app) loginForm(w http.ResponseWriter, r *http.Request) {
 	carrier := httpsec.NewCarrier(w, r)
 
-	s, err := a.manager.Get(r.Context(), carrier)
+	s, err := a.form.Get(r.Context(), carrier)
 	if err != nil {
-		if s, err = a.manager.Login(r.Context(), carrier, nil); err != nil {
+		if s, err = a.form.Login(r.Context(), carrier, nil); err != nil {
 			http.Error(w, "session error", http.StatusInternalServerError)
 
 			return
@@ -150,12 +160,13 @@ func (a *app) loginForm(w http.ResponseWriter, r *http.Request) {
 </form>`, html.EscapeString(session.CSRFToken(s)))
 }
 
-// signIn checks the form's CSRF token, verifies the credentials and mints a
-// fresh session — new ID, new CSRF token, new lifetime — on success.
+// signIn checks the form's CSRF token, verifies the credentials and, on
+// success, clears the form's session and mints a fresh session — new ID,
+// new CSRF token, new lifetime.
 func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 	carrier := httpsec.NewCarrier(w, r)
 
-	form, err := a.manager.Get(r.Context(), carrier)
+	form, err := a.form.Get(r.Context(), carrier)
 	if err != nil || !session.VerifyCSRF(form, r.FormValue("csrf_token")) {
 		http.Error(w, "bad CSRF token: reload the sign-in form", http.StatusForbidden)
 
@@ -170,6 +181,8 @@ func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	a.form.Logout(r.Context(), carrier)
 
 	if _, err := a.manager.Login(r.Context(), carrier, auth.Principal()); err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)

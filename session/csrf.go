@@ -26,13 +26,26 @@ func CSRFToken(s *Session) string {
 //
 // VerifyCSRF is a check, not a policy: nothing enforces it for you. Call it
 // on every state-changing request (POST, PUT, PATCH, DELETE) that a cookie
-// session authenticates — the sign-in form included, through a session
-// opened for the form before sign-in (Manager.Login with a nil principal),
-// against login CSRF — never change state on GET, and add a cross-origin
+// session authenticates, never change state on GET, and add a cross-origin
 // check in front of the handlers (net/http's CrossOriginProtection, which
 // refuses cross-origin unsafe requests from their Sec-Fetch-Site and Origin
 // headers). SameSite=Lax keeps the cookie off cross-site POSTs in current
 // browsers but not off same-site requests from a sibling subdomain.
+//
+// The sign-in form needs a token too, against login CSRF, before there is a
+// signed-in session: open a session for the form on a dedicated Manager —
+// its own cookie name and purpose, a short TTL — that no [Extractor] reads,
+// with Login(ctx, c, nil) when the form is rendered, and check the posted
+// token against it:
+//
+//	form := session.NewManager(codec,
+//		session.WithCookieName("__Host-signin"),
+//		session.WithPurpose("sign-in form"),
+//		session.WithTTL(15*time.Minute))
+//
+// Never open it on the Manager an Extractor reads: the Engine would extract
+// the subject-less session on every request and the [PrincipalLoader]
+// refuse it — every page, the sign-in form included, would answer 401.
 //
 // This is the synchronizer-token pattern: the server holds the canonical
 // token in the (encrypted) session and checks the value the client echoed

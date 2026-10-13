@@ -2199,9 +2199,13 @@ To migrate:
 3. Keep `Values` small: a write that would exceed 4096 bytes now returns
    `ErrCookieTooLarge`.
 4. Enforce CSRF on every state-changing request — see the `VerifyCSRF`
-   documentation and the session-web example (sign-in form protected
-   through a session opened for the form, `net/http`'s
-   `CrossOriginProtection` in front of the handlers).
+   documentation and the session-web example (`net/http`'s
+   `CrossOriginProtection` in front of the handlers). Protect the sign-in
+   form with the token of a session opened for it on a dedicated `Manager`
+   (its own cookie name and purpose, e.g. `__Host-signin`), never on the
+   one behind the Engine: there, the `PrincipalLoader` would refuse the
+   subject-less session on every request (401). A `PrincipalLoader` must
+   refuse a session without a subject, never map it to a principal.
 5. After changing `WithDomain` or `WithPath` while the cookie keeps its
    name (an explicit name, or `__Secure-session` from one `Domain` or
    `Path` to another), browsers keep the cookie of the earlier `Domain` or
