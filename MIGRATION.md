@@ -1519,7 +1519,11 @@ takes the challenge configuration and answers like the gRPC one:
 | Anonymous caller refused by the authorization interceptor | `PermissionDenied` | `Unauthenticated` |
 | Repeated `Authorization` field | first value used | `InvalidArgument` |
 | `ErrUnavailable` / error wrapping no sentinel | `Unauthenticated` | `Unavailable` / `Internal` |
+| `InvalidArgument`, `Unavailable`, `Internal` of a Bearer resource | no `WWW-Authenticate` | `Bearer realm=R` (RFC 6750 §3; `invalid_request` for a bearer request) |
 | Headers staged on the `Carrier`, refused call | dropped | in the error metadata |
+| `NewAuthenticationInterceptor(nil)` | panic on the first RPC | panic at construction |
+| A custom `Engine` returning no context or a typed nil | panic | `Internal` |
+| A nil or typed nil attribute given to `NewAuthorizationInterceptor` | `PermissionDenied` on every RPC | panic at construction; the attributes are copied |
 
 To migrate:
 

@@ -41,18 +41,20 @@ type ErrorMapper interface {
 // scheme S and realm R in the error's metadata (sent as response headers):
 //
 //	class                                       code (HTTP)             challenge
-//	invalid_request                             InvalidArgument (400)   Bearer + bearer token sent: error="invalid_request"
-//	unavailable                                 Unavailable (503)       —
+//	invalid_request                             InvalidArgument (400)   Bearer realm=R; + bearer token sent: error="invalid_request"
+//	unavailable                                 Unavailable (503)       Bearer realm=R
 //	token_expired, token_not_found,
 //	client_secret_mismatch, invalid_credentials Unauthenticated (401)   S realm=R; Bearer + bearer token sent: error="invalid_token"
 //	authentication_required,
 //	unsupported_credential                      Unauthenticated (401)   S realm=R (no error code)
 //	insufficient_scope, access_denied           PermissionDenied (403)  S realm=R; Bearer + bearer token sent: error="insufficient_scope"
-//	no_extractor, _OTHER                        Internal (500)          —
+//	no_extractor, _OTHER                        Internal (500)          Bearer realm=R
 //
-// A Basic challenge also carries charset="UTF-8" (RFC 7617 §2.1). Whether
-// the request carried a bearer token is told by the interceptors; without
-// them no RFC 6750 code is sent. An empty scheme means "Bearer" and an
+// A Bearer resource challenges every refusal (RFC 6750 §3); another scheme
+// the Unauthenticated and PermissionDenied answers. A Basic challenge also
+// carries charset="UTF-8" (RFC 7617 §2.1). Whether the request carried a
+// bearer token is told by the interceptors; without them no RFC 6750 code
+// is sent. An empty scheme means "Bearer" and an
 // empty realm [DefaultRealm]. DefaultErrorMapper panics when scheme is not
 // an RFC 9110 token or realm holds a character a quoted-string cannot
 // carry: a challenge configuration is static, so it fails at startup.
@@ -105,12 +107,16 @@ func (m *defaultErrorMapper) Map(ctx context.Context, err error) error {
 	return ce
 }
 
-// challengeFor returns the WWW-Authenticate value of an outcome, or "".
+// challengeFor returns the WWW-Authenticate value of an outcome, or "". A
+// Bearer resource challenges every refusal — RFC 6750 §3: the request
+// carried no access token enabling access — with the §3.1 error code only
+// for a request that carried a bearer token; another scheme challenges the
+// Unauthenticated (HTTP 401) and PermissionDenied (403) answers.
 func (m *defaultErrorMapper) challengeFor(o outcome, bearerSent bool) string {
 	switch {
 	case m.bearer && o.oauthCode != "" && bearerSent:
 		return m.challenge + `, error="` + o.oauthCode + `", error_description="` + o.description + `"`
-	case o.challenge:
+	case m.bearer || o.challenge:
 		return m.challenge
 	default:
 		return ""

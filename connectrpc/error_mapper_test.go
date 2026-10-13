@@ -41,9 +41,9 @@ func TestDefaultErrorMapperClassification(t *testing.T) {
 		msg       string
 		challenge []string
 	}{
-		{"invalid_request", "", security.ErrInvalidRequest, connect.CodeInvalidArgument, "invalid request", nil},
-		{"unavailable", "", security.ErrUnavailable, connect.CodeUnavailable, "authentication unavailable", nil},
-		{"unavailable_joined", "", refused(security.ErrTokenNotFound, security.ErrUnavailable), connect.CodeUnavailable, "authentication unavailable", nil},
+		{"invalid_request", "", security.ErrInvalidRequest, connect.CodeInvalidArgument, "invalid request", []string{bearerAPI}},
+		{"unavailable", "", security.ErrUnavailable, connect.CodeUnavailable, "authentication unavailable", []string{bearerAPI}},
+		{"unavailable_joined", "", refused(security.ErrTokenNotFound, security.ErrUnavailable), connect.CodeUnavailable, "authentication unavailable", []string{bearerAPI}},
 		{"token_expired", "", security.ErrTokenExpired, connect.CodeUnauthenticated, "unauthenticated", []string{bearerAPI}},
 		{"token_not_found", "", security.ErrTokenNotFound, connect.CodeUnauthenticated, "unauthenticated", []string{bearerAPI}},
 		{"invalid_credentials", "", security.ErrInvalidCredentials, connect.CodeUnauthenticated, "unauthenticated", []string{bearerAPI}},
@@ -53,10 +53,14 @@ func TestDefaultErrorMapperClassification(t *testing.T) {
 		{"unsupported_credential", "", security.ErrUnsupportedCredential, connect.CodeUnauthenticated, "unauthenticated", []string{bearerAPI}},
 		{"access_denied", "", security.ErrAccessDenied, connect.CodePermissionDenied, "permission denied", []string{bearerAPI}},
 		{"insufficient_scope", "", security.ErrInsufficientScope, connect.CodePermissionDenied, "permission denied", []string{bearerAPI}},
-		{"no_extractor", "", security.ErrNoExtractor, connect.CodeInternal, "internal error", nil},
-		{"no_sentinel", "", errors.New("boom"), connect.CodeInternal, "internal error", nil},
+		{"no_extractor", "", security.ErrNoExtractor, connect.CodeInternal, "internal error", []string{bearerAPI}},
+		{"no_sentinel", "", errors.New("boom"), connect.CodeInternal, "internal error", []string{bearerAPI}},
 		{"basic", "Basic", security.ErrInvalidCredentials, connect.CodeUnauthenticated, "unauthenticated", []string{basicAPI}},
 		{"basic_denied", "Basic", security.ErrAccessDenied, connect.CodePermissionDenied, "permission denied", []string{basicAPI}},
+		{"basic_lowercase", "basic", security.ErrAuthenticationRequired, connect.CodeUnauthenticated, "unauthenticated", []string{`basic realm="api", charset="UTF-8"`}},
+		{"basic_invalid_request", "Basic", security.ErrInvalidRequest, connect.CodeInvalidArgument, "invalid request", nil},
+		{"basic_unavailable", "Basic", security.ErrUnavailable, connect.CodeUnavailable, "authentication unavailable", nil},
+		{"basic_no_sentinel", "Basic", errors.New("boom"), connect.CodeInternal, "internal error", nil},
 	}
 
 	for _, tc := range tests {

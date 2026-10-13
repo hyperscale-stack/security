@@ -19,7 +19,8 @@ import (
 const tracerName = "github.com/hyperscale-stack/security/connectrpc"
 
 // errEngineContract reports a custom [security.Engine] that returned no
-// context or no authentication without an error: an internal error.
+// context or no authentication (nil or a typed nil) without an error: an
+// internal error.
 var errEngineContract = errors.New("connectrpcsec: the engine returned no context or authentication")
 
 // flushHeader copies the staged carrier writes into dst, a live response
@@ -70,7 +71,7 @@ func authenticate(
 	switch {
 	case err != nil && !tolerated:
 		return ctx, carrier, fmt.Errorf("connectrpcsec: authenticate: %w", err)
-	case newCtx == nil || auth == nil:
+	case newCtx == nil || isNil(auth):
 		return ctx, carrier, errEngineContract
 	case !auth.IsAuthenticated() && !cfg.anonymousFallback:
 		return ctx, carrier, security.ErrAuthenticationRequired
@@ -101,9 +102,13 @@ type AuthenticationInterceptor struct {
 // NewAuthenticationInterceptor builds a [connect.Interceptor] that
 // authenticates every inbound unary and streaming RPC against engine. Install
 // it with connect.WithInterceptors(...). Client-side calls are passed through
-// untouched. It panics on an invalid challenge configuration (see
-// [DefaultErrorMapper]).
+// untouched. It panics on a nil engine and on an invalid challenge
+// configuration (see [DefaultErrorMapper]).
 func NewAuthenticationInterceptor(engine security.Engine, opts ...Option) *AuthenticationInterceptor {
+	if engine == nil {
+		panic("connectrpcsec: NewAuthenticationInterceptor: nil Engine")
+	}
+
 	cfg := buildConfig(opts...)
 
 	return &AuthenticationInterceptor{engine: engine, cfg: cfg, mapper: cfg.ownMapper()}

@@ -701,9 +701,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   principal refused by the authorization interceptor, `InvalidArgument` for
   a repeated `Authorization` field, `Unavailable` for `ErrUnavailable`,
   `Internal` for an error wrapping no sentinel), with the RFC 6750 / RFC
-  7617 `WWW-Authenticate` challenge in the error's metadata. The
-  authorization interceptor uses the authentication interceptor's error
-  mapper unless given its own.
+  7617 `WWW-Authenticate` challenge in the error's metadata — on every
+  refusal of a Bearer resource. The authorization interceptor uses the
+  authentication interceptor's error mapper unless given its own, copies
+  its attributes and panics on a nil one; `NewAuthenticationInterceptor`
+  panics on a nil engine.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -833,7 +835,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   no `WWW-Authenticate` field (RFC 9110 §11.6.1); it now carries the
   challenge. Headers staged on the `connectrpcsec.Carrier` reach the client
   on a refused call and on a handler error too, and a custom `Engine`
-  returning no authentication no longer panics the interceptors.
+  returning no authentication — nil or a typed nil — no longer panics the
+  interceptors.
 - Documentation drift: `AttrPrincipalSubject` no longer references a
   non-existent `SetSubjectAttributeMode`, the HTTP middleware no longer
   promises a route override it could not offer, and `LIMITATIONS.md` lists

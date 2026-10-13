@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"connectrpc.com/connect"
 	"github.com/hyperscale-stack/security"
@@ -36,8 +37,9 @@ type AuthorizationInterceptor struct {
 }
 
 // NewAuthorizationInterceptor builds a [connect.Interceptor] that enforces adm
-// against attrs for every inbound unary and streaming RPC. It panics if adm
-// is nil.
+// against attrs for every inbound unary and streaming RPC. It copies attrs,
+// and panics if adm or one of attrs is nil (a typed nil included): an RPC's
+// policy is static configuration.
 func NewAuthorizationInterceptor(
 	adm security.AccessDecisionManager,
 	attrs []security.Attribute,
@@ -47,7 +49,13 @@ func NewAuthorizationInterceptor(
 		panic("connectrpcsec: NewAuthorizationInterceptor: nil AccessDecisionManager")
 	}
 
-	return &AuthorizationInterceptor{adm: adm, attrs: attrs, cfg: buildConfig(opts...)}
+	for i, a := range attrs {
+		if isNil(a) {
+			panic(fmt.Sprintf("connectrpcsec: NewAuthorizationInterceptor: nil Attribute at index %d", i))
+		}
+	}
+
+	return &AuthorizationInterceptor{adm: adm, attrs: slices.Clone(attrs), cfg: buildConfig(opts...)}
 }
 
 // Compile-time check.
