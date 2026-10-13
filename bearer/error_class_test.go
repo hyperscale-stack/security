@@ -13,6 +13,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/bearer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // The TokenVerifier contract: the verifier's sentinel decides the answer —
@@ -30,9 +31,10 @@ func TestAuthenticatorKeepsTheVerifiersErrorClass(t *testing.T) {
 		"key set out": {fmt.Errorf("jwks: %w", security.ErrUnavailable), security.ErrorClassUnavailable},
 		"no sentinel": {errors.New("verifier bug"), security.ErrorClassOther},
 	} {
-		a := bearer.NewAuthenticator(bearer.VerifierFunc(func(context.Context, string) (security.Authentication, error) {
-			return nil, c.err
-		}))
+		verifier := bearer.NewMockTokenVerifier(t)
+		verifier.EXPECT().Verify(mock.Anything, "tk").Return(nil, c.err).Once()
+
+		a := bearer.NewAuthenticator(verifier)
 
 		_, err := a.Authenticate(context.Background(), bearer.New("tk"))
 
