@@ -229,6 +229,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`oidc/client/store/redis`, one Lua script per consumption, Redis Cluster
   compatible), all validated by the exported conformance suite
   `oidc/client/storetest`.
+- **Bounded in-memory OpenID Connect transaction store**:
+  `memory.WithCapacity(n)` (`oidc/client/storage/memory`) bounds the pending
+  logins the store keeps; at capacity it drops the expired ones, then
+  refuses with `memory.ErrFull` — in constant time, walking its
+  transactions at most once per expiry — and never evicts a pending login.
+  `n` must be at least 1 (`WithCapacity` panics otherwise).
 - **OpenID Connect interoperability tests** (`internal/interop/oidcrp`,
   tests only): the Relying Party against the example provider of
   `github.com/zitadel/oidc/v3` — every client authentication method and
@@ -421,6 +427,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Changed
 
+- `examples/oidc-client` bounds its unauthenticated login starts: each
+  client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
+  each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
+  with `Retry-After` beyond — and the in-memory store keeps at most
+  10 000 pending logins (`memory.WithCapacity`) — `503 Service
+  Unavailable` beyond —, so that one network holds at most about 600 of
+  them. It used to accept and keep every start for ten minutes.
+- `oidc/client/storage/memory.New` takes options: `New(opts ...Option)`.
+  Calls are unchanged; code using `memory.New` as a `func() *memory.Store`
+  value needs a closure. Its periodic sweep now walks the transactions only
+  once one may have expired.
 - The repository is now a Go workspace (`go.work`) of independent modules,
   so consumers import only the pieces they need and the core stays free of
   heavy transitive dependencies.
@@ -547,6 +564,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Fixed
 
+- `oidcclient.Client.StartLogin` capped the binding cookies at four by
+  expiring the oldest cookies whose name started with the binding prefix —
+  `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could
+  delete the application's own `oidc-session`. Only names of the binding
+  cookie's shape (the prefix and 16 lowercase hex digits) are now counted
+  and expired.
+- The `oidc/client` documentation said that, the JSON being parsed
+  strictly, an application decoding claims itself never reads another
+  member than the one validated. Only two names differing by case are
+  refused: a lone `EMAIL_VERIFIED` is another claim, kept as OpenID Connect
+  Core §2 requires, which `encoding/json` reads as `email_verified`. The
+  documentation now says so and points to `DecodeClaims` /
+  `UserInfo.Decode` and the `Identity` fields.
 - The v0 authentication `Handler` no longer iterates past a successful
   authentication and no longer swallows provider errors — the `Manager`
   short-circuits on first success and aggregates failures.
@@ -676,6 +706,50 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   their secrets with the verbs their `String` method does not cover (`%d`,
   `%t`…). Every one now prints its redacted form with every verb
   (`fmt.Formatter`) and logs without secrets in `slog` (#86).
+- An `oidc/client` `Client` whose `Config.Outbound.MaxRedirects` allowed
+  redirects followed its discovery and JWK Set requests to any origin: a
+  server at the end of a redirect from the issuer's well-known URL only had
+  to write the configured issuer in its document to get its own endpoints
+  and keys trusted, and its ID Tokens accepted (OpenID Connect Discovery 1.0
+  §7.2 relies on TLS to the issuer), and a redirect of the `jwks_uri` made
+  another origin's keys verify ID Tokens. Every hop of these requests must
+  now stay on the origin — scheme, host and port — of the URL requested:
+  the issuer's for discovery, the `jwks_uri`'s for the keys; another hop
+  fails with `outbound.ErrRedirectNotAllowed`. Token and UserInfo requests
+  still never follow redirects, and the default policy follows none.
+- `encoding/json` wrote the binding secret of an `oidcclient.AuthRequest`
+  and the binding secret, authorization code and state of a `Callback` —
+  and so did `slog`'s JSON handler for one nested in another logged value,
+  `LogValue` applying to attribute values only. Both now encode without
+  them (`MarshalJSON`: the binding `REDACTED`, a callback's URL without its
+  query and its parameters counted), and so does `Config` (client secret
+  redacted, transaction keys counted), whose encoding used to fail on its
+  `func` fields only by accident. `UserInfo` printed its claims (personal
+  data) with `%s` and `%q`; it now prints and logs its subject only.
+  `Identity` and `Tokens` still encode their tokens, deliberately, so that
+  applications can persist them (see MIGRATION.md).
+- `oidcclient.AuthOptions.ExtraParams` compared its names with the
+  reserved parameters exactly: `Request`, `STATE`, `Nonce`, `request.uri`…
+  passed, and a provider that ignores case (ASP.NET) or rewrites `.` as `_`
+  (PHP) read them as the reserved parameter — a request object or a nonce
+  the godoc promised to refuse. They also repeated the parameters of the
+  authorization endpoint's own query (`?tenant=acme` then `tenant=evil`),
+  which RFC 6749 §3.1 forbids. Names are now compared by a key folding case
+  and reading `.`, space and `[` as `_`: `Begin` refuses an entry equivalent
+  to a parameter the client sends or does not support, to one of the
+  endpoint's query, or to another entry (`ErrInvalidAuthRequest`), and
+  `New` refuses an authorization endpoint whose query does the same
+  (`ErrInvalidMetadata`).
+- `oidc/client` errors echoed provider-controlled text without bound: a
+  900 KB issuer in a discovery document made a 900 KB error, and so did a
+  media type, a redirect target (the `Location` of a refused redirect, which
+  `net/http` puts in its error), a JOSE header member quoted by go-jose,
+  the names of the authorization endpoint's query, or the debug data of an
+  HTTP/2 GOAWAY interrupting a response body (64 KB); `%q` could also
+  multiply hostile bytes by four. Every echoed value is now Go-quoted, then
+  cut to about 256 bytes (beginning and end kept), invalid UTF-8 replaced;
+  wrapped errors keep their chain (`errors.Is`/`errors.As`). Configuration
+  and `AuthOptions` values echoed into errors are bounded the same way.
 - `jwtsec` keys revealed their material: a `PrivateKey` holding an Ed25519
   or HMAC key — or an HMAC secret carried as a `PublicKey` — printed it with
   `fmt` (`%v` and most verbs), as did a `Signer` or a `NewStaticJWKS` key

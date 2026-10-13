@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -181,9 +182,18 @@ type Config struct {
 
 	// Outbound is the network policy of every request to the provider
 	// (discovery, JWK Set, token, UserInfo). Its zero value is strict:
-	// https only and publicly routable destinations only; exempt an
-	// on-premises provider's subnet in AllowedPrefixes. Token and UserInfo
-	// requests never follow redirects, whatever MaxRedirects says.
+	// https only, publicly routable destinations only, no redirect; exempt
+	// an on-premises provider's subnet in AllowedPrefixes. Token and
+	// UserInfo requests never follow redirects, whatever MaxRedirects says.
+	// Discovery and JWK Set requests follow at most MaxRedirects redirects,
+	// and only within the origin — scheme, host and port — of the URL
+	// requested: the issuer's for discovery, the jwks_uri's for the keys,
+	// whose TLS identity OpenID Connect Discovery 1.0 §7.2 relies on. A
+	// hop to another origin fails like one beyond MaxRedirects, with
+	// outbound.ErrRedirectNotAllowed. The origin is trusted as a whole: a
+	// same-origin redirect to another path is followed. The default, which
+	// follows no redirect, retrieves the metadata at the well-known path
+	// itself (Discovery §4.1).
 	//
 	// The errors of New, Complete and UserInfo wrap the network errors of
 	// allowed destinations, which may name a resolved address and port
@@ -275,7 +285,7 @@ func (c Config) validateClient() error {
 			return fmt.Errorf("%w: a public client (none) has no ClientSecret", ErrInvalidConfig)
 		}
 	default:
-		return fmt.Errorf("%w: unsupported AuthMethod %q", ErrInvalidConfig, c.AuthMethod)
+		return fmt.Errorf("%w: unsupported AuthMethod %s", ErrInvalidConfig, quoted(string(c.AuthMethod)))
 	}
 
 	return nil
@@ -284,7 +294,7 @@ func (c Config) validateClient() error {
 func (c Config) validateFlow() error {
 	switch {
 	case c.ResponseMode != "" && c.ResponseMode != ResponseModeQuery && c.ResponseMode != ResponseModeFormPost:
-		return fmt.Errorf("%w: unsupported ResponseMode %q", ErrInvalidConfig, c.ResponseMode)
+		return fmt.Errorf("%w: unsupported ResponseMode %s", ErrInvalidConfig, quoted(string(c.ResponseMode)))
 	case c.Store == nil:
 		return fmt.Errorf("%w: Store is required", ErrInvalidConfig)
 	case c.TransactionTTL < 0 || c.TransactionTTL > MaxTransactionTTL || c.TransactionTTL%time.Second != 0:
@@ -358,13 +368,38 @@ func (c Config) LogValue() slog.Value {
 	)
 }
 
+// MarshalJSON implements json.Marshaler like String: the identifying
+// fields, the client secret redacted and the transaction keys counted.
+// Without it, encoding/json would write the secret and the keys of a
+// Config that held no func.
+func (c Config) MarshalJSON() ([]byte, error) {
+	clientSecret := ""
+	if c.ClientSecret != "" {
+		clientSecret = redactedMark
+	}
+
+	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
+		ConnectionID    string
+		Issuer          string
+		ClientID        string
+		ClientSecret    string
+		AuthMethod      AuthMethod
+		RedirectURL     string
+		ResponseMode    ResponseMode
+		TransactionKeys int
+	}{
+		c.ConnectionID, c.Issuer, c.ClientID, clientSecret, c.AuthMethod, c.RedirectURL, c.ResponseMode,
+		len(c.TransactionKeys),
+	})
+}
+
 // redacted renders a secret as REDACTED, or as "" when it is empty.
 func redacted(secret string) string {
 	if secret == "" {
 		return `""`
 	}
 
-	return "REDACTED"
+	return redactedMark
 }
 
 // validateIssuer checks an issuer identifier (OpenID Connect Core §2:
@@ -376,7 +411,7 @@ func validateIssuer(raw string, allowHTTP bool) error {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: Issuer: %w", ErrInvalidConfig, err)
+		return fmt.Errorf("%w: Issuer: %w", ErrInvalidConfig, clipped(err))
 	}
 
 	switch {
@@ -401,7 +436,7 @@ func parseRedirectURL(raw string) (*url.URL, error) {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: RedirectURL: %w", ErrInvalidConfig, err)
+		return nil, fmt.Errorf("%w: RedirectURL: %w", ErrInvalidConfig, clipped(err))
 	}
 
 	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
@@ -436,7 +471,7 @@ func normalizeScopes(in []string) ([]string, error) {
 
 	for _, s := range in {
 		if !isScopeToken(s) {
-			return nil, fmt.Errorf("%w: invalid scope %q", ErrInvalidConfig, s)
+			return nil, fmt.Errorf("%w: invalid scope %s", ErrInvalidConfig, quoted(s))
 		}
 
 		if !slices.Contains(out, s) {
@@ -466,7 +501,7 @@ func normalizeAlgorithms(in []Algorithm) ([]Algorithm, error) {
 
 	for _, alg := range in {
 		if !slices.Contains(supportedAlgorithms, alg) {
-			return nil, fmt.Errorf("%w: unsupported ID Token algorithm %q", ErrInvalidConfig, alg)
+			return nil, fmt.Errorf("%w: unsupported ID Token algorithm %s", ErrInvalidConfig, quoted(string(alg)))
 		}
 
 		if !slices.Contains(out, alg) {

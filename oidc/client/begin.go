@@ -6,8 +6,10 @@ package oidcclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -55,9 +57,14 @@ type AuthOptions struct {
 	Display string
 	// ExtraParams are other request parameters (domain_hint, hd,
 	// kc_idp_hint…): at most 20, names of letters, digits, '.', '_' or '-'.
-	// The parameters the Client sends or does not support are refused —
-	// request and request_uri included, which could override state, nonce
-	// or PKCE.
+	// No parameter is ever sent twice (RFC 6749 §3.1), and names that
+	// differ only by case, or by '.' for '_', are one parameter: servers
+	// that ignore case (ASP.NET) or rewrite names (PHP) read them so.
+	// Refused, in any such spelling: the parameters the Client sends or
+	// does not support — request and request_uri included, which could
+	// override state, nonce or PKCE — the parameters of the authorization
+	// endpoint's own query, which the request keeps, and two entries that
+	// are one parameter.
 	ExtraParams map[string]string
 	// AppState is application data stored with the transaction and
 	// returned in Identity (at most 4096 bytes of UTF-8). It is not sent to
@@ -65,7 +72,8 @@ type AuthOptions struct {
 	AppState string
 }
 
-// AuthRequest is a started login.
+// AuthRequest is a started login. It prints, logs and encodes to JSON
+// without its binding secret (String, LogValue, MarshalJSON).
 type AuthRequest struct {
 	// URL is the authorization request: send the user agent to it.
 	URL string
@@ -74,8 +82,12 @@ type AuthRequest struct {
 	// Binding is the browser-binding secret of the login. The user agent
 	// that started the login MUST keep it — the net/http helpers put it in
 	// an HttpOnly __Host- cookie — and present it at the callback. It never
-	// leaves the Relying Party and the user agent: never log it.
-	Binding string
+	// leaves the Relying Party and the user agent: never log it. fmt,
+	// log/slog and encoding/json leave it out — it is tagged json:"-" for
+	// the encodings that do not go through MarshalJSON — but other
+	// reflection-based encoders (encoding/gob, encoding/xml, YAML) write
+	// it: persist it explicitly, only where a secret belongs.
+	Binding string `json:"-"`
 	// ExpiresAt is when the login expires.
 	ExpiresAt time.Time
 }
@@ -90,7 +102,25 @@ func (r AuthRequest) GoString() string { return r.String() }
 
 // LogValue implements slog.LogValuer without the binding secret.
 func (r AuthRequest) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", "REDACTED"))
+	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
+}
+
+// MarshalJSON implements json.Marshaler without the binding secret, which
+// the default encoding would write — and log/slog's JSON handler encodes
+// a value nested in another one (a struct field, a map) with
+// encoding/json, LogValue applying to attribute values only. A struct
+// embedding AuthRequest is promoted this method and encodes as the
+// AuthRequest alone — or, when another type embedded at the same depth
+// also has a MarshalJSON, neither is promoted and encoding/json writes the
+// exported fields, the binding excluded (json:"-"). Name the field instead
+// of embedding it.
+func (r AuthRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct { //nolint:wrapcheck // strings only: never fails
+		URL       string
+		State     string
+		ExpiresAt string
+		Binding   string
+	}{r.URL, r.State, r.ExpiresAt.Format(time.RFC3339Nano), redactedMark})
 }
 
 // Begin starts a login: it stores a Transaction and returns the
@@ -102,7 +132,7 @@ func (r AuthRequest) LogValue() slog.Value {
 // key (Config.TransactionKeys). Nothing is returned when the store fails.
 // Begin writes to the store on every call: rate-limit login starts.
 func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, error) {
-	if err := opts.validate(); err != nil {
+	if err := opts.validate(c.md.authParams); err != nil {
 		return nil, err
 	}
 
@@ -195,8 +225,9 @@ func setNonEmpty(params url.Values, name, value string) {
 	}
 }
 
-// validate checks the options before anything is stored.
-func (o AuthOptions) validate() error {
+// validate checks the options before anything is stored; endpointParams
+// are the paramKeys of the authorization endpoint's query.
+func (o AuthOptions) validate(endpointParams map[string]struct{}) error {
 	if err := validatePrompt(o.Prompt); err != nil {
 		return err
 	}
@@ -225,7 +256,7 @@ func (o AuthOptions) validate() error {
 		return fmt.Errorf("%w: AppState must be at most 4096 bytes of UTF-8", ErrInvalidAuthRequest)
 	}
 
-	return validateExtraParams(o.ExtraParams)
+	return validateExtraParams(o.ExtraParams, endpointParams)
 }
 
 // validatePrompt checks the prompt values (Core §3.1.2.1: none with any
@@ -242,20 +273,36 @@ func validatePrompt(prompt []string) error {
 	return nil
 }
 
-func validateExtraParams(params map[string]string) error {
+// validateExtraParams checks AuthOptions.ExtraParams, in name order: the
+// names and values, and no parameter twice (RFC 6749 §3.1) — none the
+// Client sends or does not support, none of the authorization endpoint's
+// query (endpointParams), no two entries — names compared by paramKey.
+func validateExtraParams(params map[string]string, endpointParams map[string]struct{}) error {
 	if len(params) > maxExtraParams {
 		return fmt.Errorf("%w: at most %d ExtraParams", ErrInvalidAuthRequest, maxExtraParams)
 	}
 
-	for name, value := range params {
+	seen := make(map[string]struct{}, len(params))
+
+	for _, name := range slices.Sorted(maps.Keys(params)) {
+		key := paramKey(name)
+		_, inEndpoint := endpointParams[key]
+		_, repeated := seen[key]
+
 		switch {
 		case !isParamName(name):
-			return fmt.Errorf("%w: invalid ExtraParams name %q", ErrInvalidAuthRequest, name)
-		case slices.Contains(reservedRequestParams, name):
-			return fmt.Errorf("%w: ExtraParams cannot set %q", ErrInvalidAuthRequest, name)
-		case !validText(value, maxExtraValueLength):
-			return fmt.Errorf("%w: invalid ExtraParams value for %q", ErrInvalidAuthRequest, name)
+			return fmt.Errorf("%w: invalid ExtraParams name %s", ErrInvalidAuthRequest, quoted(name))
+		case isReservedParam(key):
+			return fmt.Errorf("%w: ExtraParams cannot set %s", ErrInvalidAuthRequest, quoted(name))
+		case inEndpoint:
+			return fmt.Errorf("%w: ExtraParams cannot set %s, which the authorization endpoint's query sets", ErrInvalidAuthRequest, quoted(name))
+		case repeated:
+			return fmt.Errorf("%w: ExtraParams name %s repeats another one", ErrInvalidAuthRequest, quoted(name))
+		case !validText(params[name], maxExtraValueLength):
+			return fmt.Errorf("%w: invalid ExtraParams value for %s", ErrInvalidAuthRequest, quoted(name))
 		}
+
+		seen[key] = struct{}{}
 	}
 
 	return nil

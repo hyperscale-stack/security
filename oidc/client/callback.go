@@ -6,6 +6,7 @@ package oidcclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -22,7 +23,9 @@ const (
 )
 
 // Callback is an authorization response as the callback endpoint received
-// it.
+// it. It prints, logs and encodes to JSON without its secrets (String,
+// LogValue, MarshalJSON): the binding secret, the parameter values (code,
+// state) and the query of URL.
 type Callback struct {
 	// Mode is how Params arrived: ResponseModeQuery for the query string
 	// of a GET, ResponseModeFormPost for the form body of a POST.
@@ -34,13 +37,14 @@ type Callback struct {
 	// missing port being the scheme's default — same path, and the
 	// RedirectURL's query parameters with their values. Build it from the
 	// request, never from the response; behind a reverse proxy, it is the
-	// public URL.
-	URL *url.URL
+	// public URL. Tagged json:"-", like Params and Binding: in query mode
+	// it carries the response, which only MarshalJSON leaves out.
+	URL *url.URL `json:"-"`
 	// Params are the response parameters (url.ParseQuery or r.PostForm).
-	Params url.Values
+	Params url.Values `json:"-"`
 	// Binding is the browser-binding secret the user agent presented (the
 	// AuthRequest.Binding of the login, read from its cookie).
-	Binding string
+	Binding string `json:"-"`
 }
 
 // String implements fmt.Stringer without the binding secret, the parameter
@@ -55,7 +59,24 @@ func (cb Callback) GoString() string { return cb.String() }
 // LogValue implements slog.LogValuer like String.
 func (cb Callback) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("mode", string(cb.Mode)), slog.String("url", withoutQuery(cb.URL)),
-		slog.String("binding", "REDACTED"))
+		slog.String("binding", redactedMark))
+}
+
+// MarshalJSON implements json.Marshaler like String: the mode, the URL
+// without its query, the number of parameters, never their values nor the
+// binding secret — log/slog's JSON handler encodes a nested Callback with
+// encoding/json. A struct embedding Callback is promoted this method and
+// encodes as the Callback alone — or, when another type embedded at the
+// same depth also has a MarshalJSON, neither is promoted and encoding/json
+// writes the exported fields: Mode only, URL, Params and Binding being
+// tagged json:"-". Name the field instead of embedding it.
+func (cb Callback) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
+		Mode    ResponseMode
+		URL     string
+		Params  int
+		Binding string
+	}{cb.Mode, withoutQuery(cb.URL), len(cb.Params), redactedMark})
 }
 
 // withoutQuery renders u without its query and fragment.
@@ -151,7 +172,7 @@ func (c *Client) Complete(ctx context.Context, cb Callback) (*Identity, error) {
 // parseCallback checks the shape of the response.
 func (c *Client) parseCallback(cb Callback) (authorizationResponse, error) {
 	if cb.Mode != c.cfg.ResponseMode {
-		return authorizationResponse{}, fmt.Errorf("%w: response mode %q, connection uses %s", ErrInvalidCallback, cb.Mode, c.cfg.ResponseMode)
+		return authorizationResponse{}, fmt.Errorf("%w: response mode %s, connection uses %s", ErrInvalidCallback, quoted(string(cb.Mode)), c.cfg.ResponseMode)
 	}
 
 	if !c.receivedOnRedirect(cb.URL) {

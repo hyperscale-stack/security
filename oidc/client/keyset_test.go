@@ -124,7 +124,7 @@ func TestKeyRefreshSingleFlight(t *testing.T) {
 		}()
 	}
 
-	<-entered
+	receive(t, entered)
 	time.Sleep(50 * time.Millisecond) // let the other logins reach the in-flight fetch
 	close(gate)
 	wg.Wait()
@@ -164,9 +164,9 @@ func TestUnknownKidRefreshCancelled(t *testing.T) {
 		done <- err
 	}()
 
-	<-entered
+	receive(t, entered)
 	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 	close(gate)
 }
 
@@ -311,9 +311,9 @@ func TestKeyFetchSurvivesCancellation(t *testing.T) {
 		done <- err
 	}()
 
-	<-entered
+	receive(t, entered)
 	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 
 	close(gate)
 
@@ -325,11 +325,11 @@ func TestKeyFetchSurvivesCancellation(t *testing.T) {
 	assert.Equal(t, 1, op.hitCount("/jwks"), "the cancelled caller's fetch completed and was cached")
 }
 
+func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
 // TestKeySetParsing checks the JWK Set handling: RFC 7517 §5 ignores keys
 // it cannot use, Discovery §3 forbids private and symmetric keys (the set is
 // refused), and the document is parsed strictly and bounded.
-func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-
 func TestKeySetParsing(t *testing.T) {
 	t.Parallel()
 

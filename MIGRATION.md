@@ -854,3 +854,117 @@ To migrate:
    `go.mod requires go >= 1.27.2`.
 3. Build and ship with the latest Go patch release: the `go` line is a
    floor, not the toolchain to release with.
+
+### `oidc/client`: discovery and JWK Set redirects stay on their origin
+
+With `Config.Outbound.MaxRedirects` above zero, the discovery request and
+the JWK Set requests followed redirects to any origin. A server at the end of
+such a redirect only had to write the configured issuer in its document to
+get its own endpoints and keys trusted — OpenID Connect Discovery 1.0 §7.2
+relies on TLS to the issuer — and a redirected `jwks_uri` made another
+origin's keys verify ID Tokens. Every hop must now stay on the origin —
+scheme, host and port — of the URL first requested:
+
+| Redirect, with `MaxRedirects > 0` | Before | After |
+| --- | --- | --- |
+| discovery, to another host, port or scheme (an http→https redirect on the same host with `AllowHTTP` included) | followed; the document used if its `issuer` matched | `New` fails with `ErrDiscovery` (`outbound.ErrRedirectNotAllowed`) |
+| JWK Set, to another origin than the `jwks_uri`'s — the issuer's included | followed; its keys verify ID Tokens | the fetch fails: logins fail with `ErrKeySet` (`outbound.ErrRedirectNotAllowed`) |
+| discovery or JWK Set, within the origin requested | followed | unchanged |
+| token, UserInfo | never followed | unchanged |
+| any, with `MaxRedirects: 0` (the default) | refused | unchanged |
+
+To migrate:
+
+1. Nothing with the default policy (`MaxRedirects: 0`).
+2. Configure as `Issuer` the issuer whose own server answers
+   `/.well-known/openid-configuration`: metadata redirected to another
+   server is no longer used.
+3. A provider whose `jwks_uri` redirects to another origin (a CDN, say) must
+   publish the final URL as its `jwks_uri`; there is no opt-out.
+
+### `oidc/client`: `AuthRequest`, `Callback` and `Config` encode without their secrets
+
+`fmt` and `log/slog` already printed these types redacted, but
+`encoding/json` wrote every exported field: the binding secret of an
+`AuthRequest`, the binding secret, authorization code and state of a
+`Callback`. `slog`'s JSON handler calls `LogValue` for attribute values only
+and encodes a value nested in another one with `encoding/json`, so a login
+logged inside a struct revealed them. They now implement `json.Marshaler`,
+like `Config`:
+
+| `json.Marshal` of | Before | After |
+| --- | --- | --- |
+| `AuthRequest` | `{"URL":…,"State":…,"Binding":"<secret>","ExpiresAt":…}` | `{"URL":…,"State":…,"ExpiresAt":…,"Binding":"REDACTED"}` |
+| `Callback` | `{"Mode":…,"URL":{…"RawQuery":"code=…&state=…"},"Params":{…},"Binding":"<secret>"}` | `{"Mode":…,"URL":"<URL without query>","Params":<count>,"Binding":"REDACTED"}` |
+| `Config` | an error (`json: unsupported type: func…`) | `{"ConnectionID":…,"Issuer":…,"ClientID":…,"ClientSecret":"REDACTED","AuthMethod":…,"RedirectURL":…,"ResponseMode":…,"TransactionKeys":<count>}` |
+| a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written; when another type embedded at the same depth also has a `MarshalJSON`, neither is promoted and the exported fields are written, the secrets excluded |
+| `json.Unmarshal` into `AuthRequest`, `Callback` | every field read | `AuthRequest.Binding` and `Callback`'s `URL`, `Params` and `Binding` are tagged `json:"-"`: never read nor written by a reflective encoding |
+| `Identity`, `Tokens` | tokens and claims | unchanged, deliberately: JSON is how applications persist them |
+| `UserInfo` | its claims | unchanged; `fmt` now prints its subject only |
+| `*Client` | `{}` | unchanged |
+
+To migrate:
+
+1. Nothing for code that does not encode these types with `encoding/json`.
+2. Code that persisted an `AuthRequest` as JSON (a server-side login state)
+   must store `AuthRequest.Binding` explicitly, where a secret belongs (an
+   HttpOnly cookie, a server-side session): read back from the new JSON, it
+   is `REDACTED` and the callback fails with `ErrBindingMismatch`.
+3. A struct that embeds `AuthRequest` or `Callback` and is encoded with
+   `encoding/json` now encodes as the embedded value alone — or, next to
+   another embedded type with a `MarshalJSON`, as flattened fields without
+   the secrets: name the field (`Login oidcclient.AuthRequest`) instead of
+   embedding it.
+4. Other reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML)
+   still write the binding secret: do not use them on these types.
+5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
+   in another logged value, `slog`'s JSON handler writes their tokens.
+
+### `oidc/client`: an authorization request never repeats a parameter
+
+RFC 6749 §3.1: "Request and response parameters MUST NOT be included more
+than once", and the authorization endpoint's own query "MUST be retained".
+`AuthOptions.ExtraParams` names were compared with the parameters the client
+sends exactly, and not at all with the endpoint's query, so `Request`,
+`STATE` or `request.uri` passed — read as `request`, `state`, `request_uri`
+by a provider that ignores case (ASP.NET) or rewrites `.` as `_` (PHP) — and
+an entry could repeat a parameter of the endpoint's query. Names are now
+compared case-insensitively, with `.` (and, in a provider's query, space and
+`[`) read as `_`:
+
+| | Before | After |
+| --- | --- | --- |
+| `ExtraParams` spelling a parameter the client sends or does not support (`Nonce`, `STATE`, `Request`, `request.uri`, `Redirect.Uri`…) | sent | `Begin` fails with `ErrInvalidAuthRequest`, nothing stored |
+| `ExtraParams` naming a parameter of the endpoint's query (`tenant`, `Tenant`, `tenant.id` for `?tenant_id=`) | sent twice | `Begin` fails with `ErrInvalidAuthRequest` |
+| two `ExtraParams` that are one parameter (`tenant` and `TENANT`, `a.b` and `a_b`) | both sent | `Begin` fails with `ErrInvalidAuthRequest` |
+| an authorization endpoint whose query spells a reserved parameter (`?State=`, `?request.uri=`) or repeats a name (`?tenant=a&TENANT=b`) | used | `New` fails with `ErrInvalidMetadata` |
+
+To migrate:
+
+1. Nothing for `ExtraParams` with distinct, non-reserved names, which are
+   sent as before.
+2. Remove the entries `Begin` now refuses; a value the provider's
+   authorization endpoint already sets in its query cannot be changed per
+   login.
+3. None of the six providers of the pinned discovery corpus has a query in
+   its authorization endpoint; a provider whose query `New` now refuses has
+   to fix its metadata.
+
+### `oidc/client/storage/memory`: `New` takes options
+
+`memory.New()` became `memory.New(opts ...memory.Option)`, to accept
+`memory.WithCapacity(n)`, which bounds the pending logins the store keeps
+(see CHANGELOG, Added). Calls compile and behave as before: without the
+option, the store stays unbounded.
+
+| | Before | After |
+| --- | --- | --- |
+| `memory.New()` | an unbounded store | unchanged |
+| `memory.New` used as a `func() *memory.Store` value | compiles | does not compile: its type is `func(...memory.Option) *memory.Store` |
+
+To migrate:
+
+1. Wrap such a use in a closure: `func() *memory.Store { return memory.New() }`.
+2. Login starts are unauthenticated: consider
+   `memory.New(memory.WithCapacity(n))`, sized as LIMITATIONS.md explains,
+   together with rate limiting.

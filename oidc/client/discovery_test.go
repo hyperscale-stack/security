@@ -279,6 +279,31 @@ func TestEndpointURLs(t *testing.T) {
 			require.ErrorIs(t, newWithOP(t, op), oidcclient.ErrInvalidMetadata)
 		})
 	}
+
+	// The Client keeps the endpoint's query (RFC 6749 §3.1): a query using
+	// a parameter the Client sends, in any spelling a server may read as
+	// it, or using one twice, would make the request repeat a parameter.
+	for name, query := range map[string]string{
+		"reserved upper case":     "State=x",
+		"reserved mixed case":     "NONCE=x",
+		"reserved title case":     "Request_Uri=x",
+		"reserved dotted":         "request.uri=x",
+		"reserved long s":         "%C5%BFtate=x", // U+017F folds to s; .NET upper-cases it to S
+		"reserved with a space":   "redirect%20uri=x",
+		"reserved with a bracket": "code%5Bchallenge=x",
+		"repeated":                "tenant=a&tenant=b",
+		"repeated in case":        "tenant=a&TENANT=b",
+		"repeated dotted":         "tenant.id=a&tenant_id=b",
+	} {
+		t.Run("authorization endpoint query "+name, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+			op.set(func(op *fakeOP) { op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + query })
+
+			require.ErrorIs(t, newWithOP(t, op), oidcclient.ErrInvalidMetadata)
+		})
+	}
 }
 
 // TestCapabilities checks what the configuration needs against what the

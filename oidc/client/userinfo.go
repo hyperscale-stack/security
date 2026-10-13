@@ -19,19 +19,24 @@ import (
 const mediaJWT = "application/jwt"
 
 // UserInfo are UserInfo claims whose subject was verified to be the
-// identity's (OpenID Connect Core §5.3.2).
+// identity's (OpenID Connect Core §5.3.2). fmt and log/slog print the
+// subject only; encoding/json writes the claims, which are personal data,
+// not secrets.
 type UserInfo struct {
 	// Subject is the sub claim, equal to Identity.Subject.
 	Subject string
-	// Claims is the UserInfo response: one JSON object without duplicate
-	// or case-variant member names at any level. Like ID Token claims other
-	// than iss and sub, its values are not stable identifiers (Core §5.7):
-	// never link accounts on them.
+	// Claims is the UserInfo response: one JSON object in which no two
+	// member names, at any level, are equal or differ only by case. Decode
+	// it with Decode, or into a map — encoding/json would read a lone
+	// EMAIL_VERIFIED as email_verified (see Identity.Claims). Like ID Token
+	// claims other than iss and sub, its values are not stable identifiers
+	// (Core §5.7): never link accounts on them.
 	Claims json.RawMessage
 }
 
 // Decode decodes the claims into v, matching member names exactly (Core
-// §14).
+// §14): use it rather than encoding/json, which matches names
+// case-insensitively.
 func (u *UserInfo) Decode(v any) error {
 	if err := josejson.Unmarshal(u.Claims, v); err != nil {
 		return fmt.Errorf("oidcclient: decode UserInfo claims: %w", err)
@@ -39,6 +44,15 @@ func (u *UserInfo) Decode(v any) error {
 
 	return nil
 }
+
+// String implements fmt.Stringer with the subject only: the claims —
+// personal data — are left out, as from LogValue.
+func (u UserInfo) String() string {
+	return fmt.Sprintf("oidcclient.UserInfo{Subject: %q}", u.Subject)
+}
+
+// GoString implements fmt.GoStringer like String.
+func (u UserInfo) GoString() string { return u.String() }
 
 // LogValue implements slog.LogValuer without the claims.
 func (u UserInfo) LogValue() slog.Value {
@@ -69,7 +83,7 @@ func (c *Client) UserInfo(ctx context.Context, id *Identity) (*UserInfo, error) 
 
 	resp, err := c.send.Do(req) //nolint:gosec // G107/G704: endpoint from validated metadata, outbound policy enforced
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUserInfo, err)
+		return nil, fmt.Errorf("%w: %w", ErrUserInfo, clipped(err)) // a refused redirect names its Location
 	}
 
 	defer func() { _ = resp.Body.Close() }()
@@ -78,7 +92,7 @@ func (c *Client) UserInfo(ctx context.Context, id *Identity) (*UserInfo, error) 
 
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("%w: read response: %w", ErrUserInfo, err)
+		return nil, fmt.Errorf("%w: read response: %w", ErrUserInfo, clipped(err)) // a GOAWAY quotes its debug data
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("%w: unexpected status %d", ErrUserInfo, resp.StatusCode)
 	case hasMediaType(resp.Header.Get("Content-Type"), mediaJWT):

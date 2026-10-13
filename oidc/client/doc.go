@@ -45,7 +45,10 @@
 //   - Every outbound request — discovery, JWK Set, token, UserInfo — goes
 //     through the outbound package: https, publicly routable destinations,
 //     bounded time and size. Token and UserInfo requests never follow
-//     redirects.
+//     redirects; discovery and JWK Set requests follow them only when
+//     Config.Outbound.MaxRedirects allows it, and never to another origin
+//     than the one requested, so metadata and keys come from the issuer's
+//     and the jwks_uri's origins only.
 //   - A login transaction is bound to the user agent that started it: Begin
 //     returns a binding secret the user agent keeps (an HttpOnly __Host-
 //     cookie with the net/http helpers) and the callback presents. The
@@ -67,10 +70,15 @@
 //     Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
-//   - JSON is parsed strictly: duplicate member names, names that differ
-//     only by case (OpenID Connect Core §14 compares claim names code point
-//     by code point), invalid UTF-8 and unpaired surrogate escapes are
-//     refused at every nesting level.
+//   - JSON is parsed strictly: duplicate member names, two names that
+//     differ only by case, invalid UTF-8 and unpaired surrogate escapes are
+//     refused at every nesting level. A lone name that differs from a known
+//     claim only by case (EMAIL_VERIFIED) is another claim (OpenID Connect
+//     Core §14 compares names code point by code point), ignored as Core §2
+//     and RFC 7519 §4 require; encoding/json, which matches struct fields
+//     case-insensitively, would read it as the known one: decode claims with
+//     Identity.DecodeClaims or UserInfo.Decode (or into a map), and read the
+//     validated values from the Identity fields.
 //   - The verified identity is Issuer + Subject (OpenID Connect Core §5.7).
 //     Never link or merge accounts by email, phone number or username:
 //     another subject — or another provider — can assert the same value.

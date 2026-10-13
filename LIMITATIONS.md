@@ -156,6 +156,10 @@ PKCE. Not supported, and refused where a provider could select them:
   body fails `UserInfo` (the conformance suite's
   `oidcc-client-test-userinfo-bearer-body`).
 - **WebFinger** (Discovery §2) — not supported: configure the issuer.
+- **`ExtraParams`** cannot override a parameter of the authorization
+  endpoint's own query (RFC 6749 §3.1: no parameter twice), nor use another
+  spelling — case, `.` for `_` — of a parameter the client sends or does not
+  support.
 - **Client authentication** — `private_key_jwt`, `client_secret_jwt` and
   mTLS; DPoP. `client_secret_basic`, `client_secret_post` and `none` are
   supported.
@@ -163,7 +167,11 @@ PKCE. Not supported, and refused where a provider could select them:
   returned to the application, which redeems them itself), no logout
   (RP-initiated, front- or back-channel), no dynamic client registration.
 - **Claims** — aggregated and distributed claims are left unresolved in
-  `Identity.Claims`.
+  `Identity.Claims`. A lone member named like a known claim but for case
+  (`EMAIL_VERIFIED`) is kept, as OpenID Connect Core §2 requires for claims
+  not understood; only two names differing by case are refused. Decode
+  claims with `DecodeClaims` / `UserInfo.Decode`, not `encoding/json`
+  into a struct, which reads such a member as the known claim.
 - **Provider metadata** — discovery is required: no static metadata. The
   metadata issuer must equal the configured issuer byte for byte, so
   templated multi-tenant issuers (Microsoft Entra `common` /
@@ -190,7 +198,12 @@ PKCE. Not supported, and refused where a provider could select them:
   logins. Removing a transaction key before `TransactionTTL` has elapsed
   fails the logins it protected. `oidc/client/storage/memory` keeps
   transactions in the process: use the SQL or Redis store when several instances serve
-  callbacks. `oidc/client/store/sql` ships `PurgeExpired`, a single
+  callbacks. It is unbounded unless built with `memory.WithCapacity(n)`:
+  login starts are unauthenticated, so size it — about 0.5 KB per pending
+  login plus its `AppState` (up to 4 KiB), kept for `TransactionTTL` — and
+  rate-limit login starts, since a full store refuses every new login
+  (`memory.ErrFull`) until transactions expire or are consumed.
+  `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
   package documentation), and its PostgreSQL and MySQL guarantees are not
   exercised in CI (SQLite only) — the opt-in runs of
@@ -320,6 +333,14 @@ PKCE. Not supported, and refused where a provider could select them:
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
   Log these types directly or through exported fields, with `%v`.
+- **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
+  only: a value nested in another one (a struct field, a map) is encoded
+  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`
+  encode without their secrets, but `oidcclient.Identity` and `Tokens`
+  encode their tokens — deliberately, so that applications can persist them
+  — and `UserInfo` its claims: log these as attributes of their own. Other
+  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
+  every exported field, an `AuthRequest`'s binding secret included.
 - **Credentials and tokens in flight are not redacted yet** — `basic` and
   `bearer` authentications print the password (before authentication) and
   the bearer token they carry, and the `oauth2` records

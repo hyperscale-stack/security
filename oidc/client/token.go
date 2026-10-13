@@ -81,14 +81,14 @@ func (c *Client) exchange(ctx context.Context, code, verifier string) (Tokens, e
 
 	resp, err := c.send.Do(req) //nolint:gosec // G107/G704: endpoint from validated metadata, outbound policy enforced
 	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: %w", ErrTokenEndpoint, err)
+		return Tokens{}, fmt.Errorf("%w: %w", ErrTokenEndpoint, clipped(err)) // a refused redirect names its Location
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: read response: %w", ErrTokenEndpoint, err)
+		return Tokens{}, fmt.Errorf("%w: read response: %w", ErrTokenEndpoint, clipped(err)) // a GOAWAY quotes its debug data
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -96,7 +96,7 @@ func (c *Client) exchange(ctx context.Context, code, verifier string) (Tokens, e
 	}
 
 	if !hasMediaType(resp.Header.Get("Content-Type"), mediaJSON) {
-		return Tokens{}, fmt.Errorf("%w: content type %q", ErrInvalidTokenResponse, resp.Header.Get("Content-Type"))
+		return Tokens{}, fmt.Errorf("%w: content type %s", ErrInvalidTokenResponse, quoted(resp.Header.Get("Content-Type")))
 	}
 
 	return parseTokenResponse(body, c.now())

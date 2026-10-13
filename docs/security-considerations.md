@@ -818,10 +818,17 @@ are attacker-influenced.
   `aud` (further audiences only when trusted), `azp`, `exp`/`iat`/`nbf`
   within a bounded skew, `nonce`, `auth_time` against `max_age`, `acr`
   against the requested `acr_values`, and `at_hash` when present. Every
-  JSON document is decoded strictly: duplicate member names, names that
-  differ only by case, invalid UTF-8 and unpaired surrogates are refused,
-  so an application decoding claims itself never reads another member than
-  the one validated.
+  JSON document is decoded strictly: duplicate member names, two names
+  that differ only by case, invalid UTF-8 and unpaired surrogates are
+  refused, so no decoder can pick between two members. A lone member whose
+  name differs from a known claim only by case (`EMAIL_VERIFIED`) is
+  another claim, which OpenID Connect Core §2 and RFC 7519 §4 require
+  ignoring — yet `encoding/json`, matching struct fields
+  case-insensitively, reads it as `email_verified`. An honest provider
+  releasing attribute names its users choose can emit one. Decode claims with
+  `Identity.DecodeClaims` / `UserInfo.Decode` or into a map, and read the
+  validated values (`Subject`, `Audience`, `AuthTime`, `ACR`, `AMR`) from
+  the `Identity` fields, never again from `Claims`.
 - **Identity** — the verified identity is the issuer and subject pair
   (Core §5.7). Link accounts on (connection or tenant, issuer, subject);
   never on email, phone or username, which another subject or provider can
@@ -830,7 +837,9 @@ are attacker-influenced.
 - **Cookies** — binding cookies are `__Host-` (Secure, Path=/, no Domain:
   a sibling subdomain cannot plant one), HttpOnly, named after the state so
   parallel logins coexist, capped at four per browser, and deleted by the
-  callback. SameSite is Lax for the `query` response mode — the callback
+  callback. The cap counts and expires only names of their shape — the
+  prefix and 16 lowercase hex digits — never the application's own cookies
+  sharing the prefix. SameSite is Lax for the `query` response mode — the callback
   is a top-level GET — and None for `form_post`, whose cross-site POST
   carries no Lax cookie; an opt-in headless-Chrome test checks both.
   `InsecureCookies` drops Secure for local http development only, and is
@@ -839,7 +848,12 @@ are attacker-influenced.
   mode: the cross-site POST is the protocol, the binding cookie its
   defense. Start logins on a user action from the application's own
   origin (a POST behind `http.CrossOriginProtection` or a CSRF token) and
-  rate limit them: each start writes a transaction.
+  rate limit them: each start writes a transaction, and a non-browser
+  client passes the cross-origin protection. `examples/oidc-client` limits
+  each client (an IPv4 address, an IPv6 /64) and each network (an IPv4
+  /24, an IPv6 /48) and bounds its in-memory store (`memory.WithCapacity`);
+  a flood from enough networks still fills the store, which refuses new
+  logins until transactions expire — limit at the edge as well.
 - **Redirect targets** — `AppState` comes back from the store verbatim;
   validate it before using it as a redirect target. After a successful
   callback, create a fresh session and answer 303 to a clean URL, so the
@@ -858,14 +872,22 @@ are attacker-influenced.
   their `Error()` prints the code only. Never render the description or the
   URI. The errors of `New` (discovery) may name the resolved address of an
   allowed destination: when tenants configure issuers, log them and show a
-  generic message.
-- **Tokens** — token and UserInfo requests never follow redirects;
+  generic message. The provider-controlled text an error echoes (an issuer,
+  a media type, a redirect target, a JOSE header member, a query parameter
+  name, the debug data of an HTTP/2 GOAWAY ending a response) is Go-quoted
+  — control characters and invalid UTF-8 escaped — then cut to about 256
+  bytes.
+- **Tokens** — token and UserInfo requests never follow redirects
+  (discovery and JWK Set requests only within the origin requested);
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
   their `sub` is the identity's. Every `fmt` verb and `slog` redact
   secrets (`%p` of a non-pointer value excepted: fmt prints the fields
-  before any method), but `json.Marshal` of an `Identity` serializes its
-  tokens.
+  before any method), and so does `encoding/json` for `Config`,
+  `AuthRequest` and `Callback` — which matters to `slog`'s JSON handler,
+  which encodes a nested value with `encoding/json`. `Identity` and
+  `Tokens` deliberately encode their tokens (applications persist them),
+  `UserInfo` its claims: never log them nested in another value.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:
@@ -920,7 +942,12 @@ network:
   host check in `CheckURL` sees the name actually dialed.
 - **Redirects** are not followed unless `MaxRedirects` allows it; every
   hop is re-checked, and https→http is always refused. Credential-bearing
-  requests (token, UserInfo) never follow redirects.
+  requests (token, UserInfo) never follow redirects. `oidc/client`'s
+  discovery and JWK Set requests and `saml/sp`'s metadata requests, whose
+  answers are trusted because of the origin they come from, never follow
+  a redirect to another origin (scheme, host and port), whatever
+  `MaxRedirects` allows: after such a hop another server would only have
+  to write the expected issuer to get its keys trusted.
 - **Resources** are bounded: one timeout for the whole exchange (10 s by
   default), a size cap on every body (1 MiB by default) counted after
   transparent decompression — a gzip bomb fails — and a 64 KiB header cap.

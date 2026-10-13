@@ -109,7 +109,7 @@ func (c *Client) verifyIDToken(ctx context.Context, raw string) (Algorithm, []by
 			return "", nil, ErrIDTokenAlgorithm
 		}
 
-		return "", nil, fmt.Errorf("%w: %w", ErrIDTokenMalformed, err)
+		return "", nil, fmt.Errorf("%w: %w", ErrIDTokenMalformed, clipped(err)) // go-jose quotes header members
 	}
 
 	header := jws.Signatures[0].Header

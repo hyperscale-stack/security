@@ -6,8 +6,10 @@ package oidcclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -169,4 +171,219 @@ func TestConfigRedactsSecrets(t *testing.T) {
 
 	assert.Equal(t, "oidcclient.Client(nil)", fmt.Sprintf("%v", none))
 	assert.Contains(t, logged(none), "oidcclient.Client(nil)", "a nil *Client prints, and logs, without panicking")
+}
+
+// encodings renders v the ways encoding/json reaches it: directly, as a
+// field of another value, and nested in a value that log/slog's JSON (and
+// text) handler logs — slog calls LogValue for attribute values only, and
+// encodes nested values with encoding/json.
+func encodings(t *testing.T, v any) map[string]string {
+	t.Helper()
+
+	out := map[string]string{}
+
+	direct, err := json.Marshal(v)
+	require.NoError(t, err, "%T encodes", v)
+
+	field, err := json.Marshal(struct{ V any }{v})
+	require.NoError(t, err)
+
+	out["json"], out["json field"] = string(direct), string(field)
+
+	var text, js strings.Builder
+
+	slog.New(slog.NewTextHandler(&text, nil)).Info("value", "wrapper", struct{ V any }{v})
+	slog.New(slog.NewJSONHandler(&js, nil)).Info("value", "wrapper", struct{ V any }{v})
+	out["slog text nested"], out["slog JSON nested"] = text.String(), js.String()
+
+	return out
+}
+
+// assertEncodedRedacted fails for every encoding of v that contains one of
+// the secrets.
+func assertEncodedRedacted(t *testing.T, v any, secrets ...string) {
+	t.Helper()
+
+	for way, encoded := range encodings(t, v) {
+		for _, secret := range secrets {
+			assert.False(t, strings.Contains(encoded, secret), "%T encoded with %s reveals a secret", v, way)
+		}
+	}
+}
+
+// TestLoginSecretsStayOutOfJSON checks that the values holding a login's
+// secrets — the binding secret of an AuthRequest, the binding, code and
+// state of a Callback, the client secret and transaction keys of a Config —
+// encode without them, including nested in a value slog's JSON handler
+// logs, and pins the documents they encode as.
+func TestLoginSecretsStayOutOfJSON(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	c := op.client(t)
+	ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+	cb := callbackFor(ar, code)
+
+	for _, v := range []any{*ar, ar} {
+		assertEncodedRedacted(t, v, ar.Binding)
+
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		assert.JSONEq(t, fmt.Sprintf(`{"URL":%q,"State":%q,"ExpiresAt":%q,"Binding":"REDACTED"}`,
+			ar.URL, ar.State, ar.ExpiresAt.Format(time.RFC3339Nano)), string(b))
+	}
+
+	for _, v := range []any{cb, &cb} {
+		assertEncodedRedacted(t, v, ar.Binding, code, ar.State)
+
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"Mode":"query","URL":"`+testRedirectURL+`","Params":2,"Binding":"REDACTED"}`, string(b))
+	}
+
+	b, err := json.Marshal(oidcclient.Callback{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Mode":"","URL":"","Params":0,"Binding":"REDACTED"}`, string(b), "a callback without URL")
+
+	cfg := op.config()
+	secrets := []string{testClientSecret, string(testTransactionKey), fmt.Sprintf("%x", testTransactionKey)[:16]}
+
+	for _, v := range []any{cfg, &cfg} {
+		assertEncodedRedacted(t, v, secrets...)
+
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		assert.JSONEq(t, fmt.Sprintf(`{"ConnectionID":%q,"Issuer":%q,"ClientID":%q,"ClientSecret":"REDACTED",`+
+			`"AuthMethod":"client_secret_basic","RedirectURL":%q,"ResponseMode":"","TransactionKeys":1}`,
+			testConnection, op.issuer, testClientID, testRedirectURL), string(b))
+	}
+
+	public := op.config(func(c *oidcclient.Config) { c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, "" })
+	b, err = json.Marshal(public)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"ClientSecret":""`, "a public client has no secret to redact")
+
+	assertEncodedRedacted(t, c, secrets...)
+
+	b, err = json.Marshal(c)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, string(b), "a *Client has no exported field")
+}
+
+// TestEmbeddingPromotesTheRedactedEncoding pins what embedding does: the
+// struct is promoted the MarshalJSON of AuthRequest and Callback, so it
+// encodes as the embedded value alone — name the field instead.
+func TestEmbeddingPromotesTheRedactedEncoding(t *testing.T) {
+	t.Parallel()
+
+	ar := oidcclient.AuthRequest{URL: "https://op.example/authorize", State: "s", Binding: "secret-binding"}
+
+	type loginState struct {
+		oidcclient.AuthRequest
+
+		ReturnTo string
+	}
+
+	embedded, err := json.Marshal(loginState{AuthRequest: ar, ReturnTo: "/account"})
+	require.NoError(t, err)
+
+	alone, err := json.Marshal(ar)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(alone), string(embedded), "the embedding struct encodes as the AuthRequest")
+	assert.NotContains(t, string(embedded), "/account")
+
+	type namedField struct {
+		Login    oidcclient.AuthRequest
+		ReturnTo string
+	}
+
+	named, err := json.Marshal(namedField{Login: ar, ReturnTo: "/account"})
+	require.NoError(t, err)
+	assert.Contains(t, string(named), `"ReturnTo":"/account"`)
+	assert.NotContains(t, string(named), "secret-binding")
+
+	// Another type with a MarshalJSON embedded at the same depth makes the
+	// promotion ambiguous: neither method is promoted, and encoding/json
+	// writes the exported fields of both. The secrets stay out all the same.
+	type withStamp struct {
+		oidcclient.AuthRequest
+		stamp
+	}
+
+	flat, err := json.Marshal(withStamp{AuthRequest: ar, stamp: stamp{At: "now"}})
+	require.NoError(t, err)
+	assert.Contains(t, string(flat), `"State":"s"`, "flattened")
+	assert.NotContains(t, string(flat), "secret-binding")
+
+	received, err := url.Parse(testRedirectURL + "?code=code-xyz&state=state-xyz")
+	require.NoError(t, err)
+
+	cb := oidcclient.Callback{
+		Mode: oidcclient.ResponseModeQuery, URL: received, Binding: "callback-binding",
+		Params: url.Values{"code": {"code-xyz"}, "state": {"state-xyz"}},
+	}
+
+	type both struct {
+		oidcclient.AuthRequest
+		oidcclient.Callback
+	}
+
+	flat, err = json.Marshal(both{AuthRequest: ar, Callback: cb})
+	require.NoError(t, err)
+	assert.Contains(t, string(flat), `"Mode":"query"`, "flattened")
+
+	for _, secret := range []string{"secret-binding", "callback-binding", "code-xyz", "state-xyz"} {
+		assert.NotContains(t, string(flat), secret)
+	}
+
+	type callbackWithStamp struct {
+		oidcclient.Callback
+		stamp
+	}
+
+	flat, err = json.Marshal(callbackWithStamp{Callback: cb, stamp: stamp{At: "now"}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Mode":"query","At":"now"}`, string(flat), "the URL, its query included, stays out")
+}
+
+// stamp has a value-receiver MarshalJSON, like many types an application
+// embeds (time.Time has a MarshalText, which wins over both).
+type stamp struct{ At string }
+
+func (s stamp) MarshalJSON() ([]byte, error) { return json.Marshal(s.At) }
+
+// TestIdentityAndTokensStayJSONSerialisable pins the documented exception:
+// an Identity — its Tokens included — encodes and decodes in full, so that
+// an application can persist it (the golang.org/x/oauth2 convention).
+func TestIdentityAndTokensStayJSONSerialisable(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	id, err := op.login(t, op.client(t))
+	require.NoError(t, err)
+
+	b, err := json.Marshal(id)
+	require.NoError(t, err)
+
+	var back oidcclient.Identity
+	require.NoError(t, json.Unmarshal(b, &back))
+	assert.Equal(t, id.Tokens, back.Tokens)
+	assert.Equal(t, id.Subject, back.Subject)
+	assert.JSONEq(t, string(id.Claims), string(back.Claims))
+}
+
+// TestUserInfoIsRedacted checks that UserInfo prints and logs its subject
+// only: its claims are personal data.
+func TestUserInfoIsRedacted(t *testing.T) {
+	t.Parallel()
+
+	ui := oidcclient.UserInfo{
+		Subject: testSubject,
+		Claims:  json.RawMessage(`{"sub":"` + testSubject + `","email":"jane@example.com","phone_number":"+1 555 0100"}`),
+	}
+
+	assertRedacted(t, ui, "jane@example.com", "555 0100")
+	assertRedacted(t, &ui, "jane@example.com", "555 0100")
+	assert.Equal(t, `oidcclient.UserInfo{Subject: "`+testSubject+`"}`, fmt.Sprintf("%v", ui))
+	assert.Contains(t, logged(ui), testSubject, "the user stays recognizable")
 }

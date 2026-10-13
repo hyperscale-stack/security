@@ -26,7 +26,11 @@ import (
 // person has a different Subject for every client.
 //
 // Tokens holds credentials. fmt and log/slog print Identity without them,
-// but json.Marshal(Identity) serializes them.
+// but encoding/json writes them — deliberately, so that an application can
+// persist an Identity (the golang.org/x/oauth2 convention for tokens). An
+// Identity nested in a value that log/slog's JSON handler logs (a struct
+// field, a map) is therefore written in full, tokens and claims included:
+// log it as an attribute of its own, which LogValue redacts.
 type Identity struct {
 	// ConnectionID is the Config.ConnectionID of the Client.
 	ConnectionID string
@@ -45,8 +49,14 @@ type Identity struct {
 	// IssuedAt and ExpiresAt are the iat and exp claims of the ID Token.
 	IssuedAt  time.Time
 	ExpiresAt time.Time
-	// Claims is the verified claims set of the ID Token: one JSON object
-	// without duplicate or case-variant member names at any level.
+	// Claims is the verified claims set of the ID Token: one JSON object in
+	// which no two member names, at any level, are equal or differ only by
+	// case. Decode it with DecodeClaims, or into a map: encoding/json
+	// matches struct fields case-insensitively, so it would read a lone
+	// member such as EMAIL_VERIFIED — another claim, which the provider may
+	// release when it lets users name attributes — as email_verified. Read
+	// the validated values from the fields above (Subject, Audience,
+	// AuthTime, ACR, AMR), never again from Claims.
 	Claims json.RawMessage
 	// Tokens are the tokens the provider issued for the login.
 	Tokens Tokens
@@ -67,7 +77,9 @@ func (id Identity) LogValue() slog.Value {
 }
 
 // DecodeClaims decodes the verified ID Token claims into v, matching
-// member names exactly (OpenID Connect Core §14), as the Client did.
+// member names exactly (OpenID Connect Core §14), as the Client did: use it
+// rather than encoding/json, which would read a member named like a known
+// claim but for case (EMAIL_VERIFIED for email_verified).
 func (id *Identity) DecodeClaims(v any) error {
 	if err := josejson.Unmarshal(id.Claims, v); err != nil {
 		return fmt.Errorf("oidcclient: decode claims: %w", err)
@@ -76,8 +88,10 @@ func (id *Identity) DecodeClaims(v any) error {
 	return nil
 }
 
-// Tokens are the tokens of a login. They are credentials: String, GoString
-// and LogValue redact them, but json.Marshal does not.
+// Tokens are the tokens of a login. They are credentials: String, GoString,
+// Format and LogValue redact them, but encoding/json writes them —
+// deliberately, for persistence — including when log/slog's JSON handler
+// encodes Tokens nested in another value.
 type Tokens struct {
 	// AccessToken authorizes calls to the provider's APIs and UserInfo.
 	AccessToken string
