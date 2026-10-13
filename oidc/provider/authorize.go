@@ -143,9 +143,10 @@ func printableASCII(s string) bool {
 // OpenID request — or under the application's other conditions; dropped —
 // "MUST ignore the offline_access request" — otherwise, and always outside
 // the authorization code flow. The rule applies to plain OAuth 2.0
-// requests too: the provider gives offline_access one meaning. It returns the narrowed scope, "" when nothing changes, or
-// access_denied when nothing would be left: a blank scope keeps the
-// granted one (oauth2.ExtensionGrant).
+// requests too: the provider gives offline_access one meaning. It returns
+// the narrowed scope, "" when nothing changes, or access_denied when
+// nothing would be left: a blank scope keeps the granted one
+// (oauth2.ExtensionGrant).
 func (v *authRequest) offlineScope(granted string, consent OfflineAccessConsent) (string, bool, error) {
 	if !hasScope(granted, ScopeOfflineAccess) {
 		return "", false, nil

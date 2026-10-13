@@ -582,7 +582,7 @@ is, never for the protocol rules:
   one `jwks_uri` serves both (RFC 9068 §4).
 - **Claims and accounts.** Only the claims the request and the end-user
   allow are released, and a `ClaimsSource` cannot override a protocol claim
-  — not even under a case variant (`SUB`, `ſub`, `s.u.b`, `iß`) that a
+  — not even under a case variant (`SUB`, `ſub`, `s.u.b`, `iß`, `ïss`) that a
   relying party matching names case-insensitively (Go's `encoding/json`
   among them) or normalizing them to camelCase would read as `sub` or
   `iss`. Other spellings of known claims

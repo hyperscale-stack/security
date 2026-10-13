@@ -238,12 +238,14 @@ but relying parties often match them case-insensitively: Go's
 names under a key that covers the rules of common relying parties — simple
 case folding (`ſ`, the Kelvin sign), simple upper- and lower-case mappings
 (`İ`, `ı`: Java's `equalsIgnoreCase`), full case mappings (`ß` as `ss`, the
-`ﬁ` ligatures: upper-casing in JavaScript, Java, Python), and ignoring every
-ASCII character but letters, digits and `#`, and Unicode white space
-(`encoding/json/v2` with `case:ignore` ignores `_` and `-`; camelCase key
-normalizers — lodash `camelCase`, `camelcase-keys`, humps — read
-`email.verified` or `email verified` as `emailVerified`) — and never
-releases, nor asks the source for:
+`ﬁ` ligatures: upper-casing in JavaScript, Java, Python), the diacritics
+lodash's `camelCase` strips from Latin letters (`émail` as `email`), and
+ignoring every character but letters, decimal digits and `#` — punctuation,
+white space, invisible characters and marks (`encoding/json/v2` with
+`case:ignore` ignores `_` and `-`; camelCase key normalizers — lodash
+`camelCase`, `camelcase-keys`, humps — read `email.verified`,
+`email verified` or `email‐verified` (U+2010) as `emailVerified`) — and
+never releases, nor asks the source for:
 
 - a case variant of a protocol claim, or of a claim reserved to another
   protocol (`azp`, `jti`, `sid`, `scope`, …);

@@ -136,14 +136,16 @@ matrix. Not supported, and never advertised:
   does not compare it with the other clients' IDs: keep every
   `IssuerResolver` audience apart from all client IDs.
 - **Claim-name aliasing beyond case variants** — the provider compares claim
-  names ignoring case (simple and full case mappings), every ASCII character
-  but letters, digits and `#`, and Unicode white space; a relying party
-  comparing them under compatibility normalization (NFKC: fullwidth `ｓｕｂ`),
-  locale-sensitive collation, or ignoring other invisible characters (a
-  zero-width space) is not covered. An application claim missing from `Config.ClaimsSupported` is
-  released under another spelling when requested alone, and dropped together
-  with such a variant — an end-user can suppress it: declare every claim
-  relying parties decide on.
+  names ignoring case (simple and full case mappings), the diacritics
+  lodash's `camelCase` strips from Latin letters, and every character but
+  letters, decimal digits and `#`; a relying party comparing them under
+  compatibility normalization (NFKC: fullwidth `ｓｕｂ`), stripping other
+  diacritics (`ṡ`, beyond Latin-1 and Latin Extended-A), under
+  locale-sensitive collation, or reading confusable letters (Cyrillic `ѕ`)
+  as Latin ones is not covered. An application claim missing from
+  `Config.ClaimsSupported` is released under another spelling when requested
+  alone, and dropped together with such a variant — an end-user can suppress
+  it: declare every claim relying parties decide on.
 - **Account checks of plain OAuth 2.0 grants** — the `ClaimsSource` stops an
   OpenID grant whose end-user is gone (`ErrUnknownSubject`), but a grant
   without `openid` carries no provider context and is not checked: revoke

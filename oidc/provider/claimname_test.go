@@ -236,9 +236,11 @@ func TestKnownClaimsAreReleasedUnderTheirExactSpellingOnly(t *testing.T) {
 
 // TestSeparatorVariantsAreCaseVariants: relying parties that normalize claim
 // names to camelCase (lodash camelCase, camelcase-keys, humps) split words
-// on any ASCII punctuation or white space, and read "email.verified" or
-// "auth time" as emailVerified or authTime: such spellings of known and
-// protocol claims are dropped like other case variants.
+// on punctuation, white space and invisible characters, and lodash's strips
+// the diacritics of Latin letters: they read "email.verified", "auth time",
+// "email‐verified" (U+2010) or "émail_verified" as emailVerified or
+// authTime. Such spellings of known and protocol claims are dropped like
+// other case variants.
 func TestSeparatorVariantsAreCaseVariants(t *testing.T) {
 	t.Parallel()
 
@@ -248,12 +250,17 @@ func TestSeparatorVariantsAreCaseVariants(t *testing.T) {
 		"email.verified": false, "email verified": false, "Email~Verified": false,
 		"given name": "Victim", "given.name": "Victim", "@given$name!": "Victim",
 		"auth time": 1, "at~hash": "x", "s.u.b": "alice",
+		"email\u2010verified": false, "email\u00b7verified": false, "email\u00adverified": false,
+		"email\u200bverified": false, "email\ufeffverified": false, "auth\u2010time": 1,
+		"\u00e9mail_verified": false, "e\u0301mail_verified": false, "s\u0345ub": "alice",
 	})
 	e.approveAs("eve")
 
 	requested := []string{
 		"email_verified", "given_name", "email.verified", "email verified", "Email~Verified",
 		"given name", "given.name", "@given$name!", "auth time", "at~hash", "s.u.b",
+		"email\u2010verified", "email\u00b7verified", "email\u00adverified", "email\u200bverified",
+		"email\ufeffverified", "auth\u2010time", "\u00e9mail_verified", "e\u0301mail_verified", "s\u0345ub",
 	}
 	resp := e.flow(with(authorizeQuery(), "scope", "openid", "claims", claimsParameter(t, requested, requested)))
 

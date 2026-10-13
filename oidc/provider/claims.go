@@ -48,10 +48,11 @@ const (
 // Claim names are case-sensitive (Core §5.1, RFC 7519 §4), but relying
 // parties often match them case-insensitively — Go's encoding/json reads
 // "SUB" or "ſub" as sub, the last one winning — or normalize them
-// ("email.verified" to emailVerified). Under that comparison (a "case
-// variant": the same name ignoring case — simple and full case mappings —,
-// every ASCII character but letters, digits and "#", and Unicode white
-// space), the provider never releases, and never asks for:
+// ("email.verified" or "émail_verified" to emailVerified). Under that
+// comparison (a "case variant": the same name ignoring case — simple and
+// full case mappings —, the diacritics lodash's camelCase strips from
+// Latin letters, and every character but letters, decimal digits and
+// "#"), the provider never releases, and never asks for:
 //   - a case variant of a protocol claim, or of a claim reserved to another
 //     protocol (azp, jti, sid, scope, …);
 //   - a case variant of a claim it knows — the standard claims of Core

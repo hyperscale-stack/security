@@ -1718,16 +1718,18 @@ and UserInfo response (account takeover). The same held for any claim
 as one duplicated member.
 
 The provider now compares claim names under a key that ignores case (simple
-and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…), every ASCII
-character but letters, digits and `#` (`email.verified`, `auth time` and
-`e_mail` are case variants of `email_verified`, `auth_time` and `email`),
-and Unicode white space, and drops — dropping is never an error (Core
-§5.3.2, §5.5):
+and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…), the diacritics
+lodash's `camelCase` strips from Latin letters (`é`, `æ`…), and every
+character but letters, decimal digits and `#` — punctuation, white space,
+invisible characters and marks (`email.verified`, `auth time`,
+`email‐verified` with U+2010, `émail` and `e_mail` are case variants of
+`email_verified`, `auth_time` and `email`) — and drops — dropping is never
+an error (Core §5.3.2, §5.5):
 
 | Released claim | Before | After |
 | --- | --- | --- |
 | `SUB`, `ſub`, `s_ub`, `Iss`, `iß`, `authtime`, `SUB#fr`… (case variants of protocol claims) | released next to the protocol claims | never asked of the source, never shown to the `Interaction`, never released |
-| `Email`, `e_mail`, `EMAIL#fr`, `Roles`, `roleſ`… (other spellings of standard claims, of `roles`/`groups`/`entitlements`, of `ClaimsSupported`) | released | dropped; `email`, `email#fr`, `roles` are released |
+| `Email`, `e_mail`, `émail`, `EMAIL#fr`, `Roles`, `roleſ`… (other spellings of standard claims, of `roles`/`groups`/`entitlements`, of `ClaimsSupported`) | released | dropped; `email`, `email#fr`, `roles` are released |
 | `team` and `teaM`, `name#fr` and `name#FR` (case variants of one another) | both released | both dropped |
 | a source name with invalid UTF-8, a control character or over 255 bytes (a tagged variant) | released, invalid UTF-8 as U+FFFD | dropped |
 | a value with case-variant, invalid or control-character member names at any depth, an unpaired surrogate escape, a number beyond float64, or nested over 31 levels | released | dropped |

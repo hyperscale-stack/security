@@ -1439,13 +1439,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   matching names case-insensitively — Go's `encoding/json`, so go-oidc, last
   member winning — read the victim's subject from her ID Token and UserInfo
   response (account takeover). Names are now compared ignoring case (simple
-  and full case mappings), every ASCII character but letters, digits and
-  `#`, and Unicode white space: case variants of
-  protocol claims are never asked for nor released, known claims (standard
-  claims, `roles`, `groups`, `entitlements`, `Config.ClaimsSupported`) only
-  under their exact spelling, names that are case variants of one another
-  never, nor invalid names or values whose member names alias at any depth
-  (OIDC Core §2, §5.3.2; RFC 7519 §4). See [MIGRATION.md](MIGRATION.md).
+  and full case mappings), the diacritics lodash's `camelCase` strips from
+  Latin letters, and every character but letters, decimal digits and `#`:
+  case variants of protocol claims are never asked for nor released, known
+  claims (standard claims, `roles`, `groups`, `entitlements`,
+  `Config.ClaimsSupported`) only under their exact spelling, names that are
+  case variants of one another never, nor invalid names or values whose
+  member names alias at any depth (OIDC Core §2, §5.3.2; RFC 7519 §4). See
+  [MIGRATION.md](MIGRATION.md).
 - `oidc/provider` drops `offline_access` from every grant its
   `Decision` does not grant it to — plain OAuth 2.0 requests included,
   which the OIDC Core §11 rules used to skip: an approval meant for

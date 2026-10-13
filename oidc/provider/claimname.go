@@ -21,23 +21,82 @@ var fullCaseExpansions = map[rune]string{
 	'\ufb05': "ST", '\ufb06': "ST", // long s t, s t ligatures
 }
 
+// latinBases are the letters lodash's camelCase reads as ASCII letters —
+// its deburr, over the Latin-1 Supplement and Latin Extended-A blocks
+// (lodash 4.17.21, every letter of both): "émail" is camel-cased to email.
+// Each string lists, in both cases, the letters keyed as its key.
+var latinBases = map[string]string{
+	"A":  "\u00c0\u00c1\u00c2\u00c3\u00c4\u00c5\u00e0\u00e1\u00e2\u00e3\u00e4\u00e5\u0100\u0101\u0102\u0103\u0104\u0105",
+	"AE": "\u00c6\u00e6",
+	"C":  "\u00c7\u00e7\u0106\u0107\u0108\u0109\u010a\u010b\u010c\u010d",
+	"D":  "\u00d0\u00f0\u010e\u010f\u0110\u0111",
+	"E":  "\u00c8\u00c9\u00ca\u00cb\u00e8\u00e9\u00ea\u00eb\u0112\u0113\u0114\u0115\u0116\u0117\u0118\u0119\u011a\u011b",
+	"G":  "\u011c\u011d\u011e\u011f\u0120\u0121\u0122\u0123",
+	"H":  "\u0124\u0125\u0126\u0127",
+	"I":  "\u00cc\u00cd\u00ce\u00cf\u00ec\u00ed\u00ee\u00ef\u0128\u0129\u012a\u012b\u012c\u012d\u012e\u012f\u0130\u0131",
+	"IJ": "\u0132\u0133",
+	"J":  "\u0134\u0135",
+	"K":  "\u0136\u0137\u0138",
+	"L":  "\u0139\u013a\u013b\u013c\u013d\u013e\u013f\u0140\u0141\u0142",
+	"N":  "\u00d1\u00f1\u0143\u0144\u0145\u0146\u0147\u0148\u0149\u014a\u014b",
+	"O":  "\u00d2\u00d3\u00d4\u00d5\u00d6\u00d8\u00f2\u00f3\u00f4\u00f5\u00f6\u00f8\u014c\u014d\u014e\u014f\u0150\u0151",
+	"OE": "\u0152\u0153",
+	"R":  "\u0154\u0155\u0156\u0157\u0158\u0159",
+	"S":  "\u015a\u015b\u015c\u015d\u015e\u015f\u0160\u0161\u017f",
+	"SS": "\u00df",
+	"T":  "\u0162\u0163\u0164\u0165\u0166\u0167",
+	"TH": "\u00de\u00fe",
+	"U":  "\u00d9\u00da\u00db\u00dc\u00f9\u00fa\u00fb\u00fc\u0168\u0169\u016a\u016b\u016c\u016d\u016e\u016f\u0170\u0171\u0172\u0173",
+	"W":  "\u0174\u0175",
+	"Y":  "\u00dd\u00fd\u00ff\u0176\u0177\u0178",
+	"Z":  "\u0179\u017a\u017b\u017c\u017d\u017e",
+}
+
+// keyBases maps the foldRune of every letter of fullCaseExpansions and
+// latinBases to its key.
+var keyBases = newKeyBases()
+
+func newKeyBases() map[rune]string {
+	bases := map[rune]string{}
+
+	for r, base := range fullCaseExpansions {
+		bases[foldRune(r)] = base
+	}
+
+	for base, letters := range latinBases {
+		for _, r := range letters {
+			bases[foldRune(r)] = base
+		}
+	}
+
+	return bases
+}
+
 // claimKey returns the case-insensitive key of a claim name: two names are
 // "case variants" of each other — in this package's documentation — when
-// their keys are equal. The key ignores every ASCII character but letters,
-// digits and "#" (the language-tag delimiter) and Unicode white space,
-// expands the nine code points of fullCaseExpansions and maps every other
-// rune to the smallest rune among the simple case-folding orbits of
-// itself, of its simple uppercase and of its simple lowercase mapping. It
-// therefore equates what relying parties matching names case-insensitively
-// equate: Go's encoding/json (strings.EqualFold, so ſ with s and K with k),
-// encoding/json/v2 with case:ignore (EqualFold, "_" and "-" ignored),
-// camelCase key normalizers — lodash camelCase, camelcase-keys, humps —
-// splitting words on punctuation and white space ("email.verified" read as
-// emailVerified), Java's equalsIgnoreCase and Turkic-locale lowercasing (İ
-// and ı with i), .NET's OrdinalIgnoreCase and Jackson's case-insensitive
-// mode (ASCII case, and K for Jackson), and full-mapping upper-casing (ß
-// with ss). An invalid UTF-8 byte keys as U+FFFD, which encoding/json
-// writes in its place.
+// their keys are equal. The key holds letters and decimal digits, and "#"
+// (the language-tag delimiter): it ignores every other character —
+// punctuation, symbols, white space, controls, invisible format characters
+// and marks — and the letters ª, µ and º, which lodash's camelCase splits
+// words on. It reads the Latin letters of latinBases as their ASCII
+// letters (é as E, æ as AE), expands the nine code points of
+// fullCaseExpansions, and maps every other letter to the smallest rune
+// among the simple case-folding orbits of itself, of its simple uppercase
+// and of its simple lowercase mapping; a rune and its case variants are
+// kept or ignored together (the micro sign with the Greek mu, the iota
+// subscript with the Greek iota). It therefore equates what relying
+// parties matching names case-insensitively equate: Go's encoding/json
+// (strings.EqualFold, so ſ with s and K with k), encoding/json/v2 with
+// case:ignore (EqualFold, "_" and "-" ignored), camelCase key normalizers
+// — lodash camelCase, camelcase-keys, humps — splitting words on
+// punctuation, white space and invisible characters ("email.verified" and
+// "email\u2010verified" read as emailVerified) and, for lodash, stripping
+// the diacritics of Latin letters ("émail" read as email), Java's
+// equalsIgnoreCase and Turkic-locale lowercasing (İ and ı with i), .NET's
+// OrdinalIgnoreCase and Jackson's case-insensitive mode (ASCII case, and K
+// for Jackson), and full-mapping upper-casing (ß with ss). An invalid
+// UTF-8 byte reads as U+FFFD, which encoding/json writes in its place: a
+// symbol, ignored.
 //
 // It is wider than the strings.EqualFold key of the oidc/client and jwt
 // verifiers on purpose: a verifier is safe when its own decoder cannot be
@@ -81,20 +140,32 @@ func unicodeClaimKey(name string) string {
 	key.Grow(len(name))
 
 	for _, r := range name {
-		if r < utf8.RuneSelf && !keyed(r) || unicode.IsSpace(r) {
-			continue
-		}
-
-		if expansion, ok := fullCaseExpansions[r]; ok {
-			key.WriteString(expansion)
+		if r < utf8.RuneSelf {
+			if keyed(r) {
+				key.WriteRune(foldRune(r))
+			}
 
 			continue
 		}
 
-		key.WriteRune(foldRune(r))
+		f := foldRune(r)
+
+		if base, ok := keyBases[f]; ok {
+			key.WriteString(base)
+		} else if lettered(f) {
+			key.WriteRune(f)
+		}
 	}
 
 	return key.String()
+}
+
+// lettered reports whether claimKey keeps a non-ASCII rune whose foldRune
+// is f: a letter or a decimal digit, but the Latin-1 letters ª, µ and º,
+// which lodash's camelCase splits words on. Deciding on f decides alike
+// for every case variant of the rune.
+func lettered(f rune) bool {
+	return (unicode.IsLetter(f) || unicode.IsDigit(f)) && (f < 0x80 || f > 0xbf)
 }
 
 // foldRune returns the smallest rune among the simple case-folding orbits
