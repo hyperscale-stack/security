@@ -1040,6 +1040,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   keep it out of reach of an XSS; `VerifyCSRF` must be called on every
   state-changing request (sign-in included) — guidance added, with the
   2^32-seal limit of a session key.
+- The `basic-http` example answered with a `Bearer` challenge although it
+  accepts Basic credentials only; it now challenges with
+  `Basic realm="basic-http", charset="UTF-8"`. The HTTP servers of the
+  `basic-http`, `bearer-jwt`, `connectrpc-bearer` and `session-web` examples
+  and of the README quick start set read, write and idle timeouts (they had
+  none, or a header timeout only, and slow clients could hold connections
+  open).
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1772,3 +1779,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and a verified `bearer.Authentication` kept its token for the rest of the
   request. They now print, log and encode without secrets, and the bearer
   token is dropped once verified.
+- The `bearer-jwt` example served an unauthenticated `/token` endpoint that
+  minted an access token for anyone who asked, and the `bearer-jwt`,
+  `grpc-bearer` and `connectrpc-bearer` examples printed a bearer token,
+  valid one hour, to their logs. The demos now mint their token in-process,
+  valid 15 minutes, write it to a file only the current user can read, log
+  the file's path and remove the file when they stop.
+- The `session-web` example's sign-in form carried no CSRF token, so another
+  site could sign a victim into the attacker's account (login CSRF), and it
+  verified the password of known users only, so its response time told
+  which accounts exist. The form now carries the token of a session opened
+  for it, cross-origin posts are refused (`http.CrossOriginProtection`) and
+  the credentials go through `basic.Authenticator`.

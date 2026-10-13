@@ -5,9 +5,7 @@
 package main
 
 import (
-	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
@@ -23,82 +21,40 @@ var csrfRE = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
 func TestSessionWebExample(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newServer()
-	require.NoError(t, err)
-
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	jar, err := cookiejar.New(nil)
-	require.NoError(t, err)
-
-	client := srv.Client()
-	client.Jar = jar
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse // inspect redirects instead of following them
-	}
-
-	get := func(t *testing.T, path string) *http.Response {
-		t.Helper()
-
-		resp, err := client.Get(srv.URL + path)
-		require.NoError(t, err)
-
-		return resp
-	}
-
-	postForm := func(t *testing.T, path string, form url.Values) *http.Response {
-		t.Helper()
-
-		resp, err := client.PostForm(srv.URL+path, form)
-		require.NoError(t, err)
-
-		return resp
-	}
+	b := newBrowser(t)
 
 	// 1. The home page redirects to /login when no session cookie is set.
-	resp := get(t, "/")
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
-	assert.Equal(t, "/login", resp.Header.Get("Location"))
-	_ = resp.Body.Close()
+	status, _ := b.do(http.MethodGet, "/", nil, nil)
+	assert.Equal(t, http.StatusSeeOther, status)
 
 	// 2. Wrong password is rejected.
-	resp = postForm(t, "/login", url.Values{"username": {"alice"}, "password": {"wrong"}})
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	_ = resp.Body.Close()
+	token := b.loginToken()
+	assert.Equal(t, http.StatusUnauthorized, b.signIn("alice", "wrong", token, nil))
 
 	// 3. Correct credentials mint a session and redirect home.
-	resp = postForm(t, "/login", url.Values{"username": {"alice"}, "password": {"alice-secret"}})
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
-	assert.Equal(t, "/", resp.Header.Get("Location"))
-	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusSeeOther, b.signIn("alice", "alice-secret", token, nil))
 
 	// 4. The home page now renders the authenticated view.
-	resp = get(t, "/")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Contains(t, string(body), "Welcome alice")
+	status, body := b.do(http.MethodGet, "/", nil, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "Welcome alice")
 
-	match := csrfRE.FindStringSubmatch(string(body))
+	match := csrfRE.FindStringSubmatch(body)
 	require.Len(t, match, 2, "home page must embed a CSRF token")
 	csrf := match[1]
+	assert.NotEqual(t, token, csrf, "signing in minted a fresh session and token")
 
 	// 5. Logout without the CSRF token is forbidden.
-	resp = postForm(t, "/logout", url.Values{"csrf_token": {"forged"}})
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	_ = resp.Body.Close()
+	status, _ = b.do(http.MethodPost, "/logout", url.Values{"csrf_token": {"forged"}}, nil)
+	assert.Equal(t, http.StatusForbidden, status)
 
 	// 6. Logout with the CSRF token clears the session.
-	resp = postForm(t, "/logout", url.Values{"csrf_token": {csrf}})
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
-	_ = resp.Body.Close()
+	status, _ = b.do(http.MethodPost, "/logout", url.Values{"csrf_token": {csrf}}, nil)
+	assert.Equal(t, http.StatusSeeOther, status)
 
 	// 7. The home page redirects to /login again.
-	resp = get(t, "/")
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
-	_ = resp.Body.Close()
+	status, _ = b.do(http.MethodGet, "/", nil, nil)
+	assert.Equal(t, http.StatusSeeOther, status)
 }
 
 func TestSessionWebTamperedCookieIsDropped(t *testing.T) {

@@ -5,11 +5,11 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,22 +21,16 @@ import (
 func TestBearerJWTReadsTheTokenFromTheAuthorizationHeaderOnly(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newServer()
+	handler, mint, err := newServer()
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Post(srv.URL+"/token", "", nil)
+	token, err := mint("resource:read", time.Now())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	var minted struct {
-		AccessToken string `json:"access_token"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&minted))
-
-	bearer := "Bearer " + minted.AccessToken
+	bearer := "Bearer " + token
 
 	inQuery, err := http.NewRequest(http.MethodGet, srv.URL+"/?Authorization="+url.QueryEscape(bearer), nil)
 	require.NoError(t, err)

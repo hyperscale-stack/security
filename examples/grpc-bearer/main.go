@@ -7,16 +7,18 @@
 // It exposes the standard gRPC health service behind two interceptor chains
 // — unary and streaming: one authenticates every RPC against a JWT, the
 // other authorizes it against an OAuth2 scope. The process also mints a
-// demo token at start-up.
+// demo token — valid 15 minutes — at start-up, writes it to a file only the
+// current user can read, logs the file's path (never the token) and removes
+// the file when it stops.
 //
 // Run:
 //
 //	go run ./grpc-bearer
 //
-// The server logs a ready-to-use token. Probe it with grpcurl:
+// Probe it with grpcurl, reading the token from the file the server logged:
 //
 //	grpcurl -plaintext \
-//	    -H "authorization: Bearer <TOKEN>" \
+//	    -H "authorization: Bearer $(cat /path/from/the/log)" \
 //	    localhost:9090 grpc.health.v1.Health/Check
 //
 // Without the token the call fails with codes.Unauthenticated; with a token
@@ -30,7 +32,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -51,6 +56,10 @@ const (
 	clientID = "demo-client"
 	scope    = "health:read"
 )
+
+// tokenLifetime is the lifetime of the demo tokens: short, a leaked one
+// expires soon.
+const tokenLifetime = 15 * time.Minute
 
 // minter signs a demo JWT carrying the requested scope.
 type minter func(scope string) (string, error)
@@ -110,7 +119,7 @@ func newServer() (*grpc.Server, minter, error) {
 			Audience:  audience,
 			ClientID:  clientID,
 			IssuedAt:  now,
-			ExpiresAt: now.Add(time.Hour),
+			ExpiresAt: now.Add(tokenLifetime),
 			Scope:     grant,
 		})
 		if err != nil {
@@ -121,6 +130,29 @@ func newServer() (*grpc.Server, minter, error) {
 	}
 
 	return srv, mint, nil
+}
+
+// writeDemoToken writes token to a new file in dir (the system's temporary
+// directory when dir is "") that only the current user can read, and
+// returns its path: the demo never prints a credential to its logs.
+func writeDemoToken(dir, token string) (string, error) {
+	f, err := os.CreateTemp(dir, "grpc-bearer-*.token") // mode 0600
+	if err != nil {
+		return "", fmt.Errorf("create token file: %w", err)
+	}
+
+	if _, err := f.WriteString(token); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+
+		return "", fmt.Errorf("write token file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close token file: %w", err)
+	}
+
+	return f.Name(), nil
 }
 
 func main() {
@@ -134,16 +166,35 @@ func main() {
 		log.Fatalf("grpc-bearer: %v", err)
 	}
 
+	path, err := writeDemoToken("", token)
+	if err != nil {
+		log.Fatalf("grpc-bearer: %v", err)
+	}
+
+	defer func() { _ = os.Remove(path) }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	addr := ":9090"
 
 	var lc net.ListenConfig
 
-	lis, err := lc.Listen(context.Background(), "tcp", addr) //nolint:gosec // G102: demo server, binding to all interfaces is intentional
+	lis, err := lc.Listen(ctx, "tcp", addr) //nolint:gosec // G102: demo server, binding to all interfaces is intentional
 	if err != nil {
-		log.Fatalf("grpc-bearer: listen: %v", err)
+		log.Printf("grpc-bearer: listen: %v", err)
+
+		return
 	}
 
-	log.Printf("grpc-bearer: listening on %s", addr)
-	log.Printf("grpc-bearer: demo token: %s", token)
-	log.Fatal(srv.Serve(lis))
+	go func() {
+		<-ctx.Done()
+		srv.GracefulStop()
+	}()
+
+	log.Printf("grpc-bearer: listening on %s; demo token (valid %s) in %s", addr, tokenLifetime, path)
+
+	if err := srv.Serve(lis); err != nil {
+		log.Printf("grpc-bearer: %v", err)
+	}
 }

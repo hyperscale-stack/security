@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -54,26 +53,25 @@ func foreignToken(t *testing.T) string {
 // Audit CORE-10 (probe TestZZAuditBearerChallengeErrorCodes): a bad signature
 // or a malformed token got a bare "Bearer" challenge. RFC 6750 §3: the
 // challenge carries a realm; RFC 9068 §4: every failed check of a JWT
-// access token carries error="invalid_token". (The expired-token and
-// wrong-scope rows need the example's signing key: they come with the
-// token-minting hook of a later change.)
+// access token carries error="invalid_token"; §3.1: a valid token without
+// the scope gets error="insufficient_scope".
 func TestBearerJWTChallenges(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newServer()
+	handler, mint, err := newServer()
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Post(srv.URL+"/token", "", nil)
+	valid, err := mint("resource:read", time.Now())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	var minted struct {
-		AccessToken string `json:"access_token"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&minted))
+	expired, err := mint("resource:read", time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+
+	wrongScope, err := mint("other:read", time.Now())
+	require.NoError(t, err)
 
 	cases := []struct {
 		name          string
@@ -84,9 +82,12 @@ func TestBearerJWTChallenges(t *testing.T) {
 		{"no token", nil, http.StatusUnauthorized, []string{bareChallenge}},
 		{"malformed token", []string{"Bearer not-a-jwt"}, http.StatusUnauthorized, []string{invalidTokenChallenge}},
 		{"untrusted signature", []string{"Bearer " + foreignToken(t)}, http.StatusUnauthorized, []string{invalidTokenChallenge}},
-		{"repeated Authorization", []string{"Bearer " + minted.AccessToken, "Bearer not-a-jwt"}, http.StatusBadRequest,
+		{"expired token", []string{"Bearer " + expired}, http.StatusUnauthorized, []string{invalidTokenChallenge}},
+		{"valid token without the scope", []string{"Bearer " + wrongScope}, http.StatusForbidden,
+			[]string{`Bearer realm="api", error="insufficient_scope", error_description="The request requires higher privileges than provided by the access token."`}},
+		{"repeated Authorization", []string{"Bearer " + valid, "Bearer not-a-jwt"}, http.StatusBadRequest,
 			[]string{`Bearer realm="api", error="invalid_request", error_description="The request is malformed."`}},
-		{"valid token", []string{"Bearer " + minted.AccessToken}, http.StatusOK, nil},
+		{"valid token", []string{"Bearer " + valid}, http.StatusOK, nil},
 	}
 
 	for _, c := range cases {

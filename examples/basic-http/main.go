@@ -27,6 +27,9 @@
 // Probe — wrong password -> 401:
 //
 //	curl -i -u alice:nope http://localhost:8080/
+//
+// Every 401 carries the challenge of the scheme the server accepts,
+// `WWW-Authenticate: Basic realm="basic-http", charset="UTF-8"` (RFC 7617).
 package main
 
 import (
@@ -35,6 +38,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
@@ -137,7 +141,26 @@ func newServer() (http.Handler, error) {
 	adm := security.NewAffirmativeDecisionManager(voter.HasRole("ADMIN"))
 	mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(admin))
 
-	return httpsec.Middleware(engine)(mux), nil
+	// The challenge names the scheme the extractors accept: Basic, with the
+	// realm RFC 7617 §2 requires (the default challenge is Bearer).
+	return httpsec.Middleware(engine, httpsec.WithChallengeScheme("Basic"), httpsec.WithRealm(realm))(mux), nil
+}
+
+// realm is the protection space of the demo (RFC 7617 §2).
+const realm = "basic-http"
+
+// newHTTPServer bounds the time a client may take at every stage, so that
+// slow clients cannot hold connections open.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 }
 
 func main() {
@@ -148,5 +171,5 @@ func main() {
 
 	addr := ":8080"
 	log.Printf("basic-http: listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, handler)) //nolint:gosec // demo server, no timeouts needed
+	log.Fatal(newHTTPServer(addr, handler).ListenAndServe())
 }

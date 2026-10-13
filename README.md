@@ -56,7 +56,9 @@ go get github.com/hyperscale-stack/security/http   # and any other module you ne
 package main
 
 import (
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
@@ -79,8 +81,18 @@ func main() {
 		w.Write([]byte("hello " + auth.Name()))
 	})
 
-	// The challenge advertises the scheme the extractors accept (RFC 7617).
-	http.ListenAndServe(":8080", httpsec.Middleware(engine, httpsec.WithChallengeScheme("Basic"))(mux))
+	srv := &http.Server{
+		Addr: ":8080",
+		// The challenge advertises the scheme the extractors accept (RFC 7617).
+		Handler: httpsec.Middleware(engine, httpsec.WithChallengeScheme("Basic"))(mux),
+		// Bound every stage so slow clients cannot hold connections open.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	log.Fatal(srv.ListenAndServe())
 }
 ```
 

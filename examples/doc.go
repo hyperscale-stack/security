@@ -13,10 +13,10 @@
 // Available examples:
 //
 //   - basic-http        — HTTP Basic authentication + role-based authorization.
-//   - bearer-jwt        — JWT issuance and Bearer-token validation, scope gating.
-//   - grpc-bearer       — gRPC unary interceptors authenticating a Bearer JWT.
-//   - connectrpc-bearer — ConnectRPC interceptors authenticating a Bearer JWT.
-//   - session-web       — cookie-session login form with a CSRF-protected logout.
+//   - bearer-jwt        — JWT Bearer-token validation and scope gating, with an in-process demo issuer.
+//   - grpc-bearer       — gRPC unary and stream interceptors authenticating and authorizing a Bearer JWT.
+//   - connectrpc-bearer — ConnectRPC interceptors authenticating and authorizing a Bearer JWT.
+//   - session-web       — cookie-session login with CSRF-protected sign-in and logout forms.
 //   - oauth2            — OAuth2 authorization server + Bearer resource server.
 //   - oidc-client       — OpenID Connect sign-in through external providers.
 //   - oidc-provider     — OpenID Provider with its own login and consent pages.
