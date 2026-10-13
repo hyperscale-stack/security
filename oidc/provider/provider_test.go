@@ -6,6 +6,7 @@ package oidcprovider_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -70,6 +71,28 @@ func TestNewValidatesItsConfiguration(t *testing.T) {
 		{"negative ID Token lifetime", nil, func(c *oidcprovider.Config) { c.IDTokenTTL = -time.Second }},
 		{"empty supported claim", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"name", ""} }},
 		{"supported claim with a control character", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"na\nme"} }},
+		{"supported claim never released: azp", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"azp"} }},
+		{"supported claim never released: _claim_sources", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"_claim_sources"} }},
+		{"supported claim never released: a tagged sub", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"sub#fr"} }},
+		{"supported case variant of sub", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"SUB"} }},
+		{"supported case variant of sub, long s", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"\u017fub"} }},
+		{"supported case variant of iss, sharp s", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"i\u00df"} }},
+		{"supported case variant of auth_time", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"authTime"} }},
+		{"supported case variant of email", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"Email"} }},
+		{"supported case variant of roles", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"ROLES"} }},
+		{"supported case variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant", "Tenant"} }},
+		{"supported delimiter variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant-id"} }},
+		{"supported tagged case variants", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"name#fr", "name#FR"} }},
+		{"supported tagged names of variant bases", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"x#fr", "X#de"} }},
+		{"supported separator variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant.id"} }},
+		{"supported separator variant of email_verified", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"email verified"} }},
+		{"supported Unicode separator variant of email_verified", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"email\u2010verified"}
+		}},
+		{"supported deburred variant of email", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"\u00e9mail"} }},
+		{"supported invisible variants of each other", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"tenant", "ten\u200bant"}
+		}},
 		{"empty acr value", nil, func(c *oidcprovider.Config) { c.ACRValuesSupported = []string{""} }},
 		{"acr value with a space", nil, func(c *oidcprovider.Config) { c.ACRValuesSupported = []string{"loa 1"} }},
 		{"extension already set", func(s *oauth2.ServerConfig) { s.Extension = noopExtension{} }, nil},
@@ -108,6 +131,32 @@ func TestNewRegistersTheProviderAsTheServerExtension(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, op.Server())
 	assert.NotNil(t, op.Server().Config().Extension, "the provider is the server's extension")
+}
+
+// TestNewKeepsItsOwnCopiesOfTheConfiguration: New validates the
+// configuration's slices, then keeps its own copies — a caller changing
+// them afterwards changes nothing the discovery document publishes (and
+// races nothing).
+func TestNewKeepsItsOwnCopiesOfTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	acrs := []string{"urn:example:loa:1"}
+	claims := []string{"tenant"}
+	e := newEnv(t, withConfig(func(c *oidcprovider.Config) { c.ACRValuesSupported, c.ClaimsSupported = acrs, claims }))
+
+	acrs[0], claims[0] = "not visible ascii é \n", "sub"
+
+	rec := serve(e.op.DiscoveryHandler(), get("/.well-known/openid-configuration"))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var doc struct {
+		ACRValues []string `json:"acr_values_supported"`
+		Claims    []string `json:"claims_supported"`
+	}
+
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, []string{"urn:example:loa:1"}, doc.ACRValues)
+	assert.Contains(t, doc.Claims, "tenant")
 }
 
 func TestPaths(t *testing.T) {

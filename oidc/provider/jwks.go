@@ -22,7 +22,9 @@ const metadataMaxAge = "max-age=300"
 // its kid, alg and use "sig". It answers GET and HEAD. A key-source failure
 // or an invalid ring answers a bare 500 — never a partial set — and no
 // private or symmetric key can be published (OIDC Discovery §3): the ring
-// refuses them, and so does the serialization.
+// refuses them, and so does the serialization. Like
+// [Provider.DiscoveryHandler], it does not check the request path: mount it
+// exactly at [Paths].JWKS.
 func (p *Provider) JWKSHandler() http.Handler {
 	return http.HandlerFunc(p.serveJWKS)
 }

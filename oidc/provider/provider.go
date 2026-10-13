@@ -40,7 +40,13 @@ type Config struct {
 	// IDTokenTTL is the ID Token lifetime; zero means [DefaultIDTokenTTL].
 	IDTokenTTL time.Duration
 	// ClaimsSupported lists application claim names Discovery publishes in
-	// claims_supported, after the protocol claims (Discovery §3).
+	// claims_supported, after the protocol claims (Discovery §3). Their
+	// spelling becomes the only one the provider releases: a case variant
+	// of one (see [ClaimsSource]) is never released, so declare every claim
+	// relying parties make decisions on. New refuses an entry that is a
+	// claim the provider never releases (azp, jti, sid, scope, …) or a case
+	// variant of a protocol, standard or other entry's claim; a protocol or
+	// standard claim spelled exactly is accepted, and published once.
 	ClaimsSupported []string
 	// ACRValuesSupported is published as Discovery acr_values_supported —
 	// omitted when empty. The provider enforces nothing about them: an acr
@@ -55,8 +61,9 @@ type Config struct {
 	// such a grant cannot be refreshed. The recommended wiring issues refresh
 	// tokens on consented offline_access only:
 	// grant.Config.RefreshTokenScope = [ScopeOfflineAccess]. The policy
-	// concerns OpenID grants only: a plain OAuth 2.0 request keeps OAuth 2.0
-	// semantics (see [ScopeOfflineAccess]).
+	// concerns OpenID grants only: a plain OAuth 2.0 grant carries no
+	// provider context, and its refresh tokens follow RefreshTokenScope
+	// (see [ScopeOfflineAccess]).
 	AllowRefreshWithoutOfflineAccess bool
 	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
 	// localhost or a loopback IP address — for development only: OpenID
@@ -77,16 +84,57 @@ func (c *Config) validate() error {
 		return errors.New("oidcprovider: New: Config.IDTokenTTL is negative")
 	}
 
-	for _, name := range c.ClaimsSupported {
-		if !validClaimName(name) {
-			return errors.New("oidcprovider: New: Config.ClaimsSupported holds an invalid claim name")
-		}
+	if err := checkClaimsSupported(c.ClaimsSupported); err != nil {
+		return err
 	}
 
 	for _, acr := range c.ACRValuesSupported {
 		if acr == "" || len(acr) > maxConfigValueLength || !visibleASCII(acr) {
 			return errors.New("oidcprovider: New: Config.ACRValuesSupported holds an invalid acr value")
 		}
+	}
+
+	return nil
+}
+
+// Why New refuses Config.ClaimsSupported.
+var (
+	errSupportedInvalid  = errors.New("oidcprovider: New: Config.ClaimsSupported holds an invalid claim name")
+	errSupportedReserved = errors.New("oidcprovider: New: Config.ClaimsSupported holds a claim the provider never releases")
+	errSupportedVariant  = errors.New("oidcprovider: New: Config.ClaimsSupported holds a case variant of another claim")
+)
+
+// checkClaimsSupported refuses, in supported, an invalid claim name, a
+// reserved claim — or a case variant of one — other than a protocol claim
+// spelled exactly, and a case variant of a known claim or of another entry
+// other than its exact spelling, untagged (its untagged name) or tagged.
+func checkClaimsSupported(supported []string) error {
+	known := newClaimNames(nil)
+	entries := map[string]string{}
+
+	for _, name := range supported {
+		base := untagged(name)
+
+		switch {
+		case !validClaimName(name):
+			return errSupportedInvalid
+		case reserved(base) && slices.Contains(protocolClaims, name):
+			continue // published once among the protocol claims
+		case reserved(base):
+			return errSupportedReserved
+		}
+
+		key, fullKey := claimKey(base), claimKey(name)
+
+		if exact, ok := known[key]; ok && exact != base {
+			return errSupportedVariant
+		}
+
+		if exact, ok := entries[fullKey]; ok && exact != name {
+			return errSupportedVariant
+		}
+
+		known[key], entries[fullKey] = base, name
 	}
 
 	return nil
@@ -133,6 +181,8 @@ type Provider struct {
 	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
 	claimsSupported []string
+	// names are the claims the provider knows, by claimKey.
+	names claimNames
 }
 
 // New builds an OpenID Provider on a new oauth2.Server made of server: the
@@ -143,8 +193,13 @@ type Provider struct {
 // authorization_code grant; register refresh_token for refresh tokens and
 // set grant.Config.RefreshTokenScope to [ScopeOfflineAccess] (see
 // [Config.AllowRefreshWithoutOfflineAccess]). The server's clock (Now) and
-// ErrorHook (OnError) are the provider's.
+// ErrorHook (OnError) are the provider's. New keeps its own copies of
+// cfg's slices: changing them afterwards changes nothing.
 func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
+	// Copied before they are validated: what is checked is what is served.
+	cfg.ClaimsSupported = slices.Clone(cfg.ClaimsSupported)
+	cfg.ACRValuesSupported = slices.Clone(cfg.ACRValuesSupported)
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -173,6 +228,7 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	p.server, p.now, p.hook, p.tokens, p.clients = srv, sc.Now, sc.OnError, sc.Storage, sc.ClientStore
 	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
+	p.names = newClaimNames(cfg.ClaimsSupported)
 
 	return p, nil
 }
@@ -188,7 +244,9 @@ func (p *Provider) Server() *oauth2.Server { return p.server }
 // mounts the handlers: exactly the paths of the URLs the discovery document
 // of that issuer advertises (Discovery §3), so that advertised and mounted
 // routes cannot drift apart. Mount them as returned — behind a proxy that
-// rewrites paths, at their public form.
+// rewrites paths, at their public form — and only there: the handlers do
+// not check the request path, and a catch-all mounting would serve an
+// issuer's discovery document or JWK Set at any path (Discovery §4.3).
 type Paths struct {
 	// Discovery is the OpenID Provider Configuration document: the issuer's
 	// path, one terminating "/" removed, followed by

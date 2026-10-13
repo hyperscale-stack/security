@@ -111,8 +111,10 @@ func refuse(oe *oauth2.Error, cause error) error {
 // otherwise, each reported to the ErrorHook. A storage, claims source or
 // issuer failure answers 500 without a challenge (Core §5.3.3).
 //
-// Mount it at [Paths].UserInfo for GET and POST; CORS, when browsers call
-// it, is the application's middleware.
+// Mount it at [Paths].UserInfo for GET and POST. CORS — which UserInfo
+// SHOULD support for browser-based clients (Core §5.3) — is the
+// application's middleware: allow the clients' origins deliberately; the
+// bearer token needs no credentialed requests.
 func (p *Provider) UserInfoHandler() http.Handler {
 	return http.HandlerFunc(p.serveUserInfo)
 }
@@ -185,7 +187,7 @@ func (p *Provider) userInfo(ctx context.Context, issuer, token string) (map[stri
 		return nil, err
 	}
 
-	allowed := releasable(gc.UserInfo, strings.Fields(at.Scope))
+	allowed := p.names.releaseSet(gc.UserInfo, strings.Fields(at.Scope))
 
 	src, err := p.cfg.Claims.Claims(ctx, ClaimsQuery{
 		Issuer: issuer, Subject: at.Subject, ClientID: at.ClientID, Target: ClaimsForUserInfo, Names: queryNames(allowed),
@@ -194,7 +196,11 @@ func (p *Provider) userInfo(ctx context.Context, issuer, token string) (map[stri
 		return nil, sourceFailure(err, func(e error) error { return refuse(errBearerToken, e) })
 	}
 
-	claims := releaseClaims(src, allowed)
+	claims, err := releaseClaims(src, allowed)
+	if err != nil {
+		return nil, err
+	}
+
 	claims[claimSub] = at.Subject
 
 	return claims, nil

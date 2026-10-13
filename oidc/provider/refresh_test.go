@@ -100,11 +100,13 @@ func TestRefreshChecksTheAccountEvenWithoutOpenID(t *testing.T) {
 	}
 }
 
+// TestRefreshOfAPlainOAuth2Grant: a plain OAuth 2.0 grant whose decision
+// grants offline_access refreshes without ID Tokens or account checks.
 func TestRefreshOfAPlainOAuth2Grant(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	e.decide(nil, nil)
+	e.decide(nil, func(d *oidcprovider.Decision) { d.OfflineAccess = oidcprovider.OfflineAccessByPolicy })
 
 	resp := e.flow(with(authorizeQuery(), "scope", "read offline_access", "nonce", ""))
 	require.NotEmpty(t, resp.RefreshToken, "RefreshTokenScope satisfied")

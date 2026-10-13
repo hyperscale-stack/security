@@ -118,14 +118,47 @@ matrix. Not supported, and never advertised:
 - **Freshness to the second** — `prompt=login` and `max_age` are enforced
   at the second of `auth_time`: an authentication earlier in the same
   second as the request passes. An `Interaction` that must re-authenticate
-  shows its login page itself.
+  shows its login page itself. Deliberate: `auth_time` is a NumericDate in
+  whole seconds (OIDC Core §2), and session stores often keep times to the
+  second — a finer check would refuse a login completed within the second
+  its interaction started.
+- **`claims_locales` and language tags** — `claims_locales` reaches the
+  `Interaction` only (OIDC Core §15.1's minimum): the `ClaimsSource` is not
+  told, so matching requested locales (§5.2, a SHOULD) rests on the tagged
+  claims it returns. Language tags are compared exactly — `name#FR` neither
+  releases nor is released by `name#fr` — although §5.2 says to interpret
+  them case-insensitively.
+- **One release list for both targets** — `Decision.Claims` releases a
+  requested claim in the ID Token and at UserInfo alike: an application
+  cannot release a claim to one target only.
+- **Access-token audience** — the provider refuses an access token whose
+  audience is the requesting client's ID (it would be an ID Token's), but
+  does not compare it with the other clients' IDs: keep every
+  `IssuerResolver` audience apart from all client IDs.
+- **Claim-name aliasing beyond case variants** — the provider compares claim
+  names ignoring case (simple and full case mappings), the diacritics
+  lodash's `camelCase` strips from Latin letters, and every character but
+  letters, decimal digits and `#`; a relying party comparing them under
+  compatibility normalization (NFKC: fullwidth `ｓｕｂ`), stripping other
+  diacritics (`ṡ`, beyond Latin-1 and Latin Extended-A), under
+  locale-sensitive collation, or reading confusable letters (Cyrillic `ѕ`)
+  as Latin ones is not covered. An application claim missing from
+  `Config.ClaimsSupported` is released under another spelling when requested
+  alone, and dropped together with such a variant — an end-user can suppress
+  it: declare every claim relying parties decide on.
 - **Account checks of plain OAuth 2.0 grants** — the `ClaimsSource` stops an
   OpenID grant whose end-user is gone (`ErrUnknownSubject`), but a grant
   without `openid` carries no provider context and is not checked: revoke
   the end-user's token families too.
 - **No UI, directory or CORS** — no login or consent pages, tenant
   directory or identity linking (the application's `Interaction`), and no
-  built-in CORS.
+  built-in CORS, which UserInfo SHOULD support for browser-based clients
+  (OIDC Core §5.3): add it as middleware.
+- **Handlers do not check their path** — discovery and the JWK Set answer
+  wherever they are mounted (behind `http.StripPrefix` or a rewriting proxy
+  they cannot see the public path): mount them at their `Paths` only, since
+  relying parties require the issuer to be the URL they fetched the
+  document from (Discovery §4.3).
 - **No certification** — the OpenID Foundation conformance suite's OP
   plans run locally (`make conformance`, results in
   [docs/oidc-conformance.md](docs/oidc-conformance.md)); a local run is no

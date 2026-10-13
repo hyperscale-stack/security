@@ -561,22 +561,36 @@ is, never for the protocol rules:
   `[ReceivedAt − 15 min, ReceivedAt + 5 s]` and ignores it under
   `prompt=none`.
 - **Offline access needs consent** (OIDC Core §11): `offline_access` is
-  dropped unless the end-user consented, and a refresh token issued without
-  that consent fails closed. Wire `grant.Config.RefreshTokenScope =
-  oidcprovider.ScopeOfflineAccess`.
+  dropped from every grant — OpenID or plain OAuth 2.0 — unless the
+  `Decision` grants it (the end-user's consent, or the application's
+  policy), and a refresh token issued to an OpenID grant without that
+  consent fails closed. Wire `grant.Config.RefreshTokenScope =
+  oidcprovider.ScopeOfflineAccess`: only the scope is gated, and a plain
+  OAuth 2.0 grant gets refresh tokens per that setting.
 - **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
-  is the client ID, and an access token whose audience equals a client ID is
-  refused at issuance; JWT access tokens are typed `at+jwt`. Resource
-  servers require that type — `jwtsec.BearerVerifier` refuses a verifier
-  without `WithType(TypeAccessToken)` — so an ID Token is never accepted as
-  an access token.
+  is the client ID, and an access token whose audience equals the requesting
+  client's ID is refused at issuance — another client's ID is not compared,
+  so keep every `IssuerResolver` audience apart from all client IDs; JWT
+  access tokens are typed `at+jwt`. Resource servers require that type —
+  `jwtsec.BearerVerifier` refuses a verifier without
+  `WithType(TypeAccessToken)` — so an ID Token is never accepted as an
+  access token.
 - **Keys.** Key rings are validated on every use (RS256 required, one key
   per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
   bound to algorithms) and fail closed; private and symmetric keys are never
   published. The keys of JWT access tokens belong in `KeyRing.Published`:
   one `jwks_uri` serves both (RFC 9068 §4).
 - **Claims and accounts.** Only the claims the request and the end-user
-  allow are released, and a `ClaimsSource` cannot override a protocol claim.
+  allow are released, and a `ClaimsSource` cannot override a protocol claim
+  — not even under a case variant (`SUB`, `ſub`, `s.u.b`, `iß`, `ïss`) that a
+  relying party matching names case-insensitively (Go's `encoding/json`
+  among them) or normalizing them to camelCase would read as `sub` or
+  `iss`. Other spellings of known claims
+  (`Email`, `Roles`), names that are case variants of one another, invalid
+  names and values whose member names would alias are dropped too; declare
+  every application claim relying parties decide on in
+  `Config.ClaimsSupported`, and keep the claim names end-users choose apart
+  from them (see [oidc-provider.md](oidc-provider.md#claims)).
   `ErrUnknownSubject` stops an OpenID grant at its next exchange; plain
   OAuth 2.0 grants carry no context and are not checked, so disabling an
   end-user must also revoke their token families.
@@ -1103,7 +1117,7 @@ What the protocol leaves open is policy, and stays with the application:
 | Tenants and connections    | issuer equality, a transaction bound to its connection, issuer, client and redirect URI, RFC 9207 `iss`; realms and issuer-bound clients (provider) | which connections exist, routing a login start to one, distinct redirect URIs, which issuers tenants may configure |
 | Identity and accounts      | the (issuer, subject) pair, UserInfo `sub` equality                                                                      | account linking (on connection, issuer, subject), just-in-time provisioning, link flows bound to a session    |
 | Authentication strength    | `max_age`/`auth_time`, `acr` among `acr_values` (client); freshness, essential `acr` (provider)                          | the acr levels required, step-up and MFA, AMR policy, the login pages                                         |
-| Consent                    | released claims, a scope that only narrows, `offline_access` only with `prompt=consent` or the application's policy      | the consent pages and records, the offline-access policy                                                      |
+| Consent                    | released claims, a scope that only narrows, `offline_access` only with the decision's grant — `prompt=consent` for OpenID requests — or the application's policy, for every request | the consent pages and records, the offline-access policy                                                      |
 | Sessions                   | no session of another realm or end-user, no state revealed under `prompt=none`                                           | session lifetime, a fresh session after each login, sign-out (no logout specification is supported)          |
 | Account disabling          | `ErrUnknownSubject` stops every grant at its next use (exchange, refresh, UserInfo)                                     | disabling accounts, revoking their token families for immediate effect                                        |
 | Keys                       | rings validated on every use, public keys only published; the client's bounded JWK Set cache                             | key custody (KMS), the rotation schedule, the response to a leaked key                                       |
@@ -1377,7 +1391,10 @@ span catalog.
       their realm (and tenant), and clients to their issuers
       (`IssuerBoundClient`); CSRF tokens and anti-framing headers on the
       login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
-      for disabled end-users, whose token families you also revoke.
+      for disabled end-users, whose token families you also revoke; every
+      application claim relying parties decide on declared in
+      `Config.ClaimsSupported`, and the claim names end-users choose kept
+      apart from them.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Supply at least two session keys so rotation is possible without
       invalidating live sessions.

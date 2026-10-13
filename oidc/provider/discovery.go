@@ -42,8 +42,12 @@ var protocolClaims = []string{
 // formulas of the oauth2 RFC 8414 document, with which every common member
 // agrees (RFC 9068 §4). The issuer is published verbatim; relying parties
 // require it to equal the URL they fetched the document from (Discovery
-// §4.3). It answers GET and HEAD, a resolver, issuer or key-ring failure
-// with a bare 500.
+// §4.3). The handler does not check the request path — behind
+// http.StripPrefix or a rewriting proxy it cannot see the public one — so
+// that equality rests on the mounting: mount it exactly at [Paths].Discovery
+// (and [Paths].Metadata) of the issuer the IssuerResolver resolves for those
+// requests, never under a catch-all pattern. It answers GET and HEAD, a
+// resolver, issuer or key-ring failure with a bare 500.
 func (p *Provider) DiscoveryHandler() http.Handler {
 	return http.HandlerFunc(p.serveDiscovery)
 }

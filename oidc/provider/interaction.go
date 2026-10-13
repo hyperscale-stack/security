@@ -83,6 +83,10 @@ type Request struct {
 	RedirectURI string
 	// Scopes are the requested scope values.
 	Scopes []string
+	// OfflineAccess reports a requested offline_access scope (Core §11) —
+	// for every request, OpenID or plain OAuth 2.0: the provider keeps it
+	// only when Decision.OfflineAccess grants it.
+	OfflineAccess bool
 	// OpenID reports an OpenID Connect authentication request (scope
 	// openid). The fields below are only set for one.
 	OpenID bool
@@ -94,8 +98,11 @@ type Request struct {
 	// MaxAge is max_age (Core §3.1.2.1), nil when absent: the end-user MUST
 	// have authenticated at most that long before the request.
 	MaxAge *time.Duration
-	// ACRValues are the requested acr_values, by preference: voluntary
-	// (Core §3.1.2.1) — the provider enforces none of them.
+	// ACRValues are the acr values the request prefers, in order: those of
+	// acr_values (Core §3.1.2.1), then those of a voluntary acr claim
+	// request for the ID Token (§5.5.1.1) — once each, at most 32; an
+	// acr_values over 2048 bytes is ignored. Voluntary: the provider
+	// enforces none of them.
 	ACRValues []string
 	// EssentialACR lists the acr values of an essential acr claim request
 	// (Core §5.5.1.1): the authentication MUST satisfy one of them.
@@ -105,17 +112,23 @@ type Request struct {
 	// requested sub claim (Core §3.1.2.2, §5.5.1).
 	Subjects []string
 	// Claims are the individually requested claims (claims parameter, Core
-	// §5.5); release them through Decision.Claims.
+	// §5.5) the provider may release — protocol claims, their case variants
+	// and other spellings of the claims it knows are left out (see
+	// [ClaimsSource]); release them through Decision.Claims. Subjects and
+	// EssentialACR hold what the sub and acr requests require.
 	Claims ClaimsRequest
 	// LoginHint, Display, UILocales and ClaimsLocales are passed through
 	// (Core §3.1.2.1, §5.2, §15.1): use them or ignore them, they never
-	// fail a request.
+	// fail a request. ClaimsLocales reaches the Interaction only — the
+	// ClaimsSource is not told: it returns the language-tagged claims
+	// (Core §5.2) it has, and the provider releases those requested. Oversized or invalid UTF-8 values are ignored: a
+	// login_hint over 1024 bytes, a display over 255 bytes, ui_locales or
+	// claims_locales over 2048 bytes — of which the first 32 values are
+	// kept.
 	LoginHint     string
 	Display       string
 	UILocales     []string
 	ClaimsLocales []string
-	// OfflineAccess reports a requested offline_access scope (Core §11).
-	OfflineAccess bool
 }
 
 // AuthenticationEvent is the end-user authentication a grant rests on: it
@@ -143,23 +156,28 @@ type AuthenticationEvent struct {
 }
 
 // OfflineAccessConsent says why a requested offline_access is granted (Core
-// §11, §17.4); its zero value refuses it.
+// §11, §17.4); its zero value refuses it. It applies to every request the
+// provider serves — offline_access has one meaning at its server — but
+// one that returns no authorization code (the implicit flow), whose
+// offline_access is always ignored (§11).
 type OfflineAccessConsent int
 
 const (
 	// NoOfflineAccess ignores the offline_access request: the scope is
 	// dropped from the grant, and no refresh token enabling offline access
-	// is issued.
+	// is issued — an approval granting nothing else answers access_denied.
 	NoOfflineAccess OfflineAccessConsent = iota
 	// OfflineAccessPrompted grants it after the end-user consented in the
-	// consent dialog the request asked for: valid only when
-	// Request.Prompt.Consent is set (Core §11 "MUST ensure that the prompt
-	// parameter contains consent").
+	// consent dialog — for an OpenID request, the one it asked for: valid
+	// only when Request.Prompt.Consent is set (Core §11 "MUST ensure that
+	// the prompt parameter contains consent"); prompt being no OAuth 2.0
+	// parameter, a plain OAuth 2.0 request needs none.
 	OfflineAccessPrompted
 	// OfflineAccessByPolicy grants it under "other conditions for
 	// processing the request permitting offline access" (Core §11) — the
 	// application's documented policy, e.g. an explicit consent to offline
-	// access recorded earlier for this client.
+	// access recorded earlier for this client, or plain OAuth 2.0 clients
+	// for which offline_access needs no end-user choice.
 	OfflineAccessByPolicy
 )
 
@@ -183,10 +201,13 @@ type Decision struct {
 	// Claims lists the individually requested claims (Request.Claims) the
 	// end-user agreed to release; nil releases none. A name releases the
 	// requested claim of that name and its language-tagged variants
-	// ("name" releases "name#fr"), a tagged name only itself.
+	// ("name" releases "name#fr"), a tagged name only itself. One list
+	// serves both targets: a name releases its ID Token and its UserInfo
+	// requests alike. A name Request.Claims does not hold releases nothing.
 	Claims []string
-	// OfflineAccess grants a requested offline_access scope (see
-	// OfflineAccessConsent).
+	// OfflineAccess grants a requested offline_access scope, for an OpenID
+	// or a plain OAuth 2.0 request alike (see OfflineAccessConsent):
+	// without it, offline_access is dropped from the grant.
 	OfflineAccess OfflineAccessConsent
 	// InteractionStartedAt is, when the login of this request spanned
 	// several HTTP requests, when the application started it — taken from

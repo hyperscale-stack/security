@@ -65,7 +65,7 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 
 	var allowed map[string][]json.RawMessage
 	if openID {
-		allowed = releasable(gc.IDToken, nil)
+		allowed = p.names.releaseSet(gc.IDToken, nil)
 	}
 
 	claims, err := p.cfg.Claims.Claims(ctx, ClaimsQuery{
@@ -82,7 +82,12 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 		return oauth2.TokenResponseExtension{}, nil
 	}
 
-	idToken, err := p.signIDToken(ctx, iss, gc, releaseClaims(claims, allowed))
+	released, err := releaseClaims(claims, allowed)
+	if err != nil {
+		return oauth2.TokenResponseExtension{}, err
+	}
+
+	idToken, err := p.signIDToken(ctx, iss, gc, released)
 	if err != nil {
 		return oauth2.TokenResponseExtension{}, err
 	}
@@ -128,7 +133,9 @@ func (p *Provider) signIDToken(ctx context.Context, iss oauth2.TokenIssuance, gc
 	clientID := iss.Client.ID()
 
 	// RFC 9068 §5, RFC 8725 §3.12: an access token never shares the ID
-	// Token's audience.
+	// Token's audience. Only the requesting client's ID is compared: an
+	// audience naming another client is the configuration's to prevent
+	// (IssuerResolver audiences are never client IDs).
 	if iss.Access.Audience == clientID {
 		return "", errAudienceCollision
 	}

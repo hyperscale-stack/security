@@ -34,6 +34,9 @@ const (
 	// maxListTokens keeps the first values of ui_locales, claims_locales
 	// and acr_values.
 	maxListTokens = 32
+	// maxListLength bounds ui_locales, claims_locales and acr_values, in
+	// bytes: a longer value is ignored.
+	maxListLength = 2048
 	// maxAgeSeconds clamps max_age (2^31-1 seconds, about 68 years).
 	maxAgeSeconds = 1<<31 - 1
 	// maxAgeDigits is the longest max_age parsed as is; longer is clamped.
@@ -79,6 +82,9 @@ type authRequest struct {
 	uiLocales     []string
 	claimsLocales []string
 	offline       bool
+	// codeFlow reports a response type returning an authorization code:
+	// offline_access is ignored otherwise (Core §11).
+	codeFlow bool
 }
 
 // public returns a deep copy of v for the application.
@@ -102,12 +108,14 @@ func (v *authRequest) public() *Request {
 // validateRequest validates the OpenID parameters of an authorization
 // request the core validated (client, redirect URI, response mode and type,
 // scope, PKCE) and returns the provider's view of it. A request without the
-// openid scope is an OAuth 2.0 one: nothing of OpenID Connect is parsed.
+// openid scope is an OAuth 2.0 one: nothing of OpenID Connect is parsed —
+// only whether it requests offline_access.
 func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oauth2.AuthorizeRequest) (*authRequest, error) {
 	scopes := strings.Fields(ar.Scope)
 	view := &authRequest{
 		openID: slices.Contains(scopes, ScopeOpenID), issuer: ar.Issuer, client: ar.Client,
 		redirectURI: ar.RedirectURI, scopes: scopes, receivedAt: p.now(),
+		offline: slices.Contains(scopes, ScopeOfflineAccess), codeFlow: ar.ResponseType == responseTypeCode,
 	}
 
 	if !view.openID {
@@ -139,6 +147,11 @@ func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oau
 		return nil, err
 	}
 
+	// What the Interaction is shown and the grant records: the claim
+	// requests the provider may release. Subjects and EssentialACR were
+	// derived from the exact sub and acr requests.
+	view.claims = p.names.filter(view.claims)
+
 	return view, nil
 }
 
@@ -159,26 +172,22 @@ var providerParameters = []string{
 // the answer ambiguous.
 var unredirectableParameters = []string{paramClientID, paramRedirectURI, paramResponseMode}
 
-// repeated reports whether form carries name more than once (RFC 6749 §3.1:
-// "MUST NOT be included more than once"). An empty value is an omitted one
-// (§3.1), so it is no repetition — except as the first occurrence of a
-// parameter the core reads, which the provider refuses in OpenID requests
-// (the core itself reads the non-empty occurrence).
+// repeated reports whether form carries name more than once with a value
+// (RFC 6749 §3.1: "MUST NOT be included more than once"). An empty
+// occurrence is an omitted one, wherever it stands (§3.1: "Parameters sent
+// without a value MUST be treated as if they were omitted from the
+// request"): the provider reads, as the oauth2 core does, the non-empty
+// occurrence.
 func repeated(form url.Values, name string) bool {
-	values := form[name]
 	nonEmpty := 0
 
-	for _, v := range values {
+	for _, v := range form[name] {
 		if v != "" {
 			nonEmpty++
 		}
 	}
 
-	if nonEmpty > 1 {
-		return true
-	}
-
-	return nonEmpty == 1 && values[0] == "" && slices.Contains(coreParameters, name)
+	return nonEmpty > 1
 }
 
 // value returns the value of name in form — its non-empty occurrence, if
@@ -195,14 +204,13 @@ func value(form url.Values, name string) string {
 
 // checkRedirection refuses, with a bare 400, an OpenID request whose answer
 // could not be redirected safely: a repeated client_id, redirect_uri or
-// response_mode — the core refuses one repeated with values itself, with a
-// bare 400, so only an empty first occurrence is left here (see repeated) —
-// or no redirect_uri — REQUIRED for OpenID requests (Core §3.1.2.1), even
-// when the client registered a single one (RFC 6749 §4.1.2.1, Core
-// §3.1.2.6). It applies to the requests the oauth2 core accepts: the core's
-// own checks — response type, scope, PKCE — run first and redirect their
-// errors to the redirect URI it trusted, the client's sole registered one
-// when the request names none.
+// response_mode — which the core already refuses, with a bare 400, before
+// any extension runs: defense in depth — or no redirect_uri — REQUIRED for
+// OpenID requests (Core §3.1.2.1), even when the client registered a
+// single one (RFC 6749 §4.1.2.1, Core §3.1.2.6). It applies to the
+// requests the oauth2 core accepts: the core's own checks — response type,
+// scope, PKCE — run first and redirect their errors to the redirect URI it
+// trusted, the client's sole registered one when the request names none.
 func checkRedirection(form url.Values) error {
 	for _, name := range unredirectableParameters {
 		if repeated(form, name) {
@@ -280,9 +288,8 @@ func (v *authRequest) parseParameters(form url.Values) error {
 
 	v.prompt, v.maxAge, v.claims = prompt, maxAge, claims
 	v.essentialACR = claims.essentialACR()
-	v.offline = slices.Contains(v.scopes, ScopeOfflineAccess)
 
-	v.acrValues = tokens(value(form, "acr_values"))
+	v.acrValues = preferredACR(tokens(value(form, "acr_values")), claims.voluntaryACR())
 	v.uiLocales = tokens(value(form, "ui_locales"))
 	v.claimsLocales = tokens(value(form, "claims_locales"))
 	v.display = bounded(value(form, "display"), maxPassthroughLength)
@@ -293,14 +300,15 @@ func (v *authRequest) parseParameters(form url.Values) error {
 
 // parsePrompt parses prompt (Core §3.1.2.1): space-delimited,
 // case-sensitive; unknown values are ignored; none with any other value is
-// refused.
+// refused. The whole value is read — bounding it could turn "none … login"
+// into a valid none, or drop a login — without allocating per separator.
 func parsePrompt(raw string) (Prompt, error) {
 	var (
 		prompt Prompt
 		count  int
 	)
 
-	for _, v := range strings.Split(raw, " ") {
+	for v := range strings.SplitSeq(raw, " ") {
 		if v == "" {
 			continue
 		}
@@ -351,17 +359,44 @@ func parseMaxAge(raw string) (*time.Duration, error) {
 	return &maxAge, nil
 }
 
-// tokens splits a space-delimited parameter (Core §14), keeping its first
-// maxListTokens valid UTF-8 values; it never fails.
+// tokens returns the first maxListTokens values of a space-delimited
+// parameter (Core §14) of at most maxListLength bytes of valid UTF-8 — nil
+// for any other value: it never fails, and allocates nothing for the
+// separators.
 func tokens(raw string) []string {
-	if !utf8.ValidString(raw) {
+	if len(raw) > maxListLength || !utf8.ValidString(raw) {
 		return nil
 	}
 
 	var out []string
 
-	for _, v := range strings.Split(raw, " ") {
-		if v != "" && len(out) < maxListTokens {
+	for v := range strings.SplitSeq(raw, " ") {
+		if v == "" {
+			continue
+		}
+
+		out = append(out, v)
+		if len(out) == maxListTokens {
+			break
+		}
+	}
+
+	return out
+}
+
+// preferredACR returns the acr values a request prefers: those of
+// acr_values, then those of a voluntary acr claim request for the ID Token
+// — Core §5.5.1.1 leaves their combination unspecified —, once each, at
+// most maxListTokens.
+func preferredACR(acrValues, claimed []string) []string {
+	var out []string
+
+	for _, v := range append(acrValues, claimed...) {
+		if len(out) == maxListTokens {
+			break
+		}
+
+		if !slices.Contains(out, v) {
 			out = append(out, v)
 		}
 	}

@@ -54,8 +54,8 @@ func TestOpenIDRequestWithoutRedirectURIIsNotRedirected(t *testing.T) {
 // gets a bare 400; any other repeated parameter is a redirected
 // invalid_request (§4.1.2.1) — the core's repetitions refused by the core
 // itself, an unredirectable one with a bare 400 whatever else is repeated.
-// An empty repetition is no duplicate (§3.1: empty = omitted), except as
-// the first occurrence of a core parameter, which the provider refuses.
+// An empty occurrence is no repetition (§3.1: empty = omitted), wherever
+// it stands.
 func TestDuplicatedParameters(t *testing.T) {
 	t.Parallel()
 
@@ -110,29 +110,28 @@ func TestDuplicatedParameters(t *testing.T) {
 		})
 	}
 
-	t.Run("empty first occurrence of a core parameter", func(t *testing.T) {
-		t.Parallel()
+	// RFC 6749 §3.1: "Parameters sent without a value MUST be treated as if
+	// they were omitted from the request" — wherever the empty occurrence
+	// stands: the provider reads what the oauth2 core reads.
+	for _, name := range []string{
+		"client_id", "redirect_uri", "response_mode", "response_type", "scope", "state",
+		"code_challenge", "code_challenge_method", "nonce",
+	} {
+		t.Run("empty occurrence of "+name+" before its value", func(t *testing.T) {
+			t.Parallel()
 
-		e := newEnv(t)
-		q := with(authorizeQuery(), "nonce", "")
-		rec := serve(e.op.AuthorizeHandler(oauth2.AuthorizeConfig{}),
-			get("/oauth2/authorize?nonce=&"+q.Encode()+"&nonce=late"))
+			e := newEnv(t)
+			q := with(authorizeQuery(), "response_mode", "query")
 
-		assert.Equal(t, oauth2.CodeInvalidRequest, redirect(t, rec).Get("error"),
-			"the provider refuses an empty first occurrence of a core parameter")
-	})
+			params := redirect(t, serve(e.op.AuthorizeHandler(oauth2.AuthorizeConfig{}),
+				get("/oauth2/authorize?"+name+"=&"+q.Encode())))
+			require.Empty(t, params.Get("error"), params.Get("error_description"))
+			assert.Equal(t, "st-1", params.Get("state"))
 
-	t.Run("empty first occurrence of redirect_uri", func(t *testing.T) {
-		t.Parallel()
-
-		e := newEnv(t)
-		rec := serve(e.op.AuthorizeHandler(oauth2.AuthorizeConfig{}),
-			get("/oauth2/authorize?redirect_uri=&"+authorizeQuery().Encode()))
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code, "the core accepts it, the provider refuses it unredirected")
-		assert.Empty(t, rec.Header().Get("Location"))
-		assert.True(t, e.sink.contains(oauth2.ErrUnredirectableRequest))
-	})
+			_, claims := e.idToken(tokens(t, e.exchange(params.Get("code"))).IDToken)
+			assert.Equal(t, testNonce, claims["nonce"], "the core and the provider read the same nonce")
+		})
+	}
 }
 
 // TestOpenIDImplicitRefused pins OIDC Core §3: OpenID Connect does not use
@@ -338,6 +337,60 @@ func TestPassthroughParameters(t *testing.T) {
 	assert.Empty(t, req.ClaimsLocales, "invalid UTF-8 is ignored")
 }
 
+// TestOversizedListParametersAreIgnored: ui_locales, claims_locales and
+// acr_values of at most 2048 bytes keep their first 32 values; a longer
+// value is ignored — never refused (Core §3.1.2.1, §15.1) — like an
+// oversized display or login_hint.
+func TestOversizedListParametersAreIgnored(t *testing.T) {
+	t.Parallel()
+
+	atBound := strings.Repeat("fr ", 682) + "fr" // 2048 bytes, 683 values
+	overBound := atBound + " "                   // 2049 bytes
+	require.Len(t, atBound, 2048)
+
+	e := newEnv(t)
+
+	for _, value := range []string{atBound, overBound} {
+		q := with(authorizeQuery(), "ui_locales", value, "claims_locales", value, "acr_values", value)
+		require.NotEmpty(t, redirect(t, e.authorize(q)).Get("code"))
+
+		req := e.lastRequest()
+		if value == atBound {
+			assert.Len(t, req.UILocales, 32)
+			assert.Len(t, req.ClaimsLocales, 32)
+			assert.Equal(t, []string{"fr"}, req.ACRValues, "acr values once each")
+
+			continue
+		}
+
+		assert.Nil(t, req.UILocales, "an oversized ui_locales is ignored")
+		assert.Nil(t, req.ClaimsLocales, "an oversized claims_locales is ignored")
+		assert.Nil(t, req.ACRValues, "an oversized acr_values is ignored")
+	}
+}
+
+// TestPromptIsReadWhole: prompt has no length bound — truncating or
+// ignoring it could turn "none … login" into a valid prompt=none, or skip a
+// required re-authentication — and is read whole, without allocating per
+// separator.
+func TestPromptIsReadWhole(t *testing.T) {
+	t.Parallel()
+
+	spaces := strings.Repeat(" ", 1<<20)
+
+	e := newEnv(t)
+	require.NotEmpty(t, redirect(t, e.authorize(with(authorizeQuery(), "prompt", spaces+"login"))).Get("code"))
+	assert.Equal(t, oidcprovider.Prompt{Login: true}, e.lastRequest().Prompt)
+
+	refused := newEnv(t)
+	params := redirect(t, refused.authorize(with(authorizeQuery(), "prompt", "none"+spaces+"login")))
+	assert.Equal(t, oauth2.CodeInvalidRequest, params.Get("error"), "none with another value, however far")
+
+	interactive, silent := refused.interaction.calls()
+	assert.Empty(t, interactive)
+	assert.Empty(t, silent)
+}
+
 // TestRequestView pins what the interaction learns about an OpenID request.
 func TestRequestView(t *testing.T) {
 	t.Parallel()
@@ -354,6 +407,22 @@ func TestRequestView(t *testing.T) {
 	assert.True(t, req.OfflineAccess)
 	assert.Equal(t, e.clock.Now(), req.ReceivedAt)
 	assert.Nil(t, req.MaxAge)
+}
+
+// TestRequestReportsOfflineAccessForEveryRequest: the interaction learns
+// that offline_access is requested — an OpenID request or a plain OAuth 2.0
+// one — so that it can ask the end-user.
+func TestRequestReportsOfflineAccessForEveryRequest(t *testing.T) {
+	t.Parallel()
+
+	for scope, openID := range map[string]bool{"read offline_access": false, "openid offline_access": true} {
+		e := newEnv(t)
+		require.NotEmpty(t, redirect(t, e.authorize(with(authorizeQuery(), "scope", scope))).Get("code"))
+
+		req := e.lastRequest()
+		assert.Equal(t, openID, req.OpenID, scope)
+		assert.True(t, req.OfflineAccess, scope)
+	}
 }
 
 // TestPlainOAuth2RequestKeepsOAuth2Semantics: without openid the request

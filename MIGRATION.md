@@ -1702,3 +1702,111 @@ held as a `jose.JSONWebKey`, and a private key placed in a `PublicKey`, were
 written in full. Every key that is not an `*rsa.PublicKey`,
 `*ecdsa.PublicKey` or `ed25519.PublicKey` is now redacted
 (`"Key": "<type> REDACTED"`) in JSON, `fmt` and `slog`. Nothing to migrate.
+
+### `oidc/provider`: claim names that differ only by case are never released
+
+Claim names are case-sensitive (OIDC Core §5.1, RFC 7519 §4), and the
+provider compared them byte for byte: an end-user whose `ClaimsSource`
+attributes she names herself (custom profile attributes, attributes passed
+through from an upstream directory) could add to her own authorization
+request a `claims` parameter naming one `"SUB"` or `"ſub"` (U+017F). It was
+released next to the genuine `sub`, and relying parties matching names
+case-insensitively — Go's `encoding/json`, so go-oidc and most Go relying
+parties, last member winning — read the victim's subject from her ID Token
+and UserInfo response (account takeover). The same held for any claim
+(`"Roles"` read as `roles`), and source names with invalid UTF-8 were written
+as one duplicated member.
+
+The provider now compares claim names under a key that ignores case (simple
+and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…), the diacritics
+lodash's `camelCase` strips from Latin letters (`é`, `æ`…), and every
+character but letters, decimal digits and `#` — punctuation, white space,
+invisible characters and marks (`email.verified`, `auth time`,
+`email‐verified` with U+2010, `émail` and `e_mail` are case variants of
+`email_verified`, `auth_time` and `email`) — and drops — dropping is never
+an error (Core §5.3.2, §5.5):
+
+| Released claim | Before | After |
+| --- | --- | --- |
+| `SUB`, `ſub`, `s_ub`, `Iss`, `iß`, `authtime`, `SUB#fr`… (case variants of protocol claims) | released next to the protocol claims | never asked of the source, never shown to the `Interaction`, never released |
+| `Email`, `e_mail`, `émail`, `EMAIL#fr`, `Roles`, `roleſ`… (other spellings of standard claims, of `roles`/`groups`/`entitlements`, of `ClaimsSupported`) | released | dropped; `email`, `email#fr`, `roles` are released |
+| `team` and `teaM`, `name#fr` and `name#FR` (case variants of one another) | both released | both dropped |
+| a source name with invalid UTF-8, a control character or over 255 bytes (a tagged variant) | released, invalid UTF-8 as U+FFFD | dropped |
+| a value with case-variant, invalid or control-character member names at any depth, an unpaired surrogate escape, a number beyond float64, or nested over 31 levels | released | dropped |
+| a `claims` request for a name never released | shown in `Request.Claims`, recorded with the grant | left out of both (`Subjects`, `EssentialACR` unchanged; the values of a voluntary `acr` request join `Request.ACRValues`, which holds each value once) |
+| `Config.ClaimsSupported` with `azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`, `c_hash`, `s_hash`, `_claim_names`, `_claim_sources`, a case variant of a protocol or standard claim (`SUB`, `Email`) or of another entry (`tenant`, `Tenant`) | accepted (published, never emitted) | `New` fails |
+| `Config.ClaimsSupported` with a protocol or standard claim spelled exactly (`sub`, `email`) | published | unchanged (published once) |
+
+To migrate:
+
+1. Remove from `Config.ClaimsSupported` the claims the provider never
+   releases (`azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`,
+   `c_hash`, `s_hash`, `_claim_names`, `_claim_sources`) and every case
+   variant of a protocol, standard or other entry's claim.
+2. Declare there every application claim relying parties make decisions on:
+   its spelling becomes the only one released. An undeclared claim is still
+   released under another spelling when requested alone, and dropped when
+   requested together with such a variant.
+3. A `ClaimsSource` exposing attribute names end-users choose keeps them
+   apart from the names relying parties consume — a collision-resistant
+   prefix (Core §5.1.2), or out of the release set — and treats
+   `ClaimsQuery.Names` as untrusted input in directory or database lookups.
+4. Relying parties key accounts on (`iss`, `sub`) only (Core §5.7), and
+   decode tokens strictly (`oidc/client` refuses case-variant member names).
+
+### `oidc/provider`: `offline_access` needs the decision's grant on every request
+
+OIDC Core §11 binds OpenID requests only, and the provider applied it to them
+only: a plain OAuth 2.0 request (no `openid`) for `offline_access` kept it as
+the `Interaction` approved it, and `Request.OfflineAccess` was never set for
+one — an application had to parse `Request.Scopes` to even notice. With
+`grant.Config.RefreshTokenScope = offline_access`, an approval meant for
+something else (a consent remembered per client, a page that never offered
+the choice) handed out a refresh token: `examples/oidc-provider` did, even
+right after the end-user had declined offline access. `offline_access` now
+has one meaning at the provider's server:
+
+| Request served by `Provider.AuthorizeHandler` | Before | After |
+| --- | --- | --- |
+| plain OAuth 2.0, `offline_access` requested | `Request.OfflineAccess` false | true |
+| plain OAuth 2.0, `Decision.OfflineAccess` unset | `offline_access` granted | dropped from the grant (no refresh token with `RefreshTokenScope = offline_access`) |
+| plain OAuth 2.0, only `offline_access` requested, `Decision.OfflineAccess` unset | code issued | `access_denied`, nothing issued |
+| plain OAuth 2.0, `OfflineAccessPrompted` or `OfflineAccessByPolicy` | granted | granted (`prompt=consent` is not required: no OAuth 2.0 parameter) |
+| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) |
+| OpenID request | §11 rules | unchanged |
+| plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged |
+
+Only the scope is gated: a plain OAuth 2.0 grant carries no provider context,
+so its refresh tokens still follow `grant.Config.RefreshTokenScope` alone.
+
+To migrate:
+
+1. In the `Interaction`, ask the end-user about offline access whenever
+   `Request.OfflineAccess` is set — for an OpenID request only with
+   `prompt=consent` (Core §11) — and set `Decision.OfflineAccess =
+   OfflineAccessPrompted` when she grants it. Never grant it from a
+   remembered consent: "a previously saved user consent is not always
+   sufficient to grant offline access" (§11).
+2. To keep the former behaviour for plain OAuth 2.0 clients whose refresh
+   tokens need no end-user choice, set `Decision.OfflineAccess =
+   OfflineAccessByPolicy` for them, as a documented policy.
+3. An `Interaction` that read `Request.OfflineAccess` as "an OpenID request
+   with offline_access" also checks `Request.OpenID`.
+
+### `oidc/provider`: list parameters over 2048 bytes are ignored
+
+`ui_locales`, `claims_locales`, `acr_values` and `prompt` were split before
+the 32-value cap applied, one allocation per space: an unauthenticated
+authorization request of a few megabytes in one of them made the provider
+allocate about 20 times its body. They are now parsed without allocating per
+separator, and the three hint lists are bounded:
+
+| Parameter | Before | After |
+| --- | --- | --- |
+| `ui_locales`, `claims_locales`, `acr_values` over 2048 bytes | first 32 values kept | ignored, like an oversized `display` or `login_hint` |
+| `acr_values` repeating a value | repeated in `Request.ACRValues` | once (with the values of a voluntary `acr` claim request after it) |
+| `prompt`, however long | read whole | read whole (truncating it could turn `none … login` into `none`) |
+
+To migrate: nothing for clients sending ordinary values. A client sending
+more than 2048 bytes in one of these hints sends fewer: they never fail a
+request (OIDC Core §3.1.2.1, §15.1).

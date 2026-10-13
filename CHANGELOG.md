@@ -752,6 +752,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrOriginMismatch`, `Connection.ResponseOrigins`,
   `MinTransactionKeySize`, `MaxTransactionKeys`, the span attribute
   `samlsp.transaction_consumed`. See [MIGRATION.md](MIGRATION.md).
+- **`oidcprovider.Config.ClaimsSupported` is validated against the release
+  rules** (breaking): `New` refuses the claims the provider never releases
+  (`azp`, `jti`, `sid`, `nbf`, `cnf`, `scope`, `client_id`, `typ`, `c_hash`,
+  `s_hash`, `_claim_names`, `_claim_sources`) and case variants of a
+  protocol, standard or other entry's claim; its names become the only
+  spelling released. `Request.Claims` only holds the claim requests the
+  provider may release, and a grant records only those; the values of a
+  voluntary `acr` request join `Request.ACRValues`, which now holds each
+  value once. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -901,6 +910,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - Unicode format and line/paragraph separator characters (bidirectional
   overrides, zero-width characters) are stripped from a SAML
   `StatusError.Message`.
+- `oidcprovider.New` keeps its own copies of `Config.ACRValuesSupported`
+  and `Config.ClaimsSupported`, taken before they are validated. It used to
+  keep the caller's `ACRValuesSupported` slice: a later write by the caller
+  reached the discovery document's `acr_values_supported` unvalidated, and
+  raced its handler.
+- `oidc/provider` treats an empty occurrence of a request parameter as
+  omitted wherever it stands, as the oauth2 core does (RFC 6749 §3.1:
+  "Parameters sent without a value MUST be treated as if they were omitted
+  from the request"). An OpenID request carrying `nonce=&nonce=n-1` — an
+  empty first occurrence of any parameter the core reads — was refused, with
+  `invalid_request` or, for `client_id`, `redirect_uri` and
+  `response_mode`, a bare `400`; it is now served like `nonce=n-1`. Two
+  occurrences with a value are still refused.
 
 ### Removed
 
@@ -1401,3 +1423,55 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   HMAC secret held as a `jose.JSONWebKey` and private keys carried by
   mistake; the remote JWKS provider and its errors printed the URL with its
   user name and query.
+- `oidc/provider` parses `prompt`, `ui_locales`, `claims_locales` and
+  `acr_values` without allocating per separator: splitting them first made
+  an unauthenticated authorization request allocate about 20 times its
+  body (16 bytes per space, before the 32-value cap). `prompt` is still
+  read whole — bounding it could turn `none … login` into a valid `none` —
+  while `ui_locales`, `claims_locales` and `acr_values` over 2048 bytes are
+  now ignored, like an oversized `display` or `login_hint`; they never fail
+  a request (OIDC Core §3.1.2.1, §15.1).
+- `oidc/provider` no longer releases claim names that relying parties read
+  as other claims. Its protocol-claim protection compared names byte for
+  byte: an end-user whose attribute names she chooses could request, in her
+  own authorization request, an attribute named `"ſub"` (U+017F) or
+  `"SUB"`; it was released next to the genuine `sub`, and relying parties
+  matching names case-insensitively — Go's `encoding/json`, so go-oidc, last
+  member winning — read the victim's subject from her ID Token and UserInfo
+  response (account takeover). Names are now compared ignoring case (simple
+  and full case mappings), the diacritics lodash's `camelCase` strips from
+  Latin letters, and every character but letters, decimal digits and `#`:
+  case variants of protocol claims are never asked for nor released, known
+  claims (standard claims, `roles`, `groups`, `entitlements`,
+  `Config.ClaimsSupported`) only under their exact spelling, names that are
+  case variants of one another never, nor invalid names or values whose
+  member names alias at any depth (OIDC Core §2, §5.3.2; RFC 7519 §4). See
+  [MIGRATION.md](MIGRATION.md).
+- `oidc/provider` drops `offline_access` from every grant its
+  `Decision` does not grant it to — plain OAuth 2.0 requests included,
+  which the OIDC Core §11 rules used to skip: an approval meant for
+  something else (a consent remembered per client, a page that never
+  offered the choice) handed out a refresh token with
+  `RefreshTokenScope = offline_access`, even right after the end-user
+  declined offline access. `Request.OfflineAccess` is now set for every
+  request; `OfflineAccessPrompted` needs no `prompt=consent` for a plain
+  request, `OfflineAccessByPolicy` keeps the former behaviour, an implicit
+  request never keeps it (Core §11), and an approval left without any
+  scope answers `access_denied` (breaking, see
+  [MIGRATION.md](MIGRATION.md)).
+- `examples/oidc-provider` grants offline access only on the end-user's
+  explicit choice — the consent page offers it to every request that can
+  get it, plain OAuth 2.0 ones included, and never from a remembered
+  consent — and remembers a consent for the scopes and claims the end-user
+  saw: a consent given once to a client silently approved any later
+  request of that client, new claims included. A consent answer applies to
+  the very request its page showed — no longer to another one sharing its
+  `client_id`, `state`, `nonce` and `code_challenge` — and to the end-user
+  who gave it: another end-user signing in in the same browser before the
+  request resumes is asked again.
+- `examples/oidc-provider` bounds the logins in progress it remembers (at
+  most 10,000; unused for 15 minutes, they expire and are purged): every
+  authorization request of a browser without a session used to leave an
+  entry for the life of the process. It compares the password of an
+  unknown username with a dummy hash — the response time told whether an
+  account existed — and its HTTP server sets read, write and idle timeouts.

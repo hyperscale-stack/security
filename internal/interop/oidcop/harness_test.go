@@ -134,6 +134,7 @@ type op struct {
 	issuer string
 	keys   *issuerKeys
 	login  *autoLogin
+	claims oidcprovider.ClaimsSource
 	offset atomic.Int64
 }
 
@@ -145,6 +146,11 @@ func (o *op) advance(d time.Duration) { o.offset.Add(int64(d)) }
 
 // opOption changes the provider newOP builds.
 type opOption func(t *testing.T, o *op, gcfg *grant.Config)
+
+// withClaimsSource makes source the provider's ClaimsSource.
+func withClaimsSource(source oidcprovider.ClaimsSource) opOption {
+	return func(_ *testing.T, o *op, _ *grant.Config) { o.claims = source }
+}
 
 // withJWTAccessTokens issues RFC 9068 JWT access tokens, signed by a key
 // the root issuer publishes in its JWK Set.
@@ -176,7 +182,7 @@ func newOP(t *testing.T, opts ...opOption) *op {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	o := &op{srv: srv, issuer: srv.URL, keys: &issuerKeys{rings: map[string]oidcprovider.KeyRing{}}}
+	o := &op{srv: srv, issuer: srv.URL, keys: &issuerKeys{rings: map[string]oidcprovider.KeyRing{}}, claims: claimsOf{}}
 	o.login = &autoLogin{now: o.now, authTime: o.now()}
 	o.keys.set(o.issuer, oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{signingKey(0, "root-1")}})
 	o.keys.set(o.issuer+tenantA, oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{signingKey(2, "tenant-a")}})
@@ -203,7 +209,7 @@ func newOP(t *testing.T, opts ...opOption) *op {
 		Now:            o.now,
 		ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic(), clientauth.NewPost(), clientauth.NewNone()},
 		Grants:         []oauth2.Grant{grant.NewAuthorizationCode(gcfg), grant.NewRefreshToken(gcfg)},
-	}, oidcprovider.Config{Keys: o.keys, Claims: claimsOf{}, Interaction: o.login})
+	}, oidcprovider.Config{Keys: o.keys, Claims: o.claims, Interaction: o.login})
 	require.NoError(t, err)
 
 	for _, issuer := range []string{o.issuer, o.issuer + tenantA, o.issuer + tenantB} {

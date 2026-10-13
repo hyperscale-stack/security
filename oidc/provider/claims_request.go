@@ -202,7 +202,7 @@ func parseClaimsMember(doc json.RawMessage) ([]ClaimRequest, error) {
 func parseClaimRequest(name string, doc json.RawMessage) (ClaimRequest, error) {
 	c := ClaimRequest{Name: name}
 
-	if string(doc) == "null" {
+	if string(doc) == jsonNull {
 		return c, nil
 	}
 
@@ -297,6 +297,20 @@ func (r ClaimsRequest) essentialACR() []string {
 
 	for _, c := range r.IDToken {
 		if c.Name == claimACR && c.Essential {
+			out = append(out, stringValues(c.Values)...)
+		}
+	}
+
+	return out
+}
+
+// voluntaryACR returns the values of a voluntary acr request for the ID
+// Token (Core §5.5.1.1) — from value and values.
+func (r ClaimsRequest) voluntaryACR() []string {
+	var out []string
+
+	for _, c := range r.IDToken {
+		if c.Name == claimACR && !c.Essential {
 			out = append(out, stringValues(c.Values)...)
 		}
 	}
