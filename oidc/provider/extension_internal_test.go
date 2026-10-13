@@ -37,10 +37,10 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 
 // TestProtocolGuardsBehindTheCore: the provider re-checks the response type
 // and the nonce of an OpenID request although the core refuses such requests
-// first — the provider serves no implicit flow (its AuthorizeHandler refuses
-// AllowImplicit, and a handler built from Server() is not mounted for OpenID
-// requests), and the core bounds the nonce of every request — so only a
-// direct call reaches these guards.
+// first — no OpenID request gets another response type through (its
+// AuthorizeHandler refuses AllowImplicit, and a handler built from Server()
+// is not mounted for OpenID requests), and the core bounds the nonce of every
+// request — so only a direct call reaches these guards.
 func TestProtocolGuardsBehindTheCore(t *testing.T) {
 	t.Parallel()
 
@@ -61,8 +61,10 @@ func TestProtocolGuardsBehindTheCore(t *testing.T) {
 
 // TestOfflineAccessNeedsTheCodeFlow pins OpenID Connect Core §11: the
 // provider ignores offline_access outside the authorization code flow,
-// whatever the decision. It serves no implicit flow — the core refuses any
-// other response type first — so only a direct call reaches the rule.
+// whatever the decision. Its AuthorizeHandler serves no implicit flow — the
+// core refuses any other response type first — and a request approved by
+// another ConsentFunc gets no provider rule, so only a direct call reaches
+// it.
 func TestOfflineAccessNeedsTheCodeFlow(t *testing.T) {
 	t.Parallel()
 

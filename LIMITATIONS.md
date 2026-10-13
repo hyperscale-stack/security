@@ -112,7 +112,11 @@ matrix. Not supported, and never advertised:
   (`unsupported_response_type`, for plain OAuth 2.0 requests too:
   `Provider.AuthorizeHandler` refuses `AuthorizeConfig.AllowImplicit`),
   `form_post`, `fragment` and JARM response modes (refused by the core with
-  a bare 400).
+  a bare 400). Nothing refuses `AllowImplicit` on a handler built from
+  `Provider.Server()`: never enable it there — the server would serve the
+  implicit flow to plain OAuth 2.0 requests and advertise it in its RFC 8414
+  metadata, which the discovery document would then contradict (RFC 9068
+  §4).
 - **Request objects and registration** — `request` and `request_uri` are
   refused (`request_not_supported`, `request_uri_not_supported`), and so is
   the `registration` parameter; clients are static (`oauth2.ClientStore`),

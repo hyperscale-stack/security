@@ -135,10 +135,10 @@ func TestDuplicatedParameters(t *testing.T) {
 }
 
 // TestOpenIDImplicitRefused pins OIDC Core §3 — OpenID Connect does not use
-// response_type=token, which returns no ID Token — and UD-1: the provider
-// serves no implicit flow at all (TestAuthorizeHandlerServesNoImplicitFlow),
-// so a plain OAuth 2.0 response_type=token is unsupported too, even under
-// Profile20.
+// response_type=token, which returns no ID Token — and UD-1: the provider's
+// AuthorizeHandler serves no implicit flow at all
+// (TestAuthorizeHandlerServesNoImplicitFlow), so a plain OAuth 2.0
+// response_type=token is unsupported too, even under Profile20.
 func TestOpenIDImplicitRefused(t *testing.T) {
 	t.Parallel()
 
