@@ -43,6 +43,7 @@ import (
 	"github.com/hyperscale-stack/security/bearer"
 	httpsec "github.com/hyperscale-stack/security/http"
 	jwtsec "github.com/hyperscale-stack/security/jwt"
+	oauth2token "github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/hyperscale-stack/security/voter"
 )
 
@@ -50,6 +51,7 @@ const (
 	issuer   = "https://issuer.example"
 	audience = "https://api.example"
 	keyID    = "demo-key"
+	clientID = "demo-client"
 )
 
 // newServer builds the demo handler. The signer mints tokens, the verifier
@@ -61,11 +63,14 @@ func newServer() (http.Handler, error) {
 		return nil, fmt.Errorf("generate key: %w", err)
 	}
 
-	signer := jwtsec.NewSigner(jwtsec.PrivateKey{
+	signer, err := jwtsec.NewOAuth2AccessTokenSigner(jwtsec.PrivateKey{
 		KeyID:     keyID,
 		Algorithm: jwtsec.EdDSA,
 		Key:       priv,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("signer: %w", err)
+	}
 
 	jwks := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{{
 		KeyID:     keyID,
@@ -76,6 +81,7 @@ func newServer() (http.Handler, error) {
 	verifier := jwtsec.NewVerifier(jwks,
 		jwtsec.WithIssuer(issuer),
 		jwtsec.WithAudience(audience),
+		jwtsec.WithType(jwtsec.TypeAccessToken), // RFC 9068 §4: refuse ID Tokens
 	)
 
 	engine := security.NewEngine(
@@ -90,12 +96,13 @@ func newServer() (http.Handler, error) {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 
-		token, err := signer.Sign(r.Context(), &jwtsec.StandardClaims{
+		token, err := signer.SignAccessToken(r.Context(), oauth2token.AccessTokenClaims{
 			Issuer:    issuer,
 			Subject:   "demo-user",
-			Audience:  jwtsec.Audience{audience},
-			IssuedAt:  jwtsec.NewNumericDate(now),
-			ExpiresAt: jwtsec.NewNumericDate(now.Add(time.Hour)),
+			Audience:  audience,
+			ClientID:  clientID,
+			IssuedAt:  now,
+			ExpiresAt: now.Add(time.Hour),
 			Scope:     "resource:read",
 		})
 		if err != nil {

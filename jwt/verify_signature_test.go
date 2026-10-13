@@ -28,7 +28,7 @@ func TestVerifySignatureReturnsTheVerifiedToken(t *testing.T) {
 
 	// Expired long ago: VerifySignature checks no claim, exp included.
 	claims := jwtsec.StandardClaims{Subject: "alice", ExpiresAt: jwtsec.NewNumericDate(time.Unix(1000, 0))}
-	jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), claims)
+	jws, err := mustSigner(t, priv).Sign(context.Background(), claims)
 	require.NoError(t, err)
 
 	got, err := jwtsec.VerifySignature(context.Background(), jws, []jwtsec.PublicKey{pub})
@@ -56,7 +56,7 @@ func TestVerifySignatureSelectsTheKeyByKid(t *testing.T) {
 	keys := []jwtsec.PublicKey{pub1, pub2}
 
 	for _, priv := range []jwtsec.PrivateKey{priv1, priv2} {
-		jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+		jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 		require.NoError(t, err)
 
 		got, err := jwtsec.VerifySignature(context.Background(), jws, keys)
@@ -73,7 +73,7 @@ func TestVerifySignatureRefusals(t *testing.T) {
 	other, _ := genECDSA(t) // same kid "ec-1", another key
 
 	signed := func(priv jwtsec.PrivateKey) string {
-		jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+		jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 		require.NoError(t, err)
 
 		return jws
@@ -100,9 +100,9 @@ func TestVerifySignatureRefusals(t *testing.T) {
 		{"no kid among several keys", signed(noKid), []jwtsec.PublicKey{ecPub, rsaPub}, nil, jwtsec.ErrInvalidSignature},
 		{"key bound to another algorithm", signed(ps256), []jwtsec.PublicKey{rsaPub}, nil, jwtsec.ErrInvalidSignature},
 		{"key without algorithm", signed(ecPriv), []jwtsec.PublicKey{pubNoAlg}, nil, jwtsec.ErrInvalidSignature},
-		{"algorithm not allowed", signed(rsaPriv), []jwtsec.PublicKey{rsaPub}, []jwtsec.Algorithm{jwtsec.ES256}, jwtsec.ErrMalformedToken},
-		{"alg none", unsignedToken(t), []jwtsec.PublicKey{ecPub}, nil, jwtsec.ErrMalformedToken},
-		{"HS256 forged with the RSA public key", hmacWithRSAPublicKey(t, rsaPub), []jwtsec.PublicKey{rsaPub}, nil, jwtsec.ErrMalformedToken},
+		{"algorithm not allowed", signed(rsaPriv), []jwtsec.PublicKey{rsaPub}, []jwtsec.Algorithm{jwtsec.ES256}, jwtsec.ErrAlgorithmNotAllowed},
+		{"alg none", unsignedToken(t), []jwtsec.PublicKey{ecPub}, nil, jwtsec.ErrAlgorithmNotAllowed},
+		{"HS256 forged with the RSA public key", hmacWithRSAPublicKey(t, rsaPub), []jwtsec.PublicKey{rsaPub}, nil, jwtsec.ErrAlgorithmNotAllowed},
 		{"tampered payload", tamper(signed(ecPriv)), []jwtsec.PublicKey{ecPub}, nil, jwtsec.ErrInvalidSignature},
 		{"JSON serialization", jsonSerialization(t, ecPriv), []jwtsec.PublicKey{ecPub}, nil, jwtsec.ErrMalformedToken},
 		{"garbage", "not.a.jws", []jwtsec.PublicKey{ecPub}, nil, jwtsec.ErrMalformedToken},
@@ -126,7 +126,7 @@ func TestVerifySignatureAcceptsANoKidTokenWithOneKey(t *testing.T) {
 	priv, pub := genECDSA(t)
 	priv.KeyID = ""
 
-	jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+	jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 	require.NoError(t, err)
 
 	got, err := jwtsec.VerifySignature(context.Background(), jws, []jwtsec.PublicKey{pub})

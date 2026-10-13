@@ -37,7 +37,10 @@ func hintClaims() map[string]any {
 func signHint(t *testing.T, key jwtsec.PrivateKey, claims map[string]any) string {
 	t.Helper()
 
-	jws, err := jwtsec.NewSigner(key).Sign(context.Background(), claims)
+	signer, err := jwtsec.NewSigner(key)
+	require.NoError(t, err)
+
+	jws, err := signer.Sign(context.Background(), claims)
 	require.NoError(t, err)
 
 	return jws
@@ -47,7 +50,10 @@ func signHint(t *testing.T, key jwtsec.PrivateKey, claims map[string]any) string
 func signHintTyped(t *testing.T, key jwtsec.PrivateKey, typ string, claims map[string]any) string {
 	t.Helper()
 
-	jws, err := jwtsec.NewSigner(key, jwtsec.WithType(typ)).Sign(context.Background(), claims)
+	signer, err := jwtsec.NewSigner(key, jwtsec.WithType(typ))
+	require.NoError(t, err)
+
+	jws, err := signer.Sign(context.Background(), claims)
 	require.NoError(t, err)
 
 	return jws
@@ -115,7 +121,10 @@ func TestIDTokenHint(t *testing.T) {
 		}, false},
 		{"encrypted (five parts)", func(*testing.T) string { return "a.b.c.d.e" }, false},
 		{"payload not an object", func(t *testing.T) string {
-			jws, err := jwtsec.NewSigner(signingRSA()).Sign(context.Background(), []string{"x"})
+			signer, err := jwtsec.NewSigner(signingRSA())
+			require.NoError(t, err)
+
+			jws, err := signer.Sign(context.Background(), []string{"x"})
 			require.NoError(t, err)
 
 			return jws

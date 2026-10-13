@@ -24,7 +24,12 @@ func Example() {
 	verify := jwtsec.PublicKey{KeyID: "k-1", Algorithm: jwtsec.ES256, Key: &priv.PublicKey}
 
 	// Authorization server side.
-	signer := jwtsec.NewSigner(signing)
+	signer, err := jwtsec.NewSigner(signing)
+	if err != nil {
+		fmt.Println("signer:", err)
+
+		return
+	}
 
 	now := time.Now()
 	token, err := signer.Sign(context.Background(), &jwtsec.StandardClaims{

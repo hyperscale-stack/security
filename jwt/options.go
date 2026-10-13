@@ -25,6 +25,7 @@ type config struct {
 	skew          time.Duration
 	clock         security.Clock
 	requireExpiry bool
+	maxTokenSize  int
 }
 
 // defaults seeds the verifier configuration with the strict baseline:
@@ -35,6 +36,7 @@ func defaults() *config {
 		allowed:       slices.Clone(defaultAllowedAlgorithms),
 		clock:         security.DefaultClock,
 		requireExpiry: true,
+		maxTokenSize:  DefaultMaxTokenSize,
 	}
 }
 
@@ -50,30 +52,65 @@ func WithAllowedAlgorithms(algs ...Algorithm) Option {
 	return func(c *config) { c.allowed = slices.Clone(algs) }
 }
 
-// WithIssuer pins the expected `iss` claim. Empty issuer disables the check
-// (the default), which is acceptable only when the verifier sits behind a
-// trust boundary that already authenticates the issuer.
+// WithIssuer pins the expected `iss` claim, compared exactly (RFC 9068 §4).
+// Empty issuer disables the check (the default), which is acceptable only
+// when the verifier sits behind a trust boundary that already
+// authenticates the issuer; [BearerVerifier] requires one.
 func WithIssuer(iss string) Option {
 	return func(c *config) { c.issuer = iss }
 }
 
 // WithAudience pins the expected `aud` claim values. At verification time
 // the token is accepted when AT LEAST ONE of its audiences is in the list.
-// Passing zero audiences disables the check.
+// Passing zero audiences disables the check; an empty audience panics — it
+// would match a token whose aud is "".
 func WithAudience(aud ...string) Option {
+	if slices.Contains(aud, "") {
+		panic("jwtsec.WithAudience: empty audience")
+	}
+
 	return func(c *config) { c.audiences = slices.Clone(aud) }
 }
 
-// WithClockSkew tolerates the given amount of clock drift on `exp` and
-// `nbf` comparisons. Recommended values: 30s–2min for inter-service hops.
-func WithClockSkew(d time.Duration) Option {
-	return func(c *config) {
-		if d < 0 {
-			d = 0
-		}
+// MaxClockSkew bounds [WithClockSkew]: RFC 7519 §4.1.4 and RFC 9068 §4
+// allow "some small leeway, usually no more than a few minutes".
+const MaxClockSkew = 5 * time.Minute
 
-		c.skew = d
+// WithClockSkew tolerates the given amount of clock drift on `exp`, `nbf`
+// and `iat` comparisons (default 0). Recommended values: 30s–2min for
+// inter-service hops. A skew outside [0, MaxClockSkew] panics.
+func WithClockSkew(d time.Duration) Option {
+	if d < 0 || d > MaxClockSkew {
+		panic("jwtsec.WithClockSkew: the skew must be between 0 and MaxClockSkew")
 	}
+
+	return func(c *config) { c.skew = d }
+}
+
+// DefaultMaxTokenSize is the largest token, in bytes of its compact
+// serialization, a [Verifier] and [VerifySignature] accept by default:
+// 16 KiB. A token over the bound is refused with [ErrMalformedToken]
+// before anything is decoded — without it, a header of small members made
+// go-jose allocate about 100 times the token's size before any check.
+//
+// The bound holds the largest tokens in common use — an Entra ID token
+// carrying its maximum of 200 group IDs is 11–13 KB, Keycloak tokens with
+// many roles 6–12 KB — and matches the single-header limit of common front
+// ends (Node.js, AWS ALB, IIS: 16 KiB; nginx and Apache: 8 KiB by
+// default). Lower it with [WithMaxTokenSize]; cap the transports too
+// (http.Server.MaxHeaderBytes, grpc.MaxHeaderListSize).
+const DefaultMaxTokenSize = 16 << 10
+
+// WithMaxTokenSize sets the largest token, in bytes of its compact
+// serialization, a [Verifier] parses (default [DefaultMaxTokenSize]); a
+// longer token is refused with [ErrMalformedToken] before any decoding.
+// Signers ignore it. n < 1 panics.
+func WithMaxTokenSize(n int) Option {
+	if n < 1 {
+		panic("jwtsec.WithMaxTokenSize: the bound must be positive")
+	}
+
+	return func(c *config) { c.maxTokenSize = n }
 }
 
 // WithClock injects a clock for deterministic tests. Defaults to
@@ -95,11 +132,6 @@ func WithClock(c security.Clock) Option {
 // assertions are an expected, deliberate part of the design.
 func WithOptionalExpiry() Option {
 	return func(c *config) { c.requireExpiry = false }
-}
-
-// algorithmAllowed reports whether alg appears in the allowlist.
-func (c *config) algorithmAllowed(alg Algorithm) bool {
-	return slices.Contains(c.allowed, alg)
 }
 
 // The "typ" header values this package knows (RFC 7515 §4.1.9).

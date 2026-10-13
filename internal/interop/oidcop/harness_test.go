@@ -152,7 +152,10 @@ func withJWTAccessTokens() opOption {
 	return func(t *testing.T, o *op, gcfg *grant.Config) {
 		t.Helper()
 
-		gcfg.AccessTokens = token.NewJWTAccessTokenGenerator(jwtsec.NewOAuth2AccessTokenSigner(accessTokenKey()))
+		signer, err := jwtsec.NewOAuth2AccessTokenSigner(accessTokenKey())
+		require.NoError(t, err)
+
+		gcfg.AccessTokens = token.NewJWTAccessTokenGenerator(signer)
 
 		pub, err := accessTokenKey().Public()
 		require.NoError(t, err)

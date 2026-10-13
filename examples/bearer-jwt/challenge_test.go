@@ -34,15 +34,18 @@ func foreignToken(t *testing.T) string {
 
 	now := time.Now()
 
-	token, err := jwtsec.NewSigner(jwtsec.PrivateKey{KeyID: keyID, Algorithm: jwtsec.EdDSA, Key: priv}).
-		Sign(context.Background(), &jwtsec.StandardClaims{
-			Issuer:    issuer,
-			Subject:   "mallory",
-			Audience:  jwtsec.Audience{audience},
-			IssuedAt:  jwtsec.NewNumericDate(now),
-			ExpiresAt: jwtsec.NewNumericDate(now.Add(time.Hour)),
-			Scope:     "resource:read",
-		})
+	signer, err := jwtsec.NewSigner(jwtsec.PrivateKey{KeyID: keyID, Algorithm: jwtsec.EdDSA, Key: priv},
+		jwtsec.WithType(jwtsec.TypeAccessToken))
+	require.NoError(t, err)
+
+	token, err := signer.Sign(context.Background(), &jwtsec.StandardClaims{
+		Issuer:    issuer,
+		Subject:   "mallory",
+		Audience:  jwtsec.Audience{audience},
+		IssuedAt:  jwtsec.NewNumericDate(now),
+		ExpiresAt: jwtsec.NewNumericDate(now.Add(time.Hour)),
+		Scope:     "resource:read",
+	})
 	require.NoError(t, err)
 
 	return token

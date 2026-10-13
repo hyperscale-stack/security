@@ -62,6 +62,28 @@ var (
 	// in a JWK Set (see [PublicKey.Validate], [PrivateKey.Validate],
 	// [MarshalJWKS]). The key material never appears in the error.
 	ErrInvalidKey = newJWTError("invalid key", security.ErrInvalidCredentials)
+
+	// ErrInvalidClaims signals a well-formed, verified token whose claims
+	// the verifier refuses: [BearerVerifier] requires a non-empty sub, the
+	// principal (RFC 9068 §2.2). Wraps [security.ErrInvalidCredentials].
+	ErrInvalidClaims = newJWTError("invalid claims", security.ErrInvalidCredentials)
+
+	// ErrUnsignableClaims signals claims a signer refuses to sign: claims
+	// that cannot be encoded — a [NumericDate] before 1970 or after year
+	// 9999, the zero time.Time included — or, for the RFC 9068 access
+	// tokens of [OAuth2AccessTokenSigner], a REQUIRED claim missing or
+	// empty (RFC 9068 §2.2). Nothing is signed. A server-side error, not a
+	// credential failure: it wraps no security sentinel.
+	ErrUnsignableClaims = errors.New("jwt: unsignable claims")
+
+	// ErrKeySetUnavailable signals that no usable verification key set
+	// could be obtained: a remote JWK Set never fetched, or older than
+	// [MaxKeySetStaleness] while refreshes fail, a [JWKSProvider] failing,
+	// the caller's context ending while it waits for a fetch. An
+	// infrastructure failure, not a credential one: it wraps
+	// [security.ErrUnavailable] and no credential sentinel, so transports
+	// answer it with 503 / Unavailable, never as an invalid token.
+	ErrKeySetUnavailable = newJWTError("key set unavailable", security.ErrUnavailable)
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via
@@ -71,8 +93,9 @@ func newJWTError(msg string, parent error) error {
 }
 
 // errAlgorithmDisallowed augments [ErrAlgorithmNotAllowed] with the offending
-// algorithm so server-side telemetry can pinpoint suspicious clients without
-// surfacing the value to the response.
+// algorithm — clipped, it comes from the token — so server-side telemetry
+// can pinpoint suspicious clients without surfacing the value to the
+// response.
 type errAlgorithmDisallowed struct {
 	alg string
 }
@@ -84,8 +107,10 @@ func (e *errAlgorithmDisallowed) Error() string {
 // Unwrap exposes the sentinel chain for errors.Is.
 func (e *errAlgorithmDisallowed) Unwrap() error { return ErrAlgorithmNotAllowed }
 
-// AsAlgorithmName extracts the disallowed algorithm name from err, returning
-// (name, true) when err is a [errAlgorithmDisallowed] instance.
+// AsAlgorithmName extracts the disallowed algorithm name — at most 128
+// bytes of it — from an [ErrAlgorithmNotAllowed] error returned by a
+// [Verifier] or [VerifySignature]: (name, true), or ("", false) for any
+// other error.
 func AsAlgorithmName(err error) (string, bool) {
 	var e *errAlgorithmDisallowed
 	if errors.As(err, &e) {

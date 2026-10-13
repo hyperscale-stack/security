@@ -93,7 +93,7 @@ func TestSignerTypesTokensJWTByDefault(t *testing.T) {
 
 	priv, _ := genECDSA(t)
 
-	jws, err := jwtsec.NewSigner(priv).Sign(context.Background(), validClaims())
+	jws, err := mustSigner(t, priv).Sign(context.Background(), validClaims())
 	require.NoError(t, err)
 	assert.Equal(t, jwtsec.TypeJWT, jwsHeader(t, jws)["typ"])
 }
@@ -103,7 +103,7 @@ func TestSignerEmitsTheConfiguredType(t *testing.T) {
 
 	priv, _ := genECDSA(t)
 
-	jws, err := jwtsec.NewSigner(priv, jwtsec.WithType(jwtsec.TypeAccessToken)).Sign(context.Background(), validClaims())
+	jws, err := mustSigner(t, priv, jwtsec.WithType(jwtsec.TypeAccessToken)).Sign(context.Background(), validClaims())
 	require.NoError(t, err)
 	assert.Equal(t, "at+jwt", jwsHeader(t, jws)["typ"])
 }
@@ -191,7 +191,7 @@ func TestOAuth2AccessTokenSignerFollowsRFC9068(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	adapter := jwtsec.NewOAuth2AccessTokenSigner(priv)
+	adapter := mustAccessTokenSigner(t, priv)
 
 	claims := token.AccessTokenClaims{
 		Issuer: "https://auth.example", Subject: "alice", Audience: "api", ClientID: "my-client",
@@ -223,7 +223,7 @@ func TestOAuth2AccessTokenSignerFollowsRFC9068(t *testing.T) {
 	assert.Equal(t, jti1, std.JWTID)
 
 	// An ID Token — typ JWT, same key, aud = the resource — is refused.
-	idToken, err := jwtsec.NewSigner(priv).Sign(context.Background(), jwtsec.StandardClaims{
+	idToken, err := mustSigner(t, priv).Sign(context.Background(), jwtsec.StandardClaims{
 		Issuer: "https://auth.example", Subject: "alice", Audience: jwtsec.Audience{"api"},
 		IssuedAt: jwtsec.NewNumericDate(time.Now()), ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
 	})
@@ -231,13 +231,4 @@ func TestOAuth2AccessTokenSignerFollowsRFC9068(t *testing.T) {
 
 	_, err = verifier.Verify(context.Background(), idToken, nil)
 	require.ErrorIs(t, err, jwtsec.ErrInvalidType)
-}
-
-func TestNewOAuth2AccessTokenSignerPanicsOnInvalidKey(t *testing.T) {
-	t.Parallel()
-
-	priv, _ := genECDSA(t)
-
-	assert.Panics(t, func() { jwtsec.NewOAuth2AccessTokenSigner(jwtsec.PrivateKey{Key: priv.Key}) }, "no algorithm")
-	assert.Panics(t, func() { jwtsec.NewOAuth2AccessTokenSigner(jwtsec.PrivateKey{Algorithm: jwtsec.ES256}) }, "no key")
 }

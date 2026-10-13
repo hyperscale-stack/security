@@ -459,6 +459,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   RPCs, as `grpc.ServerOption` values.
 - `connectrpcsec.WithChallengeScheme`, `connectrpcsec.WithRealm` and
   `connectrpcsec.DefaultRealm`: the challenge of the Connect error mapping.
+- **JWT verification bounds and remote key sets** (`jwtsec`):
+  `DefaultMaxTokenSize` and `WithMaxTokenSize` (the largest token a
+  `Verifier` parses, 16 KiB by default); `MaxClockSkew`;
+  `WithOutboundPolicy` (the SSRF policy of `NewRemoteJWKS`), the refresh
+  policy constants `DefaultCacheTTL`, `MinKeySetRefreshInterval`,
+  `MaxKeySetStaleness`; `BearerOption` and `WithAccessTokenType`;
+  `ErrInvalidClaims`, `ErrUnsignableClaims`, `ErrKeySetUnavailable` (wraps
+  `security.ErrUnavailable`); a
+  `jwtsec.RemoteJWKS.Fetch` span; fuzz targets for the verifier, the claims
+  decoder and NumericDate. See Security and Changed.
 
 ### Changed
 
@@ -706,6 +716,28 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   authentication interceptor's error mapper unless given its own, copies
   its attributes and panics on a nil one; `NewAuthenticationInterceptor`
   panics on a nil engine.
+- **`jwtsec` hardening (breaking)** — see [MIGRATION.md](MIGRATION.md):
+  - `NewSigner`, `NewOAuth2AccessTokenSigner` and `NewRemoteJWKS` return an
+    error (`ErrInvalidKey`; `outbound.ErrURLNotAllowed`,
+    `outbound.ErrInvalidPolicy`) instead of panicking or accepting anything;
+  - `BearerVerifier` panics unless its verifier comes from `NewVerifier`
+    with `WithIssuer`, `WithAudience`, `WithType(TypeAccessToken)` (or the
+    type of `WithAccessTokenType`) and a required `exp`, and refuses tokens
+    without `sub`; the bearer examples sign RFC 9068 access tokens;
+  - every verification key must set `Algorithm` and, when asymmetric, pass
+    `PublicKey.Validate`; a `kid` shared by several keys designates none;
+  - claims and `claimsOut` are decoded case-sensitively by go-jose's
+    decoder; duplicate and case-folding-equal claim names are refused;
+  - tokens over 16 KiB, non-canonical encodings and `crit`/`b64` headers
+    are refused; `VerifySignature` reports a disallowed algorithm as
+    `ErrAlgorithmNotAllowed`;
+  - NumericDates outside 1970–9999 are refused both ways; `WithClockSkew`
+    panics outside [0, 5 min]; `WithCacheTTL` outside (0, 24 h];
+    `WithAudience` on an empty value;
+  - `NewRemoteJWKS` refuses non-https, loopback and private destinations
+    unless `WithOutboundPolicy` allows them, and follows redirects within
+    the JWK Set URL's origin only; RFC 9068 access tokens need a non-empty
+    audience from the `IssuerResolver`.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -842,6 +874,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   promises a route override it could not offer, and `LIMITATIONS.md` lists
   the ConnectRPC adapter. `docs/security-considerations.md` documents the
   extractor order (first extractor wins) and its CSRF implication.
+- `jwtsec.ErrAlgorithmNotAllowed` was never returned: go-jose refused a
+  disallowed algorithm first and the error surfaced as
+  `ErrMalformedToken`.
+- The `jwtsec.NewRemoteJWKS` godoc promised a refresh on an unknown `kid`
+  and deduplicated fetches, and `docs/security-considerations.md` said JWK
+  Sets were fetched through `outbound`: none of it held (see Security).
+- `now == exp` was accepted by the JWT verifier (RFC 7519 §4.1.4).
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1320,3 +1359,45 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   unary interceptors: the streaming `Health.Watch` RPC was served to callers
   without any token. Both now install the unary and stream chains through
   `grpcsec.ServerOptions` / `grpcsec.AuthorizeServerOptions`.
+- **JWT claim smuggling** (`jwtsec`): claims were decoded with
+  `encoding/json`, which matches member names case-insensitively and keeps
+  the last duplicate, so a signed `"Sub"`, `"SCOPE"`, `"EXP"`, `"AUD"` or
+  `"ſub"` overrode the registered claim. Claims are now decoded
+  case-sensitively; duplicate and case-variant names, invalid UTF-8,
+  unpaired surrogates, non-object payloads and mistyped registered claims
+  (`"nbf": null`) are refused (RFC 7519 §4, §7.3, §10.1.1).
+- **JWT parsing cost** (`jwtsec`): tokens of any length reached go-jose,
+  which allocated about 100 times a hostile header's size (≈ 1 GiB per
+  request on gRPC defaults); token values were echoed unbounded in errors
+  and spans. Tokens over 16 KiB are refused before decoding; only the
+  canonical compact serialization with a strict header is accepted
+  (`crit`, `b64` refused, RFC 7515 §4.1.11, RFC 7797 §7).
+- **Remote JWK Sets** (`jwtsec.NewRemoteJWKS`) were fetched outside the
+  `outbound` SSRF guard — any destination, environment proxies, redirects
+  including https→http whose keys were then trusted — under a lock held
+  across the fetch, re-fetched on every call while failing, trusted forever
+  when stale, never refreshed on an unknown `kid`, and not validated (`oct`
+  keys used as HMAC secrets, RSA-1024, private keys). They are now fetched
+  through `outbound` — a redirect, when the policy allows one, never leaves
+  the JWK Set URL's origin — one fetch at a time, refreshed in the
+  background and on unknown `kid`s (rate-limited, backed off), dropped
+  after 24 h without a successful fetch, and validated key by key; an
+  outage is `ErrKeySetUnavailable`, a `security.ErrUnavailable` the
+  transports answer with 503 / Unavailable, never an invalid token (401).
+- **JWT resource servers** (`jwtsec.BearerVerifier`) accepted any `typ`,
+  `iss` and `aud` — an ID Token or another API's access token was accepted
+  — and an empty `sub`: RFC 9068 §4 checks are now required.
+- **Key ↔ algorithm binding** (`jwtsec.Verifier`): a key verified every
+  algorithm of its family and a key without `Algorithm` any algorithm;
+  static RSA-1024 and private keys verified tokens (RFC 8725 §3.1, RFC 7518
+  §3.3).
+- **Immortal tokens** (`jwtsec`): a year-1 `exp` (the zero `time.Time`,
+  which the package's own signers emitted) disabled expiry; out-of-range
+  dates wrapped around; the clock skew was unbounded.
+- **Signing** (`jwtsec`): `NewSigner` signed with RSA-1024 and other unfit
+  keys, and the RFC 9068 signer emitted empty `aud`, `iss`, `sub` or
+  `client_id`.
+- **Key material and URLs in output** (`jwtsec`): `PublicKey` JSON wrote an
+  HMAC secret held as a `jose.JSONWebKey` and private keys carried by
+  mistake; the remote JWKS provider and its errors printed the URL with its
+  user name and query.

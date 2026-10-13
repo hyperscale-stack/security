@@ -23,7 +23,7 @@ func TestSignVerifyRoundTripPerAlgorithm(t *testing.T) {
 
 	cases := []struct {
 		name string
-		gen  func(*testing.T) (jwtsec.PrivateKey, jwtsec.PublicKey)
+		gen  func(testing.TB) (jwtsec.PrivateKey, jwtsec.PublicKey)
 	}{
 		{"RS256", genRSA},
 		{"ES256", genECDSA},
@@ -36,7 +36,7 @@ func TestSignVerifyRoundTripPerAlgorithm(t *testing.T) {
 
 			priv, pub := c.gen(t)
 
-			signer := jwtsec.NewSigner(priv)
+			signer := mustSigner(t, priv)
 			provider := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub})
 			verifier := jwtsec.NewVerifier(provider,
 				jwtsec.WithIssuer("https://issuer.example"),
@@ -76,43 +76,13 @@ func TestVerifyRejectsAlgNone(t *testing.T) {
 	none := "eyJhbGciOiJub25lIn0.e30."
 
 	_, err := verifier.Verify(context.Background(), none, nil)
-	require.Error(t, err)
-	// go-jose's ParseSignedCompact already refuses unknown algs, so any error
-	// from this path is a valid defense (either ErrAlgorithmNotAllowed or
-	// ErrMalformedToken). The key fact is that it is REFUSED.
-	assert.NotEqual(t, "", err.Error())
-}
+	// "none" is never in an allow-list (RFC 8725 §3.1): refused before key
+	// resolution, as an algorithm the verifier does not allow.
+	require.ErrorIs(t, err, jwtsec.ErrAlgorithmNotAllowed)
 
-func TestVerifyRejectsKeyConfusion(t *testing.T) {
-	t.Parallel()
-
-	// Classic key-confusion attack: signer uses HS256 with the verifier's
-	// public RSA key as the HMAC secret. With HS256 NOT in the allowlist,
-	// the verifier must reject the token before reading any key material.
-	rsaPriv, rsaPub := genRSA(t)
-	provider := jwtsec.NewStaticJWKS([]jwtsec.PublicKey{rsaPub})
-
-	verifier := jwtsec.NewVerifier(provider) // default allowlist excludes HS*
-
-	// Sign with HS256 — we'd need raw bytes of the RSA public key as the
-	// shared secret, but a legitimately signed RS256 token suffices to
-	// prove the verifier accepts RS256 while rejecting HS256 even when
-	// configured with the same key material:
-	rsSigner := jwtsec.NewSigner(rsaPriv)
-	good, err := rsSigner.Sign(context.Background(), &jwtsec.StandardClaims{
-		Subject:   "alice",
-		ExpiresAt: jwtsec.NewNumericDate(time.Now().Add(time.Hour)),
-	})
-	require.NoError(t, err)
-	_, err = verifier.Verify(context.Background(), good, nil)
-	require.NoError(t, err, "RS256 allowed by default")
-
-	// Now construct a verifier that has HS256 in the allowlist but whose
-	// JWKS still ships the RSA public key. Even then, the kid lookup must
-	// fail because the attacker token uses a different kid (none). We
-	// can't easily fake an HS256 token here without rebuilding go-jose's
-	// internals, so we settle for the allowlist proof above as the canonical
-	// defense; the AlgorithmAllowed test below covers the alg-driven path.
+	alg, ok := jwtsec.AsAlgorithmName(err)
+	require.True(t, ok)
+	assert.Equal(t, "none", alg)
 }
 
 func TestVerifyRejectsExpired(t *testing.T) {
@@ -121,7 +91,7 @@ func TestVerifyRejectsExpired(t *testing.T) {
 	clk := newFixedClock(time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC))
 	priv, pub := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithClock(clk),
@@ -143,7 +113,7 @@ func TestVerifyClockSkewToleratesNearMissExpiry(t *testing.T) {
 	clk := newFixedClock(time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC))
 	priv, pub := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithClock(clk),
@@ -164,7 +134,7 @@ func TestVerifyRejectsMissingExpiryByDefault(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	// A validly-signed token with no `exp` claim — a token that never
@@ -182,7 +152,7 @@ func TestVerifyOptionalExpiryAllowsMissingExp(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithOptionalExpiry(),
@@ -199,7 +169,7 @@ func TestVerifyRejectsBadIssuer(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithIssuer("https://issuer.example"),
@@ -219,7 +189,7 @@ func TestVerifyRejectsBadAudience(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithAudience("api-1", "api-2"),
@@ -239,7 +209,7 @@ func TestVerifyAcceptsAnyMatchingAudience(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(
 		jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}),
 		jwtsec.WithAudience("api-1", "api-2"),
@@ -262,7 +232,7 @@ func TestVerifyRejectsUnknownKid(t *testing.T) {
 	// Verifier has a different key set.
 	_, pub2 := genECDSA(t)
 
-	signer := jwtsec.NewSigner(priv1)
+	signer := mustSigner(t, priv1)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub2}))
 
 	token, _ := signer.Sign(context.Background(), &jwtsec.StandardClaims{Subject: "alice"})
@@ -276,7 +246,7 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	t.Parallel()
 
 	priv, pub := genECDSA(t)
-	signer := jwtsec.NewSigner(priv)
+	signer := mustSigner(t, priv)
 	verifier := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 
 	type custom struct {
@@ -297,12 +267,4 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "alice", got.Subject)
 	assert.Equal(t, "acme", got.Tenant)
-}
-
-func TestSignerPanicsOnInvalidKey(t *testing.T) {
-	t.Parallel()
-
-	assert.Panics(t, func() {
-		jwtsec.NewSigner(jwtsec.PrivateKey{}) // empty alg
-	})
 }

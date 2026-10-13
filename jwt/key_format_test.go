@@ -206,13 +206,13 @@ func TestSignersAndKeySetsRedactTheirKeys(t *testing.T) {
 		v    any
 		want string // what every verb prints
 	}{
-		{"Ed25519 signer", jwtsec.NewSigner(edPriv), `jwtsec.Signer{KeyID: "ed", Algorithm: EdDSA, Type: "JWT"}`},
-		{"HMAC signer", jwtsec.NewSigner(hmacPriv, jwtsec.WithType(jwtsec.TypeAccessToken)),
+		{"Ed25519 signer", mustSigner(t, edPriv), `jwtsec.Signer{KeyID: "ed", Algorithm: EdDSA, Type: "JWT"}`},
+		{"HMAC signer", mustSigner(t, hmacPriv, jwtsec.WithType(jwtsec.TypeAccessToken)),
 			`jwtsec.Signer{KeyID: "hs", Algorithm: HS256, Type: "at+jwt"}`},
 		{"static key set", set, `jwtsec.KeySet{KeyIDs: ["hs" "ed"], Active: "hs"}`},
 		{"verification key set", verifySet, `jwtsec.KeySet{KeyIDs: ["hs" "ed"], Active: none}`},
 		{"static provider", provider, `jwtsec.StaticJWKS{jwtsec.KeySet{KeyIDs: ["hs" "ed"], Active: "hs"}}`},
-		{"RFC 9068 signer", jwtsec.NewOAuth2AccessTokenSigner(edPriv),
+		{"RFC 9068 signer", mustAccessTokenSigner(t, edPriv),
 			`jwtsec.OAuth2AccessTokenSigner{jwtsec.Signer{KeyID: "ed", Algorithm: EdDSA, Type: "at+jwt"}}`},
 		{"verifier", jwtsec.NewVerifier(provider, jwtsec.WithIssuer("https://op.example"), jwtsec.WithAudience("api")),
 			`jwtsec.Verifier{Provider: jwtsec.staticProvider, Issuer: "https://op.example", Audience: ["api"], Type: ""}`},
