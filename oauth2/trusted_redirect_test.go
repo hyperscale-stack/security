@@ -98,6 +98,11 @@ func preAuthenticationFailures() []preAuthenticationFailure {
 		{name: "extension refusal", ext: &fakeExtension{validate: func(context.Context, *http.Request, *oauth2.AuthorizeRequest) (any, error) {
 			return nil, oauth2.ErrInvalidRequest.WithDescription("bad prompt")
 		}}, query: boundsQuery, code: oauth2.CodeInvalidRequest, status: http.StatusBadRequest},
+		// A code the authorization endpoint does not define is answered as
+		// server_error, bare page and redirect alike (RFC 6749 §4.1.2.1).
+		{name: "extension refusal with a code /authorize does not define", ext: &fakeExtension{validate: func(context.Context, *http.Request, *oauth2.AuthorizeRequest) (any, error) {
+			return nil, oauth2.ErrInvalidClient.WithDescription("not for this endpoint")
+		}}, query: boundsQuery, code: oauth2.CodeServerError, status: http.StatusInternalServerError},
 		{name: "extension modifying the request", ext: &fakeExtension{validate: func(_ context.Context, _ *http.Request, ar *oauth2.AuthorizeRequest) (any, error) {
 			ar.Scope = "write"
 
@@ -214,6 +219,11 @@ func TestUntrustedClientIsRedirectedOnceAuthenticated(t *testing.T) {
 		{name: "an approval the server cannot honor", consent: consentWith(&oauth2.Consent{
 			Approved: true, Subject: strings.Repeat("s", 256),
 		}, nil), want: oauth2.CodeServerError},
+		{name: "a decision on a request the ConsentFunc modified", consent: func(_ http.ResponseWriter, _ *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+			ar.Scope = "write"
+
+			return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
+		}, want: oauth2.CodeServerError},
 	}
 
 	for _, tc := range cases {

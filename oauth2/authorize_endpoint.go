@@ -199,6 +199,14 @@ type Consent struct {
 //     since a refusal is a decision, returned as [Consent.Refusal] — and
 //     hands err to the [ErrorHook].
 //
+// A decision states that the resource owner authenticated: return one only
+// then. Before that — a login page left, cancelled or failed — render the
+// login page again (nil, nil) or refuse with an interaction code
+// ([ErrLoginRequired], [ErrInteractionRequired],
+// [ErrAccountSelectionRequired], [ErrConsentRequired]). Any other decision,
+// a denial included, is redirected even to a client
+// [AuthorizeConfig.TrustedRedirect] does not trust (RFC 9700 §4.11.2).
+//
 // ar is read-only: a decision returned after changing it is answered with
 // a server_error ([ErrAuthorizeRequestModified]); narrow the grant with
 // Consent.Scope instead. Render the request from ar, never from r.FormValue:
