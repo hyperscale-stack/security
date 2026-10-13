@@ -91,3 +91,44 @@ func FuzzLoopbackRedirect(f *testing.F) {
 		}
 	})
 }
+
+// FuzzAuthorizeRedirectTarget pins RFC 6749 §3.1.2 and §4.1.2 together:
+// whatever redirect URI ValidateRedirectURI accepts, the response
+// parameters appended to its query come back exactly once, with their
+// values — none glued to a registered value, none duplicated.
+func FuzzAuthorizeRedirectTarget(f *testing.F) {
+	for _, seed := range []string{
+		"https://app.example/cb", "https://app.example/cb?", "https://app.example/cb?&", "https://app.example/cb?a=1&",
+		"https://app.example/cb?a=1;b=2", "https://app.example/cb?flag", "https://app.example/cb?x=%26code%3D1",
+		"https://app.example/cb?next=/home?", "https://app.example/cb?next=https://partner.example/landing?",
+		"com.example.app:/cb??", "com.example.app:/cb?y=1", "http://127.0.0.1:5/cb?z", "https://app.example/cb?a=b=c",
+	} {
+		f.Add(seed)
+	}
+
+	want := url.Values{paramCode: {"C"}, paramState: {"S"}, "iss": {"I"}}
+
+	f.Fuzz(func(t *testing.T, uri string) {
+		if ValidateRedirectURI(uri) != nil {
+			return
+		}
+
+		target := authorizeRedirectTarget(uri, want, false)
+		if !strings.HasPrefix(target, uri) {
+			t.Fatalf("%q -> %q: the registered URI is not kept", uri, target)
+		}
+
+		u, err := url.Parse(target)
+		if err != nil {
+			t.Fatalf("%q -> unparsable %q: %v", uri, target, err)
+		}
+
+		// The error reports a registered ";" pair, skipped: not one of ours.
+		got, _ := url.ParseQuery(u.RawQuery)
+		for name, values := range want {
+			if len(got[name]) != 1 || got[name][0] != values[0] {
+				t.Fatalf("%q -> %q: %s = %q, want %q once", uri, target, name, got[name], values[0])
+			}
+		}
+	})
+}

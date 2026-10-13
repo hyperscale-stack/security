@@ -1265,14 +1265,18 @@ func (s *Server) redirectAuthorizeError(w http.ResponseWriter, r *http.Request, 
 // otherwise, appended to the redirect URI as registered — its query "MUST
 // be retained" (RFC 6749 §3.1.2), byte for byte. A validated redirect URI
 // has no fragment and no query parameter named like a response one
-// ([ValidateRedirectURI]).
+// ([ValidateRedirectURI]). The separator depends on the query component —
+// everything after the first "?" — not on the whole URI: a query whose last
+// value ends with "?" still needs one.
 func authorizeRedirectTarget(redirectURI string, params url.Values, useFragment bool) string {
+	_, query, hasQuery := strings.Cut(redirectURI, "?")
+
 	switch {
 	case useFragment:
 		return redirectURI + "#" + params.Encode()
-	case !strings.Contains(redirectURI, "?"):
+	case !hasQuery:
 		return redirectURI + "?" + params.Encode()
-	case strings.HasSuffix(redirectURI, "?"), strings.HasSuffix(redirectURI, "&"):
+	case query == "", strings.HasSuffix(query, "&"):
 		return redirectURI + params.Encode()
 	default:
 		return redirectURI + "&" + params.Encode()

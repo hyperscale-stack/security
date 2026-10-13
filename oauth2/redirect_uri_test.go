@@ -181,6 +181,9 @@ func TestAuthorizeKeepsTheRegisteredQuery(t *testing.T) {
 		{"https://app.example/cb?a=1&", "https://app.example/cb?a=1&code="},
 		{"https://app.example/cb", "https://app.example/cb?code="},
 		{"com.example.app:/oauth2redirect", "com.example.app:/oauth2redirect?code="},
+		// A query whose last value ends with "?" is not an empty query.
+		{"https://app.example/cb?next=/home?", "https://app.example/cb?next=/home?&"},
+		{"com.example.app:/cb??", "com.example.app:/cb??&"},
 	}
 
 	for _, tc := range cases {
@@ -195,6 +198,10 @@ func TestAuthorizeKeepsTheRegisteredQuery(t *testing.T) {
 			loc := rec.Header().Get("Location")
 			assert.True(t, strings.HasPrefix(loc, tc.prefix), "%s keeps %s", loc, tc.prefix)
 			assert.NotContains(t, loc, "&&")
+
+			got := mustLocation(t, rec).Query()
+			assert.Len(t, got["code"], 1, "the client reads one code")
+			assert.NotEmpty(t, got.Get("code"))
 
 			// An error redirect keeps it too.
 			q := boundsQuery()
