@@ -10,6 +10,10 @@ End-to-end wiring of the security library running in a single binary:
   storage so it can validate opaque tokens locally (the in-process
   equivalent of RFC 7662 introspection).
 
+The demo client declares the grant types it uses
+(`authorization_code`, `refresh_token`, `client_credentials`) and the scope
+it may request (`api:read`): a client gets only what it declares.
+
 ## Run
 
 ```sh

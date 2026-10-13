@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/hyperscale-stack/security/oauth2/pkce"
 )
 
@@ -53,6 +55,37 @@ const (
 	flowImplicit                      // response_type=token (legacy)
 )
 
+// grantType returns the grant type a client declares to use the flow (RFC
+// 7591 §2.1): authorization_code for response_type=code, implicit for
+// response_type=token.
+func (f authorizeFlow) grantType() string {
+	if f == flowImplicit {
+		return GrantTypeImplicit
+	}
+
+	return GrantTypeAuthorizationCode
+}
+
+// errResponseTypeNotDeclared answers a response type whose grant the client
+// does not declare: unauthorized_client, "not authorized to request an
+// authorization code / access token using this method" (RFC 6749 §4.1.2.1,
+// §4.2.2.1).
+var errResponseTypeNotDeclared = ErrUnauthorizedClient.WithDescription("the client may not use this response type")
+
+// flowRefusal returns nil when c declares the grant of flow, otherwise
+// errResponseTypeNotDeclared — with [ErrNoGrantTypesDeclared] as cause when
+// c declares no grant type at all.
+func flowRefusal(c Client, flow authorizeFlow) *Error {
+	switch {
+	case ClientAllowsGrantType(c, flow.grantType()):
+		return nil
+	case len(c.GrantTypes()) == 0:
+		return errResponseTypeNotDeclared.WithCause(ErrNoGrantTypesDeclared)
+	default:
+		return errResponseTypeNotDeclared
+	}
+}
+
 // OpaqueTokenGenerator mints opaque tokens — a raw value plus the storage
 // hash. The token sub-package's OpaqueRefreshAdapter and OpaqueCodeAdapter
 // satisfy it; it is the type the implicit flow uses to issue access tokens.
@@ -63,7 +96,9 @@ type OpaqueTokenGenerator interface {
 // AuthorizeRequest is the parsed and validated /authorize request handed to
 // a [ConsentFunc]. By the time the ConsentFunc sees it, the client, the
 // redirect URI, the response type, the scope and the PKCE parameters are
-// verified and the issuer is resolved. It is a read-only copy of the
+// verified and the issuer is resolved. It holds the values the server
+// uses — an empty occurrence of a parameter omitted (RFC 6749 §3.1) — the
+// ones to show the resource owner. It is a read-only copy of the
 // request the handler validated: a callback changing any field but
 // ExtensionRequest, or the identity of the Client it shares with the server,
 // fails the authorization with server_error ([ErrAuthorizeRequestModified]).
@@ -78,7 +113,8 @@ type AuthorizeRequest struct {
 	// client registration).
 	RedirectURI string
 	// Scope is the requested scope, already checked against the client's
-	// allowed scopes.
+	// allowed scopes, in canonical form: its RFC 6749 §3.3 tokens joined by
+	// a single SP, duplicates dropped.
 	Scope string
 	// State is the opaque client state echoed back on the redirect.
 	State string
@@ -114,9 +150,12 @@ type Consent struct {
 	// empty or longer one fails the request with server_error, nothing
 	// issued.
 	Subject string
-	// Scope is the granted scope. Empty means "exactly what was requested";
-	// a non-empty value MUST be a subset of [AuthorizeRequest.Scope] — the
-	// consent step may narrow the grant but never broaden it.
+	// Scope is the granted scope. Empty — or SPs only — means "exactly what
+	// was requested"; otherwise its RFC 6749 §3.3 tokens (SP-separated, at
+	// most 100 and 4096 bytes) MUST be a subset of [AuthorizeRequest.Scope]:
+	// the consent step may narrow the grant but never broaden it — nothing
+	// can be added to a request without scope. Anything else fails the
+	// request with invalid_scope, nothing issued.
 	Scope string
 	// Refusal, on a decision that does not approve the request, is the
 	// error redirected to the client instead of access_denied — e.g.
@@ -159,7 +198,9 @@ type Consent struct {
 //
 // ar is read-only: a decision returned after changing it is answered with
 // a server_error ([ErrAuthorizeRequestModified]); narrow the grant with
-// Consent.Scope instead.
+// Consent.Scope instead. Render the request from ar, never from r.FormValue:
+// r is the request as received, and an empty occurrence of a parameter —
+// omitted per RFC 6749 §3.1 — can precede the value the server used.
 type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeRequest) (*Consent, error)
 
 // AuthorizeConfig configures the /authorize endpoint.
@@ -189,11 +230,29 @@ type AuthorizeConfig struct {
 // The handler resolves the issuer of the request through the
 // [IssuerResolver] — the realm the code, or implicit token, is bound to —
 // validates the request (client — known at that issuer, see
-// [IssuerBoundClient] —, redirect URI, response type, scope, PKCE), and
-// then calls consent.
+// [IssuerBoundClient] —, redirect URI, response type and the client's
+// declaration of its grant — authorization_code for code, implicit for
+// token, unauthorized_client otherwise —, scope, PKCE), and then calls
+// consent.
 // The library owns the protocol plumbing — request validation, code /
 // token minting, the redirect — while the application owns the login and
 // consent UI through the [ConsentFunc].
+//
+// The parameters the handler reads are single-valued (RFC 6749 §3.1): an
+// empty occurrence is omitted, and one included more than once with a value
+// is refused — client_id, redirect_uri and response_mode with a bare 400
+// that is never redirected (the client, the target or the encoding of the
+// answer are ambiguous), whatever else the request repeats; any other with
+// a redirected invalid_request, answered in the query when response_type is
+// the one repeated (the flow is ambiguous). A repeated state is not echoed.
+// Other parameters are left to the extension and the ConsentFunc.
+//
+// The scope is parsed strictly (RFC 6749 §3.3): tokens of printable ASCII
+// but the double quote and the backslash, separated by SP — runs of SP are
+// tolerated, any other whitespace is not — at most 100 tokens, repetitions
+// included, and 4096 bytes; anything else is answered invalid_scope before
+// the value is compared with anything. The scope the request carries on is
+// canonical: single-SP joined, duplicates dropped.
 //
 // Errors that occur before the redirect URI is trusted (a client unknown
 // at the issuer, an unregistered redirect URI) are returned directly with a
@@ -253,6 +312,18 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
+	// The core reads its parameters single-valued, an empty occurrence
+	// omitted (RFC 6749 §3.1). A repeated client_id, redirect_uri or
+	// response_mode leaves the client, the target or the encoding of any
+	// answer ambiguous: refused here, never redirected.
+	params, repeated := param.SingleValued(r.Form, authorizeParameters)
+	if slices.Contains(unredirectableParameters, repeated) {
+		s.notifyError(r.Context(), repeatedParameter(repeated))
+		http.Error(w, "oauth2: repeated request parameter", http.StatusBadRequest)
+
+		return
+	}
+
 	// The issuer comes before the client: a client bound to other issuers
 	// (IssuerBoundClient) is unknown at this one. When the resolver fails,
 	// the binding cannot be checked: the request then fails with a
@@ -262,7 +333,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	// Client and redirect URI come first: a failure here MUST NOT redirect
 	// (the redirect target is not yet trusted). The refusal is deliberately
 	// opaque on the wire, so the hook is the only place the cause shows up.
-	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), r.FormValue("client_id"))
+	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), params.Get(paramClientID))
 	if err != nil || client == nil {
 		s.notifyError(r.Context(), resolved.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)
@@ -270,7 +341,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	redirectURI, ok := resolveRedirectURI(client, r.FormValue("redirect_uri"))
+	redirectURI, ok := resolveRedirectURI(client, params.Get(paramRedirectURI))
 	if !ok {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("missing or unregistered redirect_uri"))
 		http.Error(w, "oauth2: missing or unregistered redirect_uri", http.StatusBadRequest)
@@ -280,7 +351,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// The response mode decides how every later answer travels: one the
 	// handler cannot honor leaves no way to answer the client at all.
-	if !responseModeSupported(cfg, r) {
+	if !responseModeSupported(cfg, params) {
 		s.notifyError(r.Context(), ErrInvalidRequest.WithDescription("unsupported response_mode"))
 		http.Error(w, "oauth2: unsupported response_mode", http.StatusBadRequest)
 
@@ -289,7 +360,9 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	st, ok := s.validateAuthorize(cfg, w, r, client, redirectURI, resolved)
+	in := authorizeInput{client: client, redirectURI: redirectURI, params: params, repeated: repeated}
+
+	st, ok := s.validateAuthorize(cfg, w, r, in, resolved)
 	if !ok {
 		return
 	}
@@ -314,6 +387,9 @@ type authorizeState struct {
 	// fragment reports that responses travel in the redirect fragment (the
 	// implicit flow, RFC 6749 §4.2.2) rather than in the query string.
 	fragment bool
+	// redirectURIOmitted reports that the request named no redirect_uri:
+	// its code may be redeemed without one (RFC 6749 §4.1.3).
+	redirectURIOmitted bool
 }
 
 // authorizeTarget is where and how an authorization response travels: the
@@ -425,23 +501,35 @@ func (a *authorizeIssuer) explain(oe *Error) *Error {
 	return a.scoped.explain(oe)
 }
 
+// authorizeInput is an /authorize request behind a trusted redirect URI:
+// its client, the redirect URI resolved for it, and its parameters as the
+// core reads them — single-valued, an empty occurrence omitted — with the
+// first one it includes more than once (RFC 6749 §3.1).
+type authorizeInput struct {
+	client      Client
+	redirectURI string
+	params      url.Values
+	repeated    string
+}
+
 // validateAuthorize validates the request behind a trusted redirect URI:
-// the issuer it resolved to, the flow, the scope and the PKCE parameters,
-// and answers the first failure with a redirect. The issuer comes first,
-// so every later redirect is answered within the realm of the request.
+// the issuer it resolved to, a repeated parameter, the flow, the scope and
+// the PKCE parameters, and answers the first failure with a redirect. The
+// issuer comes first, so every later redirect is answered within the realm
+// of the request.
 func (s *Server) validateAuthorize(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
-	client Client,
-	redirectURI string,
+	in authorizeInput,
 	resolved *authorizeIssuer,
 ) (*authorizeState, bool) {
-	// An unsupported response type is answered in the query string.
-	flow, flowErr := resolveFlow(cfg, r.FormValue("response_type"))
+	// An unsupported — or repeated — response type is answered in the query
+	// string, and a repeated state is not echoed.
+	flow, flowErr := resolveFlow(cfg, in.params.Get("response_type"))
 	target := authorizeTarget{
-		redirectURI: redirectURI,
-		state:       r.FormValue("state"),
+		redirectURI: in.redirectURI,
+		state:       in.params.Get("state"),
 		fragment:    flowErr == nil && flow == flowImplicit,
 	}
 
@@ -456,13 +544,27 @@ func (s *Server) validateAuthorize(
 	issuer, audience := resolved.issuer, resolved.audience
 	target.issuer = issuer
 
+	// RFC 6749 §4.1.2.1: invalid_request "includes a parameter more than
+	// once".
+	if in.repeated != "" {
+		s.redirectAuthorizeError(w, r, target, repeatedParameter(in.repeated))
+
+		return nil, false
+	}
+
 	if flowErr != nil {
 		s.redirectAuthorizeError(w, r, target, flowErr)
 
 		return nil, false
 	}
 
-	ar, oerr := s.parseAuthorizeRequest(r, client, redirectURI, flow)
+	if oerr := flowRefusal(in.client, flow); oerr != nil {
+		s.redirectAuthorizeError(w, r, target, oerr)
+
+		return nil, false
+	}
+
+	ar, oerr := s.parseAuthorizeRequest(in, flow)
 	if oerr != nil {
 		s.redirectAuthorizeError(w, r, target, oerr)
 
@@ -470,7 +572,10 @@ func (s *Server) validateAuthorize(
 	}
 
 	ar.Issuer = issuer
-	st := &authorizeState{ar: *ar, clientID: client.ID(), audience: audience, fragment: target.fragment}
+	st := &authorizeState{
+		ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment,
+		redirectURIOmitted: in.params.Get(paramRedirectURI) == "",
+	}
 
 	if s.cfg.Extension == nil {
 		return st, true
@@ -548,7 +653,7 @@ func (s *Server) authorize(cfg AuthorizeConfig, consent ConsentFunc, w http.Resp
 
 	granted, err := grantedScope(&st.ar, decision)
 	if err != nil {
-		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request"))
+		s.refuseAuthorize(w, r, st, ErrInvalidScope.WithDescription("granted scope exceeds the request").WithCause(err))
 
 		return
 	}
@@ -665,13 +770,13 @@ func (s *Server) refuseAuthorize(w http.ResponseWriter, r *http.Request, st *aut
 // honored, and the answer could not even be encoded as the client
 // expects: OIDC Core 1.0 incorporating errata set 2, §3.1.2.6, answers it
 // with a bare 400 Bad Request.
-func responseModeSupported(cfg AuthorizeConfig, r *http.Request) bool {
-	mode := r.FormValue("response_mode")
+func responseModeSupported(cfg AuthorizeConfig, params url.Values) bool {
+	mode := params.Get(paramResponseMode)
 	if mode == "" {
 		return true
 	}
 
-	if cfg.AllowImplicit && r.FormValue("response_type") == responseTypeToken {
+	if cfg.AllowImplicit && params.Get("response_type") == responseTypeToken {
 		return mode == responseModeFragment
 	}
 
@@ -698,41 +803,45 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 
 // parseAuthorizeRequest validates the scope and (for the code flow) the
 // PKCE parameters, returning the [AuthorizeRequest] or an [*Error].
-func (s *Server) parseAuthorizeRequest(r *http.Request, client Client, redirectURI string, flow authorizeFlow) (*AuthorizeRequest, *Error) {
-	scope, err := authorizeScope(r.FormValue("scope"), client.Scopes())
-	if err != nil {
-		return nil, ErrInvalidScope.WithDescription(err.Error())
+func (s *Server) parseAuthorizeRequest(in authorizeInput, flow authorizeFlow) (*AuthorizeRequest, *Error) {
+	scope, oerr := authorizeScope(in.params.Get(paramScope), in.client.Scopes())
+	if oerr != nil {
+		return nil, oerr
 	}
 
-	challenge := r.FormValue("code_challenge")
-	method := r.FormValue("code_challenge_method")
+	challenge := in.params.Get("code_challenge")
+	method := in.params.Get("code_challenge_method")
 
 	// PKCE applies to the authorization-code flow only.
 	if flow == flowCode {
-		if perr := s.validateAuthorizePKCE(challenge, method); perr != nil {
+		if perr := s.validateAuthorizePKCE(in.client, challenge, method); perr != nil {
 			return nil, ErrInvalidRequest.WithDescription(perr.Error())
 		}
 	}
 
 	return &AuthorizeRequest{
-		Client:              client,
-		ResponseType:        r.FormValue("response_type"),
-		RedirectURI:         redirectURI,
+		Client:              in.client,
+		ResponseType:        in.params.Get("response_type"),
+		RedirectURI:         in.redirectURI,
 		Scope:               scope,
-		State:               r.FormValue("state"),
+		State:               in.params.Get("state"),
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: method,
-		Nonce:               r.FormValue("nonce"),
+		Nonce:               in.params.Get("nonce"),
 	}, nil
 }
 
-// validateAuthorizePKCE enforces the profile's PKCE policy and the RFC 7636
-// §4.2 challenge syntax on the /authorize parameters. Presence, method and
-// profile are checked first, so they keep their errors when a request
-// breaks several rules. The descriptions never echo the input.
-func (s *Server) validateAuthorizePKCE(challenge, method string) error {
+// validateAuthorizePKCE enforces the PKCE policy and the RFC 7636 §4.2
+// challenge syntax on the /authorize parameters of client. A challenge is
+// required under the profiles that mandate PKCE, and under every profile
+// from a client that is not confidential (RFC 9700 §2.1.1: public clients
+// MUST use PKCE; an untyped client is not known to be confidential).
+// Presence, method and profile are checked first, so they keep their errors
+// when a request breaks several rules. The descriptions never echo the
+// input.
+func (s *Server) validateAuthorizePKCE(client Client, challenge, method string) error {
 	if challenge == "" {
-		if s.cfg.Profile.RequiresPKCE() {
+		if s.cfg.Profile.RequiresPKCE() || client.Type() != ClientConfidential {
 			return errors.New("code_challenge is required")
 		}
 
@@ -786,6 +895,7 @@ func (s *Server) issueAuthorizationCode(
 		ClientID:            st.clientID,
 		Subject:             grant.subject,
 		RedirectURI:         st.ar.RedirectURI,
+		RedirectURIOmitted:  st.redirectURIOmitted,
 		Scope:               grant.scope,
 		CodeChallenge:       st.ar.CodeChallenge,
 		CodeChallengeMethod: st.ar.CodeChallengeMethod,
@@ -858,14 +968,27 @@ func (s *Server) issueImplicitToken(
 	target.redirect(w, r, params)
 }
 
-// grantedScope resolves the scope to grant: the consent value when it
-// narrows the request, the request scope otherwise. Broadening is refused.
+// grantedScope resolves the scope an approval grants: the request's when
+// the consent names none — an empty or all-SP Consent.Scope — otherwise the
+// consent's tokens, parsed like a request's (RFC 6749 §3.3) and returned
+// canonical, each of which MUST be requested: an empty request admits none.
+// The request is a subset of the client's registration already, so a grant
+// never exceeds request ∩ registration.
 func grantedScope(ar *AuthorizeRequest, decision *Consent) (string, error) {
-	if decision.Scope == "" {
+	tokens, err := scopes.Parse(decision.Scope)
+	if err != nil {
+		return "", err //nolint:wrapcheck // a scopes sentinel, the cause the ErrorHook gets
+	}
+
+	if len(tokens) == 0 {
 		return ar.Scope, nil
 	}
 
-	return authorizeScope(decision.Scope, strings.Fields(ar.Scope))
+	if !scopes.NewSet(strings.Fields(ar.Scope)).Admits(tokens) {
+		return "", errScopeNotAllowed
+	}
+
+	return scopes.Join(tokens), nil
 }
 
 // resolveRedirectURI returns the redirect URI to use: the requested one
@@ -890,27 +1013,36 @@ func resolveRedirectURI(client Client, requested string) (string, bool) {
 	return "", false
 }
 
-// errScopeNotAllowed reports a requested scope outside the allowed set. Its
-// text is the error_description: it never echoes the request.
-var errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+// Why a requested scope is refused. Their text is the error_description: it
+// never echoes the request.
+var (
+	errScopeNotAllowed = errors.New("a requested scope is not allowed for this client")
+	errScopeMalformed  = errors.New("the requested scope is malformed or too large")
+)
 
-// authorizeScope checks that every requested scope is in the allowed set
-// and returns the normalized (space-joined) scope. An empty allowed set
-// means the client carries no scope restriction.
-func authorizeScope(requested string, allowed []string) (string, error) {
-	fields := strings.Fields(requested)
-
-	if len(allowed) == 0 {
-		return strings.Join(fields, " "), nil
+// authorizeScope checks a requested scope value against the client's allowed
+// scopes and returns it canonical: single-SP joined, duplicates dropped. The
+// value is parsed strictly (RFC 6749 §3.3: SP-separated NQCHAR tokens), at
+// most 100 tokens and 4096 bytes — anything else is invalid_scope
+// ("malformed", §4.1.2.1), with the scopes sentinel as cause. Every token
+// must be allowed: an empty allowed set admits none ([ErrNoScopesDeclared]
+// as cause), and a request without scope gets the empty scope.
+func authorizeScope(requested string, allowed []string) (string, *Error) {
+	tokens, err := scopes.Parse(requested)
+	if err != nil {
+		return "", ErrInvalidScope.WithDescription(errScopeMalformed.Error()).WithCause(err)
 	}
 
-	for _, s := range fields {
-		if !slices.Contains(allowed, s) {
-			return "", errScopeNotAllowed
+	if !scopes.NewSet(allowed).Admits(tokens) {
+		refusal := ErrInvalidScope.WithDescription(errScopeNotAllowed.Error())
+		if len(allowed) == 0 {
+			refusal = refusal.WithCause(ErrNoScopesDeclared)
 		}
+
+		return "", refusal
 	}
 
-	return strings.Join(fields, " "), nil
+	return scopes.Join(tokens), nil
 }
 
 // redirectAuthorizeError sends an RFC 6749 §4.1.2.1 / §4.2.2.1 error

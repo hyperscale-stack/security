@@ -424,6 +424,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `OIDC_PROVIDER_ISSUER`, `OIDC_PROVIDER_ADDR` and
   `OIDC_PROVIDER_REDIRECT_URI`; the default redirect URI is the callback of
   the `demo` connection of `examples/oidc-client` (#86).
+- **OAuth2 absolute refresh-family lifetime**: `grant.Config.RefreshFamilyTTL`
+  (opt-in, zero by default) bounds a refresh-token family's lifetime from its
+  first issuance, which refresh tokens now record
+  (`oauth2.RefreshToken.FamilyIssuedAt`, carried unchanged by every rotation):
+  no refresh token outlives the deadline and a later refresh is
+  `invalid_grant`. `RefreshTTL` keeps its inactivity semantics (RFC 9700
+  §4.14.2).
 
 ### Changed
 
@@ -561,6 +568,35 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   keeps a `mockery_test.go` importing `testify/mock`, so its `go.mod` is the
   same with or without them (`github.com/stretchr/objx` becomes an indirect
   requirement).
+- **OAuth2 scope values are parsed strictly (breaking)**: the `scope` of
+  `/authorize` and `/token`, `Consent.Scope` and `ExtensionGrant.Scope` are
+  read as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`, separated by
+  SP — at most 100 tokens and 4096 bytes; anything else is `invalid_scope`
+  (`server_error` for an extension). Scopes are issued and stored canonical,
+  duplicates dropped, refresh narrowing included, and the `/token`
+  `invalid_scope` description no longer echoes the request. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 clients get only what they declare (breaking)**: an empty
+  `Client.GrantTypes()` allows no grant and an empty `Client.Scopes()` no
+  scope — both meant "anything" before. `/token` checks the client's grant
+  types for every grant, custom ones included, before the grant runs
+  (`unauthorized_client`; a code or refresh token presented stays untouched),
+  and a code exchange or password grant issues a refresh token only to a
+  client declaring `refresh_token`. Refusals caused by an empty declaration
+  carry `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` to
+  `OnError`. New: `oauth2.ClientAllowsGrantType` and the `GrantTypeImplicit`,
+  `GrantTypeClientCredentials`, `GrantTypePassword` constants. Every client
+  must declare its grant types and scopes. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `AuthorizationCode.RedirectURIOmitted` (storage, breaking for
+  custom stores and SQL schemas)**: codes record whether the authorization
+  request named a `redirect_uri`; every store persists the flag
+  (`store/sql`: a `redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0` column
+  existing databases add with the `ALTER TABLE` of
+  [MIGRATION.md](MIGRATION.md)).
+- **OAuth2 `RefreshToken.FamilyIssuedAt` (storage, breaking for custom stores
+  and SQL schemas)**: every store persists it (`store/sql`: a
+  `family_issued_at BIGINT NOT NULL DEFAULT 0` column existing databases add
+  with the `ALTER TABLE` of [MIGRATION.md](MIGRATION.md)).
 
 ### Fixed
 
@@ -648,6 +684,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `make generate` works again: `.mockery.yaml` used mockery v3 syntax while
   the pinned tool was v2, and mockery needs a Go 1.27-aware `x/tools` to load
   the packages (v3.8.1).
+- The OAuth2 token endpoint requires `redirect_uri` only when the
+  authorization request included one (RFC 6749 §4.1.3): a client with a
+  single registered redirect URI that omitted it at `/authorize` was refused
+  at `/token` unless it sent the URI anyway. A `redirect_uri` sent at
+  `/token` is still compared with the URI the code was delivered to.
+- OAuth2 documentation matches the code: `HashToken` is an HMAC-SHA256 —
+  with an empty key for the shipped token machinery — not a bare SHA-256;
+  the token endpoint reads the parameters of an
+  `application/x-www-form-urlencoded` body and does not check the content
+  type; client grant types are compared exactly, not case-insensitively; and
+  `Profile20BCP` refuses the legacy `password` grant as well as `implicit`.
 
 ### Removed
 
@@ -903,9 +950,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `oauth2.SecretMatcher` contract now says implementations MUST NOT match
   an empty secret: callers of `DefaultClient` are covered, custom matchers
   are told to follow suit. Public clients still authenticate with `none`,
-  by design; through it, a public client can still use any grant its
-  `GrantTypeValues` allow, `client_credentials` included (RFC 6749 §4.4 is
-  not enforced yet; see [MIGRATION.md](MIGRATION.md)). This breaks public
+  by design — they cannot use `client_credentials`, which only confidential
+  clients may (RFC 6749 §4.4). This breaks public
   clients that sent an empty Basic password — they must use `none` — and
   clients registered as confidential or untyped that authenticated with an
   empty Basic password. See [MIGRATION.md](MIGRATION.md).
@@ -941,3 +987,75 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `unsupported_response_type` descriptions no longer quote or echo the
   request: the former put a double quote, outside the charset, in every
   `invalid_scope` redirect.
+- OAuth2 scope handling is linear and bounded: comparing a requested scope
+  with a client's registration, or a consent's or an extension's narrowing
+  with the request, took time proportional to the product of their sizes, and
+  no request bounded them — tens of thousands of unique scope tokens in one
+  `/authorize` URL cost seconds of CPU. Scope values are now parsed once,
+  refused beyond 100 tokens or 4096 bytes, and compared with set lookups.
+- The OAuth2 consent step can no longer broaden a request without scope. A
+  non-empty `Consent.Scope` had to be a subset of the requested scope, but an
+  empty request admitted any scope — even scopes the client is not registered
+  for — so a `ConsentFunc` taking `Consent.Scope` from request-influenced
+  input (the checkboxes of a consent form) could grant `admin` to a client
+  allowed `read`. A consent now only narrows the request (RFC 6749 §3.3), and
+  a blank one (spaces only) grants exactly what was requested.
+- The OAuth2 `client_credentials` grant refuses every client that is not
+  confidential with `unauthorized_client` (RFC 6749 §4.4: it "MUST only be
+  used by confidential clients"). A public client authenticates with `none`
+  — its `client_id` alone, public by definition (shipped in every copy of a
+  browser or mobile app) — so anyone knowing it obtained access tokens whose
+  subject is the client, with any scope when the client registered none.
+  Untyped clients are refused too: the server cannot know they keep a
+  secret.
+- OAuth2 client registrations fail closed: a client registered without
+  `GrantTypeValues` could use every grant — `client_credentials` and the
+  legacy `password` grant included — and one without `ScopeValues` could
+  request any scope, `admin` included. Both now allow nothing. The token
+  endpoint checks the client's grant types for every grant before it runs,
+  so a custom grant can no longer forget the check, and a code presented by
+  a client not allowed `authorization_code` is no longer consumed.
+- A refresh no longer outlives a client's scope registration: the
+  `refresh_token` grant checked the requested scope against the original
+  grant only, so a refresh token minted with a scope the client was not, or
+  is no longer, registered for — through an empty `ScopeValues`, the
+  consent broadening fixed above, or before an operator removed a scope from
+  a compromised client — kept minting access tokens with it. A refresh now
+  issues an access token only within the client's current `Scopes()`
+  (`invalid_scope` otherwise, nothing consumed).
+- OAuth2 `/authorize` checks the client's grant types: a client declaring
+  neither `authorization_code` nor `implicit` obtained codes — refused only
+  at `/token` — and, under `Profile20` with the implicit flow enabled, access
+  tokens straight from the authorization endpoint. `response_type=code` now
+  needs `authorization_code`, and `token` needs `implicit` (RFC 7591 §2.1);
+  otherwise the request is answered `unauthorized_client` (RFC 6749
+  §4.1.2.1, §4.2.2.1) before the extension or the `ConsentFunc` runs.
+- OAuth2 public clients must use PKCE under every profile (RFC 9700
+  §2.1.1), `Profile20` included: a public — or untyped — client obtained and
+  redeemed codes without any PKCE under `Profile20`, although the
+  documentation said public clients MUST use it. `/authorize` now answers
+  `invalid_request` without `code_challenge` (RFC 7636 §4.4.1), and `/token`
+  refuses such a client a code issued without challenge.
+- The refresh tokens of OAuth2 public clients rotate under every profile
+  (RFC 9700 §4.14.2: "Authorization servers MUST utilize one of these
+  methods to detect refresh token replay by malicious actors for public
+  clients" — sender-constrained tokens or rotation). Under `Profile20`
+  without `RotateRefreshTokens`, a public — or untyped — client's refresh
+  token stayed reusable until it expired, so a stolen one could be replayed
+  undetected. Confidential clients keep the opt-in.
+- OAuth2 endpoints refuse repeated request parameters (RFC 6749 §3.1,
+  §3.2: they "MUST NOT be included more than once"). `/authorize`, `/token`,
+  `/revoke` and `/introspect` used the first value of a repeated parameter —
+  a `redirect_uri`, a `code`, a `client_id`… — while callbacks and other
+  components could read another. A repeated `client_id`, `redirect_uri` or
+  `response_mode` at `/authorize` is now a bare `400`, any other repeated
+  parameter the server reads an `invalid_request`; an empty occurrence is
+  omitted and never hides the value that follows. The `unsupported_grant_type`
+  description no longer echoes the request. See [MIGRATION.md](MIGRATION.md).
+- OAuth2 client authentication accepts one method per request (RFC 6749
+  §2.3). A request carrying a valid HTTP Basic header and a wrong
+  `client_secret` in its body was authenticated by the header — the body
+  secret ignored — and one authenticated with Basic as client A naming
+  `client_id=B` in its body was served as A. Both, and several
+  `Authorization` fields, are now `invalid_request` (RFC 6749 §5.2) at
+  `/token`, `/revoke` and `/introspect`.

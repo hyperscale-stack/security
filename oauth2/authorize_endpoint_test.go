@@ -36,6 +36,7 @@ func newAuthorizeServer(t *testing.T, profile oauth2.Profile) *oauth2.Server {
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
+			GrantTypeValues:   allGrantTypes,
 			IDValue:           testClientID,
 			Secret:            testClientSecret,
 			TypeValue:         oauth2.ClientConfidential,
@@ -442,8 +443,16 @@ func TestAuthorizeImplicitHappyPath(t *testing.T) {
 	srv := newAuthorizeServer(t, oauth2.Profile20)
 	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: implicitTokens()}
 
-	rec := runAuthorizeCfg(srv, cfg, implicitQuery(), approve)
+	var seen *oauth2.AuthorizeRequest
+
+	rec := runAuthorizeCfg(srv, cfg, implicitQuery(), func(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+		seen = ar
+
+		return approve(w, r, ar)
+	})
 	require.Equal(t, http.StatusFound, rec.Code)
+	require.NotNil(t, seen)
+	assert.Equal(t, "token", seen.ResponseType)
 
 	loc := mustLocation(t, rec)
 	assert.Empty(t, loc.RawQuery, "the implicit response uses the fragment, not the query")

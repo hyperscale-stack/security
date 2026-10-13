@@ -35,7 +35,10 @@ func marshalJSON(v any) ([]byte, error) {
 // extension_data fields are plain strings — the only JSON values cjson
 // round-trips byte-exact — and absent from a record written before they
 // existed, which decodes them as "". The rotation script compares them,
-// reading a missing or null field as "".
+// reading a missing or null field as "". The code's redirect_uri_omitted
+// flag is a JSON boolean, which cjson round-trips, absent when false, and
+// a refresh token's family_issued_at a number of Unix seconds, absent when
+// zero.
 
 type codeDTO struct {
 	ClientID            string `json:"client_id"`
@@ -49,6 +52,9 @@ type codeDTO struct {
 	ExpiresAt           int64  `json:"expires_at"`
 	Issuer              string `json:"issuer,omitempty"`
 	ExtensionData       string `json:"extension_data,omitempty"`
+	// RedirectURIOmitted is absent — false, redirect_uri required — from a
+	// payload written before it existed.
+	RedirectURIOmitted bool `json:"redirect_uri_omitted,omitempty"`
 	// Consumed and ConsumedBy are only written by consumeCodeScript: the
 	// flag of a consumed code and the nonce of the call that consumed it.
 	// A payload without them — or with nulls — is an unconsumed code.
@@ -69,6 +75,7 @@ func encodeCode(c *oauth2.AuthorizationCode) ([]byte, error) {
 		ExpiresAt:           c.ExpiresAt.Unix(),
 		Issuer:              c.Issuer,
 		ExtensionData:       c.ExtensionData,
+		RedirectURIOmitted:  c.RedirectURIOmitted,
 	})
 }
 
@@ -93,6 +100,7 @@ func decodeCode(hash string, raw []byte) (*oauth2.AuthorizationCode, bool, strin
 		ExpiresAt:           time.Unix(d.ExpiresAt, 0),
 		Issuer:              d.Issuer,
 		ExtensionData:       d.ExtensionData,
+		RedirectURIOmitted:  d.RedirectURIOmitted,
 	}, d.Consumed, d.ConsumedBy, nil
 }
 
@@ -152,19 +160,23 @@ type refreshDTO struct {
 	ExpiresAt     int64  `json:"expires_at"`
 	Issuer        string `json:"issuer,omitempty"`
 	ExtensionData string `json:"extension_data,omitempty"`
+	// FamilyIssuedAt is absent — no recorded family start — from a payload
+	// written before it existed, or when zero.
+	FamilyIssuedAt int64 `json:"family_issued_at,omitempty"`
 }
 
 func encodeRefresh(t *oauth2.RefreshToken) ([]byte, error) {
 	return marshalJSON(refreshDTO{
-		ClientID:      t.ClientID,
-		Subject:       t.Subject,
-		Scope:         t.Scope,
-		FamilyID:      t.FamilyID,
-		Consumed:      t.Consumed,
-		IssuedAt:      t.IssuedAt.Unix(),
-		ExpiresAt:     t.ExpiresAt.Unix(),
-		Issuer:        t.Issuer,
-		ExtensionData: t.ExtensionData,
+		ClientID:       t.ClientID,
+		Subject:        t.Subject,
+		Scope:          t.Scope,
+		FamilyID:       t.FamilyID,
+		Consumed:       t.Consumed,
+		IssuedAt:       t.IssuedAt.Unix(),
+		ExpiresAt:      t.ExpiresAt.Unix(),
+		Issuer:         t.Issuer,
+		ExtensionData:  t.ExtensionData,
+		FamilyIssuedAt: unixOrZero(t.FamilyIssuedAt),
 	})
 }
 
@@ -175,17 +187,37 @@ func decodeRefresh(hash string, raw []byte) (*oauth2.RefreshToken, error) {
 	}
 
 	return &oauth2.RefreshToken{
-		TokenHash:     hash,
-		ClientID:      d.ClientID,
-		Subject:       d.Subject,
-		Scope:         d.Scope,
-		FamilyID:      d.FamilyID,
-		Consumed:      d.Consumed,
-		IssuedAt:      time.Unix(d.IssuedAt, 0),
-		ExpiresAt:     time.Unix(d.ExpiresAt, 0),
-		Issuer:        d.Issuer,
-		ExtensionData: d.ExtensionData,
+		TokenHash:      hash,
+		ClientID:       d.ClientID,
+		Subject:        d.Subject,
+		Scope:          d.Scope,
+		FamilyID:       d.FamilyID,
+		Consumed:       d.Consumed,
+		IssuedAt:       time.Unix(d.IssuedAt, 0),
+		ExpiresAt:      time.Unix(d.ExpiresAt, 0),
+		Issuer:         d.Issuer,
+		ExtensionData:  d.ExtensionData,
+		FamilyIssuedAt: timeOrZero(d.FamilyIssuedAt),
 	}, nil
+}
+
+// unixOrZero encodes a time as Unix seconds, 0 for the zero time — never
+// the negative second of year 1.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+
+	return t.Unix()
+}
+
+// timeOrZero decodes Unix seconds: 0 is the zero time, not the epoch.
+func timeOrZero(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(sec, 0)
 }
 
 // ttlUntil returns the duration from now until t, clamped to a 1-second

@@ -30,8 +30,16 @@ const (
 	codeChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 )
 
+// allGrantTypes declares every shipped grant type: the fixtures' clients
+// may use any of them (a client declaring none may use none).
+var allGrantTypes = []string{
+	oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken,
+	oauth2.GrantTypeClientCredentials, oauth2.GrantTypePassword,
+}
+
 func newClient() oauth2.Client {
 	return &oauth2.DefaultClient{
+		GrantTypeValues:   allGrantTypes,
 		IDValue:           clientID,
 		Secret:            clientSecret,
 		TypeValue:         oauth2.ClientConfidential,

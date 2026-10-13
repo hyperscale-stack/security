@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // introspectionCallerRefused is the error_description of the 401 answered
@@ -33,6 +35,10 @@ const introspectionCallerRefused = "introspection requires confidential client a
 // [ServerConfig.IntrospectionPolicy] allows it, or when no policy is set.
 // Anything else (an unknown, expired or consumed token, or one the policy
 // withholds) answers a bare {"active":false} (RFC 7662 §2.2).
+//
+// token and token_type_hint, like the client credentials, are
+// single-valued: a request including one more than once with a value is
+// answered invalid_request (RFC 6749 §5.2).
 func (s *Server) IntrospectHandler() http.Handler {
 	return http.HandlerFunc(s.serveIntrospect)
 }
@@ -57,7 +63,16 @@ func (s *Server) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken := r.PostFormValue("token")
+	// RFC 7662 §2.1: which token a request carrying two would describe is
+	// ambiguous.
+	form, repeated := param.SingleValued(r.PostForm, tokenLookupParameters)
+	if repeated != "" {
+		s.writeOAuthError(r.Context(), w, repeatedParameter(repeated))
+
+		return
+	}
+
+	rawToken := form.Get("token")
 	if rawToken == "" {
 		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("missing token"))
 

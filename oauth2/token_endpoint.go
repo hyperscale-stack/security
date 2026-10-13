@@ -10,19 +10,38 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // TokenHandler returns the http.Handler for the RFC 6749 §3.2 /token
 // endpoint. The handler:
 //
-//  1. Enforces POST + application/x-www-form-urlencoded.
+//  1. Requires POST, and reads the parameters from the
+//     application/x-www-form-urlencoded body (RFC 6749 §3.2): a body of
+//     another type is not parsed, so the request carries no parameter and
+//     fails as such (invalid_client or invalid_request).
 //  2. Resolves the issuer and authenticates the client at it via the
 //     configured ClientAuthenticators (a client bound to other issuers is
 //     unknown, see [IssuerBoundClient]).
-//  3. Looks up the grant_type and dispatches to the matching Grant.
+//  3. Looks up the grant_type, checks that the client declares it
+//     ([ClientAllowsGrantType]; unauthorized_client otherwise, before the
+//     grant runs, custom grants included) and dispatches to the matching
+//     Grant.
 //  4. Serializes the response per RFC 6749 §5.1 (success) — plus the
 //     id_token an [Extension] adds (OpenID Connect Core §3.1.3.3) — or §5.2
 //     (error).
+//
+// The parameters of RFC 6749 and RFC 7636 the endpoint and the shipped
+// grants read — grant_type, code, redirect_uri, code_verifier,
+// refresh_token, scope, username, password, client_id, client_secret — are
+// single-valued (RFC 6749 §3.2): an empty occurrence is omitted, and one
+// included more than once with a value is refused with invalid_request
+// before the grant runs.
+//
+// The shipped grants parse a scope parameter like the authorization
+// endpoint does (RFC 6749 §3.3, at most 100 tokens and 4096 bytes:
+// invalid_scope otherwise) and issue it canonical.
 //
 // Errors are emitted as JSON: {"error":"...","error_description":"..."}.
 func (s *Server) TokenHandler() http.Handler {
@@ -51,7 +70,17 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grantType := r.PostFormValue("grant_type")
+	// The token-endpoint parameters are read single-valued, an empty
+	// occurrence omitted (RFC 6749 §3.2); one included more than once is
+	// refused before the grant runs.
+	form, repeated := param.SingleValued(r.PostForm, tokenParameters)
+	if repeated != "" {
+		s.writeOAuthError(r.Context(), w, repeatedParameter(repeated))
+
+		return
+	}
+
+	grantType := form.Get("grant_type")
 	if grantType == "" {
 		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithDescription("missing grant_type"))
 
@@ -60,7 +89,15 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 
 	handler, ok := s.dispatch[grantType]
 	if !ok {
-		s.writeOAuthError(r.Context(), w, ErrUnsupportedGrantType.WithDescription("grant_type "+grantType+" not supported"))
+		s.writeOAuthError(r.Context(), w, ErrUnsupportedGrantType)
+
+		return
+	}
+
+	// The client's declaration is checked for every grant type, custom ones
+	// included, before the grant runs: a refused request consumes nothing.
+	if !ClientAllowsGrantType(client, grantType) {
+		s.writeOAuthError(r.Context(), w, grantTypeRefusal(client))
 
 		return
 	}
@@ -72,7 +109,7 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := handler.Handle(r.Context(), GrantRequest{
 		Client:    client,
-		Form:      r.PostForm,
+		Form:      form,
 		Issuer:    issuer,
 		Audience:  audience,
 		Now:       now,
@@ -86,6 +123,20 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeTokenResponse(w, resp, now)
+}
+
+// errGrantTypeNotDeclared answers a grant type the client does not declare
+// (RFC 6749 §5.2 unauthorized_client).
+var errGrantTypeNotDeclared = ErrUnauthorizedClient.WithDescription("the client may not use this grant type")
+
+// grantTypeRefusal returns errGrantTypeNotDeclared for c, with
+// [ErrNoGrantTypesDeclared] as cause when c declares no grant type at all.
+func grantTypeRefusal(c Client) *Error {
+	if len(c.GrantTypes()) == 0 {
+		return errGrantTypeNotDeclared.WithCause(ErrNoGrantTypesDeclared)
+	}
+
+	return errGrantTypeNotDeclared
 }
 
 // tokenResponse is the on-wire JSON body per RFC 6749 §5.1. The

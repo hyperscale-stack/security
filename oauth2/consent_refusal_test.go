@@ -326,7 +326,10 @@ func TestAuthorizeIssuanceFailuresAreServerErrors(t *testing.T) {
 				Profile: oauth2.Profile20, Storage: failingCodeStore{memory.New()},
 				IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
 				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-					testClientID: &oauth2.DefaultClient{IDValue: testClientID, RedirectURIValues: []string{redirectURI}},
+					testClientID: &oauth2.DefaultClient{
+						GrantTypeValues: allGrantTypes, IDValue: testClientID, RedirectURIValues: []string{redirectURI},
+						ScopeValues: []string{"read"},
+					},
 				}},
 				ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
 				OnError:    sink.hook,

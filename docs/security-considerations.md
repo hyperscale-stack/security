@@ -55,8 +55,10 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
 ## OAuth2
 
 - **PKCE** — `authorization_code` requires PKCE under `Profile20BCP` and
-  `Profile21Draft`; under `Profile20` it is optional unless
-  `grant.Config.RequirePKCE` is set. `S256` is the only method accepted
+  `Profile21Draft`, and of every client that is not confidential — public
+  or untyped — under every profile (RFC 9700 §2.1.1); under `Profile20` it
+  is optional for a confidential client unless `grant.Config.RequirePKCE`
+  is set. `S256` is the only method accepted
   under BCP / 2.1; `plain` is tolerated only under `Profile20`. Both ends
   enforce the RFC 7636 syntax: `/authorize` answers `invalid_request` to a
   `code_challenge` that is not 43–128 unreserved characters (`plain`) or
@@ -72,6 +74,45 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   counts as absent (RFC 6749 §3.1). The refusal burns the code but revokes
   nothing: a replay of a code redeemed without PKCE still revokes its
   tokens, whatever `code_verifier` it carries.
+- **Client policy** — fail closed: a client may use only the grant types it
+  declares (`Client.GrantTypes`, compared exactly; empty allows none) and
+  request only the scopes it declares (`Client.Scopes`; empty allows none).
+  `/token` checks the grant type for every grant, custom ones included,
+  before the grant runs, so a refused request consumes nothing, and
+  `/authorize` checks the grant of the response type (`authorization_code`
+  for `code`, `implicit` for `token`) before the extension and the
+  `ConsentFunc` run;
+  `client_credentials` refuses every client that is not confidential (RFC
+  6749 §4.4); a consent narrows the requested scope, never broadens it; a
+  refresh token goes only to a client declaring `refresh_token` (RFC 9700
+  §4.14.2), and a refresh issues an access token only within the client's
+  current scope registration, so shrinking a registration takes effect at
+  the next refresh. Refusals caused by an empty declaration reach `OnError` with
+  `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` as cause. Unlike RFC
+  7591 §2, an empty grant-type list implies nothing, and scopes outside the
+  registration are refused rather than ignored (OpenID Connect Core
+  §3.1.2.1 says unknown scope values SHOULD be ignored).
+- **Request parameters** — the parameters each endpoint reads are
+  single-valued (RFC 6749 §3.1, §3.2): an empty occurrence is omitted, and
+  one included more than once with a value is refused — at `/authorize` a
+  repeated `client_id`, `redirect_uri` or `response_mode` with a bare `400`,
+  any other with `invalid_request`; at `/token`, `/revoke` and
+  `/introspect` with `invalid_request`, before the grant or the lookup
+  runs. Callbacks get the request as received: a `ConsentFunc` or an
+  `Extension` reads the core's parameters from the `AuthorizeRequest`, never
+  with `r.FormValue`, which an empty occurrence can mislead.
+- **Scope values** — every scope a client or a callback sends (the `scope`
+  of `/authorize` and `/token`, `Consent.Scope`, `ExtensionGrant.Scope`) is
+  parsed strictly as RFC 6749 §3.3 tokens — printable ASCII but `"` and `\`
+  (NQCHAR), separated by SP; runs of SP and leading or trailing SPs are
+  tolerated, any other whitespace is not — at most 100 tokens (repetitions
+  included) and 4096 bytes. Anything else is `invalid_scope` (`server_error`
+  for an extension), refused before the value is compared with anything.
+  Comparisons are set lookups, so the work a request causes stays linear in
+  its bounded size, and the server issues and stores scopes canonical:
+  single-SP joined, duplicates dropped. A registered scope outside that
+  syntax can never be requested; a scope the server stored itself is never
+  refused for its syntax.
 - **Refresh-token rotation** — mandatory under `Profile20BCP` (the default)
   and `Profile21Draft`, whatever `grant.Config.RotateRefreshTokens` says:
   every refresh exchange consumes the presented token and issues a new one
@@ -87,14 +128,31 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   [Token-family revocation](#token-family-revocation-storage-guarantees).
   Clients MUST keep the refresh token returned by each exchange (RFC 6749
   §6) and must not refresh concurrently with the same token, or they lose
-  the family. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`);
-  without it a refresh token stays reusable until it expires, which RFC 9700
-  §2.2.2 forbids for public clients.
+  the family. `RefreshTTL` is an inactivity expiry that every rotation
+  restarts; `grant.Config.RefreshFamilyTTL` adds an absolute bound from the
+  family's first issuance (`RefreshToken.FamilyIssuedAt`), which also ends a
+  family a thief keeps alive by rotating a stolen token — zero, the
+  default, sets none. Under `Profile20` rotation is opt-in (`RotateRefreshTokens`)
+  for confidential clients only: without it their refresh token stays
+  reusable until it expires, while the refresh token of a client that is
+  not confidential — public or untyped — always rotates (RFC 9700 §2.2.2,
+  §4.14.2); a `refresh_token` grant without a `RefreshTokens` generator then
+  fails their refresh with `server_error`, which `NewServer` cannot detect.
 - **Token storage** — access tokens, refresh tokens, and authorization
-  codes are stored **hashed only** (SHA-256, via `oauth2.HashToken`). The
-  store never sees cleartext, so a database compromise does not yield
-  usable tokens. Tokens carry ≥ 128 bits of entropy, so the bare hash is
-  preimage- and brute-force-resistant.
+  codes are stored **hashed only** (HMAC-SHA256 with an empty key, via
+  `oauth2.HashToken`). The store never sees cleartext, so a database
+  compromise does not yield usable tokens. Tokens carry ≥ 128 bits of
+  entropy, so the unkeyed hash is preimage- and brute-force-resistant.
+- **Codes are consumed before they are validated** — a party holding a
+  leaked code can burn it (presenting it with a wrong verifier, or as
+  another client): it obtains nothing — client, issuer, redirect URI and
+  PKCE still bind the code — but the legitimate exchange then fails with
+  `invalid_grant` and the user authorizes again. This is deliberate:
+  single use rests on one atomic consumption, validating first would need
+  a non-consuming lookup in every store, and refusing a code that has
+  leaked is the conservative outcome (RFC 6749 §4.1.2 requires refusing a
+  reused code). Keep codes out of logs and `Referer` headers, and
+  short-lived (`AuthorizeConfig.CodeTTL`).
 - **Atomic single-use** — `ConsumeAuthorizationCode` is atomic in every
   `Storage` implementation, and so are the token writes: `SaveTokenPair`
   and `RotateRefreshToken` persist a whole pair or nothing, gated by the
@@ -134,10 +192,15 @@ configurable clock skew, and resolves keys by `kid` against a JWKS provider
   §4.1.2). Access tokens validated offline are out of reach, see [Offline
   JWT access tokens](#offline-jwt-access-tokens).
 - **Profiles** — `Profile20BCP` (the default) follows the OAuth 2.0
-  Security BCP: it refuses the `implicit` grant. `Profile21Draft`
-  additionally refuses the `password` grant. Legacy grants are opt-in and
-  refused outright under the stricter profile.
-- **Client authentication** — `client_secret_basic` / `client_secret_post`
+  Security BCP and `Profile21Draft` the OAuth 2.1 draft: both refuse the
+  legacy `implicit` and `password` grants, which only `Profile20` allows —
+  opt-in, never by default.
+- **Client authentication** — one method per request (RFC 6749 §2.3): an
+  `Authorization` header with a body `client_secret`, several
+  `Authorization` fields, or a repeated `client_id` / `client_secret` are
+  `invalid_request` before any client is loaded, and a body `client_id`
+  naming another client than the one authenticated is refused.
+  `client_secret_basic` / `client_secret_post`
   compare secrets in constant time and never accept an empty one. Basic
   form-decodes the user-id and password (RFC 6749 §2.3.1, Appendix B) after
   splitting them at the first colon, refuses an invalid escape as a
@@ -1033,8 +1096,10 @@ span catalog.
       `password` legacy grants without a documented reason.
 - [ ] Give every confidential client that authenticates with a secret a
       high-entropy one. Register a client that cannot keep a secret as
-      public (`none` + PKCE), and list its `GrantTypeValues`: an empty
-      list allows every grant, `client_credentials` included.
+      public (`none` + PKCE). Declare every client's `GrantTypeValues` and
+      `ScopeValues` — an empty list allows nothing — and watch `OnError`
+      for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
+      upgrade.
 - [ ] Register the resource servers calling `/introspect` as confidential
       clients, and set `ServerConfig.IntrospectionPolicy` when several
       resource servers or tenants share the authorization server.
@@ -1049,6 +1114,9 @@ span catalog.
       revoked family whose state is lost before it expires can be revived.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
+- [ ] Bound refresh-token families with `grant.Config.RefreshFamilyTTL` —
+      the longest session you accept, 30 days for instance — so a stolen
+      refresh token kept alive by rotation dies with its family.
 - [ ] Make the `IssuerResolver` return the same issuer for every endpoint
       of a realm (`/authorize`, `/token`, `/revoke`, `/introspect`), and
       authenticate users within `AuthorizeRequest.Issuer` in the

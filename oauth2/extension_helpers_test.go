@@ -297,7 +297,8 @@ func newExtensionEnv(t *testing.T, ext oauth2.Extension, opts ...envOption) *ext
 		Storage: store,
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 			testClientID: &oauth2.DefaultClient{
-				IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+				GrantTypeValues: allGrantTypes,
+				IDValue:         testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
 				RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"openid", "read", "write"},
 			},
 		}},

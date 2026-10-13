@@ -6,16 +6,25 @@ package grant
 
 import (
 	"context"
-	"slices"
-	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 	"github.com/hyperscale-stack/security/oauth2/token"
 )
 
 // ClientCredentials implements RFC 6749 §4.4: the client authenticates
 // itself and obtains an access token bound to its own identity (no
 // resource-owner concept).
+//
+// "The client credentials grant type MUST only be used by confidential
+// clients" (RFC 6749 §4.4): a client whose Type is not
+// [oauth2.ClientConfidential] — public, or untyped and so not known to be
+// confidential — is refused with unauthorized_client, whatever it declares.
+// The rule relies on the client authentication the server ran: the shipped
+// methods authenticate a confidential client only with its credentials
+// (client_secret_basic, client_secret_post; "none" refuses every client
+// that is not public), and a custom [oauth2.ClientAuthenticator] MUST NOT
+// authenticate a confidential client without one.
 //
 // Refresh tokens MUST NOT be issued for this grant (RFC 6749 §4.4.3),
 // so the handler ignores cfg.RefreshTokens even when set.
@@ -33,13 +42,17 @@ func NewClientCredentials(cfg Config) *ClientCredentials {
 }
 
 // Type implements [Grant].
-func (g *ClientCredentials) Type() string { return "client_credentials" }
+func (g *ClientCredentials) Type() string { return oauth2.GrantTypeClientCredentials }
 
 // Handle implements [Grant]. The client has already been authenticated by
 // the time the server hands the request to the grant.
 func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "client_credentials") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use client_credentials")
+	if req.Client.Type() != oauth2.ClientConfidential {
+		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client_credentials requires a confidential client")
+	}
+
+	if err := checkGrantType(req.Client, oauth2.GrantTypeClientCredentials); err != nil {
+		return nil, err
 	}
 
 	scope, err := narrowScopes(req.Form.Get("scope"), req.Client.Scopes())
@@ -79,27 +92,50 @@ func (g *ClientCredentials) Handle(ctx context.Context, req Request) (*Response,
 	}, nil
 }
 
-// narrowScopes filters requested against the client's allowed scopes. When
-// the client has no allowed list, requested is accepted as-is. When
-// requested is empty and the client has at least one scope, the first one
-// is returned as the default — matches the common UX of "no scope ->
-// default scope".
+// The descriptions of the scope refusals of the /token grants: fixed texts
+// that never echo the request.
+const (
+	scopeMalformed  = "the requested scope is malformed or too large"
+	scopeNotAllowed = "a requested scope is not allowed for this client"
+)
+
+// parseRequestedScope parses the scope value a /token request carries:
+// RFC 6749 §3.3 syntax, at most 100 tokens and 4096 bytes (see
+// oauth2/internal/scopes), else invalid_scope (§5.2 "malformed") with the
+// scopes sentinel as cause.
+func parseRequestedScope(requested string) ([]string, error) {
+	tokens, err := scopes.Parse(requested)
+	if err != nil {
+		return nil, oauth2.ErrInvalidScope.WithDescription(scopeMalformed).WithCause(err)
+	}
+
+	return tokens, nil
+}
+
+// narrowScopes checks a requested scope value against the client's allowed
+// scopes and returns it canonical: single-SP joined, duplicates dropped.
+// Every token must be allowed: a client allowing none can request none
+// (invalid_scope, oauth2.ErrNoScopesDeclared as cause). When requested holds
+// no scope and the client has at least one, the first one is returned as the
+// default — the common UX of "no scope -> default scope" (RFC 6749 §3.3 lets
+// the server use a pre-defined default); without any, the scope is empty.
 func narrowScopes(requested string, allowed []string) (string, error) {
-	requestedFields := strings.Fields(requested)
-
-	if len(allowed) == 0 {
-		return requested, nil
+	tokens, err := parseRequestedScope(requested)
+	if err != nil {
+		return "", err
 	}
 
-	if len(requestedFields) == 0 {
+	switch {
+	case len(tokens) == 0 && len(allowed) > 0:
 		return allowed[0], nil
-	}
-
-	for _, s := range requestedFields {
-		if !slices.Contains(allowed, s) {
-			return "", oauth2.ErrInvalidScope.WithDescription("scope " + s + " not allowed for client")
+	case !scopes.NewSet(allowed).Admits(tokens):
+		refusal := oauth2.ErrInvalidScope.WithDescription(scopeNotAllowed)
+		if len(allowed) == 0 {
+			refusal = refusal.WithCause(oauth2.ErrNoScopesDeclared)
 		}
-	}
 
-	return strings.Join(requestedFields, " "), nil
+		return "", refusal
+	default:
+		return scopes.Join(tokens), nil
+	}
 }

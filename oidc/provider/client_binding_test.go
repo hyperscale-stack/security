@@ -27,7 +27,7 @@ func TestCrossTenantClientNeverReachesTheInteraction(t *testing.T) {
 	bound := &oauth2.DefaultClient{
 		IDValue: "tenant-a-app", Secret: webClientSecret, TypeValue: oauth2.ClientConfidential,
 		RedirectURIValues: []string{webRedirectURI}, ScopeValues: []string{"openid", "profile", "email"},
-		IssuerValues: []string{testIssuer},
+		GrantTypeValues: webGrantTypes, IssuerValues: []string{testIssuer},
 	}
 	e := newEnv(t, withClient(bound))
 	q := with(authorizeQuery(), "client_id", bound.IDValue)

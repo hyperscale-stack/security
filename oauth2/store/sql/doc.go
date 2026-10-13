@@ -40,10 +40,10 @@
 //
 // Migrate only creates the tables that are missing. When a release adds
 // columns to existing tables — the issuer and extension_data columns of
-// codes and tokens, for instance — MIGRATION.md lists the ALTER TABLE
-// statements to apply, through your migration tool, before the release
-// serves traffic; a row written before them reads the new columns as
-// empty.
+// codes and tokens, or the redirect_uri_omitted flag of codes, for
+// instance — MIGRATION.md lists the ALTER TABLE statements to apply,
+// through your migration tool, before the release serves traffic; a row
+// written before them reads the new columns as empty, or as their default.
 //
 // # Cleanup
 //

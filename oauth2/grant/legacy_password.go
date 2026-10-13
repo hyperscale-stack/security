@@ -53,12 +53,12 @@ func NewLegacyPassword(cfg Config, verifier ResourceOwnerVerifier) *LegacyPasswo
 
 // Type implements [oauth2.Grant]. The "password" identifier is what
 // oauth2.NewServer matches to refuse this grant outside Profile20.
-func (g *LegacyPassword) Type() string { return "password" }
+func (g *LegacyPassword) Type() string { return oauth2.GrantTypePassword }
 
 // Handle implements [oauth2.Grant].
 func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "password") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use the password grant")
+	if err := checkGrantType(req.Client, oauth2.GrantTypePassword); err != nil {
+		return nil, err
 	}
 
 	username := req.Form.Get("username")
@@ -90,7 +90,7 @@ func (g *LegacyPassword) Handle(ctx context.Context, req Request) (*Response, er
 	// No authorization precedes this grant: its tokens carry no grant
 	// context.
 	return issueTokenPair(ctx, g.cfg, req, issuance{
-		subject: subject, scope: scope, refreshScope: scope, familyID: familyID,
+		subject: subject, scope: scope, refreshScope: scope, familyID: familyID, familyIssuedAt: req.Now,
 	})
 }
 

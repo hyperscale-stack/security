@@ -50,7 +50,8 @@ func newCodeReplayServer(t *testing.T, store oauth2.Storage, sink *errorSink) *o
 
 	client := func(id, secret string, typ oauth2.ClientType) oauth2.Client {
 		return &oauth2.DefaultClient{
-			IDValue: id, Secret: secret, TypeValue: typ,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         id, Secret: secret, TypeValue: typ,
 			RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
 		}
 	}

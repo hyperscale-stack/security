@@ -14,7 +14,12 @@ import (
 // server unpacks the HTTP request once and feeds this struct to whichever
 // Grant matches the grant_type parameter.
 type GrantRequest struct {
-	Client   Client
+	Client Client
+	// Form holds the request body. The parameters the server reads (see
+	// [Server.TokenHandler]) are single-valued — an empty occurrence
+	// omitted, a repeated one refused before the grant runs (RFC 6749
+	// §3.2) — any other as sent: a custom grant refuses its own repeated
+	// parameters.
 	Form     url.Values
 	Issuer   string
 	Audience string
@@ -52,7 +57,10 @@ type GrantResponse struct {
 
 // Grant validates and processes one OAuth2 grant_type value. Each Grant is
 // invoked exclusively by the server's /token endpoint; the server
-// authenticates the client beforehand.
+// authenticates the client beforehand and checks that it declares the grant
+// type ([ClientAllowsGrantType]). A custom grant applies the client's scope
+// registration itself: [Client.Scopes], compared exactly, an empty list
+// allowing no scope.
 type Grant interface {
 	// Type returns the grant_type identifier.
 	Type() string

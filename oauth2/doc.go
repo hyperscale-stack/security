@@ -19,6 +19,12 @@
 //     ServerConfig.IntrospectionPolicy decides which active tokens each
 //     caller may see, enforcing resource and tenant boundaries (RFC 7662
 //     §4).
+//   - Clients get only what they declare: the grant types of
+//     Client.GrantTypes — checked at /token for every grant, custom ones
+//     included, before it runs — and the scopes of Client.Scopes, an empty
+//     list allowing nothing. client_credentials serves confidential
+//     clients only (RFC 6749 §4.4), and refresh tokens go to clients
+//     declaring refresh_token.
 //   - Grants implement authorization_code (with PKCE), client_credentials
 //     and refresh_token. The legacy password grant (grant.NewLegacyPassword)
 //     is opt-in and refused outside Profile20.

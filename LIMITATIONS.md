@@ -11,11 +11,6 @@ future refactor phases.
 
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
-- **RFC 6749 §4.4 is not enforced yet** — the `client_credentials` grant
-  "MUST only be used by confidential clients", but it is not refused to
-  public clients (authenticated with `none`), and an empty
-  `GrantTypeValues` allows every grant: restrict `GrantTypeValues` for
-  public clients.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
   none, although its RFC 8414 metadata advertises `jwks_uri`: mount the
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
@@ -45,8 +40,14 @@ future refactor phases.
   locking semantics, not tested.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
-  `consumed`, #83's `issuer` and `extension_data`) are added with the
-  statements MIGRATION.md lists, through your migration tool.
+  `consumed`, #83's `issuer` and `extension_data`, the codes'
+  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) are added
+  with the statements MIGRATION.md lists, through your migration tool.
+- **A leaked code can be burned** — codes are consumed before they are
+  validated, so a party holding a code (but not its client's credentials or
+  PKCE verifier) can make the legitimate exchange fail with
+  `invalid_grant`; it obtains nothing. A deliberate trade-off, see
+  [docs/security-considerations.md](docs/security-considerations.md).
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels
@@ -65,11 +66,6 @@ future refactor phases.
   by issuer.
 - **`/introspect` returns no `iss`** — the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
-- **Duplicated request parameters are not refused** — `/authorize` and
-  `/token` read the first value of a repeated parameter, while RFC 6749 §3.1
-  says request parameters MUST NOT be included more than once. An
-  `oauth2.Extension` sees every value in `r.Form` and can refuse its own:
-  `oidc/provider` refuses them in OpenID authentication requests.
 - **The `nonce` parameter is not bounded by the core** — `/authorize` records
   it as sent; `oidc/provider` bounds it in OpenID requests (512 bytes).
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
@@ -102,17 +98,23 @@ matrix. Not supported, and never advertised:
 - **Client authentication** — `client_secret_jwt`, `private_key_jwt` and
   mTLS (the core's `client_secret_basic`, `client_secret_post` and `none`
   are).
+- **Unknown scope values are refused** — a scope value outside the
+  client's registration is `invalid_scope` (the oauth2 core's client
+  policy), where Core §3.1.2.1 says unknown scope values SHOULD be ignored:
+  a client registers every scope it requests, `openid` and
+  `offline_access` included.
 - **Scope claims in the ID Token** — the claims of `profile`, `email`,
   `address` and `phone` are released at UserInfo only (OIDC Core §5.4); a
   client wanting them in the ID Token requests them through the `claims`
   parameter. Consumers that only read the ID Token (e.g. an API server's
   `--oidc-username-claim=email`) need that request until an opt-in lands.
 - **`redirect_uri` rules after the core's checks** — an OpenID request
-  without `redirect_uri`, or with a repeated one, is refused with a bare
-  400 (Core §3.1.2.1) once the oauth2 core accepted it; an error of the
-  core's own checks (response type, scope, PKCE) comes first and is
-  redirected, as for any OAuth 2.0 request, to the client's sole registered
-  redirect URI or to the first, registered, occurrence of a repeated one.
+  without `redirect_uri` is refused with a bare 400 (Core §3.1.2.1) once the
+  oauth2 core accepted it; an error of the core's own checks (response
+  type, scope, PKCE) comes first and is redirected, as for any OAuth 2.0
+  request, to the client's sole registered redirect URI. A repeated
+  `redirect_uri` is refused by the core itself, with a bare 400, before any
+  other check.
 - **Freshness to the second** — `prompt=login` and `max_age` are enforced
   at the second of `auth_time`: an authentication earlier in the same
   second as the request passes. An `Interaction` that must re-authenticate

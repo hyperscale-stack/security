@@ -6,6 +6,9 @@ package oauth2_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -115,8 +118,8 @@ func TestProfilePredicates(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		profile                                        oauth2.Profile
-		legacy, pkce, rotation, plainPKCE              bool
+		profile                           oauth2.Profile
+		legacy, pkce, rotation, plainPKCE bool
 	}{
 		{oauth2.Profile20, true, false, false, true},
 		{oauth2.Profile20BCP, false, true, true, false},
@@ -167,6 +170,14 @@ func TestHashToken(t *testing.T) {
 	assert.NotEqual(t, oauth2.HashToken(pepper, "tok"), oauth2.HashToken([]byte("x"), "tok"))
 	// SHA-256 HMAC hex output is 64 characters.
 	assert.Len(t, oauth2.HashToken(pepper, "tok"), 64)
+
+	// A nil pepper is an HMAC with an empty key — not a bare SHA-256.
+	mac := hmac.New(sha256.New, nil)
+	mac.Write([]byte("tok"))
+	assert.Equal(t, hex.EncodeToString(mac.Sum(nil)), oauth2.HashToken(nil, "tok"))
+
+	bare := sha256.Sum256([]byte("tok"))
+	assert.NotEqual(t, hex.EncodeToString(bare[:]), oauth2.HashToken(nil, "tok"))
 }
 
 func TestDefaultClient(t *testing.T) {

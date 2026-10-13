@@ -239,12 +239,20 @@ Conventions baked into the core:
 configurable via `ServerConfig.RoutePrefix`).
 
 - `Profile` (2.0 / 2.0-BCP / 2.1-draft) is enforced at runtime on the grants
-  — PKCE required and `plain` PKCE refused under BCP/2.1; legacy `password`
+  — PKCE required and `plain` PKCE refused under BCP/2.1 (PKCE is required
+  of non-confidential clients under every profile); legacy `password`
   and `implicit` flows refused outside `Profile20`.
 - Sub-packages: `grant/` (`authorization_code`, `client_credentials`,
   `refresh_token` with rotation + reuse detection, opt-in legacy `password`),
   `clientauth/` (`client_secret_basic` / `_post` / `none`), `token/` (opaque +
   JWT generators), `pkce/`.
+- **Fail-closed client policy**: a client uses only the grant types
+  (`GrantTypes`, checked at `/token` for every grant before `Handle`) and
+  requests only the scopes (`Scopes`) it declares — an empty list allows
+  nothing (`oauth2.ClientAllowsGrantType`, `ErrNoGrantTypesDeclared`,
+  `ErrNoScopesDeclared`); `client_credentials` is confidential-only; refresh
+  tokens go to clients declaring `refresh_token`. Every test client fixture
+  must declare its grant types and scopes.
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
 - Every authorization is **bound to its issuer**: every endpoint resolves it
   first (the `IssuerResolver` is the realm), codes and tokens record it, and

@@ -7,8 +7,11 @@ package grant
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 )
 
 // RefreshToken implements the RFC 6749 §6 refresh_token grant with the
@@ -21,17 +24,24 @@ import (
 //     whatever the client or issuer presenting it.
 //  2. Re-bind client (refresh.ClientID MUST match the authenticated client)
 //     and issuer (refresh.Issuer MUST match the issuer resolved for the
-//     request; a token stored without one only matches an empty issuer).
-//  3. Optionally narrow scope (RFC 6749 §6 forbids broadening).
+//     request; a token stored without one only matches an empty issuer),
+//     and refuse a family past [Config.RefreshFamilyTTL] (invalid_grant,
+//     nothing consumed).
+//  3. Optionally narrow scope (RFC 6749 §6 forbids broadening), then
+//     require the access token's scope within the client's current scope
+//     registration (invalid_scope otherwise, nothing consumed).
 //  4. Decide rotation before minting anything: mandatory under
-//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], opt-in via
-//     [Config.RotateRefreshTokens] under [oauth2.Profile20]. A rotation
-//     that cannot be honored fails with server_error
-//     ([ErrRotationRequiresGenerator]).
+//     [oauth2.Profile20BCP] and [oauth2.Profile21Draft], and under every
+//     profile for a client that is not confidential (RFC 9700 §4.14.2);
+//     opt-in via [Config.RotateRefreshTokens] for confidential clients
+//     under [oauth2.Profile20]. A rotation that cannot be honored fails
+//     with server_error ([ErrRotationRequiresGenerator]).
 //  5. Mint a fresh access token.
 //  6. When rotating, mint a fresh refresh token in the same family with
-//     the presented token's scope (RFC 6749 §6) — every minted token keeps
-//     the presented token's issuer and grant context, the authentication
+//     the presented token's scope (RFC 6749 §6) and family start, expiring
+//     RefreshTTL later but never past the family's deadline — every minted
+//     token keeps the presented token's issuer and grant context, the
+//     authentication
 //     event a refresh rests on never changes (OIDC Core §12.2, RFC 9068
 //     §2.2.1) — then consume the old token
 //     and persist the new pair in one atomic
@@ -45,10 +55,13 @@ type RefreshToken struct {
 
 // ErrRotationRequiresGenerator reports a refresh_token grant that has to
 // rotate refresh tokens but has no [Config.RefreshTokens] generator to mint
-// the replacement. [oauth2.NewServer] refuses such a grant; should
-// [RefreshToken.Handle] run anyway — called directly, or behind a decorator
-// hiding [RefreshToken.ValidateProfile] — it fails with server_error
-// carrying it as cause, before any token is minted or persisted.
+// the replacement. [oauth2.NewServer] refuses such a grant when the profile
+// or [Config.RotateRefreshTokens] makes every refresh rotate; should
+// [RefreshToken.Handle] have to rotate anyway — the refresh of a client that
+// is not confidential, which rotates under every profile, or a grant called
+// directly or behind a decorator hiding [RefreshToken.ValidateProfile] — it
+// fails with server_error carrying it as cause, before any token is minted
+// or persisted.
 var ErrRotationRequiresGenerator = errors.New("oauth2/grant: refresh-token rotation requires a RefreshTokens generator")
 
 // Compile-time interface check: renaming ValidateProfile would otherwise
@@ -65,12 +78,12 @@ func NewRefreshToken(cfg Config) *RefreshToken {
 }
 
 // Type implements [Grant].
-func (g *RefreshToken) Type() string { return "refresh_token" }
+func (g *RefreshToken) Type() string { return oauth2.GrantTypeRefreshToken }
 
 // Handle implements [Grant].
 func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, error) {
-	if !grantTypeAllowed(req.Client, "refresh_token") {
-		return nil, oauth2.ErrUnauthorizedClient.WithDescription("client cannot use refresh_token")
+	if err := checkGrantType(req.Client, oauth2.GrantTypeRefreshToken); err != nil {
+		return nil, err
 	}
 
 	raw := req.Form.Get("refresh_token")
@@ -105,21 +118,70 @@ func (g *RefreshToken) Handle(ctx context.Context, req Request) (*Response, erro
 		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh_token issued by another issuer")
 	}
 
+	if g.cfg.familyExpired(familyStart(rt), req.Now) {
+		return nil, oauth2.ErrInvalidGrant.WithDescription("refresh token family expired")
+	}
+
 	scope, err := narrowScopesForRefresh(req.Form.Get("scope"), rt.Scope)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := checkRegisteredScope(req.Client, scope); err != nil {
 		return nil, err
 	}
 
 	return g.issueRotated(ctx, req, rt, scope)
 }
 
-// rotates reports whether the exchange rotates the refresh token. The
-// profile can only tighten [Config.RotateRefreshTokens], never relax it —
-// the rule authorization_code applies to PKCE. Rotating needs a
-// [Config.RefreshTokens] generator; without one it returns
-// [ErrRotationRequiresGenerator].
-func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
-	if !g.cfg.RotateRefreshTokens && !p.RequiresRefreshRotation() {
+// familyStart returns the start of rt's family: its recorded
+// FamilyIssuedAt or, for a record written before families recorded it, its
+// own IssuedAt — the latest the family can have started.
+func familyStart(rt *oauth2.RefreshToken) time.Time {
+	if rt.FamilyIssuedAt.IsZero() {
+		return rt.IssuedAt
+	}
+
+	return rt.FamilyIssuedAt
+}
+
+// checkRegisteredScope refuses, with invalid_scope (RFC 6749 §5.2), an
+// access-token scope holding a token the client no longer declares —
+// [oauth2.Client.Scopes], compared exactly, an empty list allowing none: a
+// registration that shrank, or that never declared the scope of a refresh
+// token issued when an empty registration meant "any scope". A refresh
+// token stays bound to the scope consented (RFC 9700 §4.14.2); the server
+// applies its current policy on top (RFC 6749 §3.3). Nothing is consumed.
+func checkRegisteredScope(client oauth2.Client, scope string) error {
+	registered := client.Scopes()
+	if scopes.NewSet(registered).Admits(strings.Fields(scope)) {
+		return nil
+	}
+
+	refusal := oauth2.ErrInvalidScope.WithDescription("the client may no longer use the granted scope")
+	if len(registered) == 0 {
+		return refusal.WithCause(oauth2.ErrNoScopesDeclared)
+	}
+
+	return refusal
+}
+
+// rotatesEveryClient reports whether every exchange rotates under p: the
+// profile mandates it, or [Config.RotateRefreshTokens] opts in. The profile
+// can only tighten the option, never relax it — the rule authorization_code
+// applies to PKCE.
+func (g *RefreshToken) rotatesEveryClient(p oauth2.Profile) bool {
+	return g.cfg.RotateRefreshTokens || p.RequiresRefreshRotation()
+}
+
+// rotates reports whether the exchange of client rotates the refresh token
+// under p: when every exchange does, and under every profile for a client
+// that is not confidential — RFC 9700 §4.14.2: the refresh tokens of public
+// clients MUST be sender-constrained or rotated, and this library rotates
+// them. Rotating needs a [Config.RefreshTokens] generator; without one it
+// returns [ErrRotationRequiresGenerator].
+func (g *RefreshToken) rotates(p oauth2.Profile, client oauth2.Client) (bool, error) {
+	if !g.rotatesEveryClient(p) && client.Type() == oauth2.ClientConfidential {
 		return false, nil
 	}
 
@@ -131,19 +193,24 @@ func (g *RefreshToken) rotates(p oauth2.Profile) (bool, error) {
 }
 
 // ValidateProfile implements [oauth2.ProfileValidator]: it returns
-// [ErrRotationRequiresGenerator] when the grant would have to rotate under
-// p without a [Config.RefreshTokens] generator, so [oauth2.NewServer] fails
-// at boot rather than on the first refresh.
+// [ErrRotationRequiresGenerator] when the grant would have to rotate every
+// refresh token under p without a [Config.RefreshTokens] generator, so
+// [oauth2.NewServer] fails at boot rather than on the first refresh. It
+// cannot know whether the server serves clients that are not confidential,
+// whose refresh tokens rotate under every profile: without a generator,
+// their refresh fails with server_error before anything is minted.
 func (g *RefreshToken) ValidateProfile(p oauth2.Profile) error {
-	_, err := g.rotates(p)
+	if g.rotatesEveryClient(p) && g.cfg.RefreshTokens == nil {
+		return ErrRotationRequiresGenerator
+	}
 
-	return err
+	return nil
 }
 
 func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth2.RefreshToken, scope string) (*Response, error) {
 	// Decided before anything is minted: a rotation that cannot be honored
 	// must not mint an access token.
-	rotate, err := g.rotates(req.Profile)
+	rotate, err := g.rotates(req.Profile, req.Client)
 	if err != nil {
 		return nil, oauth2.ErrServerError.WithCause(err)
 	}
@@ -152,6 +219,7 @@ func (g *RefreshToken) issueRotated(ctx context.Context, req Request, old *oauth
 		grantType: oauth2.GrantTypeRefreshToken,
 		subject:   old.Subject, scope: scope, refreshScope: old.Scope,
 		familyID: old.FamilyID, extensionData: old.ExtensionData,
+		familyIssuedAt: familyStart(old),
 	}
 
 	access, err := mintAccess(ctx, g.cfg, req, iss)
@@ -231,50 +299,26 @@ func (g *RefreshToken) revokeReusedFamily(ctx context.Context, familyID string) 
 	}
 }
 
-// narrowScopesForRefresh refuses broadening (RFC 6749 §6). An empty
-// requested scope inherits the original grant's scope.
+// narrowScopesForRefresh narrows the scope of a refresh (RFC 6749 §6): the
+// requested value is parsed strictly (§3.3) and every token MUST belong to
+// the original grant — a refresh never broadens it — and the narrowed scope
+// is returned canonical. A requested value holding no token is omitted: it
+// inherits the original scope. The original, a value the server stored, is
+// split leniently: a record written before scopes were canonical is never
+// refused for its own scope.
 func narrowScopesForRefresh(requested, original string) (string, error) {
-	if requested == "" {
+	tokens, err := parseRequestedScope(requested)
+	if err != nil {
+		return "", err
+	}
+
+	if len(tokens) == 0 {
 		return original, nil
 	}
 
-	originalSet := make(map[string]struct{}, 8)
-
-	for _, s := range splitScopes(original) {
-		originalSet[s] = struct{}{}
+	if !scopes.NewSet(strings.Fields(original)).Admits(tokens) {
+		return "", oauth2.ErrInvalidScope.WithDescription("refresh cannot broaden scope")
 	}
 
-	for _, s := range splitScopes(requested) {
-		if _, ok := originalSet[s]; !ok {
-			return "", oauth2.ErrInvalidScope.WithDescription("refresh cannot broaden scope")
-		}
-	}
-
-	return requested, nil
-}
-
-func splitScopes(s string) []string {
-	out := make([]string, 0, 4)
-	start := -1
-
-	for i, r := range s {
-		if r == ' ' || r == '\t' {
-			if start >= 0 {
-				out = append(out, s[start:i])
-				start = -1
-			}
-
-			continue
-		}
-
-		if start < 0 {
-			start = i
-		}
-	}
-
-	if start >= 0 {
-		out = append(out, s[start:])
-	}
-
-	return out
+	return scopes.Join(tokens), nil
 }

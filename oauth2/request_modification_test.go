@@ -23,16 +23,18 @@ import (
 // a callback is handed — or, for "client identity", the client it shares
 // with the server.
 var requestEdits = map[string]func(*oauth2.AuthorizeRequest){
-	"response type":   func(ar *oauth2.AuthorizeRequest) { ar.ResponseType = "token" },
-	"redirect URI":    func(ar *oauth2.AuthorizeRequest) { ar.RedirectURI = "https://evil.example/cb" },
-	"scope":           func(ar *oauth2.AuthorizeRequest) { ar.Scope = "openid read write" },
-	"state":           func(ar *oauth2.AuthorizeRequest) { ar.State = "forged" },
-	"code challenge":  func(ar *oauth2.AuthorizeRequest) { ar.CodeChallenge = "" },
-	"PKCE method":     func(ar *oauth2.AuthorizeRequest) { ar.CodeChallengeMethod = "plain" },
-	"nonce":           func(ar *oauth2.AuthorizeRequest) { ar.Nonce = "attacker-nonce" },
-	"issuer":          func(ar *oauth2.AuthorizeRequest) { ar.Issuer = "https://evil.example" },
-	"client replaced": func(ar *oauth2.AuthorizeRequest) { ar.Client = &oauth2.DefaultClient{IDValue: "evil"} },
-	"client removed":  func(ar *oauth2.AuthorizeRequest) { ar.Client = nil },
+	"response type":  func(ar *oauth2.AuthorizeRequest) { ar.ResponseType = "token" },
+	"redirect URI":   func(ar *oauth2.AuthorizeRequest) { ar.RedirectURI = "https://evil.example/cb" },
+	"scope":          func(ar *oauth2.AuthorizeRequest) { ar.Scope = "openid read write" },
+	"state":          func(ar *oauth2.AuthorizeRequest) { ar.State = "forged" },
+	"code challenge": func(ar *oauth2.AuthorizeRequest) { ar.CodeChallenge = "" },
+	"PKCE method":    func(ar *oauth2.AuthorizeRequest) { ar.CodeChallengeMethod = "plain" },
+	"nonce":          func(ar *oauth2.AuthorizeRequest) { ar.Nonce = "attacker-nonce" },
+	"issuer":         func(ar *oauth2.AuthorizeRequest) { ar.Issuer = "https://evil.example" },
+	"client replaced": func(ar *oauth2.AuthorizeRequest) {
+		ar.Client = &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "evil"}
+	},
+	"client removed": func(ar *oauth2.AuthorizeRequest) { ar.Client = nil },
 	"client identity": func(ar *oauth2.AuthorizeRequest) {
 		ar.Client.(*oauth2.DefaultClient).IDValue = "rebound-client" //nolint:forcetypeassert // test client
 	},
@@ -143,7 +145,10 @@ func TestImplicitFlowCallbackModifyingItsRequestFailsClosed(t *testing.T) {
 		Profile: oauth2.Profile20, Storage: store, OnError: sink.hook,
 		IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
 		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-			testClientID: &oauth2.DefaultClient{IDValue: testClientID, RedirectURIValues: []string{redirectURI}},
+			testClientID: &oauth2.DefaultClient{
+				GrantTypeValues: allGrantTypes, IDValue: testClientID, RedirectURIValues: []string{redirectURI},
+				ScopeValues: []string{"read", "write"},
+			},
 		}},
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
 	})

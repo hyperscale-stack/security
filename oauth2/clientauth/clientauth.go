@@ -12,6 +12,13 @@
 //   - client_secret_post  — RFC 6749 §2.3.1 (form parameters)
 //   - none                — public clients (PKCE-only authentication)
 //
+// The server runs the first method whose Match accepts the request, after
+// refusing a request that carries client credentials more than once (RFC
+// 6749 §2.3: one method per request) — an Authorization header with a body
+// client_secret, several Authorization fields, a repeated client_id or
+// client_secret — and refuses a body client_id naming another client than
+// the one authenticated.
+//
 // Adding private_key_jwt requires the JWT module; it lives behind a small
 // adapter in the jwt sub-module so this package stays JOSE-free.
 package clientauth
@@ -25,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/internal/param"
 )
 
 // ClientAuthenticator authenticates the OAuth2 client behind an HTTP
@@ -120,6 +128,21 @@ func decodeBasic(header string) (string, string, bool) {
 	}
 
 	return id, secret, true
+}
+
+// formValue returns the value of the body parameter name: its first
+// non-empty occurrence — an empty one is omitted (RFC 6749 §3.1, §3.2) and
+// never hides the value that follows; the server refuses a parameter
+// repeated with values before any method runs. Like
+// http.Request.PostFormValue, it parses the form when the caller has not.
+func formValue(r *http.Request, name string) string {
+	if r.PostForm == nil {
+		if err := r.ParseForm(); err != nil {
+			return ""
+		}
+	}
+
+	return param.Value(r.PostForm, name)
 }
 
 // errSecretMismatch is the typed error returned by secret-matcher

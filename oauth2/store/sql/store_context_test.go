@@ -193,6 +193,8 @@ func TestSQLDocumentedUpgradeKeepsLegacyRows(t *testing.T) {
 	execAll(t, db, pre83Schema...)
 	seedLegacyRows(t, db)
 	execAll(t, db, upgrade83...)
+	execAll(t, db, upgradeRedirectURIOmitted...)
+	execAll(t, db, upgradeFamilyIssuedAt...)
 
 	store, err := sqlstore.New(db, sqlstore.SQLite)
 	require.NoError(t, err)
@@ -221,6 +223,8 @@ func TestSQLDocumentedBackfillBindsLegacyRows(t *testing.T) {
 	execAll(t, db, pre83Schema...)
 	seedLegacyRows(t, db)
 	execAll(t, db, upgrade83...)
+	execAll(t, db, upgradeRedirectURIOmitted...)
+	execAll(t, db, upgradeFamilyIssuedAt...)
 	execAll(t, db, backfill83...)
 
 	store, err := sqlstore.New(db, sqlstore.SQLite)
@@ -253,4 +257,139 @@ func TestSQLContextColumnsAreNullableText(t *testing.T) {
 			assert.Equal(t, 0, notNull, table+"."+column+" is nullable")
 		}
 	}
+}
+
+// upgradeRedirectURIOmitted is the statement MIGRATION.md tells an existing
+// deployment to apply for the redirect_uri flag of codes — keep it
+// identical.
+var upgradeRedirectURIOmitted = []string{
+	`ALTER TABLE oauth2_auth_codes ADD COLUMN redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0`,
+}
+
+// TestSQLDocumentedUpgradeAddsRedirectURIOmitted applies the documented
+// statement to a database of the previous schema holding a code: the code
+// reads RedirectURIOmitted false — its token request keeps requiring
+// redirect_uri, as it did — and a new code records the flag.
+func TestSQLDocumentedUpgradeAddsRedirectURIOmitted(t *testing.T) {
+	t.Parallel()
+
+	db := openRawSQLite(t)
+	execAll(t, db, pre83Schema...)
+	execAll(t, db, upgrade83...)
+	seedLegacyRows(t, db)
+	execAll(t, db, upgradeRedirectURIOmitted...)
+	execAll(t, db, upgradeFamilyIssuedAt...)
+
+	store, err := sqlstore.New(db, sqlstore.SQLite)
+	require.NoError(t, err)
+
+	code, err := store.ConsumeAuthorizationCode(t.Context(), "legacy-code")
+	require.NoError(t, err)
+	assert.False(t, code.RedirectURIOmitted)
+
+	now := time.Now()
+	fresh := &oauth2.AuthorizationCode{
+		CodeHash: "fresh", ClientID: "c", Subject: "s", RedirectURI: "https://app.example/cb", RedirectURIOmitted: true,
+		Scope: "r", IssuedAt: now, ExpiresAt: now.Add(time.Minute), Issuer: "https://auth.example",
+	}
+	require.NoError(t, store.SaveAuthorizationCode(t.Context(), fresh))
+
+	got, err := store.ConsumeAuthorizationCode(t.Context(), "fresh")
+	require.NoError(t, err)
+	assert.True(t, got.RedirectURIOmitted)
+}
+
+// TestSQLRedirectURIOmittedColumn pins the column Schema adds: a SMALLINT
+// NOT NULL DEFAULT 0 — the form every engine accepts in an ALTER TABLE …
+// ADD COLUMN on a populated table, whose default (0) keeps requiring
+// redirect_uri for the rows written before it.
+func TestSQLRedirectURIOmittedColumn(t *testing.T) {
+	t.Parallel()
+
+	_, db := openSQLite(t)
+
+	var (
+		typ      string
+		notNull  int
+		dfltValu sql.NullString
+	)
+
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT type, "notnull", dflt_value FROM pragma_table_info('oauth2_auth_codes') WHERE name = 'redirect_uri_omitted'`,
+	).Scan(&typ, &notNull, &dfltValu))
+	assert.Equal(t, "SMALLINT", typ)
+	assert.Equal(t, 1, notNull)
+	assert.Equal(t, "0", dfltValu.String)
+}
+
+// upgradeFamilyIssuedAt is the statement MIGRATION.md tells an existing
+// deployment to apply for the family start of refresh tokens — keep it
+// identical.
+var upgradeFamilyIssuedAt = []string{
+	`ALTER TABLE oauth2_refresh_tokens ADD COLUMN family_issued_at BIGINT NOT NULL DEFAULT 0`,
+}
+
+// TestSQLDocumentedUpgradeAddsFamilyIssuedAt applies the documented
+// statement to a database of the previous schema holding a refresh token:
+// it reads no family start — the grant then counts from its IssuedAt — and
+// a new token records its own.
+func TestSQLDocumentedUpgradeAddsFamilyIssuedAt(t *testing.T) {
+	t.Parallel()
+
+	db := openRawSQLite(t)
+	execAll(t, db, pre83Schema...)
+	execAll(t, db, upgrade83...)
+	execAll(t, db, upgradeRedirectURIOmitted...)
+	seedLegacyRows(t, db)
+	execAll(t, db, upgradeFamilyIssuedAt...)
+
+	store, err := sqlstore.New(db, sqlstore.SQLite)
+	require.NoError(t, err)
+
+	legacy, err := store.LookupRefreshToken(t.Context(), "rt-legacy")
+	require.NoError(t, err)
+	assert.True(t, legacy.FamilyIssuedAt.IsZero())
+
+	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+	next := legacyNext("rt-started", "", "")
+	next.Refresh.FamilyIssuedAt = start
+	require.NoError(t, store.RotateRefreshToken(t.Context(), "rt-legacy", next))
+
+	got, err := store.LookupRefreshToken(t.Context(), "rt-started")
+	require.NoError(t, err)
+	assert.True(t, start.Equal(got.FamilyIssuedAt))
+}
+
+// TestSQLFamilyIssuedAtColumn pins the column Schema adds: a BIGINT NOT NULL
+// DEFAULT 0, which every engine accepts on a populated table; 0 reads as no
+// family start.
+func TestSQLFamilyIssuedAtColumn(t *testing.T) {
+	t.Parallel()
+
+	store, db := openSQLite(t)
+
+	var (
+		typ      string
+		notNull  int
+		dfltValu sql.NullString
+	)
+
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT type, "notnull", dflt_value FROM pragma_table_info('oauth2_refresh_tokens') WHERE name = 'family_issued_at'`,
+	).Scan(&typ, &notNull, &dfltValu))
+	assert.Equal(t, "BIGINT", typ)
+	assert.Equal(t, 1, notNull)
+	assert.Equal(t, "0", dfltValu.String)
+
+	// A token without a recorded family start is stored as 0 — the column's
+	// default — never as the negative Unix second of year 1.
+	pair := legacyNext("rt-no-start", "", "")
+	pair.Access.FamilyID, pair.Refresh.FamilyID = "fam-no-start", "fam-no-start"
+	require.NoError(t, store.SaveTokenPair(t.Context(), pair))
+
+	var stored int64
+
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT family_issued_at FROM oauth2_refresh_tokens WHERE token_hash = 'rt-no-start'`).Scan(&stored))
+	assert.Zero(t, stored)
 }

@@ -28,7 +28,9 @@ import (
 //     and issuer (code.Issuer MUST match the issuer resolved for the
 //     request: a code is redeemed in the realm that authorized it, OIDC
 //     Core §16.15).
-//  4. Re-bind redirect_uri (RFC 6749 §4.1.3 paragraph 7).
+//  4. Re-bind redirect_uri (RFC 6749 §4.1.3): required when the
+//     authorization request included it, and identical to the URI the code
+//     was delivered to whenever sent.
 //  5. Verify PKCE when present / required, then check that the client may
 //     use the grant. A code issued without code_challenge is refused when
 //     the request carries a code_verifier, under every profile: the PKCE
@@ -41,6 +43,19 @@ import (
 //     family, carrying its issuer and grant context, let the server's
 //     extension extend the response (an OpenID Connect id_token, with the
 //     code's nonce), persist both atomically and return the pair.
+//
+// The code is consumed before it is validated (step 1): a party holding a
+// leaked code can burn it — presenting it with a wrong verifier, or as
+// another client — and the legitimate exchange then fails closed with
+// invalid_grant. This is deliberate. Single use (RFC 6749 §4.1.2, §10.5)
+// rests on one atomic ConsumeAuthorizationCode; validating first would need
+// a non-consuming lookup and a conditional consumption, a new
+// [oauth2.Storage] contract for every store, to prevent a nuisance, not a
+// breach: the party gets nothing — client, issuer, redirect URI and PKCE
+// still bind the code — and a code presented by someone else has leaked,
+// so refusing the legitimate exchange too, which RFC 6749 §4.1.2 requires
+// of a reused code, is the conservative outcome; the user starts the
+// authorization again.
 //
 // A replay — the store still retains the consumed code — is refused with
 // invalid_grant. When the replay passes steps 2-5 itself, proving
@@ -66,7 +81,7 @@ func NewAuthorizationCode(cfg Config) *AuthorizationCode {
 }
 
 // Type implements [Grant].
-func (g *AuthorizationCode) Type() string { return "authorization_code" }
+func (g *AuthorizationCode) Type() string { return oauth2.GrantTypeAuthorizationCode }
 
 // Handle implements [Grant].
 func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response, error) {
@@ -106,7 +121,7 @@ func (g *AuthorizationCode) Handle(ctx context.Context, req Request) (*Response,
 	return issueTokenPair(ctx, g.cfg, req, issuance{
 		grantType: oauth2.GrantTypeAuthorizationCode, nonce: code.Nonce,
 		subject: code.Subject, scope: code.Scope, refreshScope: code.Scope,
-		familyID: familyID, extensionData: code.ExtensionData,
+		familyID: familyID, extensionData: code.ExtensionData, familyIssuedAt: req.Now,
 	})
 }
 
@@ -138,7 +153,7 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 		return oauth2.ErrInvalidGrant.WithDescription("authorization code issued by another issuer")
 	}
 
-	if redirect := req.Form.Get("redirect_uri"); redirect != code.RedirectURI {
+	if !redirectURIMatches(req.Form.Get("redirect_uri"), code) {
 		return oauth2.ErrInvalidGrant.WithDescription("redirect_uri mismatch")
 	}
 
@@ -146,11 +161,21 @@ func (g *AuthorizationCode) validateExchange(req Request, code *oauth2.Authoriza
 		return err
 	}
 
-	if !grantTypeAllowed(req.Client, "authorization_code") {
-		return oauth2.ErrUnauthorizedClient.WithDescription("client cannot use authorization_code")
+	return checkGrantType(req.Client, oauth2.GrantTypeAuthorizationCode)
+}
+
+// redirectURIMatches applies RFC 6749 §4.1.3 to the redirect_uri a token
+// request sent ("" when it omitted it): it is required when the
+// authorization request included one — a record without the flag included
+// — and, whenever present, it must be the URI the code was delivered to
+// (§5.2 invalid_grant: "does not match the redirection URI used in the
+// authorization request").
+func redirectURIMatches(sent string, code *oauth2.AuthorizationCode) bool {
+	if sent == "" {
+		return code.RedirectURIOmitted
 	}
 
-	return nil
+	return sent == code.RedirectURI
 }
 
 // revokeReplayed answers the replay of a consumed code (RFC 6749 §4.1.2).
@@ -176,10 +201,11 @@ func (g *AuthorizationCode) revokeReplayed(ctx context.Context, req Request, cod
 func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCode) error {
 	verifier := req.Form.Get("code_verifier")
 
-	// PKCE is required when the grant is explicitly configured for it OR
-	// the active profile mandates it (BCP / OAuth 2.1). The profile can
-	// only tighten this, never relax it.
-	pkceRequired := g.cfg.RequirePKCE || req.Profile.RequiresPKCE()
+	// PKCE is required when the grant is explicitly configured for it, when
+	// the active profile mandates it (BCP / OAuth 2.1), and under every
+	// profile for a client that is not confidential (RFC 9700 §2.1.1:
+	// public clients MUST use PKCE). Each can only tighten the rule.
+	pkceRequired := g.cfg.RequirePKCE || req.Profile.RequiresPKCE() || req.Client.Type() != oauth2.ClientConfidential
 
 	if code.CodeChallenge == "" {
 		if pkceRequired {
@@ -216,18 +242,6 @@ func (g *AuthorizationCode) verifyPKCE(req Request, code *oauth2.AuthorizationCo
 	}
 
 	return nil
-}
-
-// grantTypeAllowed reports whether the client is configured for grant.
-// An empty GrantTypes() list means "any grant" — common in single-tenant
-// deployments where the client list is curated.
-func grantTypeAllowed(c oauth2.Client, grant string) bool {
-	all := c.GrantTypes()
-	if len(all) == 0 {
-		return true
-	}
-
-	return slices.Contains(all, grant)
 }
 
 // codeFamilyPrefix domain-separates the token family derived from a code

@@ -52,9 +52,10 @@ func TestOpenIDRequestWithoutRedirectURIIsNotRedirected(t *testing.T) {
 // than once") for OpenID requests: a repeated client_id, redirect_uri or
 // response_mode leaves the target or encoding of the answer ambiguous and
 // gets a bare 400; any other repeated parameter is a redirected
-// invalid_request (§4.1.2.1). An empty repetition is no duplicate (§3.1:
-// empty = omitted) — unless it hides the value from the core, which reads
-// the first occurrence.
+// invalid_request (§4.1.2.1) — the core's repetitions refused by the core
+// itself, an unredirectable one with a bare 400 whatever else is repeated.
+// An empty repetition is no duplicate (§3.1: empty = omitted), except as
+// the first occurrence of a core parameter, which the provider refuses.
 func TestDuplicatedParameters(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +68,10 @@ func TestDuplicatedParameters(t *testing.T) {
 		{"client_id", "&client_id=" + webClientID, http.StatusBadRequest, ""},
 		{"redirect_uri", "&redirect_uri=" + url.QueryEscape(webRedirectURI), http.StatusBadRequest, ""},
 		{"response_mode", "&response_mode=query&response_mode=query", http.StatusBadRequest, ""},
+		{"redirect_uri with another repeated parameter", "&response_type=code&redirect_uri=" + url.QueryEscape("https://evil.example/cb"),
+			http.StatusBadRequest, ""},
+		{"response_mode with another repeated parameter", "&scope=openid&response_mode=query&response_mode=fragment",
+			http.StatusBadRequest, ""},
 		{"nonce", "&nonce=other", http.StatusFound, oauth2.CodeInvalidRequest},
 		{"state", "&state=other", http.StatusFound, oauth2.CodeInvalidRequest},
 		{"scope", "&scope=openid", http.StatusFound, oauth2.CodeInvalidRequest},
@@ -114,7 +119,19 @@ func TestDuplicatedParameters(t *testing.T) {
 			get("/oauth2/authorize?nonce=&"+q.Encode()+"&nonce=late"))
 
 		assert.Equal(t, oauth2.CodeInvalidRequest, redirect(t, rec).Get("error"),
-			"the core read the empty nonce: the later one cannot be honored")
+			"the provider refuses an empty first occurrence of a core parameter")
+	})
+
+	t.Run("empty first occurrence of redirect_uri", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t)
+		rec := serve(e.op.AuthorizeHandler(oauth2.AuthorizeConfig{}),
+			get("/oauth2/authorize?redirect_uri=&"+authorizeQuery().Encode()))
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code, "the core accepts it, the provider refuses it unredirected")
+		assert.Empty(t, rec.Header().Get("Location"))
+		assert.True(t, e.sink.contains(oauth2.ErrUnredirectableRequest))
 	})
 }
 

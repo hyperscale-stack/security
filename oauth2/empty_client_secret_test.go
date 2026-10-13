@@ -43,15 +43,18 @@ func newEmptySecretServer(t *testing.T) (*oauth2.Server, *memory.Store) {
 	store := memory.New()
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
-			IDValue: testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         testClientID, Secret: testClientSecret, TypeValue: oauth2.ClientConfidential,
 		},
 		"secretless-confidential": &oauth2.DefaultClient{
-			IDValue: "secretless-confidential", TypeValue: oauth2.ClientConfidential,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         "secretless-confidential", TypeValue: oauth2.ClientConfidential,
 		},
 		"secretless-public": &oauth2.DefaultClient{
-			IDValue: "secretless-public", TypeValue: oauth2.ClientPublic,
+			GrantTypeValues: allGrantTypes,
+			IDValue:         "secretless-public", TypeValue: oauth2.ClientPublic,
 		},
-		"secretless-untyped": &oauth2.DefaultClient{IDValue: "secretless-untyped"},
+		"secretless-untyped": &oauth2.DefaultClient{GrantTypeValues: allGrantTypes, IDValue: "secretless-untyped"},
 	}}
 	gcfg := grant.Config{Storage: store, AccessTokens: token.NewOpaque(32), AccessTTL: time.Hour}
 

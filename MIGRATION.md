@@ -444,9 +444,8 @@ To migrate:
    `ClientAuthenticator` using another credential (e.g. `private_key_jwt`,
    mTLS). Register a client as public only if it cannot keep a secret — a
    browser or native app using `authorization_code` + PKCE — and then set
-   its `GrantTypeValues`: an empty list allows every grant, and the server
-   does not yet refuse `client_credentials` to public clients (RFC 6749
-   §4.4).
+   its `GrantTypeValues` (an empty list allows no grant; see "a client gets
+   only what it declares and what it asked for" below).
 3. **Custom `SecretMatcher`s** must return `false` when no secret is
    registered or the presented one is empty, whatever they compare
    against: a bcrypt hash of `""` matches `""`.
@@ -968,3 +967,228 @@ To migrate:
 2. Login starts are unauthenticated: consider
    `memory.New(memory.WithCapacity(n))`, sized as LIMITATIONS.md explains,
    together with rate limiting.
+
+### `oauth2`: scope values are parsed strictly and bounded
+
+Comparing a requested scope with a client's registration, a consent's
+narrowing or an extension's narrowing cost a time proportional to the
+product of their sizes, and nothing bounded the request: tens of thousands
+of scope tokens in one URL took seconds of CPU per `/authorize` request.
+Scope values were also split on any Unicode whitespace and, for a client
+without `ScopeValues`, accepted with any character. Every scope value a
+client or a callback sends — the `scope` of `/authorize` and `/token`,
+`Consent.Scope`, `ExtensionGrant.Scope` — is now parsed once, strictly, as
+RFC 6749 §3.3 tokens, compared with set lookups, and issued canonical:
+
+| Scope value | Before | After |
+| ----------- | ------ | ----- |
+| tokens separated by SP (runs of SP, leading or trailing SPs included) | accepted | unchanged |
+| separated by TAB, LF or another Unicode space; holding `"`, `\`, a control or a non-ASCII character | split on any whitespace; any character accepted for a client without `ScopeValues` | `invalid_scope` (`ExtensionGrant.Scope`: `server_error`) |
+| more than 100 tokens (repetitions included) or 4096 bytes | accepted | `invalid_scope` |
+| repeated tokens | kept (`read read`) | dropped: the scope issued and stored is single-SP joined, duplicates dropped (`read`) — `AuthorizeRequest.Scope` included |
+| refresh narrowing | returned as sent (a TAB-separated value too) | canonical; a value holding no token keeps the original scope (RFC 6749 §6) |
+| `/token` `invalid_scope` description | `scope <token> not allowed for client` | a fixed text that never echoes the request |
+
+To migrate:
+
+1. Clients send scope tokens of printable ASCII without `"` or `\`,
+   separated by single spaces — at most 100 of them.
+2. Register scopes in that syntax: a registered scope holding a space or a
+   non-ASCII character can no longer be requested.
+3. A `ConsentFunc` narrowing with `Consent.Scope`, or an `Extension`
+   narrowing with `ExtensionGrant.Scope`, joins its tokens with a single
+   space.
+4. Nothing to do for stored codes and tokens: the server never refuses a
+   scope it stored itself.
+
+### `oauth2`: a client gets only what it declares and what it asked for
+
+The authorization server granted more than a client declared or a request
+asked for. It now enforces a fail-closed client policy, and **every client
+must declare the grant types it uses and the scopes it may request** (step
+3 below):
+
+| | Before | After |
+| --- | --- | --- |
+| `Consent.Scope` adding scopes to a request without `scope` | granted — even scopes outside the client's `ScopeValues` | `invalid_scope`, nothing issued: a consent only narrows the request (RFC 6749 §3.3) |
+| `Consent.Scope` made of spaces only | an empty grant | exactly what was requested, like an empty `Consent.Scope` |
+| `client_credentials` by a public client (authenticated with `none`, its `client_id` alone) or an untyped one | issued, with the scope requested when `ScopeValues` was empty | `400 unauthorized_client` whatever the client declares: only confidential clients may use it (RFC 6749 §4.4) |
+| `GrantTypes()` empty (`DefaultClient.GrantTypeValues` unset) | every grant allowed | no grant allowed: `400 unauthorized_client` at `/token` |
+| a grant type the client does not declare, custom grants included | refused inside the shipped grants only — after a code was consumed — and never for a custom grant | `400 unauthorized_client` before the grant runs: a code or refresh token presented stays untouched |
+| `/authorize` with `response_type=code` (`token`) by a client not declaring `authorization_code` (`implicit`) | code (implicit token) issued; a code was refused only at `/token` | redirected `unauthorized_client` in the flow's response mode, before the extension and the `ConsentFunc` run (RFC 6749 §4.1.2.1, §4.2.2.1; RFC 7591 §2.1) |
+| `Profile20`: a public or untyped client without `code_challenge` | code issued and redeemed without PKCE | `/authorize`: redirected `invalid_request` (`code_challenge is required`, RFC 7636 §4.4.1); `/token`: a code issued without challenge is refused to it (`invalid_grant`, `PKCE required`) — RFC 9700 §2.1.1 |
+| `Profile20` without `RotateRefreshTokens`: refresh of a public or untyped client | the refresh token stayed reusable until it expired | rotated like under the default profiles: a new refresh token with every refresh, reuse of the old one revokes the family (RFC 9700 §4.14.2); without a `RefreshTokens` generator the refresh fails with `server_error` |
+| `Scopes()` empty (`DefaultClient.ScopeValues` unset) | any scope allowed | no scope allowed: a request carrying one is `invalid_scope`; one without scope gets the empty scope |
+| refresh token at a code exchange or a password grant | issued whenever the grant has a `RefreshTokens` generator | issued only to a client declaring `refresh_token` (RFC 9700 §4.14.2) |
+| a refusal caused by an empty declaration | — | `OnError` gets `oauth2.ErrNoGrantTypesDeclared` / `oauth2.ErrNoScopesDeclared` as cause |
+| refresh whose access-token scope holds a scope the client no longer declares | issued: a refresh token kept its scope whatever the registration became | `400 invalid_scope`, nothing consumed; a narrowing inside the registration still refreshes |
+
+To migrate:
+
+1. A `ConsentFunc` that granted scopes to a request without `scope` — a
+   default scope of its own — has the client request that scope instead:
+   `Consent.Scope` can only narrow the request.
+2. Register every machine-to-machine client as confidential
+   (`TypeValue: oauth2.ClientConfidential`) with a high-entropy secret:
+   `client_credentials` refuses public and untyped clients.
+3. **Declare, for every client, the grant types it uses and the scopes it
+   may request** — before upgrading: a client declaring none can no longer
+   obtain anything. With `DefaultClient`:
+
+   ```go
+   &oauth2.DefaultClient{
+       // ...
+       GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken},
+       ScopeValues:     []string{"openid", "profile", "offline_access", "api:read"},
+   }
+   ```
+
+   Grant types are compared exactly with the RFC 7591 §2 values (the
+   `oauth2.GrantType*` constants: `authorization_code`, `implicit`,
+   `refresh_token`, `client_credentials`, `password`, or a custom grant's
+   type); `implicit` gates the legacy `response_type=token`. A client that
+   should receive refresh tokens declares `refresh_token`. An OpenID
+   Connect client declares `openid` — plus `offline_access`, `profile`,
+   `email`… as it requests them — and `authorization_code` (with
+   `refresh_token` for offline access). Custom `Client` implementations: an
+   empty `GrantTypes()` or `Scopes()` now means none.
+4. Custom grants: the server checks the client's declaration before
+   calling `Handle` (declare the custom grant type on the clients using
+   it); a custom grant applies `Client.Scopes()` itself — exact match,
+   empty meaning none — and can call `oauth2.ClientAllowsGrantType`.
+5. After the upgrade, watch `ServerConfig.OnError` for
+   `errors.Is(err, oauth2.ErrNoGrantTypesDeclared)` and
+   `oauth2.ErrNoScopesDeclared`: they name the refusals of clients whose
+   registration declares nothing.
+6. Refresh tokens whose scope exceeds what their client now declares —
+   issued when an empty `ScopeValues` meant any scope, or before the
+   registration shrank — stop refreshing beyond it: the user authorizes
+   again, or the client narrows its refresh requests to declared scopes.
+7. Under `Profile20`, public and untyped clients send PKCE (S256) in their
+   authorization requests, as the default profiles always required, and
+   keep the refresh token each refresh returns (RFC 6749 §6): theirs now
+   rotate. Give the `refresh_token` grant a `RefreshTokens` generator when
+   such clients refresh.
+8. No storage change: the policy applies per request, and instances may be
+   upgraded one at a time.
+
+### `oauth2`: repeated parameters and several client authentication methods are refused
+
+RFC 6749 §3.1 and §3.2: "Request and response parameters MUST NOT be
+included more than once". The server read the first value of a repeated
+parameter, so a request carrying `redirect_uri` twice — the registered one,
+then another — or a client and a request disagreeing on which value counts
+were not refused. The parameters each endpoint reads are now single-valued:
+
+| Request | Before | After |
+| ------- | ------ | ----- |
+| `/authorize` repeating `client_id`, `redirect_uri` or `response_mode` | the first value used | bare `400`, never redirected, whatever else the request repeats (the client, the target or the encoding of the answer are ambiguous); `OnError` gets `invalid_request` |
+| `/authorize` repeating `response_type`, `scope`, `state`, `code_challenge`, `code_challenge_method` or `nonce` — a POST carrying one in the query and in the body included | the first value used | redirected `invalid_request` (`repeated <name>`); a repeated `state` is not echoed |
+| `/token` repeating `grant_type`, `code`, `redirect_uri`, `code_verifier`, `refresh_token`, `scope`, `username`, `password`, `client_id` or `client_secret` | the first value used | `400 invalid_request` before the grant runs: a code presented stays redeemable |
+| `/revoke`, `/introspect` repeating `token`, `token_type_hint`, `client_id` or `client_secret` | the first value used | `400 invalid_request` |
+| a parameter repeated with an empty first occurrence (`scope=&scope=read`) | the empty first value used | the value: an empty occurrence is omitted (RFC 6749 §3.1) |
+| `Authorization` header and a `client_secret` in the body | the header authenticated the client, the body secret was ignored | `400 invalid_request` (`more than one client authentication method`, RFC 6749 §2.3, §5.2), before any client is loaded |
+| several `Authorization` header fields | the first one used | `400 invalid_request` (`more than one Authorization header`) |
+| a body `client_id` naming another client than the one authenticated (Basic as A, `client_id=B`) | the authenticated client served | `400 invalid_request` (`client_id does not name the authenticated client`); the authenticated client's own `client_id` stays accepted (RFC 6749 §3.2.1) |
+| an unrecognized parameter repeated | ignored | unchanged |
+| `unsupported_grant_type` description | echoed the `grant_type` sent | a fixed text |
+
+To migrate:
+
+1. Clients send each parameter once, and authenticate with one method: an
+   HTTP Basic header, or `client_id` and `client_secret` in the body — not
+   both. A consent form posting back to
+   `/authorize` must not repeat in its body a parameter the query already
+   carries.
+2. A `ConsentFunc` or an `Extension` reads the core's parameters from the
+   `*oauth2.AuthorizeRequest`, never with `r.FormValue`: `r` is the request
+   as received, where an empty occurrence can precede the value the server
+   used. An extension refuses its own repeated parameters, as
+   `oidc/provider` does.
+3. A custom grant gets `GrantRequest.Form` with the core's parameters
+   single-valued and its own as sent; a custom `ClientAuthenticator` reads a
+   body parameter as its first non-empty occurrence.
+
+### `oauth2`: `redirect_uri` at `/token` only when `/authorize` received one
+
+RFC 6749 §4.1.3: `redirect_uri` is "REQUIRED, if the `redirect_uri`
+parameter was included in the authorization request". A client with a single
+registered redirect URI may omit it from its authorization request, but its
+token request was then refused (`invalid_grant`, `redirect_uri mismatch`)
+unless it sent the URI anyway. Codes now record whether the authorization
+request named a redirect URI:
+
+| Authorization request | Token request | Before | After |
+| --------------------- | ------------- | ------ | ----- |
+| named `redirect_uri` | the same URI | issued | unchanged |
+| named `redirect_uri` | none, or another | `invalid_grant` | unchanged |
+| omitted it (single registered URI) | none | `invalid_grant` | issued |
+| omitted it | the registered URI | issued | unchanged |
+| omitted it | another URI | `invalid_grant` | unchanged |
+
+`oauth2.AuthorizationCode` gains `RedirectURIOmitted`; its zero value —
+codes written before the upgrade included — keeps requiring `redirect_uri`.
+
+To migrate:
+
+1. **SQL.** `oauth2_auth_codes` gains a `redirect_uri_omitted` column, which
+   `Migrate` does not add to an existing table. Until it exists, every code
+   write and redemption fails with `server_error`. Apply, through your
+   migration tool and before the new build serves traffic — the same
+   statement on PostgreSQL, MySQL and SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes ADD COLUMN redirect_uri_omitted SMALLINT NOT NULL DEFAULT 0;
+   ```
+
+   Existing rows read `0`: their token requests keep requiring
+   `redirect_uri`, as before.
+2. **Redis and memory** need nothing: a code payload without the flag
+   requires `redirect_uri`.
+3. **Custom stores** persist and return `RedirectURIOmitted` — on the record
+   of a `*oauth2.CodeReplayError` too — and pass `storetest.RunConformance`.
+4. **Rollout.** Instances may be upgraded one at a time once the column
+   exists: an earlier build writes the column default (required) and
+   requires `redirect_uri` itself, which only refuses what it refused
+   before.
+
+### `oauth2`: an optional absolute lifetime for refresh-token families
+
+`grant.Config.RefreshTTL` expires a refresh token its client leaves unused,
+the inactivity expiry RFC 9700 §4.14.2 recommends; every rotation restarts
+it, so a family refreshed often enough lived forever — including one a thief
+keeps alive by rotating a token stolen from an idle client. Refresh tokens
+now record when their family started (`oauth2.RefreshToken.FamilyIssuedAt`,
+carried unchanged by every rotation), and the new
+`grant.Config.RefreshFamilyTTL` bounds a family's lifetime from that start:
+
+| | Before | After |
+| --- | --- | --- |
+| `RefreshFamilyTTL` zero (the default) | — | unchanged: families slide with `RefreshTTL` |
+| `RefreshFamilyTTL` set | — | no refresh token expires past the family's start + `RefreshFamilyTTL`; a refresh after it is `invalid_grant` ("refresh token family expired"), nothing consumed; it applies at once to existing families |
+| a refresh token written before the upgrade | — | its family counts from the token's own `IssuedAt` |
+
+To migrate:
+
+1. **SQL.** `oauth2_refresh_tokens` gains a `family_issued_at` column, which
+   `Migrate` does not add to an existing table. Until it exists, every
+   refresh-token write and lookup fails with `server_error`. Apply, through
+   your migration tool and before the new build serves traffic — the same
+   statement on PostgreSQL, MySQL and SQLite:
+
+   ```sql
+   ALTER TABLE oauth2_refresh_tokens ADD COLUMN family_issued_at BIGINT NOT NULL DEFAULT 0;
+   ```
+
+   Existing rows read `0`: no recorded start.
+2. **Redis and memory** need nothing: a payload without the field has no
+   recorded start.
+3. **Custom stores** persist and return `FamilyIssuedAt` on every refresh
+   token — a consumed one included — the zero time as the zero time, and
+   pass `storetest.RunConformance`.
+4. To bound sessions, set `grant.Config.RefreshFamilyTTL` on the grants —
+   the `refresh_token` grant and the grants issuing refresh tokens — to the
+   longest session you accept: users then sign in again at least that
+   often. Set it once every instance runs this release: an instance still
+   on the previous one writes refresh tokens without a family start, so
+   each rotation it serves restarts the bound.

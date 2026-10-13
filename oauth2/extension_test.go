@@ -344,10 +344,11 @@ func TestExtensionGrantScopeOnlyNarrows(t *testing.T) {
 		ok                bool
 	}{
 		{"unset", "", "openid read write", true},
-		{"blank", " \t ", "openid read write", true},
+		{"blank", "   ", "openid read write", true},
 		{"narrowed", "openid read", "openid read", true},
 		{"reordered with duplicates", " read  openid read ", "read openid", true},
 		{"broadened", "openid admin", "", false},
+		{"tab separator (RFC 6749 §3.3: SP only)", " \t ", "", false},
 	}
 
 	for _, tc := range cases {

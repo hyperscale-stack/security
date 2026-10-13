@@ -121,7 +121,12 @@ func buildServer() (http.Handler, error) {
 			Secret:            demoClientSecret,
 			TypeValue:         oauth2.ClientConfidential,
 			RedirectURIValues: []string{"http://localhost:1337/callback"},
-			ScopeValues:       []string{"api:read"},
+			// A client may use only the grant types and request only the
+			// scopes it declares: an empty list allows none.
+			GrantTypeValues: []string{
+				oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeRefreshToken, oauth2.GrantTypeClientCredentials,
+			},
+			ScopeValues: []string{"api:read"},
 		},
 	}}
 

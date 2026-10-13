@@ -51,6 +51,9 @@ func newPair(name, family string) *oauth2.TokenPair {
 			FamilyID:      family,
 			Issuer:        issuer,
 			ExtensionData: data,
+			// The family started before this token: a store returning the
+			// token's own IssuedAt is caught.
+			FamilyIssuedAt: now.Add(-time.Hour),
 		},
 	}
 }
@@ -82,6 +85,16 @@ func requireContext(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
 	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
 	mustEqual(t, rt.Issuer, pair.Refresh.Issuer, "refresh token issuer")
 	mustEqual(t, rt.ExtensionData, pair.Refresh.ExtensionData, "refresh token extension data")
+	requireFamilyIssuedAt(t, rt, pair.Refresh.FamilyIssuedAt)
+}
+
+// requireFamilyIssuedAt asserts that rt carries want as FamilyIssuedAt, to
+// the second — the zero time as the zero time, never as the Unix epoch.
+func requireFamilyIssuedAt(t *testing.T, rt *oauth2.RefreshToken, want time.Time) {
+	t.Helper()
+
+	mustEqual(t, rt.FamilyIssuedAt.IsZero(), want.IsZero(), "refresh token FamilyIssuedAt set")
+	mustEqual(t, rt.FamilyIssuedAt.Unix(), want.Unix(), "refresh token FamilyIssuedAt")
 }
 
 // accessOnly returns a pair carrying an access token alone: a

@@ -8,10 +8,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 )
 
 // MaxExtensionDataLength is the longest ExtensionGrant.Data, in bytes, an
@@ -19,13 +20,6 @@ import (
 // the authentication event, the claims requested, its own markers — copied
 // onto the code and onto every token issued from it.
 const MaxExtensionDataLength = 4096
-
-// The grant_type values of the exchanges an [Extension] extends: the
-// authorization-code exchange (RFC 6749 §4.1.3) and the refresh (§6).
-const (
-	GrantTypeAuthorizationCode = "authorization_code"
-	GrantTypeRefreshToken      = "refresh_token"
-)
 
 // ErrUnredirectableRequest marks an /authorize refusal that MUST NOT be
 // redirected — e.g. an OpenID Connect request without the redirect_uri it
@@ -92,8 +86,13 @@ type Extension interface {
 	// ConsentFunc, which gets its result as AuthorizeRequest.ExtensionRequest
 	// (nil: nothing to add, e.g. a request outside the extension's
 	// protocol). ar is a read-only copy: changing it fails the request with
-	// server_error ([ErrAuthorizeRequestModified]). r.Form holds every
-	// parameter, duplicates included, and the nonce unbounded: bound it.
+	// server_error ([ErrAuthorizeRequestModified]). r is the request as
+	// received: the core refused it when it repeats a parameter the core
+	// reads, but r.Form still holds the empty occurrences — which RFC 6749
+	// §3.1 omits: read the core's parameters from ar, never r.FormValue,
+	// which an empty occurrence can hide them from — the extension's own
+	// parameters as sent, repeated or not (refuse your own repetitions), and
+	// the nonce unbounded: bound it.
 	ValidateAuthorizeRequest(ctx context.Context, r *http.Request, ar *AuthorizeRequest) (any, error)
 
 	// CompleteAuthorization decides what an approved authorization records.
@@ -127,9 +126,11 @@ type Extension interface {
 type ExtensionGrant struct {
 	// Scope, when it holds a scope token, narrows the granted scope — e.g.
 	// dropping an offline_access the extension must ignore (OpenID Connect
-	// Core §11). It is read as its whitespace-separated tokens, duplicates
-	// dropped, and each MUST be granted already: a broader one fails the
-	// request with server_error. A blank Scope keeps the consented one.
+	// Core §11). It is parsed like a request's scope — SP-separated RFC 6749
+	// §3.3 tokens, at most 100 and 4096 bytes, duplicates dropped — and each
+	// token MUST be granted already: a malformed or broader one fails the
+	// request with server_error. A blank Scope — empty or SPs only — keeps
+	// the consented one.
 	Scope string
 	// Data is the opaque, extension-defined grant context recorded as
 	// ExtensionData on the code, or implicit access token, and on every
@@ -160,11 +161,12 @@ type TokenIssuance struct {
 	Nonce string
 	// RefreshTokenIssued reports whether a refresh token is persisted with
 	// the access token — minted at a code exchange (a RefreshTokens
-	// generator configured, and grant.Config.RefreshTokenScope satisfied),
-	// or the replacement of a rotating refresh. It is false for a refresh
-	// that does not rotate, whose presented token stays in use. An OpenID
-	// provider fails closed on a refresh token the end-user did not consent
-	// to (offline_access, OpenID Connect Core §11).
+	// generator configured, the client declaring the refresh_token grant,
+	// and grant.Config.RefreshTokenScope satisfied), or the replacement of
+	// a rotating refresh. It is false for a refresh that does not rotate,
+	// whose presented token stays in use. An OpenID provider fails closed
+	// on a refresh token the end-user did not consent to (offline_access,
+	// OpenID Connect Core §11).
 	RefreshTokenIssued bool
 }
 
@@ -192,23 +194,18 @@ func applyExtensionGrant(granted string, g ExtensionGrant) (string, *Error) {
 		return "", ErrServerError.WithCause(errExtensionData)
 	}
 
-	fields := strings.Fields(g.Scope)
-	if len(fields) == 0 {
+	tokens, err := scopes.Parse(g.Scope)
+	if err != nil {
+		return "", ErrServerError.WithCause(errors.Join(errExtensionScope, err))
+	}
+
+	if len(tokens) == 0 {
 		return granted, nil
 	}
 
-	allowed := strings.Fields(granted)
-	narrowed := make([]string, 0, len(fields))
-
-	for _, scope := range fields {
-		if !slices.Contains(allowed, scope) {
-			return "", ErrServerError.WithCause(errExtensionScope)
-		}
-
-		if !slices.Contains(narrowed, scope) {
-			narrowed = append(narrowed, scope)
-		}
+	if !scopes.NewSet(strings.Fields(granted)).Admits(tokens) {
+		return "", ErrServerError.WithCause(errExtensionScope)
 	}
 
-	return strings.Join(narrowed, " "), nil
+	return scopes.Join(tokens), nil
 }

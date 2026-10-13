@@ -14,7 +14,11 @@ import (
 
 // ClientAuthenticator is the contract the [Server] consumes for client
 // authentication. Concrete implementations live in oauth2/clientauth; the
-// interface lives here to avoid an import cycle.
+// interface lives here to avoid an import cycle. The server refuses a
+// request repeating client_id or client_secret with a value before any
+// method runs; an implementation reads a body parameter as its first
+// non-empty occurrence (RFC 6749 §3.1: an empty one is omitted), never
+// r.PostFormValue alone.
 type ClientAuthenticator interface {
 	Method() string
 	Match(r *http.Request) bool
@@ -170,7 +174,7 @@ func (s *Server) resolveIssuer(ctx context.Context, r *http.Request) (string, st
 func profileConstraints(p Profile, grants []Grant) error {
 	for _, g := range grants {
 		switch g.Type() {
-		case "password", "implicit":
+		case GrantTypePassword, GrantTypeImplicit:
 			if !p.AllowsLegacyGrant() {
 				return fmt.Errorf("oauth2: profile %s forbids grant %q", p, g.Type())
 			}
