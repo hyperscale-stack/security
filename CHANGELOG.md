@@ -1832,13 +1832,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   code and token hashes under the collation of their columns, and the
   default collations ignore letter case and accents and take canonically
   equivalent forms (and `ß` / `ss`) for one character; MariaDB's, like
-  every `_bin` collation, also ignore trailing spaces. Two families whose
-  IDs differed only that way were one: revoking one revoked the other, and a
-  pair issued into one joined the other's record (the family isolation, I7,
-  of `oauth2.Storage`). The library's own family IDs and hashes never differ
-  that way; those of custom grants can. `Schema(sqlstore.MySQL)` declares
-  the six key columns `VARBINARY`; an existing MySQL database is converted
-  with the statements of MIGRATION.md, which also record revoked the
-  families such a merge left without a record, so that none is revived.
+  every PAD SPACE collation (`utf8mb4_bin` included), also ignore trailing
+  spaces. Two families whose IDs differed only that way were one: revoking
+  one revoked the other, and a pair issued into one joined the other's
+  record (the family isolation, I7, of `oauth2.Storage`). The library's own
+  family IDs and hashes never differ that way; those of custom grants can.
+  `Schema(sqlstore.MySQL)` declares the six key columns `VARBINARY`; an
+  existing MySQL database is converted with the statements of MIGRATION.md,
+  which also record revoked the families such a merge left without a
+  record, so that none is revived.
   `storetest.RunConformance` checks that every store compares its keys byte
   for byte (`KeysAreComparedExactly`).

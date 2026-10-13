@@ -2275,15 +2275,15 @@ On MySQL and MariaDB the SQL store compared its keys — token-family IDs,
 code and token hashes — under the collation of their columns. The default
 ones ignore letter case and accents and take canonically equivalent Unicode
 forms (and `ß` / `ss`) for one character: `utf8mb4_0900_ai_ci` on MySQL 8,
-`utf8mb4_uca1400_ai_ci` on MariaDB 11. Those of MariaDB, like every `_bin`
-collation, also ignore trailing spaces. Two families whose IDs differed only
-that way were one family: revoking one revoked the other, and a pair issued
-into one joined the other's record — against the isolation the
-`oauth2.Storage` contract promises (I7). The library's own family IDs (random
-or derived, base64url) and its hashes (lowercase hex) never differ that way;
-the family IDs of custom grants can. `Schema(sqlstore.MySQL)` now declares
-the six key columns `VARBINARY`, which MySQL and MariaDB compare byte for
-byte; PostgreSQL and SQLite already did.
+`utf8mb4_uca1400_ai_ci` on MariaDB 11. Those of MariaDB, like every PAD
+SPACE collation (`utf8mb4_bin` included), also ignore trailing spaces. Two
+families whose IDs differed only that way were one family: revoking one
+revoked the other, and a pair issued into one joined the other's record —
+against the isolation the `oauth2.Storage` contract promises (I7). The
+library's own family IDs (random or derived, base64url) and its hashes
+(lowercase hex) never differ that way; the family IDs of custom grants can.
+`Schema(sqlstore.MySQL)` now declares the six key columns `VARBINARY`, which
+MySQL and MariaDB compare byte for byte; PostgreSQL and SQLite already did.
 
 |                                                                | Before                                       | After                                            |
 | -------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------ |
@@ -2322,8 +2322,9 @@ To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
    with token writes stopped: between the `ALTER` of
    `oauth2_token_families` and step 3, an issuance into such a family would
    record it active and revive the tokens it shares with a revoked family. A
-   key longer than its column makes step 2 fail (it runs in strict mode):
-   delete those rows first — the store refuses such keys since #82.
+   family ID over 64 bytes or a hash over 128 makes step 2 fail (it runs in
+   strict mode): delete those rows first. The store refuses such family IDs
+   since #82, and its own hashes are 64 characters.
 2. **Convert the key columns and record the orphaned families revoked**, in
    one session, before traffic resumes:
 
