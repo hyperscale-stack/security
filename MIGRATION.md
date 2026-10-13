@@ -1790,3 +1790,21 @@ To migrate:
    OfflineAccessByPolicy` for them, as a documented policy.
 3. An `Interaction` that read `Request.OfflineAccess` as "an OpenID request
    with offline_access" also checks `Request.OpenID`.
+
+### `oidc/provider`: list parameters over 2048 bytes are ignored
+
+`ui_locales`, `claims_locales`, `acr_values` and `prompt` were split before
+the 32-value cap applied, one allocation per space: an unauthenticated
+authorization request of a few megabytes in one of them made the provider
+allocate about 20 times its body. They are now parsed without allocating per
+separator, and the three hint lists are bounded:
+
+| Parameter | Before | After |
+| --- | --- | --- |
+| `ui_locales`, `claims_locales`, `acr_values` over 2048 bytes | first 32 values kept | ignored, like an oversized `display` or `login_hint` |
+| `acr_values` repeating a value | repeated in `Request.ACRValues` | once (with the values of a voluntary `acr` claim request after it) |
+| `prompt`, however long | read whole | read whole (truncating it could turn `none … login` into `none`) |
+
+To migrate: nothing for clients sending ordinary values. A client sending
+more than 2048 bytes in one of these hints sends fewer: they never fail a
+request (OIDC Core §3.1.2.1, §15.1).
