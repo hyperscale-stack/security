@@ -20,20 +20,22 @@
 #   - the module builds and vets as a consumer resolves it: a copy without
 #     its in-repo replace directives, outside the workspace, so that the
 #     in-repo modules it requires are fetched at their required versions
-#     (they must be tagged and pushed first).
+#     (they must be tagged and pushed first). Consumers ignore every replace
+#     and exclude directive of a dependency, so any other one is refused.
 #
 # In GitHub Actions it also writes the module directory, the previous tag of
 # the same module and whether the version is a pre-release to $GITHUB_OUTPUT.
 set -eu
 
 ROOT=github.com/hyperscale-stack/security
-ROOT_RE='github\.com/hyperscale-stack/security'
 PLACEHOLDER=v0.0.0-00010101000000-000000000000
 
 fail() {
 	echo "release-check: $*" >&2
 	exit 1
 }
+
+command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 tag=${1:-}
 [ -n "$tag" ] || fail "usage: release-check.sh TAG (v1.2.3 for the core module, <dir>/v1.2.3 otherwise)"
@@ -81,7 +83,8 @@ git merge-base --is-ancestor HEAD origin/master || fail "HEAD is not on origin/m
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	prefix=
 	[ "$dir" = . ] || prefix=$dir/
-	previous=$(git tag --list "${prefix}v[0-9]*" --sort=v:refname |
+	# versionsort.suffix=- sorts v1.0.0-rc.1 before v1.0.0.
+	previous=$(git -c versionsort.suffix=- tag --list "${prefix}v[0-9]*" --sort=v:refname |
 		awk -v cur="$tag" '$0 == cur { print prev; exit } { prev = $0 }')
 	prerelease=false
 	case $version in
@@ -99,10 +102,21 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -R "$dir"/. "$tmp"/
 cd "$tmp"
-! grep -q '^replace[[:space:]]*(' go.mod || fail "$tag: replace blocks are not supported, use one replace line per module"
-for old in $(sed -n 's/^replace[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' go.mod | grep -E "^$ROOT_RE(/|\$)" || true); do
+# Drop each in-repo replace by its exact old path[@version].
+for old in $(go mod edit -json | jq -r --arg root "$ROOT" '
+	(.Replace // [])[] | .Old
+	| select(.Path == $root or (.Path | startswith($root + "/")))
+	| .Path + (if .Version then "@" + .Version else "" end)'); do
 	go mod edit -dropreplace="$old"
 done
+replaces=$(go mod edit -json | jq -r '(.Replace // [])[]
+	| .Old.Path + (if .Old.Version then "@" + .Old.Version else "" end)
+	+ " => " + .New.Path + (if .New.Version then " " + .New.Version else "" end)')
+[ -z "$replaces" ] ||
+	fail "$tag: $expected keeps replace directives its consumers ignore: $(printf '%s\n' "$replaces" | paste -sd ';' -)"
+excludes=$(go mod edit -json | jq -r '(.Exclude // [])[] | .Path + "@" + .Version')
+[ -z "$excludes" ] ||
+	fail "$tag: $expected keeps exclude directives its consumers ignore: $(printf '%s\n' "$excludes" | paste -sd ';' -)"
 GOWORK=off GOFLAGS=-mod=mod go build ./... ||
 	fail "$tag: $expected does not build at the versions it requires (are its in-repo requirements tagged and up to date?)"
 GOWORK=off GOFLAGS=-mod=mod go vet ./... ||

@@ -82,7 +82,7 @@ echo "==> build, vet and tidy with the generated mocks"
 for mod in $workspace; do
 	echo "    $mod"
 	(cd "$mod" && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go mod tidy -diff) ||
-		fail "$mod does not build, vet or stay tidy on its own (GOWORK=off)"
+		fail "$mod does not build, vet or stay tidy on its own (GOWORK=off); if its packages just got their first interface, run make tidy and add a mockery_test.go importing testify/mock"
 done
 for mod in $tools; do
 	(cd "$mod" && GOWORK=off go mod tidy -diff) || fail "$mod is not tidy"
