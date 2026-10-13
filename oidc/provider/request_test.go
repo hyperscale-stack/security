@@ -121,6 +121,18 @@ func TestDuplicatedParameters(t *testing.T) {
 		assert.Equal(t, oauth2.CodeInvalidRequest, redirect(t, rec).Get("error"),
 			"the provider refuses an empty first occurrence of a core parameter")
 	})
+
+	t.Run("empty first occurrence of redirect_uri", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t)
+		rec := serve(e.op.AuthorizeHandler(oauth2.AuthorizeConfig{}),
+			get("/oauth2/authorize?redirect_uri=&"+authorizeQuery().Encode()))
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code, "the core accepts it, the provider refuses it unredirected")
+		assert.Empty(t, rec.Header().Get("Location"))
+		assert.True(t, e.sink.contains(oauth2.ErrUnredirectableRequest))
+	})
 }
 
 // TestOpenIDImplicitRefused pins OIDC Core §3: OpenID Connect does not use
