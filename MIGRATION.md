@@ -2034,9 +2034,10 @@ To migrate:
    with those parameters. Watch for `ErrCostLimitExceeded` after the upgrade.
 2. bcrypt hashes imported from an implementation that silently truncated
    passwords to 72 bytes — older `golang.org/x/crypto` releases (this
-   library's v0 stack used one), PHP's `password_hash`, Node's `bcrypt` —
-   no longer verify a password longer than 72 bytes. If such accounts exist,
-   wrap the hasher for them and move them to Argon2id at their next login:
+   library's legacy v0 packages used one), PHP's `password_hash`, Node's
+   `bcrypt` — no longer verify a password longer than 72 bytes. If such
+   accounts exist, wrap the hasher for them and move them to Argon2id at
+   their next login:
    ```go
    type truncating struct{ password.Hasher }
 
@@ -2129,8 +2130,8 @@ To migrate:
 session — and cookies were not bound to their name or purpose. `Rotate`
 extended a session's lifetime indefinitely, a TTL lowered after issuance did
 not apply, and numbers in `Values` lost precision. The cookie format changes
-(v2), so **every existing session cookie is refused once: users sign in
-again** after the upgrade.
+(format 2), so **every existing session cookie is refused once: users sign
+in again** after the upgrade.
 
 | | Before | After |
 | --- | --- | --- |
@@ -2153,8 +2154,8 @@ To migrate:
    passphrase. To rotate later, put the new key first and keep the previous
    one until the longest TTL has elapsed.
 2. Deploy all instances at once, or accept that users are signed out while
-   old and new instances run side by side: a v1 instance cannot read v2
-   cookies and the other way round.
+   old and new instances run side by side: an instance on the previous code
+   cannot read the new cookies, and the other way round.
 3. Several applications or paths sharing keys and a cookie name: give each
    its own `WithPurpose`.
 4. Call `Login` at sign-in (new session, new lifetime); `Rotate` within a
@@ -2184,7 +2185,7 @@ that browsers silently refused.
 | `SameSite=None` without `Secure` | emitted, dropped by browsers | `NewManager` panics |
 | `WithTTL(d ≤ 0)`, `WithIdleTimeout(d < 0)`, nil codec | accepted | `NewManager` panics |
 | Cookie name + value over 4096 bytes | emitted, dropped by browsers | `ErrCookieTooLarge`, nothing written |
-| Several cookies of the session's name | the first one | the only valid one; none when two or more are valid sessions |
+| Several cookies of the session's name | the first one | the only valid session; none when they hold two or more different valid sessions |
 
 To migrate:
 

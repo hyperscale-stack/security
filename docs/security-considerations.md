@@ -1182,10 +1182,11 @@ session store to compromise or scale.
   matched case-insensitively, like browsers do), `SameSite=None` without
   `Secure`.
 - **Shadowing cookies** — when a request carries several cookies of the
-  session's name and more than one is a valid session, it has no session:
-  a tossed cookie can deny a session (until it expires), never swap it.
-  Expired or undecodable ones do not count. With the default `__Host-` name
-  no other host can toss one at all.
+  session's name and they hold more than one valid session, it has no
+  session: a tossed cookie can deny a session (until it expires), never
+  swap it. Expired or undecodable ones do not count, nor do copies of the
+  same session. With the default `__Host-` name no other host can toss one
+  at all.
 - **Cookie only** — the `Manager` reads the session from the request's
   `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
   the URL nor from a header named like the cookie: a link carrying a session

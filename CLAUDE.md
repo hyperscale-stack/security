@@ -244,6 +244,22 @@ Conventions baked into the core:
   scope `github.com/hyperscale-stack/security`; each instrumented module
   (`httpsec`, `grpcsec`, `connectrpcsec`, `jwtsec`, `session`, `samlsp`) uses its own. See
   `docs/observability.md` for the span catalog.
+- **Credential checks spend the same work.** `basic.Authenticator` runs
+  exactly one `hasher.Verify` per attempt — against a dummy hash made by the
+  configured hasher for unknown users, loader failures and accounts without
+  a password — reads the account state after it, and caps concurrent
+  verifications (`WithMaxConcurrentVerifications`, `ErrUnavailable` when the
+  caller gives up). `password` hashers check a stored hash's parameters
+  (RFC 9106 §3.1 ranges, operator limits) before any hashing.
+- **Sessions** are sealed cookies: format v2 (AES-256-GCM under an HKDF key
+  from ≥ 32 random bytes, associated data = version ‖ cookie name ‖
+  purpose), default name `__Host-session`, absolute lifetime
+  `CreatedAt + TTL` never extended. `NewManager` panics on a configuration
+  browsers would refuse.
+- **Credentials never print**: the `basic`, `bearer` and `session`
+  authentications and `session.Session` print and log without their secrets
+  (`String`, `Format` for every verb, `LogValue`); `session.Session` also has
+  a redacting `MarshalJSON`.
 
 ## OAuth2 server (`oauth2/`)
 

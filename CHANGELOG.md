@@ -1769,7 +1769,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   was emitted and silently dropped by browsers; an invalid cookie name
   produced an empty `Set-Cookie` while `Login` reported success. The
   default name is now `__Host-session`, the configuration is checked at
-  construction, a request with two valid session cookies has none, and an
+  construction, a request carrying two different valid sessions has none, and an
   oversized cookie is an error.
 - Credentials printed and serialized: the exported fields of a
   `session.Session` revealed its CSRF token (and its raw ID) through `%+v`
