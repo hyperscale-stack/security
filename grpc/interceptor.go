@@ -18,7 +18,8 @@ import (
 const tracerName = "github.com/hyperscale-stack/security/grpc"
 
 // errEngineContract reports a custom [security.Engine] that returned no
-// context or no authentication without an error: an internal error.
+// context or no authentication (nil or a typed nil) without an error: an
+// internal error.
 var errEngineContract = errors.New("grpcsec: the engine returned no context or authentication")
 
 // authenticate runs the engine against the RPC metadata and returns the
@@ -41,7 +42,7 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 	switch {
 	case err != nil && !tolerated:
 		return ctx, carrier, fmt.Errorf("grpcsec: authenticate: %w", err)
-	case newCtx == nil || auth == nil:
+	case newCtx == nil || isNil(auth):
 		return ctx, carrier, errEngineContract
 	case !auth.IsAuthenticated() && !cfg.anonymousFallback:
 		return ctx, carrier, security.ErrAuthenticationRequired
@@ -64,8 +65,10 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside
-// this interceptor.
+// this interceptor. It panics if engine is nil.
 func UnaryServerInterceptor(engine security.Engine, opts ...Option) grpc.UnaryServerInterceptor {
+	mustEngine(engine)
+
 	cfg := buildConfig(opts...)
 	mapper := cfg.ownMapper()
 
@@ -94,8 +97,10 @@ func UnaryServerInterceptor(engine security.Engine, opts ...Option) grpc.UnarySe
 // StreamServerInterceptor is the streaming counterpart of
 // [UnaryServerInterceptor]. The wrapped stream exposes the enriched
 // context through ServerStream.Context(), and the staged metadata is sent
-// as the stream's header.
+// as the stream's header. It panics if engine is nil.
 func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.StreamServerInterceptor {
+	mustEngine(engine)
+
 	cfg := buildConfig(opts...)
 	mapper := cfg.ownMapper()
 
@@ -118,6 +123,14 @@ func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.Stream
 		}
 
 		return handler(srv, &wrappedStream{ServerStream: ss, ctx: withErrorMapper(newCtx, mapper)})
+	}
+}
+
+// mustEngine refuses a nil engine at construction: grpc-go recovers no
+// panic, so it would otherwise crash the server on the first RPC.
+func mustEngine(engine security.Engine) {
+	if engine == nil {
+		panic("grpcsec: nil Engine")
 	}
 }
 

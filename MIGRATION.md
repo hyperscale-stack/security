@@ -1487,6 +1487,10 @@ unauthenticated.
 | Error wrapping no sentinel, `ErrNoExtractor` | `Unauthenticated` | `Internal` |
 | Metadata staged on the `Carrier` | dropped | sent as the response header |
 | `UnaryAuthorize` without `WithErrorMapper` | `DefaultErrorMapper()` | the authentication interceptor's mapper |
+| A nil engine (`UnaryServerInterceptor(nil)`, `ServerOptions(nil)`, …) | server crash on the first RPC | panic at construction |
+| A custom `Engine` returning no context or a typed nil | server crash | `Internal` |
+| A nil or typed nil attribute given to `UnaryAuthorize` / `StreamAuthorize` / `AuthorizeServerOptions` | `PermissionDenied` on every RPC | panic at construction |
+| Reusing the attribute slice passed to them | rewrote the RPC's policy | no effect (copied) |
 
 To migrate:
 

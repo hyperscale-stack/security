@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/hyperscale-stack/security"
 	"go.opentelemetry.io/otel"
@@ -23,14 +24,15 @@ import (
 // On grant the handler runs. On deny it answers with its [WithErrorMapper],
 // else the mapper of the authentication interceptor before it, else
 // [DefaultErrorMapper]: codes.PermissionDenied for an authenticated
-// principal, codes.Unauthenticated for an unauthenticated one. It panics if
-// adm is nil.
+// principal, codes.Unauthenticated for an unauthenticated one. It copies
+// attrs, and panics if adm or one of attrs is nil (a typed nil included): an
+// RPC's policy is static configuration.
 func UnaryAuthorize(
 	adm security.AccessDecisionManager,
 	attrs []security.Attribute,
 	opts ...Option,
 ) grpc.UnaryServerInterceptor {
-	mustDecisionManager(adm)
+	attrs = mustPolicy(adm, attrs)
 
 	cfg := buildConfig(opts...)
 
@@ -49,13 +51,13 @@ func UnaryAuthorize(
 }
 
 // StreamAuthorize is the streaming counterpart of [UnaryAuthorize]. It
-// panics if adm is nil.
+// copies attrs, and panics if adm or one of attrs is nil.
 func StreamAuthorize(
 	adm security.AccessDecisionManager,
 	attrs []security.Attribute,
 	opts ...Option,
 ) grpc.StreamServerInterceptor {
-	mustDecisionManager(adm)
+	attrs = mustPolicy(adm, attrs)
 
 	cfg := buildConfig(opts...)
 
@@ -100,8 +102,19 @@ func refusal(auth security.Authentication, err error) error {
 	return err //nolint:wrapcheck // security.* sentinels pass through to the ErrorMapper
 }
 
-func mustDecisionManager(adm security.AccessDecisionManager) {
+// mustPolicy checks the static configuration of the authorization
+// interceptors and returns a copy of attrs, so the caller reusing its slice
+// cannot rewrite the policy.
+func mustPolicy(adm security.AccessDecisionManager, attrs []security.Attribute) []security.Attribute {
 	if adm == nil {
 		panic("grpcsec: nil AccessDecisionManager")
 	}
+
+	for i, a := range attrs {
+		if isNil(a) {
+			panic(fmt.Sprintf("grpcsec: nil Attribute at index %d", i))
+		}
+	}
+
+	return slices.Clone(attrs)
 }

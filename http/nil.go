@@ -9,8 +9,8 @@ import (
 	"slices"
 )
 
-// The core, grpcsec and connectrpcsec hold the same unexported helper: the
-// dependency policy keeps it out of the core's API.
+// The core, grpcsec and connectrpcsec hold the same unexported helper: it
+// stays out of the core's API.
 
 // nilableKinds are the kinds whose zero value is a nil a method call can
 // dereference.

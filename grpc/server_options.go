@@ -12,7 +12,8 @@ import (
 // ServerOptions returns the grpc.ServerOption values that authenticate every
 // RPC against engine — unary AND streaming. Chaining only
 // [UnaryServerInterceptor] leaves the streaming RPCs (the health service's
-// Watch, server reflection, your own streams) unauthenticated.
+// Watch, server reflection, your own streams) unauthenticated. It panics if
+// engine is nil.
 func ServerOptions(engine security.Engine, opts ...Option) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(UnaryServerInterceptor(engine, opts...)),
@@ -30,14 +31,13 @@ func ServerOptions(engine security.Engine, opts ...Option) []grpc.ServerOption {
 //	    grpcsec.AuthorizeServerOptions(adm, attrs),
 //	)...)
 //
-// It panics if adm is nil.
+// It copies attrs, and panics if adm or one of attrs is nil (a typed nil
+// included).
 func AuthorizeServerOptions(
 	adm security.AccessDecisionManager,
 	attrs []security.Attribute,
 	opts ...Option,
 ) []grpc.ServerOption {
-	mustDecisionManager(adm)
-
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(UnaryAuthorize(adm, attrs, opts...)),
 		grpc.ChainStreamInterceptor(StreamAuthorize(adm, attrs, opts...)),

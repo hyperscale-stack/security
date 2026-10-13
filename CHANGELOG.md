@@ -691,7 +691,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `PermissionDenied`), a repeated `authorization` value `InvalidArgument`,
   an `ErrUnavailable` `Unavailable`, and an error wrapping no sentinel
   `Internal` (was `Unauthenticated`). The authorization interceptors use the
-  authentication interceptor's error mapper unless given their own.
+  authentication interceptor's error mapper unless given their own, copy
+  their attributes and panic on a nil one; the authentication interceptors
+  and `ServerOptions` panic on a nil engine.
 - `connectrpcsec.DefaultErrorMapper()` becomes
   `DefaultErrorMapper(scheme, realm string)` and answers from
   `security.ErrorClass` like the gRPC mapper (generic messages,
@@ -824,8 +826,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `httpsec.Middleware` panic; it is now answered 500, like a nil one.
 - `grpcsec` sends the metadata staged on its `Carrier` as the response
   header, refused RPCs included, as its documentation said; it was dropped.
-  A custom `Engine` returning no authentication no longer panics the
-  interceptors.
+  A custom `Engine` returning no authentication — nil or a typed nil — no
+  longer panics the interceptors, which crashed the server: grpc-go
+  recovers no panic.
 - A ConnectRPC unary call refused with `Unauthenticated` (HTTP 401) carried
   no `WWW-Authenticate` field (RFC 9110 §11.6.1); it now carries the
   challenge. Headers staged on the `connectrpcsec.Carrier` reach the client
