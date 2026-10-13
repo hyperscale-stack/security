@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -24,6 +25,12 @@ const tracerName = "github.com/hyperscale-stack/security/session"
 // ErrNoSession is returned by [Manager.Get] when the request carries no
 // session cookie (or one that fails to decode).
 var ErrNoSession = errors.New("session: no session on request")
+
+// ErrCookieTooLarge is returned by [Manager.Login], [Manager.Touch] and
+// [Manager.Rotate] when the session cookie would exceed [MaxCookieSize]:
+// user agents ignore such a cookie, so the session would be lost silently.
+// Nothing is written. Keep Values small.
+var ErrCookieTooLarge = errors.New("session: cookie larger than 4096 bytes")
 
 // Manager owns the session lifecycle on top of a cookie. It writes the
 // cookie through a [security.Carrier] and reads it through the carrier's
@@ -44,6 +51,7 @@ type Manager struct {
 	clock       func() time.Time
 	purpose     string
 	validator   func(ctx context.Context, s *Session) error
+	nameSet     bool
 }
 
 // MaxCookieSize bounds a session cookie: the name and value of a cookie
@@ -52,18 +60,33 @@ type Manager struct {
 const MaxCookieSize = 4096
 
 // maxPurposeLength and maxCookieNameLength bound what the AEAD associated
-// data length-prefixes.
+// data length-prefixes; maxAttributeLength is the longest Path or Domain a
+// user agent keeps (rfc6265bis §5.6); maxSessionCookies bounds the cookies
+// of the session's name one request may make the Manager open.
 const (
 	maxPurposeLength    = 255
 	maxCookieNameLength = 256
+	maxAttributeLength  = 1024
+	maxSessionCookies   = 4
 )
 
 // Option configures a [Manager].
 type Option func(*Manager)
 
-// WithCookieName overrides the cookie name. Default: "session".
+// WithCookieName overrides the cookie name. Default: "__Host-session" when
+// the cookie is Secure with Path=/ and no Domain — a sibling host cannot
+// then plant a cookie that shadows it (draft-ietf-httpbis-rfc6265bis
+// §4.1.3.2) — else "__Secure-session" when it is Secure, else "session".
+// An explicit name must be an RFC 6265 token of at most 256 bytes whose
+// prefix rules the configuration satisfies: "__Host-" requires Secure,
+// Path=/ and no Domain, "__Secure-" requires Secure (prefixes are matched
+// case-insensitively, like user agents do). One cookie name per Manager per
+// host: __Host- cookies ignore the port.
 func WithCookieName(name string) Option {
-	return func(m *Manager) { m.cookieName = name }
+	return func(m *Manager) {
+		m.cookieName = name
+		m.nameSet = true
+	}
 }
 
 // WithPath overrides the cookie Path attribute. Default: "/".
@@ -147,28 +170,97 @@ func WithValidator(validate func(ctx context.Context, s *Session) error) Option 
 	return func(m *Manager) { m.validator = validate }
 }
 
-// NewManager builds a [Manager] sealing sessions with codec.
+// NewManager builds a [Manager] sealing sessions with codec. It panics on a
+// configuration a user agent would refuse or that cannot work — a nil
+// codec, an invalid cookie name, path or domain, a cookie prefix whose rules
+// the attributes break, SameSite=None without Secure (user agents drop it),
+// a TTL that is not positive, a negative idle timeout: it is static
+// configuration, refused at start-up rather than as silently lost sessions.
 func NewManager(codec *Codec, opts ...Option) *Manager {
 	m := &Manager{
-		codec:      codec,
-		cookieName: schemeName,
-		path:       "/",
-		secure:     true,
-		httpOnly:   true,
-		sameSite:   http.SameSiteLaxMode,
-		ttl:        24 * time.Hour,
-		clock:      time.Now,
+		codec:    codec,
+		path:     "/",
+		secure:   true,
+		httpOnly: true,
+		sameSite: http.SameSiteLaxMode,
+		ttl:      24 * time.Hour,
+		clock:    time.Now,
 	}
 
 	for _, o := range opts {
 		o(m)
 	}
 
-	if len(m.cookieName) > maxCookieNameLength {
-		panic(fmt.Sprintf("session: NewManager: cookie name of %d bytes, at most %d", len(m.cookieName), maxCookieNameLength))
+	if !m.nameSet {
+		m.cookieName = m.defaultCookieName()
+	}
+
+	if err := m.check(); err != nil {
+		panic("session: NewManager: " + err.Error())
 	}
 
 	return m
+}
+
+// defaultCookieName is the strongest prefixed name the configuration
+// allows.
+func (m *Manager) defaultCookieName() string {
+	switch {
+	case m.secure && m.path == "/" && m.domain == "":
+		return "__Host-" + schemeName
+	case m.secure:
+		return "__Secure-" + schemeName
+	default:
+		return schemeName
+	}
+}
+
+// check refuses a configuration that cannot work.
+func (m *Manager) check() error {
+	switch {
+	case m.codec == nil:
+		return errors.New("nil Codec")
+	case m.ttl <= 0:
+		return fmt.Errorf("TTL %s: it must be positive", m.ttl)
+	case m.idleTimeout < 0:
+		return fmt.Errorf("idle timeout %s: it must not be negative", m.idleTimeout)
+	}
+
+	return m.checkCookie()
+}
+
+// checkCookie refuses cookie attributes a user agent would refuse or drop.
+func (m *Manager) checkCookie() error {
+	name := strings.ToLower(m.cookieName)
+
+	switch {
+	case probe(m.cookieName, "", "").Valid() != nil:
+		return fmt.Errorf("invalid cookie name %q: an RFC 6265 token is required", m.cookieName)
+	case len(m.cookieName) > maxCookieNameLength:
+		return fmt.Errorf("cookie name of %d bytes, at most %d", len(m.cookieName), maxCookieNameLength)
+	case !strings.HasPrefix(m.path, "/") || len(m.path) > maxAttributeLength ||
+		probe("n", m.path, "").Valid() != nil:
+		return fmt.Errorf("invalid cookie path %q: an absolute path of at most %d bytes is required", m.path, maxAttributeLength)
+	case m.domain != "" && (len(m.domain) > maxAttributeLength || probe("n", "", m.domain).Valid() != nil):
+		return fmt.Errorf("invalid cookie domain %q", m.domain)
+	case strings.HasPrefix(name, "__host-") && (!m.secure || m.path != "/" || m.domain != ""):
+		return fmt.Errorf("a __Host- cookie (%q) requires Secure, Path=/ and no Domain", m.cookieName)
+	case strings.HasPrefix(name, "__secure-") && !m.secure:
+		return fmt.Errorf("a __Secure- cookie (%q) requires Secure", m.cookieName)
+	case m.sameSite == http.SameSiteNoneMode && !m.secure:
+		return errors.New("SameSite=None requires Secure: user agents drop the cookie otherwise")
+	}
+
+	return nil
+}
+
+// probe is a cookie whose name, path or domain http.Cookie.Valid checks
+// (RFC 6265 §4.1.1 token, path and domain syntax).
+func probe(name, path, domain string) *http.Cookie {
+	return &http.Cookie{
+		Name: name, Value: "v", Path: path, Domain: domain,
+		Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	}
 }
 
 // Login mints a fresh authenticated session for principal, stores its
@@ -218,12 +310,67 @@ func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error)
 		return nil, fmt.Errorf("%w: the carrier exposes no cookies", ErrNoSession)
 	}
 
-	found := cookies.CookiesNamed(m.cookieName)
-	if len(found) == 0 || found[0].Value == "" {
+	s, err := m.pick(ctx, cookies.CookiesNamed(m.cookieName))
+	if err != nil {
+		return nil, err
+	}
+
+	s.LastAccessed = m.clock()
+	span.SetAttributes(attribute.String("session.id_hash", hashID(s.ID)))
+
+	return s, nil
+}
+
+// pick returns the one valid session among the cookies of the session's
+// name. Several cookies of one name come from a cookie tossed by a sibling
+// host or a more specific path, or from a stale configuration: when more
+// than one is a valid session the request is ambiguous and has none — a
+// tossed cookie can deny a session, never swap it. Cookies that do not open
+// or are expired do not count. An unavailable validator ends the search.
+func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, error) {
+	if len(found) == 0 {
 		return nil, ErrNoSession
 	}
 
-	s, err := m.codec.open(found[0].Value, m.cookieName, m.purpose)
+	if len(found) > maxSessionCookies {
+		return nil, fmt.Errorf("%w: %d cookies of the session's name", ErrNoSession, len(found))
+	}
+
+	var (
+		chosen   *Session
+		firstErr error
+	)
+
+	for _, cookie := range found {
+		s, err := m.load(ctx, cookie.Value)
+
+		switch {
+		case err == nil && chosen != nil:
+			return nil, fmt.Errorf("%w: several valid session cookies", ErrNoSession)
+		case err == nil:
+			chosen = s
+		case errors.Is(err, security.ErrUnavailable):
+			return nil, err
+		case firstErr == nil:
+			firstErr = err
+		}
+	}
+
+	if chosen == nil {
+		return nil, firstErr
+	}
+
+	return chosen, nil
+}
+
+// load opens one cookie value and checks the session's deadline, idle
+// timeout and validator.
+func (m *Manager) load(ctx context.Context, value string) (*Session, error) {
+	if value == "" {
+		return nil, ErrNoSession
+	}
+
+	s, err := m.codec.open(value, m.cookieName, m.purpose)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrNoSession, err)
 	}
@@ -236,9 +383,6 @@ func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error)
 	if err := m.validate(ctx, s); err != nil {
 		return nil, err
 	}
-
-	s.LastAccessed = now
-	span.SetAttributes(attribute.String("session.id_hash", hashID(s.ID)))
 
 	return s, nil
 }
@@ -369,6 +513,10 @@ func (m *Manager) writeCookie(c security.Carrier, s *Session) error {
 	value, err := m.codec.seal(s, m.cookieName, m.purpose)
 	if err != nil {
 		return fmt.Errorf("session: encode: %w", err)
+	}
+
+	if size := len(m.cookieName) + len(value); size > MaxCookieSize {
+		return fmt.Errorf("%w: %d bytes", ErrCookieTooLarge, size)
 	}
 
 	//nolint:gosec // G124: Secure/HttpOnly/SameSite come from the Manager config (secure-by-default: Secure, HttpOnly, SameSiteLax)

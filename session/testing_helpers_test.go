@@ -19,6 +19,9 @@ type mapCarrier struct {
 	headers map[string]string
 	// cookies are the request cookies.
 	cookies map[string]string
+	// more are further request cookies sharing a name with one of cookies
+	// (a tossed or stale cookie), sent after it.
+	more map[string][]string
 	// setCookies are the Set-Cookie headers the Manager staged via Add.
 	setCookies []string
 }
@@ -41,11 +44,17 @@ func (c *mapCarrier) Values(key string) []string {
 
 // CookiesNamed implements session.CookieReader.
 func (c *mapCarrier) CookiesNamed(name string) []*http.Cookie {
+	var out []*http.Cookie
+
 	if v, ok := c.cookies[name]; ok {
-		return []*http.Cookie{{Name: name, Value: v}}
+		out = append(out, &http.Cookie{Name: name, Value: v})
 	}
 
-	return nil
+	for _, v := range c.more[name] {
+		out = append(out, &http.Cookie{Name: name, Value: v})
+	}
+
+	return out
 }
 
 func (c *mapCarrier) Set(key, value string) {

@@ -2168,3 +2168,36 @@ To migrate:
    deny-list written at logout, or a per-user "valid since" time); wrap
    `security.ErrUnavailable` when its store is down (503, nobody is signed
    out).
+
+### `session`: the cookie is `__Host-session` by default and its configuration is checked
+
+The session cookie had no prefix, so a sibling host could plant a cookie of
+the same name that shadowed the user's own; misconfigurations (a `__Host-`
+name with a `Domain`, an invalid name, an oversized cookie) produced cookies
+that browsers silently refused.
+
+| | Before | After |
+| --- | --- | --- |
+| Default cookie name | `session` | `__Host-session`; `__Secure-session` with a `Domain` or a `Path` other than `/`; `session` with `WithSecure(false)` |
+| Invalid cookie name, relative or invalid path, invalid domain | empty or truncated `Set-Cookie`, `Login` succeeds | `NewManager` panics |
+| `__Host-` name with `Domain`, another `Path` or without `Secure`; `__Secure-` name without `Secure` (any case) | emitted, refused by browsers | `NewManager` panics |
+| `SameSite=None` without `Secure` | emitted, dropped by browsers | `NewManager` panics |
+| `WithTTL(d ≤ 0)`, `WithIdleTimeout(d < 0)`, nil codec | accepted | `NewManager` panics |
+| Cookie name + value over 4096 bytes | emitted, dropped by browsers | `ErrCookieTooLarge`, nothing written |
+| Several cookies of the session's name | the first one | the only valid one; none when two or more are valid sessions |
+
+To migrate:
+
+1. Nothing to do for the default configuration: the new name takes effect
+   with the cookie format change (users sign in again anyway). Update
+   whatever reads the cookie by name (tests, proxies, monitoring) to
+   `__Host-session`.
+2. Sharing a session across subdomains (`WithDomain`) or under a path now
+   gets `__Secure-session`; plain-HTTP development (`WithSecure(false)`)
+   gets `session`. An explicit name keeps working if its prefix rules hold.
+3. Keep `Values` small: a write that would exceed 4096 bytes now returns
+   `ErrCookieTooLarge`.
+4. Enforce CSRF on every state-changing request — see the `VerifyCSRF`
+   documentation and the session-web example (sign-in form protected
+   through a session opened for the form, `net/http`'s
+   `CrossOriginProtection` in front of the handlers).

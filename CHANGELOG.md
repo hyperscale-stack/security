@@ -499,6 +499,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `session`: `MinKeySize`, `MaxCookieSize`, `WithPurpose` (binds the cookies
   of a Manager to a purpose), `WithValidator` (server-side revocation hook)
   and `Session.GetInt64`.
+- `session.ErrCookieTooLarge`: a session cookie that would exceed 4096
+  bytes is refused instead of being silently dropped by the browser.
 
 ### Changed
 
@@ -810,6 +812,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `json.Number`. The session `Extractor` reports a validator error wrapping
   `security.ErrUnavailable` instead of finding no session. See
   [MIGRATION.md](MIGRATION.md).
+- The session cookie is named `__Host-session` by default (`__Secure-session`
+  with a `Domain` or another `Path`, `session` with `WithSecure(false)`), and
+  `session.NewManager` panics on a configuration browsers would refuse or
+  that cannot work: a nil codec, an invalid cookie name, path or domain, a
+  `__Host-`/`__Secure-` name whose rules the attributes break, `SameSite=None`
+  without `Secure`, a TTL that is not positive, a negative idle timeout. A
+  request carrying more than one valid session cookie of the session's name
+  has no session. See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1016,6 +1026,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   Password Storage Cheat Sheet minimum, not RFC 9106 §4's recommendation;
   `ErrMismatch` is never returned by the shipped hashers (a mismatch is
   `(false, nil)`).
+- `session` documentation: the store is AES-256-GCM (an AEAD), not "AES-GCM
+  with HMAC"; the CSRF token is rendered into pages, so `HttpOnly` does not
+  keep it out of reach of an XSS; `VerifyCSRF` must be called on every
+  state-changing request (sign-in included) — guidance added, with the
+  2^32-seal limit of a session key.
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1731,3 +1746,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - Session values decoded numbers as float64: 1234567890123456789 came back
   as 1234567890123456768, mapping a session to another account. Numbers now
   decode as `json.Number`.
+- Session cookie hygiene: the session cookie had no `__Host-` prefix, so a
+  sibling host could plant a cookie of the same name that shadowed the
+  user's own (cookie tossing, login CSRF); a `__Host-` name with `Domain`
+  and `Path` was emitted although browsers reject it; an oversized session
+  was emitted and silently dropped by browsers; an invalid cookie name
+  produced an empty `Set-Cookie` while `Login` reported success. The
+  default name is now `__Host-session`, the configuration is checked at
+  construction, a request with two valid session cookies has none, and an
+  oversized cookie is an error.

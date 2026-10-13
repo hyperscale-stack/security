@@ -14,6 +14,16 @@
 // key rotation with a multi-key reader and a single active writer (see
 // Codec for the cookie format).
 //
+// The cookie is named __Host-session by default — Secure, Path=/ and no
+// Domain, so no other host can plant a cookie that shadows it — and the
+// Manager refuses at construction a cookie configuration a browser would
+// refuse; a cookie that would exceed 4096 bytes is refused with
+// ErrCookieTooLarge rather than silently dropped by the browser.
+//
+// CSRF: VerifyCSRF checks a synchronizer token; the application must call it
+// on every state-changing request (the sign-in form included) and should
+// put net/http's CrossOriginProtection in front of its handlers.
+//
 // A session lives at most its TTL from its creation: the Manager enforces
 // CreatedAt + TTL on every read, and neither Rotate nor Touch extends it.
 // Numbers in Values come back as json.Number (Session.GetInt64), never as a

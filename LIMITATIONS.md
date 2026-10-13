@@ -499,6 +499,13 @@ PKCE. Not supported, and refused where a provider could select them:
   store of the application's (no Redis/SQL store is shipped); otherwise a
   copy of the cookie stays valid until its deadline, `Logout` deleting the
   browser's copy only.
+- With a cookie name that is not `__Host-` (a `Domain`, another `Path`,
+  plain HTTP), a sibling host can plant a cookie of the session's name: the
+  request then carries two valid sessions and has none until that cookie
+  expires (denial, never a swap). The default `__Host-session` prevents it.
+- One active session key seals at most 2^32 cookies (random GCM nonces,
+  NIST SP 800-38D §8.3): the library does not count seals across
+  instances — rotate the key by volume.
 - The session cookie is read through `httpsec.Carrier` (its
   `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
   no cookies: a cookie session does not authenticate gRPC or ConnectRPC

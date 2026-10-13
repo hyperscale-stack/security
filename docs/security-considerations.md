@@ -1170,8 +1170,22 @@ session store to compromise or scale.
   lookups. A validator error wrapping `security.ErrUnavailable` answers 503,
   so an outage of that store never signs everyone out.
 - **Cookie attributes** — defaults are conservative: `Secure=true`,
-  `HttpOnly=true`, `SameSite=Lax`. Disable `Secure` only for local plain-HTTP
-  development.
+  `HttpOnly=true`, `SameSite=Lax`, and the name `__Host-session`: a
+  `__Host-` cookie is Secure, has `Path=/` and no `Domain`, so a sibling
+  host cannot plant a cookie that shadows it (cookie tossing,
+  draft-ietf-httpbis-rfc6265bis §4.1.3.2). When the configuration cannot
+  satisfy that prefix the default name falls back to `__Secure-session`
+  (a `Domain` or another `Path`) or `session` (`WithSecure(false)`, local
+  plain-HTTP development only). `NewManager` refuses at start-up a
+  configuration browsers would refuse: an invalid name, path or domain, a
+  `__Host-`/`__Secure-` name whose rules the attributes break (prefixes
+  matched case-insensitively, like browsers do), `SameSite=None` without
+  `Secure`.
+- **Shadowing cookies** — when a request carries several cookies of the
+  session's name and more than one is a valid session, it has no session:
+  a tossed cookie can deny a session (until it expires), never swap it.
+  Expired or undecodable ones do not count. With the default `__Host-` name
+  no other host can toss one at all.
 - **Cookie only** — the `Manager` reads the session from the request's
   `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
   the URL nor from a header named like the cookie: a link carrying a session
@@ -1185,10 +1199,23 @@ session store to compromise or scale.
   `Session.GetInt64`): a 64-bit ID never loses precision through a float64.
   Treat a value that is present but unreadable as a refusal, not as absent.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
-  compares tokens in constant time. The session cookie being `HttpOnly`
-  keeps the token out of reach of XSS.
-- **Size** — the whole session is JSON-encoded into the cookie; browsers
-  cap a cookie near 4 KiB. Keep `Values` small.
+  compares tokens in constant time, but it is a check, not a policy: call
+  `VerifyCSRF` on every state-changing request a cookie session
+  authenticates — the sign-in form included, through a session opened for
+  the form (`Login` with a nil principal), against login CSRF — never change
+  state on GET, and put `net/http`'s `CrossOriginProtection` (Sec-Fetch-Site
+  and Origin checks) in front of the handlers. `SameSite=Lax` does not stop
+  same-site requests from a sibling subdomain. The cookie is `HttpOnly`, but
+  the token is rendered into the page: an XSS reads it — no CSRF defense
+  survives XSS.
+- **Size** — the whole session is JSON-encoded into the cookie, and browsers
+  ignore a cookie whose name and value exceed 4096 bytes (rfc6265bis §5.6):
+  `Login`, `Touch` and `Rotate` refuse it with `ErrCookieTooLarge` instead
+  of losing the session silently. Keep `Values` small.
+- **Key usage** — nonces are random (96 bits), and NIST SP 800-38D §8.3
+  limits one key to 2^32 seals: every `Login`, `Touch` and `Rotate` is one.
+  Rotate the active key well before that volume (about 50 days at 1 000
+  cookie writes per second), and do not `Touch` on every request.
 
 ## OpenID Connect client
 
@@ -1643,7 +1670,11 @@ span catalog.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
 - [ ] Generate session keys of 32 bytes or more from a cryptographic source
       and keep them in a secret store; keep the previous key after the new
-      one while you rotate, so rotation does not sign everyone out.
+      one while you rotate, so rotation does not sign everyone out; rotate
+      the active key before it seals 2^32 cookies.
+- [ ] Sessions: keep the default `__Host-session` cookie name; call
+      `VerifyCSRF` on every state-changing request (sign-in form included)
+      behind `net/http`'s `CrossOriginProtection`.
 - [ ] SAML: import IdP metadata through a trusted channel, or fetch it from
       the IdP's https metadata URL with a `MetadataSource` pinned to its
       entity ID; never take a metadata URL from a request. Widen the
