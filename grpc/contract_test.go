@@ -161,8 +161,8 @@ func TestServerOptionsPassTheirOptionsToBothChains(t *testing.T) {
 	attrs := []security.Attribute{security.Role("ADMIN")}
 
 	own := dialWithOptions(t, slices.Concat(
-		grpcsec.ServerOptions(newEngine("ROLE_USER"), grpcsec.WithErrorMapper(fixedMapper{code: codes.Aborted})),
-		grpcsec.AuthorizeServerOptions(adm, attrs, grpcsec.WithErrorMapper(fixedMapper{code: codes.DataLoss})),
+		grpcsec.ServerOptions(newEngine("ROLE_USER"), grpcsec.WithErrorMapper(mapperAnswering(t, codes.Aborted))),
+		grpcsec.AuthorizeServerOptions(adm, attrs, grpcsec.WithErrorMapper(mapperAnswering(t, codes.DataLoss))),
 	)...)
 
 	assert.Equal(t, codes.Aborted, checkCode(own, context.Background()), "authentication mapper")

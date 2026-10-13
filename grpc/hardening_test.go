@@ -17,6 +17,7 @@ import (
 	grpcsec "github.com/hyperscale-stack/security/grpc"
 	"github.com/hyperscale-stack/security/voter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -178,11 +179,16 @@ func TestInterceptorsFailClosedOnABrokenEngine(t *testing.T) {
 	assert.Equal(t, codes.Internal, status.Code(err))
 }
 
-// recordingMapperFor answers every error with a fixed status and records
-// that it was used.
-type fixedMapper struct{ code codes.Code }
+// mapperAnswering is an ErrorMapper mock answering every error with code;
+// it must be used.
+func mapperAnswering(t *testing.T, code codes.Code) *grpcsec.MockErrorMapper {
+	t.Helper()
 
-func (m fixedMapper) Map(context.Context, error) error { return status.Error(m.code, "custom") }
+	m := grpcsec.NewMockErrorMapper(t)
+	m.EXPECT().Map(mock.Anything, mock.Anything).Return(status.Error(code, "custom"))
+
+	return m
+}
 
 // The authorization interceptors answer with the authentication
 // interceptor's mapper unless they were given their own.
@@ -191,7 +197,7 @@ func TestAuthorizeUsesTheAuthenticationInterceptorsMapper(t *testing.T) {
 
 	adm := security.NewAffirmativeDecisionManager(voter.HasRole("ADMIN"))
 	attrs := []security.Attribute{security.Role("ADMIN")}
-	custom := grpcsec.WithErrorMapper(fixedMapper{code: codes.Aborted})
+	custom := grpcsec.WithErrorMapper(mapperAnswering(t, codes.Aborted))
 
 	inherited := dialWithOptions(t, slices.Concat(
 		grpcsec.ServerOptions(newEngine("ROLE_USER"), custom),
@@ -203,7 +209,7 @@ func TestAuthorizeUsesTheAuthenticationInterceptorsMapper(t *testing.T) {
 
 	own := dialWithOptions(t, slices.Concat(
 		grpcsec.ServerOptions(newEngine("ROLE_USER"), custom),
-		grpcsec.AuthorizeServerOptions(adm, attrs, grpcsec.WithErrorMapper(fixedMapper{code: codes.DataLoss})),
+		grpcsec.AuthorizeServerOptions(adm, attrs, grpcsec.WithErrorMapper(mapperAnswering(t, codes.DataLoss))),
 	)...)
 
 	_, err = own.Check(bearer(context.Background(), "letmein"), &healthpb.HealthCheckRequest{})
