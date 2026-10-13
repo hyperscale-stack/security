@@ -5,12 +5,10 @@
 package oauth2_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,33 +18,25 @@ import (
 	"github.com/hyperscale-stack/security/oauth2/storage/memory"
 	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// countingClients is a ClientStore counting its lookups.
-type countingClients struct {
-	staticClientStore
-
-	loads atomic.Int32
-}
-
-func (c *countingClients) LoadClient(ctx context.Context, id string) (oauth2.Client, error) {
-	c.loads.Add(1)
-
-	return c.staticClientStore.LoadClient(ctx, id)
-}
-
 // authMethodsServer serves the confidential client "machine" and the public
-// client "spa" with every client-authentication method.
-func authMethodsServer(t *testing.T) (*oauth2.Server, *countingClients) {
+// client "spa" with every client-authentication method, from a ClientStore
+// mock recording its lookups.
+func authMethodsServer(t *testing.T) (*oauth2.Server, *oauth2.MockClientStore) {
 	t.Helper()
 
-	clients := &countingClients{staticClientStore: staticClientStore{clients: map[string]oauth2.Client{
+	registry := &staticClientStore{clients: map[string]oauth2.Client{
 		"machine": confidentialClient([]string{oauth2.GrantTypeClientCredentials}, []string{"read"}),
 		"spa": &oauth2.DefaultClient{
 			IDValue: "spa", TypeValue: oauth2.ClientPublic, GrantTypeValues: []string{oauth2.GrantTypeAuthorizationCode},
 		},
-	}}}
+	}}
+
+	clients := oauth2.NewMockClientStore(t)
+	clients.EXPECT().LoadClient(mock.Anything, mock.Anything).RunAndReturn(registry.LoadClient).Maybe()
 
 	store := memory.New()
 	gcfg := grant.Config{Storage: store, AccessTokens: token.NewOpaque(32), AccessTTL: time.Hour}
@@ -149,7 +139,7 @@ func TestOneClientAuthenticationMethodPerRequest(t *testing.T) {
 				assert.Empty(t, rec.Header().Get("WWW-Authenticate"), "invalid_request, not invalid_client")
 
 				if tc.noLookup {
-					assert.Zero(t, clients.loads.Load(), "refused before any client is loaded")
+					clients.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 				}
 			})
 		}

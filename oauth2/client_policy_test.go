@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/hyperscale-stack/security/oauth2/storage/memory"
 	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -364,23 +364,6 @@ func TestGrantTypesAreComparedExactly(t *testing.T) {
 	}
 }
 
-// stubGrant is a custom grant counting its calls.
-type stubGrant struct {
-	typ   string
-	calls atomic.Int32
-}
-
-func (g *stubGrant) Type() string { return g.typ }
-
-func (g *stubGrant) Handle(_ context.Context, req oauth2.GrantRequest) (*oauth2.GrantResponse, error) {
-	g.calls.Add(1)
-
-	return &oauth2.GrantResponse{
-		Pair:      oauth2.TokenPair{Access: oauth2.AccessToken{Token: "custom", TokenHash: "custom", ExpiresAt: req.Now.Add(time.Hour)}},
-		TokenType: oauth2.TokenTypeBearer,
-	}, nil
-}
-
 // TestCustomGrantsAreGatedByTheClientDeclaration: the server checks the
 // client's declaration for every grant type, custom ones included, before
 // the grant runs — a custom grant cannot forget the policy.
@@ -389,7 +372,15 @@ func TestCustomGrantsAreGatedByTheClientDeclaration(t *testing.T) {
 
 	const custom = "urn:example:params:oauth:grant-type:custom"
 
-	stub := &stubGrant{typ: custom}
+	stub := oauth2.NewMockGrant(t)
+	stub.EXPECT().Type().Return(custom)
+	stub.EXPECT().Handle(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, req oauth2.GrantRequest) (*oauth2.GrantResponse, error) {
+			return &oauth2.GrantResponse{
+				Pair:      oauth2.TokenPair{Access: oauth2.AccessToken{Token: "custom", TokenHash: "custom", ExpiresAt: req.Now.Add(time.Hour)}},
+				TokenType: oauth2.TokenTypeBearer,
+			}, nil
+		}).Once()
 	clients := map[string]oauth2.Client{
 		"declares": &oauth2.DefaultClient{IDValue: "declares", Secret: "s1", TypeValue: oauth2.ClientConfidential, GrantTypeValues: []string{custom}},
 		"nothing":  &oauth2.DefaultClient{IDValue: "nothing", Secret: "s2", TypeValue: oauth2.ClientConfidential},
@@ -424,11 +415,11 @@ func TestCustomGrantsAreGatedByTheClientDeclaration(t *testing.T) {
 		assert.Equal(t, oauth2.CodeUnauthorizedClient, jsonBody(t, rec)["error"], id)
 	}
 
-	assert.Zero(t, stub.calls.Load(), "the grant never ran for a client not declaring it")
+	stub.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
 
 	rec := call("declares", "s1")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, int32(1), stub.calls.Load())
+	stub.AssertNumberOfCalls(t, "Handle", 1)
 }
 
 // TestEmptyScopesAllowNoScope pins the fail-closed client policy on scopes: a
