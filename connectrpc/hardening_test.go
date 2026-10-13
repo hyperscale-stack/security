@@ -18,6 +18,7 @@ import (
 	connectrpcsec "github.com/hyperscale-stack/security/connectrpc"
 	"github.com/hyperscale-stack/security/voter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -217,10 +218,15 @@ func TestInterceptorFailsClosedOnABrokenEngine(t *testing.T) {
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 }
 
-type fixedMapper struct{ code connect.Code }
+// mapperAnswering is an ErrorMapper mock answering every error with code;
+// it must be used.
+func mapperAnswering(t *testing.T, code connect.Code) *connectrpcsec.MockErrorMapper {
+	t.Helper()
 
-func (m fixedMapper) Map(context.Context, error) error {
-	return connect.NewError(m.code, errors.New("custom"))
+	m := connectrpcsec.NewMockErrorMapper(t)
+	m.EXPECT().Map(mock.Anything, mock.Anything).Return(connect.NewError(code, errors.New("custom")))
+
+	return m
 }
 
 func TestAuthorizationUsesTheAuthenticationInterceptorsMapper(t *testing.T) {
@@ -229,13 +235,13 @@ func TestAuthorizationUsesTheAuthenticationInterceptorsMapper(t *testing.T) {
 	adm := security.NewAffirmativeDecisionManager(voter.HasRole("ADMIN"))
 	attrs := []security.Attribute{security.Role("ADMIN")}
 	authn := connectrpcsec.NewAuthenticationInterceptor(newEngine("ROLE_USER"),
-		connectrpcsec.WithErrorMapper(fixedMapper{code: connect.CodeAborted}))
+		connectrpcsec.WithErrorMapper(mapperAnswering(t, connect.CodeAborted)))
 
 	_, err := chainUnary(authn, connectrpcsec.NewAuthorizationInterceptor(adm, attrs), (&recordingUnary{}).fn)(
 		context.Background(), unaryReq("letmein"))
 	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
 
-	own := connectrpcsec.NewAuthorizationInterceptor(adm, attrs, connectrpcsec.WithErrorMapper(fixedMapper{code: connect.CodeDataLoss}))
+	own := connectrpcsec.NewAuthorizationInterceptor(adm, attrs, connectrpcsec.WithErrorMapper(mapperAnswering(t, connect.CodeDataLoss)))
 	_, err = chainUnary(authn, own, (&recordingUnary{}).fn)(context.Background(), unaryReq("letmein"))
 	assert.Equal(t, connect.CodeDataLoss, connect.CodeOf(err))
 }
