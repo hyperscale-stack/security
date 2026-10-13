@@ -2318,15 +2318,16 @@ To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
    ```
 
    The counts are 0 unless custom family IDs differ only by case, accents,
-   Unicode form or trailing spaces. When they are not, run steps 2 and 3
-   with token writes stopped: between the `ALTER` of
-   `oauth2_token_families` and step 3, an issuance into such a family would
-   record it active and revive the tokens it shares with a revoked family. A
-   family ID over 64 bytes or a hash over 128 makes step 2 fail (it runs in
-   strict mode): delete those rows first. The store refuses such family IDs
-   since #82, and its own hashes are 64 characters.
+   Unicode form or trailing spaces. When they are not, stop token writes —
+   issuance, rotation, revocation — during step 2: between its `ALTER` of
+   `oauth2_token_families` and its `INSERT`, an issuance into such a family
+   would record it active and revive the tokens it shares with a revoked
+   family. A family ID over 64 bytes or a hash over 128 makes step 2 fail
+   (it runs in strict mode): delete those rows first. The store refuses
+   such family IDs since #82, and its own hashes are 64 characters.
 2. **Convert the key columns and record the orphaned families revoked**, in
-   one session, before traffic resumes:
+   one session — with token writes stopped when step 1 counted merged
+   tokens:
 
    ```sql
    SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'STRICT_ALL_TABLES');
@@ -2366,10 +2367,11 @@ To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
    `oauth2_token_families` is rebuilt, every issuance, rotation and
    revocation waits. Run it at a quiet time, or use an online schema-change
    tool with the same column definitions. The store works before, during
-   and after the conversion; until it is done, comparisons stay as they
-   were.
-5. **Read the keys** with `CAST(family_id AS CHAR)`: the `mysql` client
-   shows binary columns in hexadecimal (`--binary-as-hex`, its default
-   since 8.0.19).
+   and after the conversion, and comparisons become exact table by table:
+   once a token table is converted, its tokens merged into a look-alike's
+   record already read revoked.
+5. **Read the keys** with `CAST(family_id AS CHAR)`: the interactive
+   `mysql` client shows binary columns in hexadecimal (`--binary-as-hex`,
+   on by default in interactive mode since 8.0.19).
 6. **Custom stores** compare family IDs and hashes byte for byte, and pass
    `storetest.RunConformance`, which now checks it (`KeysAreComparedExactly`).

@@ -246,13 +246,16 @@ func requireBinaryKeys(t *testing.T, db *sql.DB) {
 
 // TestOAuth2MySQLUpgrade runs the upgrade statements of MIGRATION.md on
 // tables created by the former MySQL DDL. Seeded with families the former
-// collation merged with a look-alike — revoked, and active — it checks
-// what the upgrade keeps: the preflight counts the merged tokens, the
-// key columns become binary, a revoked family and its look-alike stay
-// revoked even through a new issuance into the look-alike (the orphaned
-// family is recorded revoked), the look-alike of an active family reads
-// revoked, other families and codes are untouched. The conformance suite
-// then passes on upgraded tables.
+// collation merged with look-alikes — revoked, and active; whole pairs,
+// a refresh token whose access token is gone, an access token alone — it
+// checks what the upgrade keeps: the preflight counts the merged tokens,
+// the key columns become binary, a revoked family and its look-alikes stay
+// revoked even through a new issuance into each look-alike (the orphaned
+// families are recorded revoked, for FamilyRevocationRetention at least),
+// the look-alike of an active family reads revoked, other families and
+// codes are untouched. In strict mode, an over-long key stops the upgrade
+// instead of being truncated. The conformance suite then passes on
+// upgraded tables.
 func TestOAuth2MySQLUpgrade(t *testing.T) {
 	blocks := upgradeBlocks(t)
 	require.Len(t, blocks, 3, "the preflight, the upgrade and the conversion of the codes' table")
@@ -266,6 +269,10 @@ func TestOAuth2MySQLUpgrade(t *testing.T) {
 
 			t.Run("revocations survive", func(t *testing.T) {
 				upgradeSeededDatabase(t, b, preflight, upgrade)
+			})
+
+			t.Run("over-long keys stop it", func(t *testing.T) {
+				upgradeRefusesOverLongKeys(t, b, preflight, upgrade)
 			})
 
 			t.Run("conformance", func(t *testing.T) {
@@ -289,6 +296,8 @@ func TestOAuth2MySQLUpgrade(t *testing.T) {
 func upgradeSeededDatabase(t *testing.T, b backend, preflight, upgrade []string) {
 	t.Helper()
 
+	start := time.Now().Unix()
+
 	driver, dsn := b.namespace(t)
 	db := open(t, driver, dsn, 4)
 	execAll(t, db, legacyMySQLSchema...)
@@ -297,26 +306,41 @@ func upgradeSeededDatabase(t *testing.T, b backend, preflight, upgrade []string)
 	require.NoError(t, err)
 
 	// Under the former collation a pair saved into a look-alike of a
-	// family joins that family's record: revoking one revokes both.
+	// family joins that family's record: revoking one revokes all of them.
 	var (
-		alice      = tokenPair("alice", "User-Alice")
-		aliceAlike = tokenPair("alice-alike", "user-alice")
-		bob        = tokenPair("bob", "Team-Bob")
-		bobAlike   = tokenPair("bob-alike", "team-bob")
-		plain      = tokenPair("plain", "plain-family")
+		alice            = tokenPair("alice", "User-Alice")
+		aliceAlike       = tokenPair("alice-alike", "user-alice")
+		aliceRefreshOnly = tokenPair("alice-refresh-only", "USER-ALICE")
+		aliceAccessOnly  = tokenPair("alice-access-only", "uSeR-aLiCe")
+		bob              = tokenPair("bob", "Team-Bob")
+		bobAlike         = tokenPair("bob-alike", "team-bob")
+		plain            = tokenPair("plain", "plain-family")
 	)
 
-	for _, p := range []*oauth2.TokenPair{alice, aliceAlike, bob, bobAlike, plain} {
+	// An access token alone: a non-rotating refresh under Profile20.
+	aliceAccessOnly.Refresh = nil
+
+	for _, p := range []*oauth2.TokenPair{alice, aliceAlike, aliceRefreshOnly, aliceAccessOnly, bob, bobAlike, plain} {
 		require.NoError(t, s.SaveTokenPair(t.Context(), p))
 	}
 
+	// A refresh token whose access token is gone: revoked, or cleaned up.
+	require.NoError(t, s.RevokeAccessToken(t.Context(), aliceRefreshOnly.Access.TokenHash))
 	require.NoError(t, s.RevokeRefreshFamily(t.Context(), "User-Alice"))
-	requireUnusable(t, s, aliceAlike)
+
+	lookAlikes := map[string]func(){
+		"user-alice": func() { requireUnusable(t, s, aliceAlike) },
+		"USER-ALICE": func() { requireRefreshConsumed(t, s, aliceRefreshOnly) },
+		"uSeR-aLiCe": func() { requireAccessRevoked(t, s, aliceAccessOnly) },
+	}
+	for _, unusable := range lookAlikes {
+		unusable()
+	}
 
 	code := &oauth2.AuthorizationCode{CodeHash: sha256Hex("legacy-code"), ClientID: "client-1", ExpiresAt: time.Now().Add(time.Hour)}
 	require.NoError(t, s.SaveAuthorizationCode(t.Context(), code))
 
-	require.Equal(t, []int64{2, 2}, queryRow(t, db, preflight[0]), "access and refresh tokens merged with a look-alike")
+	require.Equal(t, []int64{3, 3}, queryRow(t, db, preflight[0]), "access and refresh tokens merged with a look-alike")
 
 	for i, length := range queryRow(t, db, preflight[1]) {
 		require.LessOrEqual(t, length, []int64{64, 64, 64, 128, 128, 128}[i], "longest key %d", i)
@@ -326,17 +350,101 @@ func upgradeSeededDatabase(t *testing.T, b backend, preflight, upgrade []string)
 	requireBinaryKeys(t, db)
 
 	requireUnusable(t, s, alice)
-	requireUnusable(t, s, aliceAlike)
-	require.ErrorIs(t, s.SaveTokenPair(t.Context(), tokenPair("alice-alike-new", "user-alice")), oauth2.ErrTokenFamilyRevoked,
-		"an issuance into the look-alike of a revoked family")
-	requireUnusable(t, s, aliceAlike)
+
+	for family, unusable := range lookAlikes {
+		unusable()
+		require.ErrorIs(t, s.SaveTokenPair(t.Context(), tokenPair("new-"+family, family)), oauth2.ErrTokenFamilyRevoked,
+			"an issuance into %q, a look-alike of a revoked family", family)
+		unusable()
+		requireRevokedRecord(t, db, family, start)
+	}
 
 	requireUsable(t, s, bob)
 	requireUnusable(t, s, bobAlike)
+	requireRevokedRecord(t, db, "team-bob", start)
 	requireUsable(t, s, plain)
 
 	_, err = s.ConsumeAuthorizationCode(t.Context(), code.CodeHash)
 	require.NoError(t, err)
+}
+
+// requireRevokedRecord asserts that the upgrade recorded family revoked —
+// no earlier than start — and kept for oauth2.FamilyRevocationRetention
+// at least: past every one of its tokens, and past start + 24 hours even
+// for a family whose tokens expire sooner (an access token alone lives an
+// hour here).
+func requireRevokedRecord(t *testing.T, db *sql.DB, family string, start int64) {
+	t.Helper()
+
+	var revokedAt, expiresAt int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT revoked_at, expires_at FROM oauth2_token_families WHERE family_id = ?`, family).Scan(&revokedAt, &expiresAt), family)
+
+	require.GreaterOrEqual(t, revokedAt, start, "%s revoked at the upgrade", family)
+	require.GreaterOrEqual(t, expiresAt, start+int64(oauth2.FamilyRevocationRetention/time.Second), "%s retained", family)
+}
+
+// upgradeRefusesOverLongKeys seeds, behind the store's back, a token row
+// whose family ID fits VARCHAR(64) — 33 characters — but not VARBINARY(64):
+// 66 bytes. The preflight reports it, and the upgrade, which sets a strict
+// sql_mode for its session, stops at the ALTER of that table instead of
+// truncating the key, on a connection whose own sql_mode is not strict.
+func upgradeRefusesOverLongKeys(t *testing.T, b backend, preflight, upgrade []string) {
+	t.Helper()
+
+	lax := b
+	lax.params = map[string]string{"sql_mode": "''"}
+
+	driver, dsn := lax.namespace(t)
+	db := open(t, driver, dsn, 1)
+	execAll(t, db, legacyMySQLSchema...)
+
+	long := strings.Repeat("\u00e9", 33)
+	execAll(t, db, `INSERT INTO oauth2_access_tokens (token_hash, client_id, subject, scope, family_id, audience, issued_at, expires_at)
+		VALUES ('at-long', 'client-1', 'alice', 'read', '`+long+`', 'api', 0, 4102444800)`)
+
+	require.Equal(t, int64(66), queryRow(t, db, preflight[1])[1], "the preflight reports the 66-byte family ID")
+
+	// One session: the SET applies to the statements after it.
+	conn, err := db.Conn(t.Context())
+	require.NoError(t, err)
+
+	var failed error
+
+	for _, stmt := range upgrade {
+		if _, failed = conn.ExecContext(t.Context(), stmt); failed != nil {
+			require.Contains(t, stmt, "ALTER TABLE oauth2_access_tokens", "the statement that fails")
+
+			break
+		}
+	}
+
+	require.NoError(t, conn.Close())
+	require.Error(t, failed, "the upgrade truncated a 66-byte family ID into VARBINARY(64)")
+
+	var familyID, dataType string
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT family_id FROM oauth2_access_tokens WHERE token_hash = 'at-long'`).Scan(&familyID))
+	require.Equal(t, long, familyID, "the key is intact")
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT DATA_TYPE FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oauth2_access_tokens' AND COLUMN_NAME = 'family_id'`).Scan(&dataType))
+	require.Equal(t, "varchar", dataType, "the table is left as it was")
+}
+
+// requireRefreshConsumed asserts that pair's refresh token reads consumed.
+func requireRefreshConsumed(t *testing.T, s *oauth2sql.Store, pair *oauth2.TokenPair) {
+	t.Helper()
+
+	rt, err := s.LookupRefreshToken(t.Context(), pair.Refresh.TokenHash)
+	require.NoError(t, err, pair.Refresh.TokenHash)
+	require.True(t, rt.Consumed, pair.Refresh.TokenHash)
+}
+
+// requireAccessRevoked asserts that pair's access token reads revoked.
+func requireAccessRevoked(t *testing.T, s *oauth2sql.Store, pair *oauth2.TokenPair) {
+	t.Helper()
+
+	_, err := s.LookupAccessToken(t.Context(), pair.Access.TokenHash)
+	require.ErrorIs(t, err, oauth2.ErrTokenFamilyRevoked, pair.Access.TokenHash)
 }
 
 // requireUsable asserts that pair's access token is found and its refresh

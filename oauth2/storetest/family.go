@@ -287,7 +287,8 @@ var lookAlikeKeys = [][2]string{
 // byte (I7). Of two look-alike family IDs, revoking one leaves the other
 // usable, and a revocation recorded for one before any issuance does not
 // refuse the first pair of the other. Tokens and codes whose hashes differ
-// only in letter case are records of their own, each consumed on its own.
+// only in letter case, or by a trailing space, are records of their own,
+// each consumed on its own.
 func testKeysAreComparedExactly(t *testing.T, s oauth2.Storage) {
 	for i, ids := range lookAlikeKeys {
 		kept := newPair(fmt.Sprintf("alike-kept-%d", i), ids[0])
@@ -306,13 +307,21 @@ func testKeysAreComparedExactly(t *testing.T, s oauth2.Storage) {
 		requireUsable(t, s, first)
 	}
 
-	upper, lower := newPair("Alike-Hash", "fam-alike-upper"), newPair("aLIKE-hASH", "fam-alike-lower")
-	mustSave(t, s, upper)
-	mustSave(t, s, lower)
-	requireOwnFamily(t, s, upper)
-	requireOwnFamily(t, s, lower)
+	pairs := []*oauth2.TokenPair{
+		newPair("Alike-Hash", "fam-alike-upper"), newPair("aLIKE-hASH", "fam-alike-lower"),
+		newPair("alike-pad", "fam-alike-pad"), newPair("alike-pad ", "fam-alike-padded"),
+	}
+	for _, pair := range pairs {
+		mustSave(t, s, pair)
+	}
 
-	codes := []*oauth2.AuthorizationCode{sampleCode("Alike-Code"), sampleCode("aLIKE-cODE")}
+	for _, pair := range pairs {
+		requireOwnFamily(t, s, pair)
+	}
+
+	codes := []*oauth2.AuthorizationCode{
+		sampleCode("Alike-Code"), sampleCode("aLIKE-cODE"), sampleCode("alike-pad"), sampleCode("alike-pad "),
+	}
 	for _, code := range codes {
 		mustNoError(t, s.SaveAuthorizationCode(ctx(), code), "save code "+code.CodeHash)
 	}

@@ -34,8 +34,9 @@
 //     case- and accent-insensitive by default, trailing spaces ignored by
 //     every PAD SPACE one, utf8mb4_bin included — so [Schema] declares
 //     these columns VARBINARY there; a database created before needs the
-//     statements MIGRATION.md lists. The mysql client shows them in
-//     hexadecimal: read them with CAST(family_id AS CHAR). PostgreSQL
+//     statements MIGRATION.md lists. The interactive mysql client shows
+//     them in hexadecimal (--binary-as-hex, on by default in interactive
+//     mode since 8.0.19): read them with CAST(family_id AS CHAR). PostgreSQL
 //     compares them byte for byte under the database's default collation,
 //     which is deterministic, and SQLite under its BINARY collation.
 //   - Text is stored as UTF-8: a PostgreSQL database in the UTF8 encoding;

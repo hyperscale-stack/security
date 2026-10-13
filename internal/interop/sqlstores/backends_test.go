@@ -58,7 +58,8 @@ type backend struct {
 	engine engine
 	// env names the variable holding the server's DSN; SQLite needs none.
 	env string
-	// params are run-time parameters every PostgreSQL namespace DSN sets.
+	// params are the run-time parameters (PostgreSQL) or the system
+	// variables (MySQL) every namespace DSN sets.
 	params map[string]string
 	// clientFoundRows sets the MySQL CLIENT_FOUND_ROWS flag, under which
 	// an UPDATE reports the rows it matched rather than those it changed.
@@ -178,6 +179,10 @@ func (b backend) mysqlNamespace(t *testing.T) string {
 
 	cfg.DBName = database
 	cfg.ClientFoundRows = b.clientFoundRows
+
+	if len(b.params) > 0 {
+		cfg.Params = b.params
+	}
 
 	return cfg.FormatDSN()
 }
