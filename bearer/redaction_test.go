@@ -15,6 +15,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/bearer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,9 +78,13 @@ func TestWithAuthenticatedDropsTheToken(t *testing.T) {
 	assert.Empty(t, authed.Token(), "the token never outlives its verification")
 	assert.Nil(t, authed.Credentials())
 
-	a := bearer.NewAuthenticator(bearer.VerifierFunc(func(_ context.Context, token string) (security.Authentication, error) {
-		return bearer.New(token).WithAuthenticated(principal{sub: "alice"}, nil, ""), nil
-	}))
+	v := bearer.NewMockTokenVerifier(t)
+	v.EXPECT().Verify(mock.Anything, secretToken).
+		RunAndReturn(func(_ context.Context, token string) (security.Authentication, error) {
+			return bearer.New(token).WithAuthenticated(principal{sub: "alice"}, nil, ""), nil
+		}).Once()
+
+	a := bearer.NewAuthenticator(v)
 
 	out, err := a.Authenticate(context.Background(), bearer.New(secretToken))
 	require.NoError(t, err)
@@ -94,9 +99,10 @@ func TestWithAuthenticatedDropsTheToken(t *testing.T) {
 func TestAuthenticatorFailureReturnsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	a := bearer.NewAuthenticator(bearer.VerifierFunc(func(context.Context, string) (security.Authentication, error) {
-		return nil, security.ErrTokenExpired
-	}))
+	v := bearer.NewMockTokenVerifier(t)
+	v.EXPECT().Verify(mock.Anything, secretToken).Return(nil, security.ErrTokenExpired).Once() // Anonymous is not supported: never verified
+
+	a := bearer.NewAuthenticator(v)
 
 	for _, in := range []security.Authentication{bearer.New(secretToken), security.Anonymous()} {
 		out, err := a.Authenticate(context.Background(), in)
@@ -104,9 +110,10 @@ func TestAuthenticatorFailureReturnsAnonymous(t *testing.T) {
 		assert.Equal(t, security.Anonymous(), out)
 	}
 
-	nilVerifier := bearer.NewAuthenticator(bearer.VerifierFunc(func(context.Context, string) (security.Authentication, error) {
-		return nil, nil
-	}))
+	nilResult := bearer.NewMockTokenVerifier(t)
+	nilResult.EXPECT().Verify(mock.Anything, secretToken).Return(nil, nil).Once()
+
+	nilVerifier := bearer.NewAuthenticator(nilResult)
 
 	out, err := nilVerifier.Authenticate(context.Background(), bearer.New(secretToken))
 	require.ErrorIs(t, err, security.ErrInvalidCredentials)

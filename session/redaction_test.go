@@ -15,6 +15,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/session"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,7 +119,16 @@ func TestSessionAuthenticationRedactsItself(t *testing.T) {
 	s, err := mgr.Login(context.Background(), c, principal{sub: "alice"})
 	require.NoError(t, err)
 
-	engine := security.NewEngine(security.NewManager(session.NewAuthenticator(recordLoader{})), session.NewExtractor(mgr))
+	// The loader resolves the session's subject into a userRecord.
+	loader := session.NewMockPrincipalLoader(t)
+	loader.EXPECT().Load(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, values map[string]any) (security.Principal, []string, error) {
+			sub, _ := values["sub"].(string)
+
+			return userRecord{sub: sub, passwordHash: "$2a$10$HASH-OF-THE-USER"}, []string{"ROLE_USER"}, nil
+		}).Once()
+
+	engine := security.NewEngine(security.NewManager(session.NewAuthenticator(loader)), session.NewExtractor(mgr))
 
 	_, auth, err := engine.Process(context.Background(), c.replay())
 	require.NoError(t, err)
@@ -139,19 +149,13 @@ func TestSessionAuthenticationRedactsItself(t *testing.T) {
 }
 
 // userRecord is an application principal holding a secret field, as a user
-// record loaded from a store does.
+// record loaded from a store does. It is hand-written: security.Principal
+// belongs to the core package, whose generated mocks exist only in the
+// core's own test binary, and the test needs the secret in a field fmt
+// would print.
 type userRecord struct {
 	sub          string
 	passwordHash string
 }
 
 func (u userRecord) Subject() string { return u.sub }
-
-// recordLoader resolves the session's subject into a userRecord.
-type recordLoader struct{}
-
-func (recordLoader) Load(_ context.Context, values map[string]any) (security.Principal, []string, error) {
-	sub, _ := values["sub"].(string)
-
-	return userRecord{sub: sub, passwordHash: "$2a$10$HASH-OF-THE-USER"}, []string{"ROLE_USER"}, nil
-}

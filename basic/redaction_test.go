@@ -14,6 +14,7 @@ import (
 
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,8 +55,13 @@ func renderings(t *testing.T, v any) []string {
 func TestAuthenticationRedactsCredentials(t *testing.T) {
 	t.Parallel()
 
+	// The user record is a hand-written stubUser, not a generated mock: the
+	// test needs the hash in a field fmt would print if the Authentication
+	// leaked its user — a mock keeps its return values behind pointers.
 	user := &stubUser{subject: "alice", passwordHash: "$2a$04$HASH-OF-THE-USER", enabled: true}
-	a := basic.NewAuthenticator(&stubLoader{user: user}, &recordingHasher{always: true})
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(user, nil).Once()
+	a := basic.NewAuthenticator(l, &recordingHasher{always: true})
 
 	pending := basic.New("Summer2026!-typed-in-the-user-field", "S3cr3t!")
 

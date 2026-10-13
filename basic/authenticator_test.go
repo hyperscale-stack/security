@@ -184,6 +184,6 @@ func TestAuthenticatorRejectsForeignAuthentication(t *testing.T) {
 func TestAuthenticatorName(t *testing.T) {
 	t.Parallel()
 
-	a := basic.NewAuthenticator(&stubLoader{}, newHasher(t))
+	a := basic.NewAuthenticator(basic.NewMockUserLoader(t), newHasher(t))
 	assert.Equal(t, "basic", a.AuthenticatorName())
 }

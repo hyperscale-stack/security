@@ -17,8 +17,14 @@ import (
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/hyperscale-stack/security/password"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// The password.Hasher doubles of these tests (recordingHasher, gateHasher and
+// their variants, recordingWrapper) are hand-written: mockery generates
+// in-package mocks, so password's MockHasher exists only in the password
+// package's own test binary, not in this one.
 
 // recordingHasher is a password.Hasher fake: Hash returns a fresh
 // "dummy-N" value; Verify waits `delay`, records the hash it was given and
@@ -68,46 +74,95 @@ func (h *recordingHasher) calls() []string {
 	return slices.Clone(h.verified)
 }
 
-// funcLoader is a basic.UserLoader driven by a function.
-type funcLoader func(username string) (basic.PasswordUser, error)
+// account is the user record behind a generated PasswordUser mock.
+type account struct {
+	subject, hash                                 string
+	disabled, locked, expired, credentialsExpired bool
+}
 
-func (f funcLoader) LoadByUsername(_ context.Context, username string) (basic.PasswordUser, error) {
-	return f(username)
+// mockUser returns a generated PasswordUser mock answering with a: the
+// Authenticator may read each field any number of times.
+func mockUser(t *testing.T, a account) *basic.MockPasswordUser {
+	t.Helper()
+
+	u := basic.NewMockPasswordUser(t)
+	u.EXPECT().Subject().Return(a.subject).Maybe()
+	u.EXPECT().GetPasswordHash().Return(a.hash).Maybe()
+	u.EXPECT().IsEnabled().Return(!a.disabled).Maybe()
+	u.EXPECT().IsLocked().Return(a.locked).Maybe()
+	u.EXPECT().IsExpired().Return(a.expired).Maybe()
+	u.EXPECT().IsCredentialsExpired().Return(a.credentialsExpired).Maybe()
+
+	return u
+}
+
+// mockLoader returns a generated UserLoader mock answering every lookup with
+// load, from any goroutine, any number of times.
+func mockLoader(t *testing.T, load func(username string) (basic.PasswordUser, error)) *basic.MockUserLoader {
+	t.Helper()
+
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, username string) (basic.PasswordUser, error) { return load(username) }).
+		Maybe()
+
+	return l
+}
+
+// unknownUsers returns a generated UserLoader mock that knows nobody.
+func unknownUsers(t *testing.T) *basic.MockUserLoader {
+	t.Helper()
+
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+
+	return l
+}
+
+// attempt is one outcome an attacker could tell apart by timing.
+type attempt struct {
+	name     string
+	user     *account // nil: the loader returns no user
+	loadErr  error
+	password string
+	dummy    bool // verified against the dummy hash
+}
+
+// loader returns a generated UserLoader mock expecting the attempt's single
+// lookup of "alice".
+func (c attempt) loader(t *testing.T) *basic.MockUserLoader {
+	t.Helper()
+
+	var user basic.PasswordUser
+	if c.user != nil {
+		user = mockUser(t, *c.user)
+	}
+
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(user, c.loadErr).Once()
+
+	return l
 }
 
 // attempts lists every outcome an attacker could tell apart by timing.
-func attempts(real string) []struct {
-	name     string
-	loader   funcLoader
-	password string
-	dummy    bool // verified against the dummy hash
-} {
-	user := func(mod func(*stubUser)) funcLoader {
-		return func(string) (basic.PasswordUser, error) {
-			u := &stubUser{subject: "alice", passwordHash: real, enabled: true}
-			mod(u)
+func attempts(real string) []attempt {
+	user := func(mod func(*account)) *account {
+		a := &account{subject: "alice", hash: real}
+		mod(a)
 
-			return u, nil
-		}
+		return a
 	}
 
-	return []struct {
-		name     string
-		loader   funcLoader
-		password string
-		dummy    bool
-	}{
-		{"unknown user (nil, nil)", func(string) (basic.PasswordUser, error) { return nil, nil }, "right", true},
-		{"unknown user (ErrInvalidCredentials)", func(string) (basic.PasswordUser, error) {
-			return nil, security.ErrInvalidCredentials
-		}, "right", true},
-		{"loader failure", func(string) (basic.PasswordUser, error) { return nil, errors.New("store down") }, "right", true},
-		{"account without a password hash", user(func(u *stubUser) { u.passwordHash = "" }), "right", true},
-		{"disabled", user(func(u *stubUser) { u.enabled = false }), "right", false},
-		{"locked", user(func(u *stubUser) { u.locked = true }), "right", false},
-		{"expired", user(func(u *stubUser) { u.expired = true }), "right", false},
-		{"credentials expired", user(func(u *stubUser) { u.credentialsExpired = true }), "right", false},
-		{"wrong password", user(func(*stubUser) {}), "wrong", false},
+	return []attempt{
+		{name: "unknown user (nil, nil)", password: "right", dummy: true},
+		{name: "unknown user (ErrInvalidCredentials)", loadErr: security.ErrInvalidCredentials, password: "right", dummy: true},
+		{name: "loader failure", loadErr: errors.New("store down"), password: "right", dummy: true},
+		{name: "account without a password hash", user: user(func(a *account) { a.hash = "" }), password: "right", dummy: true},
+		{name: "disabled", user: user(func(a *account) { a.disabled = true }), password: "right"},
+		{name: "locked", user: user(func(a *account) { a.locked = true }), password: "right"},
+		{name: "expired", user: user(func(a *account) { a.expired = true }), password: "right"},
+		{name: "credentials expired", user: user(func(a *account) { a.credentialsExpired = true }), password: "right"},
+		{name: "wrong password", user: user(func(*account) {}), password: "wrong"},
 	}
 }
 
@@ -126,7 +181,7 @@ func TestAuthenticatorVerifiesExactlyOncePerAttempt(t *testing.T) {
 			t.Parallel()
 
 			h := &recordingHasher{match: "real-hash"}
-			a := basic.NewAuthenticator(c.loader, h)
+			a := basic.NewAuthenticator(c.loader(t), h)
 
 			out, err := a.Authenticate(context.Background(), basic.New("alice", c.password))
 
@@ -159,7 +214,7 @@ func TestAuthenticatorRefusalsHoldWhateverTheHasherAnswers(t *testing.T) {
 			t.Parallel()
 
 			h := &recordingHasher{always: true}
-			a := basic.NewAuthenticator(c.loader, h)
+			a := basic.NewAuthenticator(c.loader(t), h)
 
 			out, err := a.Authenticate(context.Background(), basic.New("alice", c.password))
 
@@ -176,8 +231,10 @@ func TestAuthenticatorChecksTheAccountStateAfterThePassword(t *testing.T) {
 	t.Parallel()
 
 	h := &recordingHasher{match: "real-hash"}
-	locked := &stubUser{subject: "alice", passwordHash: "real-hash", enabled: true, locked: true}
-	a := basic.NewAuthenticator(&stubLoader{user: locked}, h)
+	locked := mockUser(t, account{subject: "alice", hash: "real-hash", locked: true})
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(locked, nil).Twice()
+	a := basic.NewAuthenticator(l, h)
 
 	_, rightErr := a.Authenticate(context.Background(), basic.New("alice", "right"))
 	_, wrongErr := a.Authenticate(context.Background(), basic.New("alice", "wrong"))
@@ -200,7 +257,7 @@ func TestAuthenticatorEveryAttemptTakesAVerification(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			a := basic.NewAuthenticator(c.loader, &recordingHasher{match: "real-hash", delay: delay})
+			a := basic.NewAuthenticator(c.loader(t), &recordingHasher{match: "real-hash", delay: delay})
 
 			start := time.Now()
 			_, err := a.Authenticate(context.Background(), basic.New("alice", c.password))
@@ -228,11 +285,11 @@ func TestAuthenticatorResponseTimeDoesNotRevealAccounts(t *testing.T) {
 		hash, err := c.h.Hash(context.Background(), "right")
 		require.NoError(t, err)
 
-		users := map[string]*stubUser{
-			"alice":  {subject: "alice", passwordHash: hash, enabled: true},
-			"locked": {subject: "locked", passwordHash: hash, enabled: true, locked: true},
+		users := map[string]basic.PasswordUser{
+			"alice":  mockUser(t, account{subject: "alice", hash: hash}),
+			"locked": mockUser(t, account{subject: "locked", hash: hash, locked: true}),
 		}
-		loader := funcLoader(func(username string) (basic.PasswordUser, error) {
+		loader := mockLoader(t, func(username string) (basic.PasswordUser, error) {
 			if u, ok := users[username]; ok {
 				return u, nil
 			}
@@ -274,7 +331,9 @@ func TestNewAuthenticatorMakesTheDummyWithTheConfiguredHasher(t *testing.T) {
 	params := password.Argon2idParams{MemoryKiB: 1024, Time: 3, Parallelism: 2, KeyLen: 32, SaltLen: 16}
 	rec := &recordingWrapper{Hasher: password.NewArgon2idHasher(params)}
 
-	a := basic.NewAuthenticator(funcLoader(func(string) (basic.PasswordUser, error) { return nil, nil }), rec)
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "nobody").Return(nil, nil).Once()
+	a := basic.NewAuthenticator(l, rec)
 
 	_, err := a.Authenticate(context.Background(), basic.New("nobody", "pw"))
 	require.ErrorIs(t, err, security.ErrInvalidCredentials)
@@ -302,7 +361,7 @@ func (w *recordingWrapper) Verify(ctx context.Context, hash, pw string) (bool, e
 func TestNewAuthenticatorPanics(t *testing.T) {
 	t.Parallel()
 
-	loader := funcLoader(func(string) (basic.PasswordUser, error) { return nil, nil })
+	loader := basic.NewMockUserLoader(t) // never called
 
 	assert.PanicsWithValue(t, "basic: NewAuthenticator: nil UserLoader", func() {
 		basic.NewAuthenticator(nil, &recordingHasher{})
@@ -321,8 +380,9 @@ func TestNewAuthenticatorPanics(t *testing.T) {
 func TestAuthenticatorRefusesAnUnverifiableStoredHash(t *testing.T) {
 	t.Parallel()
 
-	user := &stubUser{subject: "alice", passwordHash: "$2a$broken", enabled: true}
-	a := basic.NewAuthenticator(&stubLoader{user: user}, password.NewBCryptHasher(4))
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(mockUser(t, account{subject: "alice", hash: "$2a$broken"}), nil).Once()
+	a := basic.NewAuthenticator(l, password.NewBCryptHasher(4))
 
 	out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
 

@@ -17,6 +17,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,10 +56,6 @@ func (h *gateHasher) Verify(ctx context.Context, _, _ string) (bool, error) {
 }
 
 func (h *gateHasher) NeedsRehash(string) bool { return false }
-
-func unknownUsers() basic.UserLoader {
-	return funcLoader(func(string) (basic.PasswordUser, error) { return nil, nil })
-}
 
 // runAttempts starts n concurrent attempts and returns a function waiting
 // for them — failing the test, instead of hanging it, when they do not end.
@@ -127,14 +124,14 @@ func TestAuthenticatorCapsConcurrentVerificationsByDefault(t *testing.T) {
 	h := newGateHasher()
 	limit := runtime.GOMAXPROCS(0)
 
-	assertConcurrencyCap(t, basic.NewAuthenticator(unknownUsers(), h), h, limit, limit+5)
+	assertConcurrencyCap(t, basic.NewAuthenticator(unknownUsers(t), h), h, limit, limit+5)
 }
 
 func TestWithMaxConcurrentVerifications(t *testing.T) {
 	t.Parallel()
 
 	h := newGateHasher()
-	a := basic.NewAuthenticator(unknownUsers(), h, basic.WithMaxConcurrentVerifications(3))
+	a := basic.NewAuthenticator(unknownUsers(t), h, basic.WithMaxConcurrentVerifications(3))
 
 	assertConcurrencyCap(t, a, h, 3, 12)
 }
@@ -146,7 +143,7 @@ func TestUnlimitedVerifications(t *testing.T) {
 
 	h := newGateHasher()
 	limit := runtime.GOMAXPROCS(0) + 8
-	a := basic.NewAuthenticator(unknownUsers(), h, basic.WithMaxConcurrentVerifications(basic.UnlimitedVerifications))
+	a := basic.NewAuthenticator(unknownUsers(t), h, basic.WithMaxConcurrentVerifications(basic.UnlimitedVerifications))
 
 	assertConcurrencyCap(t, a, h, limit, limit)
 }
@@ -167,9 +164,10 @@ func TestAuthenticatorVerificationQueueHonorsTheContext(t *testing.T) {
 	t.Parallel()
 
 	h := newGateHasher()
-	users := funcLoader(func(username string) (basic.PasswordUser, error) {
+	alice := mockUser(t, account{subject: "alice", hash: "hash"})
+	users := mockLoader(t, func(username string) (basic.PasswordUser, error) {
 		if username == "alice" {
-			return &stubUser{subject: "alice", passwordHash: "hash", enabled: true}, nil
+			return alice, nil
 		}
 
 		return nil, security.ErrInvalidCredentials
@@ -229,7 +227,7 @@ func (h *ctxHasher) Verify(context.Context, string, string) (bool, error) {
 func TestAuthenticatorMapsAContextEndedVerificationToUnavailable(t *testing.T) {
 	t.Parallel()
 
-	a := basic.NewAuthenticator(unknownUsers(), &ctxHasher{})
+	a := basic.NewAuthenticator(unknownUsers(t), &ctxHasher{})
 
 	_, err := a.Authenticate(context.Background(), basic.New("nobody", "pw"))
 
@@ -237,36 +235,23 @@ func TestAuthenticatorMapsAContextEndedVerificationToUnavailable(t *testing.T) {
 	assert.NotErrorIs(t, err, security.ErrInvalidCredentials)
 }
 
-// rehashLoader is a UserLoader that also stores new password hashes.
-type rehashLoader struct {
-	user    *stubUser
-	mu      sync.Mutex
-	updates []string
-	err     error
+// rehashingLoader is a UserLoader that also stores new password hashes
+// (PasswordRehasher), made of the two generated mocks. Without an
+// UpdatePasswordHash expectation, any call fails the test.
+type rehashingLoader struct {
+	*basic.MockUserLoader
+	*basic.MockPasswordRehasher
 }
 
-func (l *rehashLoader) LoadByUsername(context.Context, string) (basic.PasswordUser, error) {
-	return l.user, nil
-}
+// newRehashingLoader returns a rehashingLoader whose lookups of "alice"
+// return user.
+func newRehashingLoader(t *testing.T, user basic.PasswordUser) rehashingLoader {
+	t.Helper()
 
-func (l *rehashLoader) UpdatePasswordHash(_ context.Context, user basic.PasswordUser, hash string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l := rehashingLoader{basic.NewMockUserLoader(t), basic.NewMockPasswordRehasher(t)}
+	l.MockUserLoader.EXPECT().LoadByUsername(mock.Anything, "alice").Return(user, nil).Once()
 
-	if user.Subject() != l.user.subject {
-		return errors.New("wrong user")
-	}
-
-	l.updates = append(l.updates, hash)
-
-	return l.err
-}
-
-func (l *rehashLoader) updated() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	return append([]string(nil), l.updates...)
+	return l
 }
 
 // Review finding 2: the dummy hash costs what a hash at the hasher's current
@@ -277,70 +262,71 @@ func (l *rehashLoader) updated() []string {
 func TestAuthenticatorRehashesOutdatedHashes(t *testing.T) {
 	t.Parallel()
 
-	newUser := func() *stubUser { return &stubUser{subject: "alice", passwordHash: "old", enabled: true} }
+	alice := account{subject: "alice", hash: "old"}
 
 	t.Run("outdated hash is re-hashed after a success", func(t *testing.T) {
 		t.Parallel()
 
-		l := &rehashLoader{user: newUser()}
-		h := &recordingHasher{match: "old", rehash: true}
-		a := basic.NewAuthenticator(l, h)
-
-		out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
-
-		require.NoError(t, err)
-		assert.True(t, out.IsAuthenticated())
-		assert.Equal(t, []string{"dummy-2"}, l.updated(), "the new hash comes from the hasher")
-	})
-
-	t.Run("current hash is left alone", func(t *testing.T) {
-		t.Parallel()
-
-		l := &rehashLoader{user: newUser()}
-		a := basic.NewAuthenticator(l, &recordingHasher{match: "old"})
-
-		_, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
-
-		require.NoError(t, err)
-		assert.Empty(t, l.updated())
-	})
-
-	for name, mod := range map[string]func(*stubUser){
-		"wrong password": func(u *stubUser) { u.passwordHash = "other" },
-		"locked account": func(u *stubUser) { u.locked = true },
-	} {
-		t.Run("no rehash on a failure: "+name, func(t *testing.T) {
-			t.Parallel()
-
-			u := newUser()
-			mod(u)
-			l := &rehashLoader{user: u}
-			a := basic.NewAuthenticator(l, &recordingHasher{match: "old", rehash: true})
-
-			_, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
-
-			require.ErrorIs(t, err, security.ErrInvalidCredentials)
-			assert.Empty(t, l.updated())
-		})
-	}
-
-	t.Run("a failed update does not fail the authentication", func(t *testing.T) {
-		t.Parallel()
-
-		l := &rehashLoader{user: newUser(), err: errors.New("store read-only")}
+		user := mockUser(t, alice)
+		l := newRehashingLoader(t, user)
+		l.MockPasswordRehasher.EXPECT().UpdatePasswordHash(mock.Anything, user, "dummy-2").Return(nil).Once() // the new hash comes from the hasher
 		a := basic.NewAuthenticator(l, &recordingHasher{match: "old", rehash: true})
 
 		out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
 
 		require.NoError(t, err)
 		assert.True(t, out.IsAuthenticated())
-		assert.Len(t, l.updated(), 1)
+	})
+
+	t.Run("current hash is left alone", func(t *testing.T) {
+		t.Parallel()
+
+		l := newRehashingLoader(t, mockUser(t, alice)) // no UpdatePasswordHash expected
+		a := basic.NewAuthenticator(l, &recordingHasher{match: "old"})
+
+		_, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
+
+		require.NoError(t, err)
+	})
+
+	for name, mod := range map[string]func(*account){
+		"wrong password": func(a *account) { a.hash = "other" },
+		"locked account": func(a *account) { a.locked = true },
+	} {
+		t.Run("no rehash on a failure: "+name, func(t *testing.T) {
+			t.Parallel()
+
+			u := alice
+			mod(&u)
+			l := newRehashingLoader(t, mockUser(t, u)) // no UpdatePasswordHash expected
+			a := basic.NewAuthenticator(l, &recordingHasher{match: "old", rehash: true})
+
+			_, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
+
+			require.ErrorIs(t, err, security.ErrInvalidCredentials)
+		})
+	}
+
+	t.Run("a failed update does not fail the authentication", func(t *testing.T) {
+		t.Parallel()
+
+		user := mockUser(t, alice)
+		l := newRehashingLoader(t, user)
+		l.MockPasswordRehasher.EXPECT().UpdatePasswordHash(mock.Anything, user, mock.Anything).Return(errors.New("store read-only")).Once()
+		a := basic.NewAuthenticator(l, &recordingHasher{match: "old", rehash: true})
+
+		out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
+
+		require.NoError(t, err)
+		assert.True(t, out.IsAuthenticated())
 	})
 
 	t.Run("a loader without PasswordRehasher is never asked", func(t *testing.T) {
 		t.Parallel()
 
-		a := basic.NewAuthenticator(&stubLoader{user: newUser()}, &recordingHasher{match: "old", rehash: true})
+		l := basic.NewMockUserLoader(t)
+		l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(mockUser(t, alice), nil).Once()
+		a := basic.NewAuthenticator(l, &recordingHasher{match: "old", rehash: true})
 
 		out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
 
@@ -363,14 +349,13 @@ func (h *failingRehashHasher) Hash(ctx context.Context, pw string) (string, erro
 func TestAuthenticatorIgnoresAFailedRehash(t *testing.T) {
 	t.Parallel()
 
-	l := &rehashLoader{user: &stubUser{subject: "alice", passwordHash: "old", enabled: true}}
+	l := newRehashingLoader(t, mockUser(t, account{subject: "alice", hash: "old"})) // no UpdatePasswordHash expected
 	a := basic.NewAuthenticator(l, &failingRehashHasher{recordingHasher{match: "old", rehash: true}})
 
 	out, err := a.Authenticate(context.Background(), basic.New("alice", "right"))
 
 	require.NoError(t, err)
 	assert.True(t, out.IsAuthenticated())
-	assert.Empty(t, l.updated())
 }
 
 // A context that ended during the verification gets no slot for the
@@ -378,7 +363,7 @@ func TestAuthenticatorIgnoresAFailedRehash(t *testing.T) {
 func TestAuthenticatorSkipsTheRehashWhenTheContextEnded(t *testing.T) {
 	t.Parallel()
 
-	l := &rehashLoader{user: &stubUser{subject: "alice", passwordHash: "old", enabled: true}}
+	l := newRehashingLoader(t, mockUser(t, account{subject: "alice", hash: "old"})) // no UpdatePasswordHash expected
 	h := &recordingHasher{match: "old", rehash: true, delay: 40 * time.Millisecond} // Verify ignores ctx
 	a := basic.NewAuthenticator(l, h)
 
@@ -389,7 +374,6 @@ func TestAuthenticatorSkipsTheRehashWhenTheContextEnded(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, out.IsAuthenticated())
-	assert.Empty(t, l.updated())
 }
 
 // A canceled request never starts a verification.
@@ -397,7 +381,7 @@ func TestAuthenticatorDoesNotVerifyForACanceledRequest(t *testing.T) {
 	t.Parallel()
 
 	h := &recordingHasher{}
-	a := basic.NewAuthenticator(unknownUsers(), h)
+	a := basic.NewAuthenticator(unknownUsers(t), h)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -413,7 +397,7 @@ func TestAuthenticatorDoesNotVerifyForACanceledRequest(t *testing.T) {
 func TestAuthenticatorReleasesItsSlots(t *testing.T) {
 	t.Parallel()
 
-	a := basic.NewAuthenticator(unknownUsers(), &recordingHasher{}, basic.WithMaxConcurrentVerifications(1))
+	a := basic.NewAuthenticator(unknownUsers(t), &recordingHasher{}, basic.WithMaxConcurrentVerifications(1))
 
 	for i := range 5 {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

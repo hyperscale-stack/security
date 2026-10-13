@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -17,6 +16,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,18 +121,6 @@ func TestExtractorLeavesOtherSchemes(t *testing.T) {
 	}
 }
 
-// countingLoader counts the lookups it serves.
-type countingLoader struct {
-	calls atomic.Int32
-	user  *stubUser
-}
-
-func (l *countingLoader) LoadByUsername(context.Context, string) (basic.PasswordUser, error) {
-	l.calls.Add(1)
-
-	return l.user, nil
-}
-
 // Review finding 3: form logins (and the OAuth2 password grant) build the
 // Authentication with basic.New from their own fields, bypassing the
 // Extractor. The Authenticator applies the same rules before any lookup —
@@ -156,7 +144,7 @@ func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			l := &countingLoader{user: &stubUser{subject: "alice", passwordHash: "h", enabled: true}}
+			l := basic.NewMockUserLoader(t) // no expectation: the loader never sees malformed credentials
 			h := &recordingHasher{always: true}
 			a := basic.NewAuthenticator(l, h)
 
@@ -165,7 +153,6 @@ func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 			require.ErrorIs(t, err, basic.ErrBadFormat)
 			require.ErrorIs(t, err, security.ErrInvalidCredentials)
 			assert.False(t, out.IsAuthenticated())
-			assert.Zero(t, l.calls.Load(), "the loader never sees malformed credentials")
 			assert.Empty(t, h.calls(), "nor does the hasher")
 		})
 	}
@@ -176,25 +163,14 @@ func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 func TestAuthenticatorAcceptsTheLongestUserPass(t *testing.T) {
 	t.Parallel()
 
-	l := &countingLoader{user: &stubUser{subject: "alice", passwordHash: "h", enabled: true}}
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "alice").Return(mockUser(t, account{subject: "alice", hash: "h"}), nil).Once()
 	a := basic.NewAuthenticator(l, &recordingHasher{always: true})
 
 	out, err := a.Authenticate(context.Background(), basic.New("alice", strings.Repeat("p", 3066)))
 
 	require.NoError(t, err)
 	assert.True(t, out.IsAuthenticated())
-}
-
-// caseInsensitiveLoader finds users whatever the case of the typed user-id —
-// the usual e-mail lookup.
-type caseInsensitiveLoader struct{ user *stubUser }
-
-func (l caseInsensitiveLoader) LoadByUsername(_ context.Context, username string) (basic.PasswordUser, error) {
-	if strings.EqualFold(username, l.user.subject) {
-		return l.user, nil
-	}
-
-	return nil, nil
 }
 
 // Audit CORE-11 (probe TestZZAuditBasicNameIsTypedUsername): Name() returned
@@ -205,8 +181,11 @@ func (l caseInsensitiveLoader) LoadByUsername(_ context.Context, username string
 func TestAuthenticationNameIsTheSubjectOnceAuthenticated(t *testing.T) {
 	t.Parallel()
 
-	user := &stubUser{subject: "alice", passwordHash: "h", enabled: true}
-	a := basic.NewAuthenticator(caseInsensitiveLoader{user: user}, &recordingHasher{always: true})
+	// The loader finds users whatever the case of the typed user-id — the
+	// usual e-mail lookup.
+	l := basic.NewMockUserLoader(t)
+	l.EXPECT().LoadByUsername(mock.Anything, "ALICE").Return(mockUser(t, account{subject: "alice", hash: "h"}), nil).Once()
+	a := basic.NewAuthenticator(l, &recordingHasher{always: true})
 
 	in := basic.New("ALICE", "pw")
 	assert.Equal(t, "basic", in.Name())
