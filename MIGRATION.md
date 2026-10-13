@@ -1591,7 +1591,7 @@ it check the key (RFC 7518 §3.3: RSA keys of 2048 bits or more).
 | --- | --- | --- |
 | `Algorithm: RS256`, token RS384 or PS256 | verified | `ErrInvalidSignature` |
 | no `Algorithm` | verified the token's algorithm | verifies nothing |
-| RSA under 2048 bits, a private key, a `jose.JSONWebKey` in `PublicKey.Key` | verified | `ErrInvalidSignature` wrapping `ErrInvalidKey` |
+| RSA under 2048 bits, a private key, a `jose.JSONWebKey` in `PublicKey.Key` (an HMAC secret's included) | verified | `ErrInvalidSignature` wrapping `ErrInvalidKey` |
 | two keys with the token's `kid` | the first | none |
 | token without `kid`, several keys | the key without `KeyID` | none |
 
@@ -1599,7 +1599,8 @@ To migrate:
 
 1. Set `Algorithm` on every `PublicKey` you build.
 2. Replace RSA keys under 2048 bits; pass public keys (`*rsa.PublicKey`,
-   `*ecdsa.PublicKey`, `ed25519.PublicKey`), not private keys or JWKs.
+   `*ecdsa.PublicKey`, `ed25519.PublicKey`) or, for HMAC, the `[]byte`
+   secret — not private keys or JWKs.
 3. Give every key its own `kid`.
 
 ### `jwt`: `exp`, NumericDates and the clock skew are enforced strictly
@@ -1649,7 +1650,8 @@ stale set forever, never refreshed on an unknown `kid`, and trusted every key.
 | signature | `NewRemoteJWKS(url, opts...) JWKSProvider` | `NewRemoteJWKS(url, opts...) (JWKSProvider, error)`: the URL must be absolute https with a host and no userinfo (http only with `AllowHTTP` or `WithHTTPClient`) |
 | client | `http.Client{Timeout: 10s}`, default transport | `outbound.NewClient(outbound.Policy{})`, or `WithOutboundPolicy(p)`; `WithHTTPClient` is an explicit opt-out, still bounded (10 s, 1 MiB) |
 | loopback, private, link-local destination; plain http | fetched | refused unless the policy allows it |
-| redirects, environment proxies | followed, used | refused, ignored; a response over http for an https URL is never trusted |
+| redirects | followed, to any origin | none by default; those `MaxRedirects` (or the `WithHTTPClient` client) allows stay on the JWK Set URL's origin — another origin fails with `outbound.ErrRedirectNotAllowed`; a response over http for an https URL is never trusted |
+| environment proxies | used | ignored |
 | refresh | under a lock; on every call while failing; stale set used forever; none on an unknown `kid` | one fetch at a time in the background after the TTL; at most every 10 s; back-off up to 5 min; set unused after 24 h; one refresh on an unknown `kid` |
 | keys | all kept; one unsupported key failed the set | validated one by one, unusable ones ignored; RSA without `alg`: RS256 if allowed, else the verifier's only RSA algorithm |
 | `WithCacheTTL(0)` | fetched on every call | panics: the TTL is in (0, 24 h] |
@@ -1663,6 +1665,8 @@ To migrate:
    (and `RootCAs` for a private CA); in tests against `httptest`, use
    `outbound.Policy{AllowHTTP: true, AllowedPrefixes: outbound.LoopbackPrefixes()}`.
 3. Map `jwtsec.ErrKeySetUnavailable` to 503 if your transport does not.
+4. If your JWK Set URL redirects to another origin (a CDN, another host),
+   configure the final URL.
 
 ### `jwt`: `BearerVerifier` requires issuer, audience and `at+jwt`
 

@@ -62,6 +62,10 @@ func TestNewSignerValidatesItsKey(t *testing.T) {
 		"no algorithm":                {KeyID: "k", Key: k.p256},
 		"no key":                      {KeyID: "k", Algorithm: jwtsec.ES256},
 		"JWK wrapping RSA-1024":       {KeyID: "k", Algorithm: jwtsec.RS256, Key: jose.JSONWebKey{Key: k.rsa1024}},
+		"JWK pointer to RSA-1024":     {KeyID: "k", Algorithm: jwtsec.RS256, Key: &jose.JSONWebKey{Key: k.rsa1024}},
+		"JWK pointer, P-256 as ES384": {KeyID: "k", Algorithm: jwtsec.ES384, Key: &jose.JSONWebKey{Key: k.p256}},
+		"HS384 secret of 47 bytes":    {KeyID: "k", Algorithm: jwtsec.HS384, Key: []byte(strings.Repeat("s", 47))},
+		"opaque without public key":   {KeyID: "k", Algorithm: jwtsec.RS256, Key: noPublicOpaque{cryptosigner.Opaque(k.rsa2048)}},
 		"nil JWK pointer":             {KeyID: "k", Algorithm: jwtsec.RS256, Key: (*jose.JSONWebKey)(nil)},
 		"opaque RSA-1024":             {KeyID: "k", Algorithm: jwtsec.RS256, Key: cryptosigner.Opaque(k.rsa1024)},
 		"opaque P-256 declared ES384": {KeyID: "k", Algorithm: jwtsec.ES384, Key: cryptosigner.Opaque(k.p256)},
@@ -116,6 +120,11 @@ func TestNewSignerValidatesItsKey(t *testing.T) {
 		})
 	}
 }
+
+// noPublicOpaque is an opaque signer that exposes no public key.
+type noPublicOpaque struct{ jose.OpaqueSigner }
+
+func (noPublicOpaque) Public() *jose.JSONWebKey { return nil }
 
 // limitedOpaque is an opaque (KMS-style) signer offering only algs.
 type limitedOpaque struct {

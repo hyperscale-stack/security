@@ -5,10 +5,12 @@
 package jwtsec_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -326,15 +328,126 @@ func TestRemoteJWKSRefusesRedirects(t *testing.T) {
 	require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed, "https to http is always refused")
 	assert.Equal(t, int32(0), target.hits.Load())
 
-	// The opt-out client follows the downgrade; the keys are not trusted.
+	// The opt-out client would follow the downgrade: it is a hop to
+	// another origin (the scheme is part of it), refused.
 	p, err = jwtsec.NewRemoteJWKS(frontPlain.URL, jwtsec.WithHTTPClient(frontPlain.Client()))
 	require.NoError(t, err)
 
 	_, err = p.KeySet(context.Background())
-	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
+	require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed)
 
 	_, err = jwtsec.NewVerifier(p).Verify(context.Background(), tokenFor(t, attacker, "evil"), nil)
 	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, "a key served over http verifies nothing")
+	assert.Equal(t, int32(0), target.hits.Load())
+
+	// A transport of the opt-out client answering over http — whatever it
+	// does — is refused all the same.
+	doc := jwksJSON(t, sigKey(attackerPub))
+	stripping := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		plainReq := req.Clone(req.Context())
+		plainReq.URL.Scheme = "http"
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(doc)), Request: plainReq}, nil
+	})}
+
+	p, err = jwtsec.NewRemoteJWKS("https://idp.example/jwks", jwtsec.WithHTTPClient(stripping))
+	require.NoError(t, err)
+
+	_, err = p.KeySet(context.Background())
+	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
+	assert.Contains(t, err.Error(), "did not come over https")
+}
+
+// roundTripFunc is an http.RoundTripper calling itself.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestRemoteJWKSKeepsRedirectsOnItsOrigin pins review F6 (decided by the
+// project: the rule of oidc/client and saml/sp): a redirect the client
+// may follow — MaxRedirects of the outbound policy, or the opt-out
+// client's own policy — is followed within the origin (scheme, host,
+// port) of the JWK Set URL only; a hop to another origin fails with
+// outbound.ErrRedirectNotAllowed before any request reaches it, so
+// another server's keys never verify tokens.
+func TestRemoteJWKSKeepsRedirectsOnItsOrigin(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := ecKey(t, "k")
+	attacker, attackerPub := ecKey(t, "evil")
+	other := newJWKSEndpoint(t, jwksJSON(t, sigKey(attackerPub)))
+	doc := jwksJSON(t, sigKey(pub))
+
+	var hops atomic.Int32
+
+	front := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/moved":
+			http.Redirect(w, r, "/jwks", http.StatusFound)
+		case "/away":
+			http.Redirect(w, r, other.srv.URL+"/jwks", http.StatusFound)
+		case "/loop":
+			hops.Add(1)
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		default:
+			_, _ = w.Write(doc)
+		}
+	}))
+	t.Cleanup(front.Close)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(front.Certificate())
+	pool.AddCert(other.srv.Certificate())
+
+	policy := jwtsec.WithOutboundPolicy(outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool, MaxRedirects: 3})
+
+	clients := map[string]func() jwtsec.RemoteOption{
+		"outbound policy with MaxRedirects": func() jwtsec.RemoteOption { return policy },
+		"opt-out client":                    func() jwtsec.RemoteOption { return jwtsec.WithHTTPClient(front.Client()) },
+	}
+
+	for name, option := range clients {
+		p, err := jwtsec.NewRemoteJWKS(front.URL+"/moved", option())
+		require.NoError(t, err, name)
+		assert.True(t, hasKey(t, p, "k"), "%s: a same-origin redirect is followed", name)
+
+		_, err = jwtsec.NewVerifier(p).Verify(context.Background(), tokenFor(t, priv, "k"), nil)
+		require.NoError(t, err, name)
+
+		p, err = jwtsec.NewRemoteJWKS(front.URL+"/away", option())
+		require.NoError(t, err, name)
+
+		_, err = p.KeySet(context.Background())
+		require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed, name)
+		require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, name)
+
+		_, err = jwtsec.NewVerifier(p).Verify(context.Background(), tokenFor(t, attacker, "evil"), nil)
+		require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, name)
+	}
+
+	assert.Equal(t, int32(0), other.hits.Load(), "the other origin is never requested")
+	assert.Nil(t, front.Client().CheckRedirect, "the opt-out client is not modified")
+
+	// The opt-out client's own policy decides first: here it follows no
+	// redirect at all.
+	noRedirect := *front.Client()
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	p, err := jwtsec.NewRemoteJWKS(front.URL+"/moved", jwtsec.WithHTTPClient(&noRedirect))
+	require.NoError(t, err)
+
+	_, err = p.KeySet(context.Background())
+	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
+	assert.Contains(t, err.Error(), "unexpected status 302")
+
+	// Without a policy of its own, the opt-out client keeps net/http's:
+	// at most 10 redirects.
+	p, err = jwtsec.NewRemoteJWKS(front.URL+"/loop", jwtsec.WithHTTPClient(front.Client()))
+	require.NoError(t, err)
+
+	_, err = p.KeySet(context.Background())
+	require.ErrorIs(t, err, outbound.ErrRedirectNotAllowed)
+	assert.Equal(t, int32(10), hops.Load(), "the first request and 9 redirects reach the server; the 10th is refused")
 }
 
 // TestRemoteJWKSIgnoresEnvironmentProxy pins that the default client uses
@@ -501,6 +614,7 @@ func TestRemoteJWKSWaitHonoursTheCallerContext(t *testing.T) {
 	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	notCredentialFailure(t, err)
+	assert.Equal(t, 1, strings.Count(err.Error(), e.srv.URL+"/jwks"), "the URL is named once: %v", err)
 	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.False(t, jwtsec.RemoteJWKSIdle(p), "the fetch goes on")
 
@@ -560,6 +674,16 @@ func TestRemoteJWKSBacksOff(t *testing.T) {
 
 	for _, wait := range []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute} {
 		clock.advance(wait - time.Nanosecond)
+		attempt(e.hits.Load())
+		clock.advance(time.Nanosecond)
+		attempt(e.hits.Load() + 1)
+	}
+
+	// However long the outage, the interval stays 5 minutes (review F5: a
+	// doubling without bound overflows from the 31st failure on, lifting
+	// the rate limit).
+	for range 40 {
+		clock.advance(5*time.Minute - time.Nanosecond)
 		attempt(e.hits.Load())
 		clock.advance(time.Nanosecond)
 		attempt(e.hits.Load() + 1)

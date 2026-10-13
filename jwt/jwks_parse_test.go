@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,6 +36,27 @@ func jwkOf(t *testing.T, k jose.JSONWebKey) string {
 
 // withMember adds a member to a marshalled JWK.
 func withMember(jwk, member string) string { return strings.TrimSuffix(jwk, "}") + "," + member + "}" }
+
+// TestRemoteJWKSAcceptsAHundredKeys pins the key-count bound from below
+// (review F9): a set of exactly maxJWKSKeys keys is used whole.
+func TestRemoteJWKSAcceptsAHundredKeys(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := ecKey(t, "k")
+	keys := make([]jose.JSONWebKey, 100)
+
+	for i := range keys {
+		keys[i] = sigKey(pub)
+		keys[i].KeyID = "k" + strconv.Itoa(i)
+	}
+
+	p := newJWKSEndpoint(t, jwksJSON(t, keys...)).provider(t, newTestClock())
+
+	assert.True(t, hasKey(t, p, "k99"))
+
+	_, err := jwtsec.NewVerifier(p).Verify(context.Background(), tokenFor(t, priv, "k0"), nil)
+	require.NoError(t, err)
+}
 
 // TestRemoteJWKSValidatesEachKey pins RFC 7517 §5 ("implementations SHOULD
 // ignore JWKs … that use kty values that are not understood …, that are
@@ -67,10 +89,15 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 
 	secret := []byte(strings.Repeat("s", 32))
 
-	// An 8200-bit RSA modulus (no private key needed: it is never used).
-	bigN := new(big.Int).Lsh(big.NewInt(1), 8199)
-	bigN.Or(bigN, big.NewInt(1))
-	bigRSA := `{"kty":"RSA","kid":"big","alg":"RS256","use":"sig","n":"` + base64.RawURLEncoding.EncodeToString(bigN.Bytes()) + `","e":"AQAB"}`
+	// RSA moduli of 8200 and exactly 8192 bits (no private key needed:
+	// they never verify a token here).
+	rsaOfBits := func(kid string, bits uint) string {
+		n := new(big.Int).Lsh(big.NewInt(1), bits-1)
+		n.Or(n, big.NewInt(1))
+
+		return `{"kty":"RSA","kid":"` + kid + `","alg":"RS256","use":"sig","n":"` + base64.RawURLEncoding.EncodeToString(n.Bytes()) + `","e":"AQAB"}`
+	}
+	bigRSA := rsaOfBits("big", 8200)
 
 	rsaKid := func(kid, alg string, pub any) string {
 		return jwkOf(t, jose.JSONWebKey{Key: pub, KeyID: kid, Algorithm: alg, Use: "sig"})
@@ -82,19 +109,22 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 		accepted bool
 	}
 
-	cases := []struct {
+	type keyCase struct {
 		name    string
 		jwks    []string
 		kid     string
 		present bool // the key is in the set
 		allowed []jwtsec.Algorithm
 		tokens  []tokenCase
-	}{
+	}
+
+	cases := []keyCase{
 		{"oct key, HS256 allowed", []string{jwkOf(t, jose.JSONWebKey{Key: secret, KeyID: "x", Algorithm: "HS256", Use: "sig"})}, "x", false,
 			[]jwtsec.Algorithm{jwtsec.ES256, jwtsec.HS256}, []tokenCase{{jwtsec.HS256, secret, false}}},
 		{"RSA-1024", []string{rsaKid("x", "RS256", &rsa1024.PublicKey)}, "x", false, nil,
 			[]tokenCase{{jwtsec.RS256, rsa1024, false}}},
 		{"RSA over 8192 bits", []string{bigRSA}, "big", false, nil, nil},
+		{"RSA of exactly 8192 bits", []string{rsaOfBits("max", 8192)}, "max", true, nil, nil},
 		{"EC key declaring RS256", []string{rsaKid("x", "RS256", &p256.PublicKey)}, "x", false, nil,
 			[]tokenCase{{jwtsec.ES256, p256, false}}},
 		{"RSA key bound to RS256, token PS512", []string{rsaKid("x", "RS256", &rsa2048.PublicKey)}, "x", true, nil,
@@ -136,6 +166,25 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 		{"Ed448 key", []string{`{"kty":"OKP","crv":"Ed448","kid":"x","x":"AAAA"}`}, "x", false, nil, nil},
 		{"unknown kty", []string{`{"kty":"XYZ","kid":"x"}`}, "x", false, nil, nil},
 		{"malformed RSA key", []string{`{"kty":"RSA","kid":"x","n":"!!","e":"AQAB"}`}, "x", false, nil, nil},
+	}
+
+	// Every private member of an RSA JWK (RFC 7518 §6.3.2) factors the
+	// modulus or is a private key: a public key leaking one is refused
+	// (review F4).
+	rsa2048.Precompute()
+
+	b64 := func(n *big.Int) string { return `"` + base64.RawURLEncoding.EncodeToString(n.Bytes()) + `"` }
+
+	for member, value := range map[string]string{
+		"d":   b64(rsa2048.D),
+		"q":   b64(rsa2048.Primes[1]),
+		"dp":  b64(rsa2048.Precomputed.Dp),
+		"dq":  b64(rsa2048.Precomputed.Dq),
+		"qi":  b64(rsa2048.Precomputed.Qinv),
+		"oth": `[{"r":"AQAB","d":"AQAB","t":"AQAB"}]`,
+	} {
+		cases = append(cases, keyCase{"RSA key leaking " + member, []string{withMember(rsaKid("x", "RS256", &rsa2048.PublicKey), `"`+member+`":`+value)}, "x", false, nil,
+			[]tokenCase{{jwtsec.RS256, rsa2048, false}}})
 	}
 
 	for _, tc := range cases {

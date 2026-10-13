@@ -107,7 +107,7 @@ func (v *verifier) verify(ctx context.Context, span trace.Span, token string, cl
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
 
-		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clippedError{err: err})
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clipError(err))
 	}
 
 	return v.claims(span, payload, claimsOut)

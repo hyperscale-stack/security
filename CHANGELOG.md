@@ -734,8 +734,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     panics outside [0, 5 min]; `WithCacheTTL` outside (0, 24 h];
     `WithAudience` on an empty value;
   - `NewRemoteJWKS` refuses non-https, loopback and private destinations
-    unless `WithOutboundPolicy` allows them; RFC 9068 access tokens need a
-    non-empty audience from the `IssuerResolver`.
+    unless `WithOutboundPolicy` allows them, and follows redirects within
+    the JWK Set URL's origin only; RFC 9068 access tokens need a non-empty
+    audience from the `IssuerResolver`.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1376,10 +1377,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   across the fetch, re-fetched on every call while failing, trusted forever
   when stale, never refreshed on an unknown `kid`, and not validated (`oct`
   keys used as HMAC secrets, RSA-1024, private keys). They are now fetched
-  through `outbound`, one fetch at a time, refreshed in the background and
-  on unknown `kid`s (rate-limited, backed off), dropped after 24 h without a
-  successful fetch, and validated key by key; an outage is
-  `ErrKeySetUnavailable`, never an invalid token.
+  through `outbound` — a redirect, when the policy allows one, never leaves
+  the JWK Set URL's origin — one fetch at a time, refreshed in the
+  background and on unknown `kid`s (rate-limited, backed off), dropped
+  after 24 h without a successful fetch, and validated key by key; an
+  outage is `ErrKeySetUnavailable`, never an invalid token.
 - **JWT resource servers** (`jwtsec.BearerVerifier`) accepted any `typ`,
   `iss` and `aud` — an ID Token or another API's access token was accepted
   — and an empty `sub`: RFC 9068 §4 checks are now required.

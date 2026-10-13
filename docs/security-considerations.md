@@ -95,7 +95,11 @@ keys by `kid` against a JWKS provider (static or remote).
   An internal JWKS host needs `WithOutboundPolicy` (exempt its subnet in
   `AllowedPrefixes`); `WithHTTPClient` is an explicit opt-out that keeps the
   10 s / 1 MiB bounds and still refuses a response that arrived over http
-  for an https URL. The set is refreshed in the background after the TTL
+  for an https URL. Whatever the client, the redirects it may follow
+  (`MaxRedirects`, or the opt-out client's own policy) stay on the origin
+  (scheme, host and port) of the JWK Set URL: a hop to another origin fails
+  with `outbound.ErrRedirectNotAllowed`, so another server's keys never
+  verify tokens. The set is refreshed in the background after the TTL
   (5 minutes by default) and on a token with an unknown `kid` — at most once
   per `MinKeySetRefreshInterval` (10 s), one fetch shared by every caller,
   never under a lock, not aborted when a caller gives up; failed fetches

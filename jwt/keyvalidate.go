@@ -107,15 +107,20 @@ func hmacKeySize(alg Algorithm) int { return hmacKeySizes[alg] }
 // verifies nothing) and, for an asymmetric algorithm, is a valid public key
 // for it (PublicKey.Validate: RSA of at least 2048 bits, the algorithm's
 // curve, never a private key, a wrapper or another type — RFC 7518 §3.3 to
-// §3.5). go-jose checks an HMAC secret's length itself (RFC 7518 §3.2).
-// Failures wrap ErrInvalidSignature (and ErrInvalidKey for an invalid key);
-// no key material appears in them.
+// §3.5); for an HMAC algorithm, it is a []byte secret, never a wrapper —
+// go-jose checks the secret's length itself (RFC 7518 §3.2). Failures wrap
+// ErrInvalidSignature (and ErrInvalidKey for an invalid key); no key
+// material appears in them.
 func bindKey(pub PublicKey, alg Algorithm) error {
 	if pub.Algorithm != alg {
 		return fmt.Errorf("%w: the key is bound to another algorithm", ErrInvalidSignature)
 	}
 
 	if isHMAC(alg) {
+		if _, ok := pub.Key.([]byte); !ok {
+			return fmt.Errorf("%w: %w: not a %q secret", ErrInvalidSignature, ErrInvalidKey, alg)
+		}
+
 		return nil
 	}
 

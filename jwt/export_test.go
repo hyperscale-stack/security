@@ -23,3 +23,7 @@ func RemoteJWKSIdle(p JWKSProvider) bool {
 
 	return r.inflight == nil
 }
+
+// TypedNilVerifier is a nil *verifier in a Verifier: only the package can
+// build one.
+var TypedNilVerifier Verifier = (*verifier)(nil)

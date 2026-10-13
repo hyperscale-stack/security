@@ -25,9 +25,10 @@
 //     registered claim of the wrong JSON type (null included). claimsOut is
 //     decoded the same way, by go-jose's case-sensitive decoder.
 //   - Every verification key is bound to one algorithm (RFC 8725 §3.1): its
-//     Algorithm must equal the token's alg, and an asymmetric key must pass
+//     Algorithm must equal the token's alg, an asymmetric key must pass
 //     PublicKey.Validate (RSA of 2048 bits or more, the algorithm's curve, a
-//     public key). A kid shared by several keys designates none.
+//     public key) and an HMAC key must be a []byte secret. A kid shared by
+//     several keys designates none.
 //   - exp is required by default (WithOptionalExpiry); a token is expired
 //     from now == exp + skew on; NumericDates outside 1970..9999 are
 //     refused when reading and when signing; WithClockSkew is bounded by
@@ -37,11 +38,12 @@
 //     the RFC 9068 §4 resource-server adapter: it refuses a verifier
 //     without them; WithAccessTokenType names another required typ.
 //   - NewRemoteJWKS fetches through the SSRF-safe outbound client (https,
-//     public destinations, no redirect, no proxy), refreshes once per TTL
-//     in the background and once on an unknown kid — at most once per
-//     MinKeySetRefreshInterval, one fetch shared by all callers, never under
-//     a lock — stops using a set older than MaxKeySetStaleness, ignores
-//     unusable keys one by one, and reports an outage as
+//     public destinations, no redirect, no proxy; the redirects a policy or
+//     an opt-out client allows stay on the JWK Set URL's origin), refreshes
+//     once per TTL in the background and once on an unknown kid — at most
+//     once per MinKeySetRefreshInterval, one fetch shared by all callers,
+//     never under a lock — stops using a set older than MaxKeySetStaleness,
+//     ignores unusable keys one by one, and reports an outage as
 //     ErrKeySetUnavailable, never as an invalid token.
 //   - MarshalJWKS publishes a JWK Set of public signature keys and refuses
 //     private or symmetric material; PublicKey.Validate and

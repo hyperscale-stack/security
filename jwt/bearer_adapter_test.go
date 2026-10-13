@@ -114,6 +114,7 @@ func TestBearerVerifierRefusesAnUnsafeVerifier(t *testing.T) {
 	}{
 		"not built by NewVerifier": {v: foreignVerifier{}, why: "built by NewVerifier"},
 		"nil verifier":             {v: nil, why: "built by NewVerifier"},
+		"typed nil verifier":       {v: jwtsec.TypedNilVerifier, why: "built by NewVerifier"},
 		"no issuer":                {v: jwtsec.NewVerifier(keys, aud, typ), why: "WithIssuer"},
 		"no audience":              {v: jwtsec.NewVerifier(keys, iss, typ), why: "WithAudience"},
 		"empty audience list":      {v: jwtsec.NewVerifier(keys, iss, jwtsec.WithAudience(), typ), why: "WithAudience"},

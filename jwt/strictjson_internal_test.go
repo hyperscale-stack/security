@@ -25,6 +25,8 @@ func TestValidateJSON(t *testing.T) {
 		"distinct names":           `{"sub":"a","sid":"b","s":"c"}`,
 		"same name, other objects": `{"a":{"x":1},"b":{"x":2},"c":[{"x":1},{"x":2}]}`,
 		"surrogate pair":           `{"e":"` + esc("d83d") + esc("de00") + `"}`,
+		"first pair (U+10000)":     `{"e":"` + esc("d800") + esc("dc00") + `"}`,
+		"last pair (U+10FFFF)":     `{"e":"` + esc("dbff") + esc("dfff") + `"}`,
 		"raw non-BMP character":    `{"e":"😀"}`,
 		"escaped backslash u":      `{"e":"\\ud800"}`,
 		"escaped quote":            `{"e":"a\"b\\"}`,
@@ -55,6 +57,9 @@ func TestValidateJSON(t *testing.T) {
 		"duplicate in array object": `{"a":[1,{"x":1,"X":2}]}`,
 		"lone high surrogate":       `{"e":"` + esc("d800") + `"}`,
 		"lone low surrogate":        `{"e":"` + esc("dc00") + `"}`,
+		"lone last high surrogate":  `{"e":"` + esc("dbff") + `"}`,
+		"high then non-low escape":  `{"e":"` + esc("d800") + esc("e000") + `"}`,
+		"high then unescaped u":     `{"e":"` + esc("d800") + `Xudc00"}`,
 		"high then non-surrogate":   `{"e":"` + esc("d800") + esc("0041") + `"}`,
 		"high then text":            `{"e":"` + esc("d800") + `abcdef"}`,
 		"surrogate in a name":       `{"` + esc("d800") + `":1}`,
@@ -150,12 +155,15 @@ func FuzzStrictJSON(f *testing.F) {
 	for _, seed := range []string{
 		`{"sub":"a","SUB":"b"}`, `{"a":{"b":[1,{"c":null}]}}`, `{"e":"\ud800"}`, "{\"e\":\"\xff\"}",
 		`{"a":1} x`, `[]`, `{"ſub":1,"sub":2}`, `{"s` + esc("0075") + `b":1,"sub":2}`, `{"e":"` + esc("dc00") + `"}`,
+		`{"n":1` + strings.Repeat("0", 400) + `}`,
 	} {
 		f.Add([]byte(seed))
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if validateJSON(data) != nil {
+		if err := validateJSON(data); err != nil {
+			require.Less(t, len(err.Error()), 400, "a short error (review F1)")
+
 			return
 		}
 

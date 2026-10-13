@@ -150,9 +150,17 @@ func TestVerifierRefusesKeysFailingValidate(t *testing.T) {
 		})
 	}
 
+	// An HMAC secret is a []byte: wrapped in a jose.JSONWebKey, it verifies
+	// nothing either (review F7).
+	wrapped := []byte(strings.Repeat("w", 32))
+	errV, errS := verifyBoth(t, []jwtsec.PublicKey{{KeyID: "h", Algorithm: jwtsec.HS256, Key: jose.JSONWebKey{Key: wrapped}}},
+		forge(t, jwtsec.HS256, wrapped, header(jwtsec.HS256, "h"), claimsPayload()), jwtsec.HS256)
+	require.ErrorIs(t, errV, jwtsec.ErrInvalidKey)
+	require.ErrorIs(t, errS, jwtsec.ErrInvalidKey)
+
 	// A short HMAC secret is refused by go-jose (RFC 7518 §3.2).
 	short := []byte("0123456789abcdef")
-	errV, errS := verifyBoth(t, []jwtsec.PublicKey{{KeyID: "h", Algorithm: jwtsec.HS256, Key: short}},
+	errV, errS = verifyBoth(t, []jwtsec.PublicKey{{KeyID: "h", Algorithm: jwtsec.HS256, Key: short}},
 		forge(t, jwtsec.HS256, short, header(jwtsec.HS256, "h"), claimsPayload()), jwtsec.HS256)
 	require.ErrorIs(t, errV, jwtsec.ErrInvalidSignature)
 	require.ErrorIs(t, errS, jwtsec.ErrInvalidSignature)

@@ -6,6 +6,7 @@ package jwtsec
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -78,4 +79,36 @@ func TestClip(t *testing.T) {
 	assert.True(t, utf8.ValidString(got), "never cuts inside a rune")
 	assert.True(t, strings.HasSuffix(got, "…"))
 	assert.Equal(t, maxEchoedLength-1+len("…"), len(got))
+}
+
+// countingError is an error with a long message that counts how many times
+// it was rendered.
+type countingError struct{ renders *int }
+
+func (e countingError) Error() string {
+	*e.renders++
+
+	return strings.Repeat("x", 10*maxEchoedLength)
+}
+
+// TestClipError pins review F1: a clipped error renders the long message
+// once, when wrapped — a kept error reported on every verification never
+// rebuilds it — and stays matchable.
+func TestClipError(t *testing.T) {
+	t.Parallel()
+
+	renders := 0
+	inner := countingError{renders: &renders}
+	err := clipError(inner)
+
+	for range 3 {
+		assert.Len(t, err.Error(), maxEchoedLength+len("…"))
+	}
+
+	assert.Equal(t, 1, renders, "rendered once")
+	assert.ErrorIs(t, err, inner)
+
+	err = jsonError(errors.New(strings.Repeat("y", 10*maxEchoedLength)))
+	require.ErrorIs(t, err, errJSON)
+	assert.LessOrEqual(t, len(err.Error()), len(errJSON.Error())+len(": ")+maxEchoedLength+len("…"))
 }

@@ -39,7 +39,7 @@ func parseCompact(token string, allowed []Algorithm, maxSize int) (*jose.JSONWeb
 		}
 
 		// go-jose quotes raw header values in its messages: clip them.
-		return nil, jose.Header{}, fmt.Errorf("%w: %w", ErrMalformedToken, clippedError{err: err})
+		return nil, jose.Header{}, fmt.Errorf("%w: %w", ErrMalformedToken, clipError(err))
 	}
 
 	// Defense in depth: the compact serialization carries one signature.

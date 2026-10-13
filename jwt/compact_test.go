@@ -348,21 +348,33 @@ func TestVerifyReportsDisallowedAlgorithms(t *testing.T) {
 
 // TestVerifyClipsHeaderValuesInErrorsAndSpans pins that no token-supplied
 // value reaches an error or a span unbounded (audit JWT-I7, JWT-02): the
-// kid, the alg and the parser's own messages are clipped. Not parallel:
-// it installs the recording tracer provider.
+// kid, the alg and the parser's own messages are clipped — a number
+// literal the standard library quoted whole included (review F1). Not
+// parallel: it installs the recording tracer provider.
 func TestVerifyClipsHeaderValuesInErrorsAndSpans(t *testing.T) {
 	priv, pub := genECDSA(t)
+	other, _ := genECDSA(t)
 	v := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 	payload := fmt.Sprintf(`{"sub":"alice","exp":%d}`, in(time.Hour))
 	longKid := strings.Repeat("k", 10<<10)
 	longAlg := strings.Repeat("A", 5<<10)
+	// An unknown header member holding an 11 000-digit number: valid JSON,
+	// which go-jose refuses — it decodes unknown header values into float64.
+	longNumber := forge(t, jwtsec.ES256, other.Key, `{"alg":"ES256","kid":"ec-1","x":1`+strings.Repeat("0", 11_000)+`}`, payload)
 
-	var errKid, errAlg error
+	var errKid, errAlg, errNumber, errNumberSig error
 
 	spans := record(func() {
 		_, errKid = v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, header(jwtsec.ES256, longKid), payload), nil)
 		_, errAlg = v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, `{"alg":"`+longAlg+`","kid":"ec-1"}`, payload), nil)
+		_, errNumber = v.Verify(context.Background(), longNumber, nil)
+		_, errNumberSig = jwtsec.VerifySignature(context.Background(), longNumber, []jwtsec.PublicKey{pub})
 	})
+
+	for _, err := range []error{errNumber, errNumberSig} {
+		require.ErrorIs(t, err, jwtsec.ErrMalformedToken)
+		assert.Less(t, len(err.Error()), 400, "the number literal is not echoed")
+	}
 
 	require.ErrorIs(t, errKid, jwtsec.ErrInvalidSignature, "unknown kid")
 	assert.Less(t, len(errKid.Error()), 400)
@@ -376,9 +388,9 @@ func TestVerifyClipsHeaderValuesInErrorsAndSpans(t *testing.T) {
 	assert.LessOrEqual(t, len(alg), 128+len("…"))
 
 	verifies := named(spans, "jwtsec.Verifier.Verify")
-	require.Len(t, verifies, 2)
+	require.Len(t, verifies, 3)
 
-	for _, s := range verifies {
+	for _, s := range append(verifies, named(spans, "jwtsec.VerifySignature")...) {
 		assert.LessOrEqual(t, len(s.attr("jwt.kid")), 128+len("…"))
 		assert.LessOrEqual(t, len(s.attr("jwt.alg")), 128+len("…"))
 

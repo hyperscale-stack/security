@@ -51,7 +51,7 @@ func unmarshalExact(data []byte, v any) (err error) {
 	}()
 
 	if err := josejson.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("%w: %w", errJSON, clippedError{err: err})
+		return fmt.Errorf("%w: %w", errJSON, clipError(err))
 	}
 
 	return nil
@@ -76,10 +76,14 @@ func validateJSON(data []byte) error {
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(data))
+	// Numbers stay literals: converting them to float64 would refuse those
+	// out of its range — valid JSON (RFC 8259 §6) — with an error quoting
+	// the whole literal.
+	dec.UseNumber()
 
 	tok, err := dec.Token()
 	if err != nil {
-		return fmt.Errorf("%w: %w", errJSON, err)
+		return jsonError(err)
 	}
 
 	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
@@ -108,7 +112,7 @@ func walkObject(dec *json.Decoder, depth int) error {
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
-			return fmt.Errorf("%w: %w", errJSON, err)
+			return jsonError(err)
 		}
 
 		key := foldKey(tok.(string)) //nolint:forcetypeassert // dec.More inside an object yields a member name
@@ -146,7 +150,7 @@ func walkArray(dec *json.Decoder, depth int) error {
 func walkValue(dec *json.Decoder, depth int) error {
 	tok, err := dec.Token()
 	if err != nil {
-		return fmt.Errorf("%w: %w", errJSON, err)
+		return jsonError(err)
 	}
 
 	switch tok {
@@ -162,11 +166,15 @@ func walkValue(dec *json.Decoder, depth int) error {
 // closeDelim consumes the '}' or ']' closing a container.
 func closeDelim(dec *json.Decoder) error {
 	if _, err := dec.Token(); err != nil {
-		return fmt.Errorf("%w: %w", errJSON, err)
+		return jsonError(err)
 	}
 
 	return nil
 }
+
+// jsonError wraps an error of the encoding/json decoder in errJSON,
+// clipped: its message may quote the input.
+func jsonError(err error) error { return fmt.Errorf("%w: %w", errJSON, clipError(err)) }
 
 // foldKey maps s to a canonical form such that foldKey(a) == foldKey(b)
 // exactly when strings.EqualFold(a, b): every rune becomes the smallest

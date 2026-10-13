@@ -30,12 +30,20 @@ func clip(s string) string {
 
 // clippedError bounds the message of an error returned by a third-party
 // parser, which may quote the input it refused (go-jose quotes raw header
-// values): Error is clipped, Unwrap keeps the chain for errors.Is and
-// errors.As.
-type clippedError struct{ err error }
+// values, encoding/json whole number literals): the message is clipped
+// once, when the error is wrapped — an error kept and reported again, such
+// as a JWK Set's last fetch error, never rebuilds the long one — and
+// Unwrap keeps the chain for errors.Is and errors.As.
+type clippedError struct {
+	msg string
+	err error
+}
+
+// clipError wraps err in a clippedError.
+func clipError(err error) error { return clippedError{msg: clip(err.Error()), err: err} }
 
 // Error implements error with the clipped message of the wrapped error.
-func (e clippedError) Error() string { return clip(e.err.Error()) }
+func (e clippedError) Error() string { return e.msg }
 
 // Unwrap exposes the wrapped error.
 func (e clippedError) Unwrap() error { return e.err }

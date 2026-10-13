@@ -261,7 +261,8 @@ PKCE. Not supported, and refused where a provider could select them:
   10 s and 1 MiB fetch bounds are not. An RSA key published without `alg`
   verifies RS256 when the verifier allows it, otherwise the verifier's only
   RSA algorithm, otherwise nothing: publish `alg` on RSA keys signing
-  PS256/384/512.
+  PS256/384/512. A JWK Set URL redirecting to another origin cannot be
+  used, whatever `MaxRedirects`: configure the final URL.
 - **No JWS extension, nested JWT or JWE** — tokens whose header uses `crit`
   or `b64` are refused, and a nested JWT (`cty: JWT`, RFC 7519 §7.2 step 8)
   is refused because its payload is not a claims object.

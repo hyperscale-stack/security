@@ -11,8 +11,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,15 +49,25 @@ const (
 	// usable set is served; without one, attempts stay
 	// MinKeySetRefreshInterval apart.
 	maxKeySetBackoff = 5 * time.Minute
+	// maxBackoffDoublings bounds the doublings of MinKeySetRefreshInterval:
+	// 10 s × 2⁵ already exceeds maxKeySetBackoff, and the shift never
+	// overflows however many attempts failed.
+	maxBackoffDoublings = 5
 	// jwksFetchTimeout bounds a whole fetch.
 	jwksFetchTimeout = outbound.DefaultTimeout
 	// maxJWKSBytes bounds the document.
 	maxJWKSBytes = 1 << 20
 )
 
-// schemeHTTPS is the only scheme of a JWK Set URL without an explicit
-// opt-in.
-const schemeHTTPS = "https"
+// Schemes of a JWK Set URL: https, or http with an explicit opt-in.
+const (
+	schemeHTTPS = "https"
+	schemeHTTP  = "http"
+)
+
+// defaultMaxRedirects is net/http's redirect limit for a client without
+// CheckRedirect, which the pinned copy of a WithHTTPClient client keeps.
+const defaultMaxRedirects = 10
 
 // remoteOptions collects the RemoteOptions of NewRemoteJWKS.
 type remoteOptions struct {
@@ -71,7 +84,9 @@ type RemoteOption func(*remoteOptions)
 // routable destinations only, no redirect, no proxy). A JWKS host on a
 // private network needs it: exempt its subnet in AllowedPrefixes, give a
 // private CA in RootCAs, allow plain http for local development only. The
-// provider's own bounds (10 s, 1 MiB) apply on top of the policy's.
+// provider's own bounds (10 s, 1 MiB) apply on top of the policy's, and
+// the redirects MaxRedirects allows are followed within the JWK Set URL's
+// origin only (see [NewRemoteJWKS]).
 func WithOutboundPolicy(p outbound.Policy) RemoteOption {
 	return func(o *remoteOptions) { o.policy = &p }
 }
@@ -79,9 +94,11 @@ func WithOutboundPolicy(p outbound.Policy) RemoteOption {
 // WithHTTPClient replaces the SSRF-safe client with c — an explicit
 // opt-out: c decides which destinations, redirects and proxies are
 // allowed, and an http URL is accepted. The provider still bounds each
-// fetch (10 s, 1 MiB) and refuses a response that arrives over http for an
-// https URL (a redirect downgrade would let a network attacker serve its
-// own keys). Exclusive with WithOutboundPolicy; a nil c panics.
+// fetch (10 s, 1 MiB), follows c's redirects within the JWK Set URL's
+// origin only (on a copy of c: c itself is not modified), and refuses a
+// response that arrives over http for an https URL (a redirect downgrade
+// would let a network attacker serve its own keys). Exclusive with
+// WithOutboundPolicy; a nil c panics.
 func WithHTTPClient(c *http.Client) RemoteOption {
 	if c == nil {
 		panic("jwtsec.WithHTTPClient: nil client")
@@ -110,7 +127,11 @@ func WithCacheTTL(d time.Duration) RemoteOption {
 // destinations judged at dial time (no loopback, private network or cloud
 // metadata address), no redirect, no proxy, 10 s and 1 MiB per fetch — or
 // the policy of [WithOutboundPolicy], or the client of [WithHTTPClient]
-// (opt-out). The document is strict JSON; each key is validated on its
+// (opt-out). Whatever the client, a redirect it may follow is followed
+// within the origin of rawURL only — scheme, host and port (RFC 6454 §4),
+// the rule of oidc/client and saml/sp: a hop to another origin fails with
+// [outbound.ErrRedirectNotAllowed], so only that origin's keys ever verify
+// tokens. The document is strict JSON; each key is validated on its
 // own and an unusable one is ignored without discarding the set (RFC 7517
 // §5): private or symmetric material, use other than sig, key_ops without
 // verify, an unknown key type or curve, RSA outside 2048–8192 bits, an alg
@@ -168,7 +189,7 @@ func NewRemoteJWKS(rawURL string, opts ...RemoteOption) (JWKSProvider, error) {
 		url:       u.String(),
 		display:   redactURL(u),
 		httpsOnly: u.Scheme == schemeHTTPS,
-		client:    client,
+		client:    pinRedirects(client, u),
 		ttl:       o.ttl,
 		now:       time.Now,
 		timeout:   jwksFetchTimeout,
@@ -187,11 +208,82 @@ func checkJWKSURL(rawURL string, allowHTTP bool) (*url.URL, error) {
 		return nil, fmt.Errorf("jwt: remote JWKS URL: %w: userinfo", outbound.ErrURLNotAllowed)
 	case u.Host == "":
 		return nil, fmt.Errorf("jwt: remote JWKS URL: %w: not an absolute URL", outbound.ErrURLNotAllowed)
-	case u.Scheme == schemeHTTPS, u.Scheme == "http" && allowHTTP:
+	case u.Scheme == schemeHTTPS, u.Scheme == schemeHTTP && allowHTTP:
 		return u, nil
 	default:
 		return nil, fmt.Errorf("jwt: remote JWKS URL: %w: the scheme must be https", outbound.ErrURLNotAllowed)
 	}
+}
+
+// pinRedirects returns a copy of c whose CheckRedirect applies c's own
+// policy — net/http's limit of 10 redirects when c has none — then
+// refuses a hop to another origin than u's (see NewRemoteJWKS).
+func pinRedirects(c *http.Client, u *url.URL) *http.Client {
+	pinned := *c
+	next := c.CheckRedirect
+	origin := originOf(u)
+
+	pinned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		switch {
+		case next != nil:
+			// Returned as is: net/http compares it with ErrUseLastResponse.
+			if err := next(req, via); err != nil {
+				return err
+			}
+		case len(via) >= defaultMaxRedirects:
+			return fmt.Errorf("%w: stopped after %d redirects", outbound.ErrRedirectNotAllowed, defaultMaxRedirects)
+		}
+
+		if originOf(req.URL) != origin {
+			return fmt.Errorf("%w: to another origin than the JWK Set URL's", outbound.ErrRedirectNotAllowed)
+		}
+
+		return nil
+	}
+
+	return &pinned
+}
+
+// originOf renders the origin of u (RFC 6454 §4): its scheme (url.Parse
+// lower-cases it), its host lower-cased in ASCII only — a host that is not
+// ASCII stays its own origin — an IP literal in canonical form, and the
+// port as a number, the scheme's default when absent.
+func originOf(u *url.URL) string {
+	scheme := u.Scheme
+
+	host := asciiLower(u.Hostname())
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+	}
+
+	port := u.Port()
+
+	switch {
+	case port != "":
+		if n, err := strconv.Atoi(port); err == nil {
+			port = strconv.Itoa(n)
+		}
+	case scheme == schemeHTTP:
+		port = "80"
+	default:
+		port = "443"
+	}
+
+	return scheme + "://" + net.JoinHostPort(host, port)
+}
+
+// asciiLower maps the ASCII upper-case letters of s to lower case, and
+// nothing else (RFC 4790 i;ascii-casemap).
+func asciiLower(s string) string {
+	b := []byte(s)
+
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+
+	return string(b)
 }
 
 // redactURL returns u without userinfo, query nor fragment — a query may
@@ -277,12 +369,14 @@ func (r *remoteJWKS) refreshKeySet(ctx context.Context) (KeySet, error) {
 }
 
 // await waits for call, when there is one, and returns the usable set.
+// Its errors name the redacted URL — they alone do: the fetch errors name
+// none.
 func (r *remoteJWKS) await(ctx context.Context, call *jwksFetch) (KeySet, error) {
 	if call != nil {
 		select {
 		case <-call.done:
 		case <-ctx.Done():
-			return nil, fmt.Errorf("%w: waiting for the JWK Set: %w", ErrKeySetUnavailable, ctx.Err())
+			return nil, fmt.Errorf("%w: %s: waiting for the JWK Set: %w", ErrKeySetUnavailable, r.display, ctx.Err())
 		}
 	}
 
@@ -335,16 +429,7 @@ func (r *remoteJWKS) wait(now time.Time) time.Duration {
 		return MinKeySetRefreshInterval
 	}
 
-	d := MinKeySetRefreshInterval
-	for range r.failures - 1 {
-		if d >= maxKeySetBackoff {
-			break
-		}
-
-		d *= 2
-	}
-
-	return min(d, maxKeySetBackoff)
+	return min(MinKeySetRefreshInterval<<min(r.failures-1, maxBackoffDoublings), maxKeySetBackoff)
 }
 
 // fetch downloads the set and publishes the outcome. It runs on its own
@@ -405,11 +490,11 @@ func (r *remoteJWKS) download(ctx context.Context) (keys []PublicKey, ignored in
 	return parseJWKS(body)
 }
 
-// get performs the request; its errors name the redacted URL only.
+// get performs the request. Its errors name no URL (see withoutURL).
 func (r *remoteJWKS) get(ctx context.Context) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url, nil)
 	if err != nil {
-		return nil, redactURLError(err, r.display)
+		return nil, withoutURL(err)
 	}
 
 	req.Header.Set("Accept", "application/jwk-set+json, application/json")
@@ -419,38 +504,39 @@ func (r *remoteJWKS) get(ctx context.Context) ([]byte, error) {
 	// opt-out. G704's SSRF heuristic cannot see either.
 	resp, err := r.client.Do(req) //nolint:gosec // operator URL; outbound policy by default, documented opt-out
 	if err != nil {
-		return nil, redactURLError(err, r.display)
+		return nil, withoutURL(err)
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	if r.httpsOnly && (resp.Request == nil || resp.Request.URL.Scheme != schemeHTTPS) {
-		return nil, fmt.Errorf("%s: the response did not come over https", r.display)
+		return nil, errors.New("the response did not come over https")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: unexpected status %d", r.display, resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJWKSBytes+1))
 	if err != nil {
-		return nil, redactURLError(err, r.display)
+		return nil, withoutURL(err)
 	}
 
 	if len(body) > maxJWKSBytes {
-		return nil, fmt.Errorf("%s: %w", r.display, outbound.ErrResponseTooLarge)
+		return nil, outbound.ErrResponseTooLarge
 	}
 
 	return body, nil
 }
 
-// redactURLError replaces the URL net/http puts in a *url.Error — it masks
-// a password only, not a user name or a query — with display; the wrapped
-// error stays matchable.
-func redactURLError(err error, display string) error {
+// withoutURL returns the cause of the *url.Error net/http returns, which
+// names the request URL — a redirect target's included — with its user
+// name and query (a password alone is masked); the cause stays matchable.
+// The provider's errors name its redacted URL instead (see await).
+func withoutURL(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return &url.Error{Op: ue.Op, URL: display, Err: ue.Err}
+		return ue.Err
 	}
 
 	return err

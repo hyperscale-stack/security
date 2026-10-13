@@ -120,6 +120,8 @@ func TestVerifyRefusesNonUTF8AndLoneSurrogateClaims(t *testing.T) {
 		"lone high surrogate": `"` + esc("d800") + `"`,
 		"lone low surrogate":  `"` + esc("dfff") + `"`,
 		"high then text":      `"` + esc("d800") + `abc"`,
+		"lone last high":      `"` + esc("dbff") + `"`,
+		"high then non-low":   `"` + esc("d800") + esc("e000") + `"`,
 		"invalid UTF-8":       "\"\xff\"",
 		"overlong UTF-8":      "\"\xc0\xaf\"",
 	} {
@@ -133,11 +135,42 @@ func TestVerifyRefusesNonUTF8AndLoneSurrogateClaims(t *testing.T) {
 		})
 	}
 
-	payload := fmt.Sprintf(`{"sub":"%s%s","exp":%d}`, esc("d83d"), esc("de00"), in(time.Hour))
+	for pair, want := range map[string]string{
+		esc("d83d") + esc("de00"): "\U0001F600",
+		esc("d800") + esc("dc00"): "\U00010000",
+		esc("dbff") + esc("dfff"): "\U0010FFFF",
+	} {
+		payload := fmt.Sprintf(`{"sub":"%s","exp":%d}`, pair, in(time.Hour))
 
-	std, err := v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, header(jwtsec.ES256, "ec-1"), payload), nil)
-	require.NoError(t, err, "a surrogate pair is valid")
-	assert.Equal(t, "😀", std.Subject)
+		std, err := v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, header(jwtsec.ES256, "ec-1"), payload), nil)
+		require.NoError(t, err, "a surrogate pair is valid: %s", pair)
+		assert.Equal(t, want, std.Subject)
+	}
+}
+
+// TestVerifyReadsLongNumbersWithoutEchoingThem pins review F1: a number
+// literal too long for a float64 is valid JSON (RFC 8259 §6) — ignored in
+// an unknown claim (RFC 7519 §4) — and a decoder refusing it for a field
+// of claimsOut does not echo it whole.
+func TestVerifyReadsLongNumbersWithoutEchoingThem(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	v := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
+	payload := fmt.Sprintf(`{"sub":"alice","exp":%d,"n":1%s}`, in(time.Hour), strings.Repeat("0", 11_000))
+	tok := forge(t, jwtsec.ES256, priv.Key, header(jwtsec.ES256, "ec-1"), payload)
+
+	std, err := v.Verify(context.Background(), tok, nil)
+	require.NoError(t, err, "an unknown claim is ignored, whatever its value")
+	assert.Equal(t, "alice", std.Subject)
+
+	var out struct {
+		N int64 `json:"n"`
+	}
+
+	_, err = v.Verify(context.Background(), tok, &out)
+	require.ErrorIs(t, err, jwtsec.ErrMalformedToken)
+	assert.Less(t, len(err.Error()), 400, "the number literal is not echoed")
 }
 
 // TestVerifyRefusesNonObjectPayloads pins RFC 7519 §7.2 step 10: the claims

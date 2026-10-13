@@ -52,8 +52,8 @@ func TestRemoteJWKSErrorsDoNotLeakTheURL(t *testing.T) {
 	}))
 	t.Cleanup(big.Close)
 
-	// The redirect target's certificate is not trusted by the client: the
-	// error names the target URL, a secret in its query.
+	// A redirect to another origin is refused: net/http names the target
+	// URL, a secret in its query, in its error.
 	redirect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, e.srv.URL+"/keys?token=S3CR3T-2", http.StatusFound)
 	}))
@@ -88,6 +88,7 @@ func TestRemoteJWKSErrorsDoNotLeakTheURL(t *testing.T) {
 		})
 
 		require.ErrorIs(t, verifyErr, jwtsec.ErrKeySetUnavailable, name)
+		assert.Equal(t, 1, strings.Count(verifyErr.Error(), "/jwks?REDACTED"), "%s: the URL is named once: %v", name, verifyErr)
 
 		rendered := []string{verifyErr.Error(), fmt.Sprintf("%+v", verifyErr), fmt.Sprintf("%#v", verifyErr)}
 
@@ -102,6 +103,52 @@ func TestRemoteJWKSErrorsDoNotLeakTheURL(t *testing.T) {
 		}
 
 		require.NotEmpty(t, named(spans, "jwtsec.RemoteJWKS.Fetch"), name)
+	}
+}
+
+// TestRemoteJWKSBoundsDocumentErrors pins review F1: a hostile JWK Set —
+// a number literal of a megabyte — yields neither a megabyte error nor
+// megabytes of allocations on every verification, nor a megabyte span
+// event. Not parallel: it installs the recording tracer provider and
+// measures the allocations of the process.
+func TestRemoteJWKSBoundsDocumentErrors(t *testing.T) {
+	huge := "1" + strings.Repeat("0", 1_000_000)
+	tok := tokenFor(t, mustKey(t), "k")
+
+	for name, doc := range map[string]string{
+		"beside the keys": `{"keys":[],"x":` + huge + `}`,
+		"as the keys":     `{"keys":` + huge + `}`,
+		"as a key":        `{"keys":[` + huge + `]}`,
+	} {
+		e := newJWKSEndpoint(t, []byte(doc))
+		v := jwtsec.NewVerifier(e.provider(t, newTestClock()))
+
+		var verifyErr error
+
+		spans := record(func() { _, verifyErr = v.Verify(context.Background(), tok, nil) })
+
+		require.Error(t, verifyErr, name)
+		assert.Less(t, len(verifyErr.Error()), 400, name)
+
+		fetches := named(spans, "jwtsec.RemoteJWKS.Fetch")
+		require.Len(t, fetches, 1, name)
+
+		for _, recorded := range fetches[0].errs {
+			assert.Less(t, len(recorded), 400, name)
+		}
+
+		const calls = 20
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		for range calls {
+			_, _ = v.Verify(context.Background(), tok, nil)
+		}
+
+		runtime.ReadMemStats(&after)
+		assert.Less(t, (after.TotalAlloc-before.TotalAlloc)/calls, uint64(64<<10), "%s: bytes allocated per verification", name)
 	}
 }
 

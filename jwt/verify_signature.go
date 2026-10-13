@@ -79,7 +79,7 @@ func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowe
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
 
-		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clippedError{err: err})
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSignature, clipError(err))
 	}
 
 	return &VerifiedToken{Algorithm: alg, KeyID: header.KeyID, Type: headerType(header), Payload: payload}, nil
