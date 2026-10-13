@@ -12,16 +12,18 @@ package samlinterop_test
 // (plan review F5).
 //
 // Backends: a SQLite file in WAL mode and miniredis always; Redis,
-// PostgreSQL and MySQL (with and without CLIENT_FOUND_ROWS) when their
-// environment variables point at a disposable server (see compose.yaml):
+// PostgreSQL and MySQL (with and without CLIENT_FOUND_ROWS) on the
+// disposable servers their environment variables name (see compose.yaml),
+// skipped when a variable is unset. CI sets all of them
+// (scripts/test-backends.sh) and fails on any skip:
 //
 //	SAMLSP_REDIS_ADDR=127.0.0.1:16379
 //	SAMLSP_POSTGRES_DSN=postgres://samlsp:<password>@127.0.0.1:15432/samlsp?sslmode=disable
 //	SAMLSP_MYSQL_DSN=root:<password>@tcp(127.0.0.1:13306)/
 //
-// With SAMLSP_MYSQL_DSN, a third MySQL backend uses a latin1 database and
-// a non-strict sql_mode with interpolated parameters: the deployment that
-// altered raw UTF-8 payloads (audit STORE-I2).
+// A third MySQL backend uses a latin1 database and a non-strict sql_mode
+// with interpolated parameters: the deployment that altered raw UTF-8
+// payloads (audit STORE-I2).
 
 import (
 	"context"
@@ -56,14 +58,49 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
+// The variables naming the opt-in servers of the shared-store tests.
+const (
+	envRedisAddr   = "SAMLSP_REDIS_ADDR"
+	envPostgresDSN = "SAMLSP_POSTGRES_DSN"
+	envMySQLDSN    = "SAMLSP_MYSQL_DSN"
+)
+
 // storeBackend opens namespaces of one persistence backend: each namespace
 // is fresh and empty, and opens any number of independent instances.
 type storeBackend struct {
 	name string
+	// env names the variable holding the server of an opt-in backend;
+	// empty for the local ones.
+	env string
 	// namespace returns an opener of instances sharing one new namespace.
 	namespace func(t *testing.T) func() samlsp.Storage
 	// fastForward advances the backend's expiry clock (miniredis only).
 	fastForward func(d time.Duration)
+}
+
+// skipIfUnset skips t when b is an opt-in backend whose variable is unset.
+func (b storeBackend) skipIfUnset(t *testing.T) {
+	t.Helper()
+
+	if b.env != "" && os.Getenv(b.env) == "" {
+		t.Skipf("set %s to run against a real %s (opt-in)", b.env, b.name)
+	}
+}
+
+// optIn returns the opt-in backend name on the server the variable env
+// names, its namespaces opened by open. The namespace skips t while env is
+// unset: no client is ever built on an empty address, which go-redis would
+// take for localhost:6379.
+func optIn(name, env string, open func(server string) func(t *testing.T) func() samlsp.Storage) storeBackend {
+	b := storeBackend{name: name, env: env}
+	b.namespace = func(t *testing.T) func() samlsp.Storage {
+		t.Helper()
+		b.skipIfUnset(t)
+
+		return open(os.Getenv(env))(t)
+	}
+
+	return b
 }
 
 // unique returns a short random suffix for namespaces.
@@ -90,6 +127,27 @@ func sqlInstance(t *testing.T, driver, dsn string, d sqlstore.Dialect) samlsp.St
 	return s
 }
 
+// TestStoreBackendsListTheOptInServers: the opt-in servers are listed
+// whether or not their variables are set, so that an unset or renamed
+// variable shows as skipped subtests — which the CI job of the real
+// backends refuses (scripts/test-backends.sh) — instead of backends that
+// silently vanish.
+func TestStoreBackendsListTheOptInServers(t *testing.T) {
+	for _, env := range []string{envRedisAddr, envPostgresDSN, envMySQLDSN} {
+		t.Setenv(env, "")
+	}
+
+	var names []string
+	for _, b := range storeBackends(t) {
+		names = append(names, b.name)
+	}
+
+	require.Equal(t, []string{
+		"sqlite-file", "miniredis",
+		"redis", "postgres", "mysql", "mysql-client-found-rows", "mysql-latin1-nonstrict",
+	}, names)
+}
+
 // storeBackends returns the backends of this run.
 func storeBackends(t *testing.T) []storeBackend {
 	t.Helper()
@@ -112,24 +170,19 @@ func storeBackends(t *testing.T) []storeBackend {
 		},
 	}
 
-	if addr := os.Getenv("SAMLSP_REDIS_ADDR"); addr != "" {
-		backends = append(backends, storeBackend{name: "redis", namespace: redisNamespace(addr)})
-	}
-
-	if dsn := os.Getenv("SAMLSP_POSTGRES_DSN"); dsn != "" {
-		backends = append(backends, storeBackend{name: "postgres", namespace: postgresNamespace(dsn)})
-	}
-
-	if base := os.Getenv("SAMLSP_MYSQL_DSN"); base != "" {
-		backends = append(backends,
-			storeBackend{name: "mysql", namespace: mysqlNamespace(base, "", "")},
-			storeBackend{name: "mysql-client-found-rows", namespace: mysqlNamespace(base, "clientFoundRows=true", "")},
-			storeBackend{name: "mysql-latin1-nonstrict", namespace: mysqlNamespace(base,
-				"sql_mode="+url.QueryEscape("''")+"&interpolateParams=true", "latin1")},
-		)
-	}
-
-	return backends
+	return append(backends,
+		optIn("redis", envRedisAddr, redisNamespace),
+		optIn("postgres", envPostgresDSN, postgresNamespace),
+		optIn("mysql", envMySQLDSN, func(base string) func(t *testing.T) func() samlsp.Storage {
+			return mysqlNamespace(base, "", "")
+		}),
+		optIn("mysql-client-found-rows", envMySQLDSN, func(base string) func(t *testing.T) func() samlsp.Storage {
+			return mysqlNamespace(base, "clientFoundRows=true", "")
+		}),
+		optIn("mysql-latin1-nonstrict", envMySQLDSN, func(base string) func(t *testing.T) func() samlsp.Storage {
+			return mysqlNamespace(base, "sql_mode="+url.QueryEscape("''")+"&interpolateParams=true", "latin1")
+		}),
+	)
 }
 
 func redisNamespace(addr string) func(t *testing.T) func() samlsp.Storage {
@@ -406,6 +459,8 @@ func TestSharedStoreRaces(t *testing.T) {
 
 	for _, b := range storeBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
+			b.skipIfUnset(t)
+
 			c := newCluster(t, b)
 			rounds := raceRounds(t)
 
@@ -512,6 +567,10 @@ func TestSharedStoreConformance(t *testing.T) {
 
 	for _, b := range storeBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
+			// Before RunConformance: the namespace opener runs in the goroutine
+			// of each case, where skipping the backend's test is not allowed.
+			b.skipIfUnset(t)
+
 			storetest.RunConformance(t, func() samlsp.Storage { return b.namespace(t)() })
 		})
 	}
@@ -553,6 +612,8 @@ func TestSharedStorePayloadRoundTrip(t *testing.T) {
 
 	for _, b := range storeBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
+			b.skipIfUnset(t)
+
 			store := &recordingStorage{Storage: b.namespace(t)()}
 
 			sp, err := samlsp.New(samlsp.Config{

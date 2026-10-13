@@ -8,5 +8,6 @@
 // advisory lock Migrate takes on PostgreSQL, the oauth2 storage
 // conformance suite, and the MySQL upgrade statements of MIGRATION.md. The
 // module holds tests only and is never released. SQLite runs everywhere;
-// PostgreSQL, MySQL and MariaDB are opt-in (see compose.yaml).
+// PostgreSQL, MySQL and MariaDB are opt-in (see compose.yaml) and run in
+// CI (scripts/test-backends.sh).
 package sqlstores_test

@@ -128,6 +128,7 @@ make test     # race + coverage
 make lint     # golangci-lint with the shared config (pinned in tools/golangci-lint)
 make vuln     # govulncheck on every module
 make check-modules # every module on its own (GOWORK=off), workspace in sync
+make test-backends # the store suites on real PostgreSQL, MySQL, MariaDB and Redis servers (run by CI; locally, start them as scripts/test-backends.sh shows)
 make e2e      # opt-in browser suites (Tales and Chrome: docs/saml-sp.md, e2e/oidc/run.sh)
 make conformance # opt-in: the OpenID Foundation conformance suite, locally (docs/oidc-conformance.md)
 ```

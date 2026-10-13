@@ -62,3 +62,109 @@ jobs:
         env:
           COVERALLS_TOKEN: ${{ github.token }}
         run: make coveralls
+
+  # The store suites on real servers (make test-backends, see
+  # scripts/test-backends.sh), which `make test` runs on SQLite and
+  # miniredis only: the SQL stores on PostgreSQL, MySQL 8.0 and 8.4 and
+  # MariaDB, the Redis stores on Redis. Each image is pinned by the digest
+  # the compose.yaml files under internal/interop/ use: bump them together
+  # (Dependabot updates neither).
+  #
+  # No credentials: PostgreSQL trusts every connection, the MySQL and
+  # MariaDB root has no password, Redis has no auth. The ports are
+  # published on the runner's 127.0.0.1 only: nothing outside this
+  # disposable VM can reach the servers, and every process inside it is
+  # this job's own code, which would read any password from its
+  # environment. A generated password would not stay secret either: the
+  # runner prints each service's environment in the log.
+  backends:
+    name: Store suites (real backends)
+    runs-on: ubuntu-latest
+    # A backstop: go test bounds each of the four suites at 300 s.
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+        env:
+          POSTGRES_USER: stores
+          POSTGRES_DB: stores
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "127.0.0.1:35432:5432"
+        # Over TCP: the server that initializes a database listens on its
+        # socket only (MySQL's runs with --skip-networking), so the checks
+        # pass once the final server is up.
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U stores -d stores"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql80:
+        image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - "127.0.0.1:33306:3306"
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot --silent"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+      mysql84:
+        image: mysql:8.4@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - "127.0.0.1:33307:3306"
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot --silent"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+      mariadb:
+        image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
+        ports:
+          - "127.0.0.1:33308:3306"
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+      # The image's defaults: maxmemory 0 and the noeviction policy the
+      # stores require. Its RDB snapshots stay on, which is harmless here
+      # (the compose files turn them off).
+      redis:
+        image: redis:7.4@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+        ports:
+          - "127.0.0.1:36379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          # A cache key of this job's own, for its race-built packages:
+          # hashing the script with the go.sum files makes it differ from
+          # the key the other jobs share.
+          cache-dependency-path: |
+            **/go.sum
+            scripts/test-backends.sh
+
+      # Generates the mocks first. Fails when a test fails, when a suite
+      # runs no test, and when a test is skipped: a server this job does
+      # not provide.
+      - name: Test the stores on PostgreSQL, MySQL, MariaDB and Redis
+        env:
+          SQLSTORES_POSTGRES_DSN: postgres://stores@127.0.0.1:35432/stores?sslmode=disable
+          SQLSTORES_MYSQL80_DSN: root@tcp(127.0.0.1:33306)/
+          SQLSTORES_MYSQL84_DSN: root@tcp(127.0.0.1:33307)/
+          SQLSTORES_MARIADB_DSN: root@tcp(127.0.0.1:33308)/
+          OIDCCLIENT_POSTGRES_DSN: postgres://stores@127.0.0.1:35432/stores?sslmode=disable
+          OIDCCLIENT_MYSQL_DSN: root@tcp(127.0.0.1:33306)/
+          OIDCCLIENT_REDIS_ADDR: 127.0.0.1:36379
+          SAMLSP_POSTGRES_DSN: postgres://stores@127.0.0.1:35432/stores?sslmode=disable
+          SAMLSP_MYSQL_DSN: root@tcp(127.0.0.1:33306)/
+          SAMLSP_REDIS_ADDR: 127.0.0.1:36379
+          OAUTH2_TEST_REDIS_ADDR: 127.0.0.1:36379
+        run: make test-backends

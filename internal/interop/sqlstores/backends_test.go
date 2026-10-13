@@ -24,8 +24,9 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
 )
 
-// The real backends are opt-in — routine CI never sets these variables.
-// Start them with compose.yaml (see its header), then:
+// The real backends are opt-in: a test skips while its variable is unset.
+// CI sets them all (scripts/test-backends.sh) and fails on any skip.
+// Locally, start them with compose.yaml (see its header), then:
 //
 //	SQLSTORES_POSTGRES_DSN=postgres://sqlstores:$SQLSTORES_DB_PASSWORD@127.0.0.1:35432/sqlstores?sslmode=disable
 //	SQLSTORES_MYSQL80_DSN=root:$SQLSTORES_DB_PASSWORD@tcp(127.0.0.1:33306)/

@@ -27,8 +27,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The real backends are opt-in — routine CI never sets these variables.
-// Start them with compose.yaml (see its header), then:
+// The real backends are opt-in: a test skips while its variable is unset.
+// CI sets them all (scripts/test-backends.sh) and fails on any skip.
+// Locally, start them with compose.yaml (see its header), then:
 //
 //	OIDCCLIENT_POSTGRES_DSN=postgres://oidcclient:$OIDCCLIENT_DB_PASSWORD@127.0.0.1:25432/oidcclient?sslmode=disable
 //	OIDCCLIENT_MYSQL_DSN=root:$OIDCCLIENT_DB_PASSWORD@tcp(127.0.0.1:23306)/oidcclient

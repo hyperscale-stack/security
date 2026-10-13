@@ -37,11 +37,11 @@
 //   - Every instance must reach the primary database: a replica, or a
 //     read/write-splitting proxy, could answer from before a consumption.
 //
-// The CI of this module exercises SQLite only, with several connections
-// racing on a database file; the PostgreSQL and MySQL guarantees rest on
-// the locking described in [Store], which the opt-in suites of
-// internal/interop/oidcstack and internal/interop/sqlstores check on real
-// servers.
+// The tests of this module run on SQLite, with several connections racing
+// on a database file. The PostgreSQL and MySQL guarantees rest on the
+// locking described in [Store], which the suites of
+// internal/interop/oidcstack and internal/interop/sqlstores check in CI
+// (make test-backends) on PostgreSQL, MySQL and MariaDB servers.
 //
 // # Cleanup
 //

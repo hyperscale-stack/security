@@ -46,9 +46,9 @@ transitive dependencies.
 | `./internal/integrations`   | (private)                              | Cross-module end-to-end tests                                                 |
 | `./internal/interop/oidcop` | (private)                              | OpenID Provider interoperability tests (go-oidc + x/oauth2 as the RP)         |
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
-| `./internal/interop/oidcstack` | (private)                           | Our RP against our OP, attacks included; opt-in real PG/MySQL/Redis store runs |
+| `./internal/interop/oidcstack` | (private)                           | Our RP against our OP, attacks included; real PG/MySQL/Redis store runs (CI: `make test-backends`) |
 | `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak, shared stores, e2e helper) |
-| `./internal/interop/sqlstores` | (private)                           | The three SQL stores on SQLite and, opt-in, real PG/MySQL/MariaDB: concurrent `Migrate`, oauth2 conformance, MySQL upgrade |
+| `./internal/interop/sqlstores` | (private)                           | The three SQL stores on SQLite and real PG/MySQL/MariaDB (CI: `make test-backends`): concurrent `Migrate`, oauth2 conformance, MySQL upgrade |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.

@@ -37,15 +37,46 @@ const (
 		`"consumed":false,"issued_at":0,"expires_at":0,"issuer":null,"extension_data":null}`
 )
 
+// envRedisAddr names the variable holding the address of a disposable
+// Redis server (e.g. 127.0.0.1:6379) for the real-server tests. They are
+// opt-in: a real-server case skips when the variable is unset. CI sets it
+// (scripts/test-backends.sh) and fails on any skip.
+const envRedisAddr = "OAUTH2_TEST_REDIS_ADDR"
+
 // contextBackend is a Redis server the legacy-payload tests write raw
-// payloads to: miniredis always, and the real server
-// OAUTH2_TEST_REDIS_ADDR names when it is set — cjson decodes a JSON null
-// as nil on miniredis, as a truthy userdata on a real Redis.
+// payloads to: miniredis always, and the real server envRedisAddr names —
+// cjson decodes a JSON null as nil on miniredis, as a truthy userdata on a
+// real Redis. The real server is listed even when the variable is unset,
+// without a client: its cases then skip (skipIfUnset).
 type contextBackend struct {
 	name   string
 	client *redis.Client
 	store  *redisstore.Store
 	prefix string
+}
+
+// skipIfUnset skips t when b is the real server and envRedisAddr is unset.
+func (b contextBackend) skipIfUnset(t *testing.T) {
+	t.Helper()
+
+	if b.client == nil {
+		t.Skipf("set %s to run against a real Redis (opt-in)", envRedisAddr)
+	}
+}
+
+// TestContextBackendsListTheRealServer: the real Redis is listed whether
+// or not its variable is set, so that an unset or renamed variable shows
+// as skipped cases — which the CI job of the real backends refuses
+// (scripts/test-backends.sh) — instead of cases that silently vanish.
+func TestContextBackendsListTheRealServer(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+
+	var names []string
+	for _, b := range contextBackends(t) {
+		names = append(names, b.name)
+	}
+
+	assert.Equal(t, []string{"miniredis", "redis"}, names)
 }
 
 // contextBackends returns the servers to run a legacy-payload test on.
@@ -61,9 +92,9 @@ func contextBackends(t *testing.T) []contextBackend {
 
 	backends := []contextBackend{{name: "miniredis", client: local, store: localStore, prefix: "oauth2:"}}
 
-	addr := os.Getenv("OAUTH2_TEST_REDIS_ADDR")
+	addr := os.Getenv(envRedisAddr)
 	if addr == "" {
-		return backends
+		return append(backends, contextBackend{name: "redis"})
 	}
 
 	remote := redis.NewClient(&redis.Options{Addr: addr})
@@ -103,6 +134,8 @@ func TestRedisLegacyPayloadsReadEmptyContext(t *testing.T) {
 
 	for _, b := range contextBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
+			b.skipIfUnset(t)
+
 			ctx := t.Context()
 
 			b.set(t, "code:legacy", legacyCodePayload)
@@ -166,6 +199,8 @@ func TestRedisRotationReadsMissingContextAsEmpty(t *testing.T) {
 	for _, b := range contextBackends(t) {
 		for name, payload := range map[string]string{"absent": legacyRefreshPayload, "null": nullContextRefreshPayload} {
 			t.Run(b.name+"/"+name, func(t *testing.T) {
+				b.skipIfUnset(t)
+
 				ctx := t.Context()
 				key := "rt-legacy-" + name
 
@@ -191,13 +226,12 @@ func TestRedisRotationReadsMissingContextAsEmpty(t *testing.T) {
 
 // TestRedisStoreConformanceRealServer runs the shared suite against a real
 // Redis — cjson's encoder and decoder differ from miniredis' Lua ones on
-// the re-encoded replay and rotation payloads. Opt-in: set
-// OAUTH2_TEST_REDIS_ADDR (e.g. 127.0.0.1:6379) to a disposable server;
-// every run uses its own key prefix and deletes its keys.
+// the re-encoded replay and rotation payloads. Opt-in (envRedisAddr, set
+// by CI): every run uses its own key prefix and deletes its keys.
 func TestRedisStoreConformanceRealServer(t *testing.T) {
-	addr := os.Getenv("OAUTH2_TEST_REDIS_ADDR")
+	addr := os.Getenv(envRedisAddr)
 	if addr == "" {
-		t.Skip("set OAUTH2_TEST_REDIS_ADDR to run the conformance suite against a real Redis")
+		t.Skipf("set %s to run the conformance suite against a real Redis (opt-in)", envRedisAddr)
 	}
 
 	client := redis.NewClient(&redis.Options{Addr: addr})
