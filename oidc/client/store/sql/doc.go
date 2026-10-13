@@ -6,7 +6,7 @@
 // oidcclient.TransactionStore, the store of pending OpenID Connect logins,
 // for deployments whose instances share a database. Dialects supported:
 // PostgreSQL, MySQL, SQLite. Schema returns the DDL; Store.Migrate applies
-// it.
+// it, and every instance may run it at boot, concurrently.
 //
 // The table holds no secret: transactions are keyed by a hash of the
 // state, the browser binding is a keyed hash, and the nonce and PKCE

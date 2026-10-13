@@ -38,7 +38,8 @@
 //
 // # Upgrading
 //
-// Migrate only creates the tables that are missing. When a release adds
+// Migrate only creates the tables that are missing; every instance may run
+// it at boot, concurrently (see [Store.Migrate]). When a release adds
 // columns to existing tables — the issuer and extension_data columns of
 // codes and tokens, or the redirect_uri_omitted flag of codes, for
 // instance — MIGRATION.md lists the ALTER TABLE statements to apply,

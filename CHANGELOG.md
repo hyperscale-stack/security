@@ -947,6 +947,21 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   comparisons — and the token-family indexes are gone, since MySQL rejects
   their `CREATE INDEX IF NOT EXISTS`. `Schema` returns the same DDL for
   every dialect.
+- The `Migrate` of the SQL stores (`oauth2/store/sql`,
+  `oidc/client/store/sql`, `saml/sp/store/sql`) can run concurrently, as
+  every instance of a deployment starting at once does. On PostgreSQL,
+  concurrent `CREATE TABLE IF NOT EXISTS` of one table found it missing in
+  every session, and all but one then failed (`duplicate key value violates
+  unique constraint "pg_type_typname_nsp_index"`, SQLSTATE 23505). There
+  `Migrate` now runs in one transaction that first takes a transaction-level
+  advisory lock (`pg_advisory_xact_lock`), one per store module, documented
+  in each package: concurrent calls run one after the other, a waiting call
+  waits as long as its context allows, and a failed call creates nothing.
+  MySQL, MariaDB and SQLite (with the busy timeout the stores require)
+  already serialized the creation of a table, and run as before. The opt-in
+  suite of the new private module `internal/interop/sqlstores` checks the
+  four engines (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its
+  `compose.yaml`).
 - A failed family revocation after a refresh-token reuse the store detects
   is no longer swallowed: the SQL and Redis stores returned the bare
   `ErrRefreshTokenReused` whatever the revocation did. The error now also

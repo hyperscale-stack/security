@@ -34,6 +34,7 @@ released on its own cadence.
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
 | `./internal/interop/oidcstack` | `github.com/hyperscale-stack/security/internal/interop/oidcstack` | Our RP against our OP end to end, attacks included; opt-in real-backend runs of the client stores (private, tests only) |
 | `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak, shared stores, e2e helper (private, tests only) |
+| `./internal/interop/sqlstores` | `github.com/hyperscale-stack/security/internal/interop/sqlstores` | The three SQL stores on SQLite and, opt-in, real PostgreSQL / MySQL / MariaDB: concurrent `Migrate`, the oauth2 conformance suite, the MySQL upgrade statements (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -102,6 +103,10 @@ internal/interop/saml/  ← (tests only) saml/sp + saml/sp/store/{sql,redis}
                            + github.com/go-sql-driver/mysql
                            + github.com/redis/go-redis/v9
                            + github.com/alicebob/miniredis/v2
+internal/interop/sqlstores/ ← (tests only) oauth2/store/sql, oidc/client/store/sql,
+                           saml/sp/store/sql + oauth2 + oidc/client + saml/sp
+                           + modernc.org/sqlite + opt-in drivers
+                           github.com/jackc/pgx/v5, github.com/go-sql-driver/mysql
 
 (`oauth2/storage/memory` is a sub-package of the `oauth2` module;
 `oidc/client/storage/memory` and `oidc/client/storetest` are sub-packages
@@ -2249,3 +2254,17 @@ To migrate:
    relay the token must read the request's `Authorization` field. A custom
    `TokenVerifier` should build its result with
    `bearer.New(token).WithAuthenticated(...)`, which drops the token.
+
+### SQL stores: `Migrate` takes an advisory lock on PostgreSQL
+
+Nothing to migrate. On PostgreSQL, the `Migrate` of `oauth2/store/sql`,
+`oidc/client/store/sql` and `saml/sp/store/sql` now runs in one transaction
+that first takes a transaction-level advisory lock, so that every instance
+of a deployment can call it at boot: concurrent `CREATE TABLE IF NOT EXISTS`
+of one table used to fail (SQLSTATE 23505). A migration tool that applies
+`Schema` while instances may run `Migrate` should take the same lock, named
+in each package's documentation (`pg_advisory_xact_lock(-2450120788798466590)`
+for `oauth2/store/sql`, `(-3346565968272468758)` for `oidc/client/store/sql`,
+`(1266919442082856213)` for `saml/sp/store/sql`). An engine without
+`pg_advisory_xact_lock` cannot use `Migrate`: apply `Schema` with your own
+tool.

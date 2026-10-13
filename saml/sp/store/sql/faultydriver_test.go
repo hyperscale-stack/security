@@ -25,8 +25,17 @@ type faultyConn struct {
 func (c *faultyConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("faulty: no prepare")
 }
-func (c *faultyConn) Close() error              { return nil }
-func (c *faultyConn) Begin() (driver.Tx, error) { return nil, errors.New("faulty: no transactions") }
+func (c *faultyConn) Close() error { return nil }
+
+// Begin opens a transaction whose statements go through the connection,
+// failing as configured.
+func (c *faultyConn) Begin() (driver.Tx, error) { return faultyTx{}, nil }
+
+// faultyTx commits and rolls back nothing.
+type faultyTx struct{}
+
+func (faultyTx) Commit() error   { return nil }
+func (faultyTx) Rollback() error { return nil }
 
 func (c *faultyConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
 	if c.execErr != nil {

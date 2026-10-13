@@ -48,6 +48,7 @@ transitive dependencies.
 | `./internal/interop/oidcrp` | (private)                              | OIDC client interoperability tests (zitadel/oidc, headless Chrome)            |
 | `./internal/interop/oidcstack` | (private)                           | Our RP against our OP, attacks included; opt-in real PG/MySQL/Redis store runs |
 | `./internal/interop/saml`   | (private)                              | SAML interoperability tests (crewjam/saml IdP, Keycloak, shared stores, e2e helper) |
+| `./internal/interop/sqlstores` | (private)                           | The three SQL stores on SQLite and, opt-in, real PG/MySQL/MariaDB: concurrent `Migrate`, oauth2 conformance, MySQL upgrade |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
@@ -93,6 +94,8 @@ internal/interop/oidcstack/ ← (tests only) oidc/client + its stores
 internal/interop/saml/  ← (tests only) saml/sp + its stores + crewjam/saml + etree
                           + modernc sqlite + pgx + go-sql-driver/mysql
                           + go-redis + miniredis
+internal/interop/sqlstores/ ← (tests only) the three SQL stores + oauth2 + oidc/client
+                          + saml/sp + modernc sqlite + opt-in pgx, go-sql-driver/mysql
 ```
 
 The core MUST NOT depend on gRPC, ConnectRPC, JOSE libraries, OAuth2,

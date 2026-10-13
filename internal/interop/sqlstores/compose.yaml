@@ -1,0 +1,69 @@
+# Disposable databases for the opt-in real-backend tests of the SQL stores
+# (oauth2/store/sql, oidc/client/store/sql, saml/sp/store/sql); routine CI
+# runs the SQLite cases only. Images are pinned by digest — postgres:16 and
+# mysql:8.0 are the ones the other interop projects use — and every port is
+# bound to 127.0.0.1 on a non-default port, distinct from those projects',
+# so all of them can run at once. Nothing is persisted.
+#
+#   export SQLSTORES_DB_PASSWORD="$(openssl rand -hex 16)"
+#   docker compose -f internal/interop/sqlstores/compose.yaml up -d --wait
+#   cd internal/interop/sqlstores
+#   SQLSTORES_POSTGRES_DSN="postgres://sqlstores:$SQLSTORES_DB_PASSWORD@127.0.0.1:35432/sqlstores?sslmode=disable" \
+#   SQLSTORES_MYSQL80_DSN="root:$SQLSTORES_DB_PASSWORD@tcp(127.0.0.1:33306)/" \
+#   SQLSTORES_MYSQL84_DSN="root:$SQLSTORES_DB_PASSWORD@tcp(127.0.0.1:33307)/" \
+#   SQLSTORES_MARIADB_DSN="root:$SQLSTORES_DB_PASSWORD@tcp(127.0.0.1:33308)/" \
+#   go test -race -count=1 ./...
+#   docker compose -f internal/interop/sqlstores/compose.yaml down
+
+name: sqlstores-interop
+
+services:
+  postgres:
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    environment:
+      POSTGRES_USER: sqlstores
+      POSTGRES_PASSWORD: ${SQLSTORES_DB_PASSWORD:?set SQLSTORES_DB_PASSWORD}
+      POSTGRES_DB: sqlstores
+    ports:
+      - "127.0.0.1:35432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqlstores -d sqlstores"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mysql80:
+    image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SQLSTORES_DB_PASSWORD:?set SQLSTORES_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:33306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mysql84:
+    image: mysql:8.4@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SQLSTORES_DB_PASSWORD:?set SQLSTORES_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:33307:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mariadb:
+    image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    environment:
+      MARIADB_ROOT_PASSWORD: ${SQLSTORES_DB_PASSWORD:?set SQLSTORES_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:33308:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 5s
+      retries: 60

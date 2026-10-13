@@ -6,7 +6,7 @@
 // login transactions of a SAML Service Provider and its assertion replay
 // cache, shared by every instance of a deployment. Dialects supported:
 // PostgreSQL, MySQL, SQLite. Schema returns the DDL; Store.Migrate applies
-// it.
+// it, and every instance may run it at boot, concurrently.
 //
 // # Atomicity
 //
