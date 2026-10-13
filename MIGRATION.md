@@ -2122,3 +2122,49 @@ To migrate:
    `Name()` or `Principal().Subject()`; log `Name()`, never `Username()`.
 3. A custom authenticator consuming `basic.Authentication` with an empty
    user-id (API keys) keeps working: only `basic.Authenticator` refuses it.
+
+### `session`: strong keys, cookies bound to their name and purpose, an enforced absolute lifetime
+
+`session.NewCodec` accepted any key — an empty one let anyone forge a
+session — and cookies were not bound to their name or purpose. `Rotate`
+extended a session's lifetime indefinitely, a TTL lowered after issuance did
+not apply, and numbers in `Values` lost precision. The cookie format changes
+(v2), so **every existing session cookie is refused once: users sign in
+again** after the upgrade.
+
+| | Before | After |
+| --- | --- | --- |
+| `NewCodec` keys | any length, empty included | at least 32 random bytes each (`MinKeySize`); shorter keys and single-byte buffers → `ErrInvalidKeys` |
+| AES key | SHA-256(key) | HKDF-SHA256(key, label) |
+| Cookie value | `base64url(nonce ‖ ciphertext)` | `base64url(0x02 ‖ nonce ‖ ciphertext)`, AEAD-bound to version, cookie name and purpose (see the `Codec` documentation) |
+| Cookies issued before the upgrade | — | refused (`ErrNoSession` wrapping `ErrDecode`) |
+| `Codec.Encode` / `Codec.Decode` | exported | removed: only the `Manager` seals and opens cookies |
+| Same keys, another cookie name or `WithPurpose` | cookie accepted | refused |
+| Session deadline | the `ExpiresAt` in the cookie | the earlier of it and `CreatedAt + TTL` of the reading `Manager` |
+| `Rotate` | `ExpiresAt` = now + TTL | creation time and deadline kept; new ID and CSRF token |
+| `Touch` on a session at or past its deadline / on nil | cookie written (Max-Age 1) / panic | `ErrTokenExpired` / `ErrNoSession`, nothing written |
+| Numbers in `Values` after a round trip | `float64` (precision lost above 2^53) | `json.Number` (`Session.GetInt64`) |
+| Server-side revocation | impossible | `WithValidator` |
+
+To migrate:
+
+1. Generate each session key from a cryptographic source — `openssl rand
+   -base64 32`, decoded — and load it from your secret store; never a
+   passphrase. To rotate later, put the new key first and keep the previous
+   one until the longest TTL has elapsed.
+2. Deploy all instances at once, or accept that users are signed out while
+   old and new instances run side by side: a v1 instance cannot read v2
+   cookies and the other way round.
+3. Several applications or paths sharing keys and a cookie name: give each
+   its own `WithPurpose`.
+4. Call `Login` at sign-in (new session, new lifetime); `Rotate` within a
+   session (step-up) keeps the deadline. Expect `Touch` to fail with
+   `ErrTokenExpired` at the end of a session's life, and not to write.
+5. Search your code for type assertions on session values: `.(float64)` on a
+   decoded number now fails — and fails open if the code treats an
+   unreadable value as absent. Read integers with `s.GetInt64(key)` and
+   treat a present but unreadable value as a refusal.
+6. To revoke sessions server-side, register `session.WithValidator` (a
+   deny-list written at logout, or a per-user "valid since" time); wrap
+   `security.ErrUnavailable` when its store is down (503, nobody is signed
+   out).

@@ -6,6 +6,7 @@ package session_test
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 
 	"github.com/hyperscale-stack/security/session"
@@ -15,7 +16,16 @@ import (
 // encrypted cookie, Get replays it, Rotate changes the ID after a
 // privilege change, and Logout clears it.
 func Example() {
-	codec, err := session.NewCodec([]byte("a-32-byte-or-longer-secret-key!!"))
+	// A session key is 32 bytes or more from a cryptographic source — in
+	// production, read it from your secret store (e.g. a base64 value made
+	// with `openssl rand -base64 32`), never a passphrase. Keep the previous
+	// key after the new one to rotate without signing everyone out.
+	key := make([]byte, session.MinKeySize)
+	if _, err := rand.Read(key); err != nil {
+		panic(err)
+	}
+
+	codec, err := session.NewCodec(key)
 	if err != nil {
 		panic(err)
 	}

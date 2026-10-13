@@ -494,9 +494,11 @@ PKCE. Not supported, and refused where a provider could select them:
 ## Sessions
 
 - The session module is stateless: the whole session lives in an encrypted
-  cookie, there is no server-side session store. This covers the common
-  case without server state, but a session cannot be revoked server-side
-  before its cookie expires. A server-side store (Redis/SQL) is not shipped.
+  cookie, there is no server-side session store. A session can be revoked
+  before its cookie expires only through `session.WithValidator` checking a
+  store of the application's (no Redis/SQL store is shipped); otherwise a
+  copy of the cookie stays valid until its deadline, `Logout` deleting the
+  browser's copy only.
 - The session cookie is read through `httpsec.Carrier` (its
   `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
   no cookies: a cookie session does not authenticate gRPC or ConnectRPC

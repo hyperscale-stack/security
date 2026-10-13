@@ -7,6 +7,8 @@ package session
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -62,7 +64,9 @@ func newSession(now time.Time, ttl time.Duration) (*Session, error) {
 	}, nil
 }
 
-// IsExpired reports whether the session has passed its absolute expiry.
+// IsExpired reports whether the session has passed the ExpiresAt it
+// carries. The [Manager] also enforces CreatedAt + its TTL, whichever comes
+// first: rely on [Manager.Get], not on IsExpired alone.
 func (s *Session) IsExpired(now time.Time) bool {
 	return now.After(s.ExpiresAt)
 }
@@ -84,6 +88,44 @@ func (s *Session) GetString(key string) string {
 	v, _ := s.Values[key].(string)
 
 	return v
+}
+
+// GetInt64 returns the integer stored under key and whether there is one
+// that fits an int64: an int of any size set in this request, or the
+// json.Number it becomes once the cookie round-trips (numbers decode as
+// json.Number, so 64-bit IDs keep their precision — never assert float64 on
+// a decoded value). A float, a string or an out-of-range number reports
+// false: treat a value that is present but unreadable as a refusal, not as
+// absent.
+func (s *Session) GetInt64(key string) (int64, bool) {
+	switch v := s.Values[key].(type) {
+	case json.Number:
+		n, err := v.Int64()
+
+		return n, err == nil
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint:
+		return int64(v), v <= math.MaxInt64 //nolint:gosec // G115: checked
+	case uint64:
+		return int64(v), v <= math.MaxInt64 //nolint:gosec // G115: checked
+	}
+
+	return 0, false
 }
 
 // randomToken returns n cryptographically-random bytes, base64url-encoded

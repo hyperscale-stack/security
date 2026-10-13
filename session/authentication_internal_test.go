@@ -7,6 +7,7 @@ package session
 import (
 	"testing"
 
+	"github.com/hyperscale-stack/security"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -25,6 +26,7 @@ func TestAuthenticationValue(t *testing.T) {
 	assert.False(t, pending.IsAuthenticated())
 	assert.Nil(t, pending.Credentials(), "a session is never exposed as a credential")
 	assert.Equal(t, schemeName, pending.Name())
+	assert.Equal(t, security.AnonymousPrincipal, pending.Principal())
 	assert.Nil(t, pending.Authorities())
 
 	// Post-authentication.

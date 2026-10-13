@@ -1143,9 +1143,32 @@ session store to compromise or scale.
 
 - **Confidentiality + integrity** — the cookie payload is sealed with
   AES-256-GCM (AEAD): tampering fails decryption, it is not merely detected.
+- **Keys** — `NewCodec` requires keys of at least 32 bytes from a
+  cryptographic source (`openssl rand -base64 32`, `crypto/rand`) and
+  refuses shorter keys and buffers that were never filled; it cannot tell a
+  random key from a 32-character passphrase, so never use one. Each key is
+  expanded with HKDF-SHA256 under a label of its own (RFC 5869), so a secret
+  reused elsewhere never yields the same AES key.
+- **Binding** — the AEAD associated data binds every cookie to the format
+  version, the cookie name and an optional purpose (`WithPurpose`): a cookie
+  minted for another cookie name, application or path that shares the keys
+  never opens (NIST SP 800-38D).
 - **Key rotation** — the `Codec` accepts an ordered key list. New cookies
   are sealed with the first key; decryption is attempted against every key,
-  so a key can be retired gracefully.
+  so a key can be retired gracefully, and `Touch`/`Rotate` re-seal a cookie
+  with the active key.
+- **Absolute lifetime** — a session expires at the earlier of the
+  `ExpiresAt` its cookie carries and `CreatedAt + TTL` of the reading
+  `Manager`: lowering the TTL applies to issued cookies at once, raising it
+  extends none, and neither `Rotate` nor `Touch` ever extends a session.
+  The idle timeout slides only when `Touch` rewrites the cookie.
+- **Revocation** — the cookie is stateless, so `Logout` only deletes the
+  browser's copy. To revoke server-side — a stolen copy after logout, every
+  session of a user after a password change — register `WithValidator`
+  against a store of yours (a deny-list of session-ID fingerprints kept until
+  the session's deadline, or a "valid since" time per user); cache its
+  lookups. A validator error wrapping `security.ErrUnavailable` answers 503,
+  so an outage of that store never signs everyone out.
 - **Cookie attributes** — defaults are conservative: `Secure=true`,
   `HttpOnly=true`, `SameSite=Lax`. Disable `Secure` only for local plain-HTTP
   development.
@@ -1153,9 +1176,14 @@ session store to compromise or scale.
   `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
   the URL nor from a header named like the cookie: a link carrying a session
   value cannot log a browser into another account.
-- **Session fixation** — `Manager.Rotate` mints a fresh session ID; call it
-  immediately after a privilege change (login). The ID never appears raw in
-  a span — only a SHA-256 fingerprint.
+- **Session fixation** — call `Manager.Login` at sign-in: it mints a fresh
+  session (new ID, new CSRF token, new lifetime) and replaces the previous
+  one. `Manager.Rotate` mints a new ID and CSRF token within the same
+  session — after a step-up — and keeps its creation time and deadline. The
+  ID never appears raw in a span — only a SHA-256 fingerprint.
+- **Values** — numbers come back as `json.Number` (read integers with
+  `Session.GetInt64`): a 64-bit ID never loses precision through a float64.
+  Treat a value that is present but unreadable as a refusal, not as absent.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
   compares tokens in constant time. The session cookie being `HttpOnly`
   keeps the token out of reach of XSS.
@@ -1613,8 +1641,9 @@ span catalog.
       `Config.ClaimsSupported`, and the claim names end-users choose kept
       apart from them.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
-- [ ] Supply at least two session keys so rotation is possible without
-      invalidating live sessions.
+- [ ] Generate session keys of 32 bytes or more from a cryptographic source
+      and keep them in a secret store; keep the previous key after the new
+      one while you rotate, so rotation does not sign everyone out.
 - [ ] SAML: import IdP metadata through a trusted channel, or fetch it from
       the IdP's https metadata URL with a `MetadataSource` pinned to its
       entity ID; never take a metadata URL from a request. Widen the

@@ -496,6 +496,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   default), and `basic.PasswordRehasher`, an optional `UserLoader`
   capability through which the `Authenticator` upgrades a stored hash that
   `NeedsRehash` after a successful authentication.
+- `session`: `MinKeySize`, `MaxCookieSize`, `WithPurpose` (binds the cookies
+  of a Manager to a purpose), `WithValidator` (server-side revocation hook)
+  and `Session.GetInt64`.
 
 ### Changed
 
@@ -793,6 +796,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   empty user-id through for custom authenticators (`-u :KEY`).
   `Authentication.Name()` returns the authenticated user's subject, and
   `"basic"` before authentication (it returned the typed user-id). See
+  [MIGRATION.md](MIGRATION.md).
+- `session` cookie format v2 (breaking: **every existing session cookie is
+  invalidated once** — users sign in again): keys of at least 32 random
+  bytes (`NewCodec` refuses shorter keys and single-byte buffers), expanded
+  with HKDF-SHA256; AES-256-GCM associated data binding the cookie to the
+  format version, its name and the Manager's purpose; `Codec.Encode` and
+  `Codec.Decode` are no longer exported (only the `Manager` seals and opens
+  cookies). A session expires at the earlier of its `ExpiresAt` and
+  `CreatedAt + TTL` of the reading Manager; `Rotate` keeps the creation time
+  and deadline; `Touch` refuses a nil session (`ErrNoSession`) and a session
+  past its deadline (`ErrTokenExpired`). Numbers in `Values` decode as
+  `json.Number`. The session `Extractor` reports a validator error wrapping
+  `security.ErrUnavailable` instead of finding no session. See
   [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
@@ -1698,3 +1714,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   lenient base64 decoding skipped CR LF inside the credentials. Malformed
   credentials are now refused before any lookup, by the extractor and by
   the `Authenticator` alike.
+- `session.NewCodec` accepted an empty or low-entropy key and derived the
+  AES key with a bare SHA-256: an unset environment variable let anyone mint
+  a cookie for any subject, and a passphrase key could be brute-forced
+  offline from one cookie. Keys must now be at least 32 random bytes.
+- Session cookies carried no AEAD associated data: a cookie minted by one
+  manager (`shop_session`) opened under another cookie name
+  (`admin_session`) or for another purpose sharing the keys. Cookies are now
+  bound to the format version, their name and an optional purpose.
+- `Manager.Rotate` moved the session's expiry to now + TTL, so periodic
+  rotations kept a session alive forever, and only the expiry written in the
+  cookie was checked — lowering the TTL did not affect issued cookies. The
+  absolute lifetime `CreatedAt + TTL` is now enforced on every read and
+  never extended. `session.WithValidator` makes server-side revocation
+  possible (a stolen copy after logout).
+- Session values decoded numbers as float64: 1234567890123456789 came back
+  as 1234567890123456768, mapping a session to another account. Numbers now
+  decode as `json.Number`.
