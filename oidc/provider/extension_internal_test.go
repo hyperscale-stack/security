@@ -6,6 +6,8 @@ package oidcprovider
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -30,6 +32,30 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 			GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
 		})
 		require.ErrorIs(t, err, errClientMismatch)
+	}
+}
+
+// TestProtocolGuardsBehindTheCore: the provider re-checks the response type
+// and the nonce of an OpenID request although the core refuses such requests
+// first — the provider serves no implicit flow (its AuthorizeHandler refuses
+// AllowImplicit, and a handler built from Server() is not mounted for OpenID
+// requests), and the core bounds the nonce of every request — so only a
+// direct call reaches these guards.
+func TestProtocolGuardsBehindTheCore(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: responseTypeCode}))
+
+	err := checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: "token"})
+	require.Equal(t, oauth2.CodeUnsupportedResponseType, oauth2.IsCode(err))
+
+	err = checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: responseTypeCode, Nonce: "a\x00b"})
+	require.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err))
+
+	require.NoError(t, checkNonce(strings.Repeat("n", MaxNonceLength)))
+
+	for _, nonce := range []string{strings.Repeat("n", MaxNonceLength+1), "a\x00b", "\xff"} {
+		require.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(checkNonce(nonce)), "%q", nonce)
 	}
 }
 
