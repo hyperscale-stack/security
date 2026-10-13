@@ -16,20 +16,39 @@ import (
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
 	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// recorder is a tester that records the failure of a case and stops it,
-// so that the suite itself can be run against deliberately broken stores.
-type recorder struct {
-	failure string
-}
+// maxFatalfArgs bounds the arguments of the suite's Fatalf calls: the
+// generated mock matches variadic arguments one by one, so the recorder
+// declares one expectation per count.
+const maxFatalfArgs = 3
 
-func (r *recorder) Helper() {}
+// newRecorder returns the generated mock of tester, recording the failure
+// of a case and stopping it (runtime.Goexit) as testing.T.Fatalf would, so
+// that the suite itself can be run against deliberately broken stores.
+func newRecorder(t *testing.T, failure *string) *Mocktester {
+	t.Helper()
 
-func (r *recorder) Fatalf(format string, args ...any) {
-	r.failure = fmt.Sprintf(format, args...)
-	runtime.Goexit()
+	m := NewMocktester(t)
+	m.EXPECT().Helper().Maybe()
+
+	record := func(format string, args ...any) {
+		*failure = fmt.Sprintf(format, args...)
+		runtime.Goexit()
+	}
+
+	for n := 0; n <= maxFatalfArgs; n++ {
+		args := make([]any, n)
+		for i := range args {
+			args[i] = mock.Anything
+		}
+
+		m.EXPECT().Fatalf(mock.Anything, args...).Run(record).Maybe()
+	}
+
+	return m
 }
 
 // caseTimeout bounds one case run through a recorder.
@@ -43,7 +62,9 @@ func runRecorded(t *testing.T, newStore func() samlsp.Storage) map[string]string
 	failures := map[string]string{}
 
 	for _, c := range conformanceCases() {
-		r := &recorder{}
+		var failure string
+
+		r := newRecorder(t, &failure)
 		done := make(chan struct{})
 
 		go func() {
@@ -58,8 +79,8 @@ func runRecorded(t *testing.T, newStore func() samlsp.Storage) map[string]string
 			t.Fatalf("case %s did not finish within %s", c.name, caseTimeout)
 		}
 
-		if r.failure != "" {
-			failures[c.name] = r.failure
+		if failure != "" {
+			failures[c.name] = failure
 		}
 	}
 
@@ -82,7 +103,10 @@ var errPastExpiry = errors.New("record past its expiry")
 // for every immediate check of the suite, far shorter than retentionWait.
 const forgetWindow = 100 * time.Millisecond
 
-// flawedStore is the reference memory store with one flaw.
+// flawedStore is the reference memory store with one flaw. It is written
+// by hand: the generated samlsp mocks are in-package test files of samlsp,
+// absent from this package's test binary, and the self-test must live here
+// to reach conformanceCases.
 type flawedStore struct {
 	*memory.Store
 

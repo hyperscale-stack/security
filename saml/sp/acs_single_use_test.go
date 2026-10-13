@@ -23,38 +23,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// consumeCounter counts the consumptions a store is asked for, those it
-// grants, and the replay marks.
-type consumeCounter struct {
-	*memory.Store
-
-	calls, granted, marks atomic.Int32
+// storeCounts observes the store of a test: the calls recorded by its
+// generated mock, and the consumptions the store granted.
+type storeCounts struct {
+	mock    *samlsp.MockStorage
+	granted atomic.Int32
 }
 
-func (c *consumeCounter) ConsumeTransaction(ctx context.Context, id, bindingHash string) error {
-	c.calls.Add(1)
-
-	err := c.Store.ConsumeTransaction(ctx, id, bindingHash)
-	if err == nil {
-		c.granted.Add(1)
-	}
-
-	return err
-}
-
-func (c *consumeCounter) MarkAssertionUsed(ctx context.Context, key string, expiresAt time.Time) error {
-	c.marks.Add(1)
-
-	return c.Store.MarkAssertionUsed(ctx, key, expiresAt)
-}
-
-// newCountingEnv is newEnv over a consumeCounter.
-func newCountingEnv(t *testing.T, opts ...envOption) (*env, *consumeCounter) {
+// calls counts the recorded calls of method.
+func (c *storeCounts) calls(t *testing.T, method string) int {
 	t.Helper()
 
-	c := &consumeCounter{Store: memory.New()}
-	e := newEnv(t, append(opts, func(cfg *samlsp.Config, _ *samlsp.Connection) { cfg.Transactions, cfg.ReplayCache = c, c })...)
-	e.store = c.Store
+	n := 0
+
+	for _, call := range c.mock.Calls {
+		if call.Method == method {
+			n++
+		}
+	}
+
+	return n
+}
+
+// newCountingEnv is newEnv over the generated MockStorage, delegating to a
+// memory store and counting the consumptions it grants.
+func newCountingEnv(t *testing.T, opts ...envOption) (*env, *storeCounts) {
+	t.Helper()
+
+	mem := memory.New()
+	c := &storeCounts{}
+	c.mock = storageDouble(t, mem, func(m *samlsp.MockStorage) {
+		m.EXPECT().ConsumeTransaction(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, id, bindingHash string) error {
+				err := mem.ConsumeTransaction(ctx, id, bindingHash)
+				if err == nil {
+					c.granted.Add(1)
+				}
+
+				return err
+			}).Maybe()
+	})
+
+	e := newEnv(t, append(opts, withStorage(c.mock))...)
+	e.store = mem
 
 	return e, c
 }
@@ -138,8 +149,8 @@ func TestCompleteLogin_OneVerificationPerTransaction(t *testing.T) {
 			_, err = complete(e, lr, respond(t, lr.requestID, respOpts{}))
 			requireRejectedConsumed(t, e, lr, err, samlsp.ErrTransactionConsumed)
 
-			assert.EqualValues(t, 1, c.calls.Load(), "the later POSTs stop at the lookup")
-			assert.Zero(t, c.marks.Load())
+			assert.Equal(t, 1, c.calls(t, "ConsumeTransaction"), "the later POSTs stop at the lookup")
+			assert.Zero(t, c.calls(t, "MarkAssertionUsed"))
 
 			fresh := begin(t, e, samlsp.LoginOptions{})
 			res, err := complete(e, fresh, respond(t, fresh.requestID, respOpts{}))
@@ -255,7 +266,7 @@ func TestCompleteLogin_DoubleSubmit(t *testing.T) {
 
 	assert.Equal(t, 1, ok)
 	assert.Equal(t, 7, consumed)
-	assert.EqualValues(t, 1, c.marks.Load(), "one assertion recorded")
+	assert.Equal(t, 1, c.calls(t, "MarkAssertionUsed"), "one assertion recorded")
 }
 
 // TestCompleteLogin_OtherBrowsersNeverConsume: 31 browsers posting the
@@ -286,7 +297,7 @@ func TestCompleteLogin_OtherBrowsersNeverConsume(t *testing.T) {
 			"another browser: %v", err)
 	}
 
-	assert.EqualValues(t, 1, c.calls.Load(), "only the owner reaches the consumption")
+	assert.Equal(t, 1, c.calls(t, "ConsumeTransaction"), "only the owner reaches the consumption")
 }
 
 // TestCompleteLogin_ForcedForgeryBurnsTheLogin pins a residual risk (review
@@ -360,7 +371,7 @@ func TestCompleteLogin_LostConsumptionRaceIsFinal(t *testing.T) {
 			store.EXPECT().SaveTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.SaveTransaction).Once()
 			store.EXPECT().LookupTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.LookupTransaction).Once()
 
-			e := newEnv(t, func(c *samlsp.Config, _ *samlsp.Connection) { c.Transactions, c.ReplayCache = store, store })
+			e := newEnv(t, withStorage(store))
 			e.store = mem
 
 			lr := begin(t, e, samlsp.LoginOptions{})

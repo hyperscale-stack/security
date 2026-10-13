@@ -20,6 +20,7 @@ import (
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
 	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,47 +39,52 @@ func integrityHex(key []byte, rec *samlsp.TransactionRecord) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// tamperingStore models write access to the transaction store (a database
-// row or a Redis hash edited between BeginLogin and CompleteLogin): lookups
-// return the stored record edited by rewrite, while the store keeps the
+// tamper models write access to the transaction store (a database row or
+// a Redis hash edited between BeginLogin and CompleteLogin): lookups
+// return the stored record edited by its rewrite, while the store keeps the
 // genuine one.
-type tamperingStore struct {
-	*memory.Store
-
+type tamper struct {
 	mu      sync.Mutex
 	rewrite func(rec *samlsp.TransactionRecord)
 }
 
-func (s *tamperingStore) set(f func(rec *samlsp.TransactionRecord)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (tp *tamper) set(f func(rec *samlsp.TransactionRecord)) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
 
-	s.rewrite = f
+	tp.rewrite = f
 }
 
-func (s *tamperingStore) LookupTransaction(ctx context.Context, id string) (*samlsp.TransactionRecord, error) {
-	rec, err := s.Store.LookupTransaction(ctx, id)
+func (tp *tamper) get() func(rec *samlsp.TransactionRecord) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
 
-	s.mu.Lock()
-	f := s.rewrite
-	s.mu.Unlock()
-
-	if err == nil && f != nil {
-		f(rec)
-	}
-
-	return rec, err
+	return tp.rewrite
 }
 
-// newTamperingEnv is newEnv over a tamperingStore.
-func newTamperingEnv(t *testing.T) (*env, *tamperingStore) {
+// newTamperingEnv is newEnv over the generated MockStorage delegating to a
+// memory store, its lookups edited by the returned tamper.
+func newTamperingEnv(t *testing.T) (*env, *tamper) {
 	t.Helper()
 
-	store := &tamperingStore{Store: memory.New()}
-	e := newEnv(t, func(c *samlsp.Config, _ *samlsp.Connection) { c.Transactions, c.ReplayCache = store, store })
-	e.store = store.Store
+	mem := memory.New()
+	tp := &tamper{}
+	store := storageDouble(t, mem, func(m *samlsp.MockStorage) {
+		m.EXPECT().LookupTransaction(mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, id string) (*samlsp.TransactionRecord, error) {
+				rec, err := mem.LookupTransaction(ctx, id)
+				if f := tp.get(); err == nil && f != nil {
+					f(rec)
+				}
 
-	return e, store
+				return rec, err
+			}).Maybe()
+	})
+
+	e := newEnv(t, withStorage(store))
+	e.store = mem
+
+	return e, tp
 }
 
 // TestCompleteLogin_TransactionIntegrity: a store writer can neither
@@ -345,38 +351,6 @@ func TestCompleteLogin_TransactionKeyRotation(t *testing.T) {
 	require.NoError(t, err, "mutating the caller's slice after New changes nothing")
 }
 
-// consumeSpy records the arguments of ConsumeTransaction.
-type consumeSpy struct {
-	*memory.Store
-
-	mu            sync.Mutex
-	ids, bindings []string
-}
-
-func (s *consumeSpy) ConsumeTransaction(ctx context.Context, id, bindingHash string) error {
-	s.mu.Lock()
-	s.ids, s.bindings = append(s.ids, id), append(s.bindings, bindingHash)
-	s.mu.Unlock()
-
-	return s.Store.ConsumeTransaction(ctx, id, bindingHash)
-}
-
-// idRewritingStore returns every record with the ID field set to id.
-type idRewritingStore struct {
-	*consumeSpy
-
-	id string
-}
-
-func (s *idRewritingStore) LookupTransaction(ctx context.Context, id string) (*samlsp.TransactionRecord, error) {
-	rec, err := s.consumeSpy.LookupTransaction(ctx, id)
-	if err == nil {
-		rec.ID = s.id
-	}
-
-	return rec, err
-}
-
 // TestCompleteLogin_ConsumesWithThePresentedBinding: the store's own
 // binding comparison receives the digest of the cookie the browser
 // presented and the ID derived from the connection and the handle — not
@@ -386,21 +360,37 @@ func (s *idRewritingStore) LookupTransaction(ctx context.Context, id string) (*s
 func TestCompleteLogin_ConsumesWithThePresentedBinding(t *testing.T) {
 	t.Parallel()
 
-	spy := &consumeSpy{Store: memory.New()}
-	store := &idRewritingStore{consumeSpy: spy}
-	e := newEnv(t, func(c *samlsp.Config, _ *samlsp.Connection) { c.Transactions, c.ReplayCache = store, store })
-	e.store = spy.Store
+	// The store returns every record with the ID field of another
+	// transaction of the same browser (whose binding check would pass).
+	mem := memory.New()
+
+	var otherID string
+
+	store := storageDouble(t, mem, func(m *samlsp.MockStorage) {
+		m.EXPECT().LookupTransaction(mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, id string) (*samlsp.TransactionRecord, error) {
+				rec, err := mem.LookupTransaction(ctx, id)
+				if err == nil && otherID != "" {
+					rec.ID = otherID
+				}
+
+				return rec, err
+			}).Maybe()
+	})
+
+	e := newEnv(t, withStorage(store))
+	e.store = mem
 
 	lr := begin(t, e, samlsp.LoginOptions{})
-	other := begin(t, e, samlsp.LoginOptions{}, lr.cookie) // same browser: the store's check would pass
-	store.id = txKey(connID, other.relayState)
+	other := begin(t, e, samlsp.LoginOptions{}, lr.cookie)
+	otherID = txKey(connID, other.relayState)
 
 	_, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{txKey(connID, lr.relayState)}, spy.ids)
-	assert.Equal(t, []string{bindingKey(lr.cookie.Value)}, spy.bindings)
+	store.AssertNumberOfCalls(t, "ConsumeTransaction", 1)
+	store.AssertCalled(t, "ConsumeTransaction", mock.Anything, txKey(connID, lr.relayState), bindingKey(lr.cookie.Value))
 
-	_, err = spy.Store.LookupTransaction(context.Background(), txKey(connID, other.relayState))
+	_, err = mem.LookupTransaction(context.Background(), otherID)
 	require.NoError(t, err, "the transaction named by the returned ID field is not consumed")
 }
