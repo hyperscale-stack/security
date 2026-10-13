@@ -17,7 +17,7 @@ import (
 func TestAuthoritiesReturnsACopy(t *testing.T) {
 	t.Parallel()
 
-	auth := basic.New("alice", "pw").WithAuthenticated(&stubUser{subject: "alice"}, []string{"ROLE_USER"})
+	auth := basic.New("alice", "pw").WithAuthenticated(basic.NewMockPasswordUser(t), []string{"ROLE_USER"})
 
 	auth.Authorities()[0] = "ROLE_ADMIN"
 

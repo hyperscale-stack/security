@@ -13,6 +13,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // The UserLoader contract: an unavailable store is an outage (503), any
@@ -28,7 +29,10 @@ func TestAuthenticatorClassifiesLoaderErrors(t *testing.T) {
 		"unknown user":      {fmt.Errorf("lookup: %w", security.ErrInvalidCredentials), security.ErrorClassInvalidCredentials},
 		"plain error":       {errors.New("db: boom"), security.ErrorClassInvalidCredentials},
 	} {
-		a := basic.NewAuthenticator(&stubLoader{err: c.err}, newHasher(t))
+		loader := basic.NewMockUserLoader(t)
+		loader.EXPECT().LoadByUsername(mock.Anything, "alice").Return(nil, c.err).Once()
+
+		a := basic.NewAuthenticator(loader, newHasher(t))
 
 		_, err := a.Authenticate(context.Background(), basic.New("alice", "p4ss"))
 

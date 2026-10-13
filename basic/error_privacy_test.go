@@ -12,6 +12,7 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/basic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +23,10 @@ func TestAuthenticatorErrorDoesNotEchoTheUsername(t *testing.T) {
 
 	const typed = "Summer2026!-my-password"
 
-	a := basic.NewAuthenticator(&stubLoader{err: errors.New("store unreachable")}, newHasher(t))
+	loader := basic.NewMockUserLoader(t)
+	loader.EXPECT().LoadByUsername(mock.Anything, typed).Return(nil, errors.New("store unreachable")).Once()
+
+	a := basic.NewAuthenticator(loader, newHasher(t))
 
 	_, err := a.Authenticate(context.Background(), basic.New(typed, "x"))
 
