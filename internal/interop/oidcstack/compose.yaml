@@ -1,8 +1,10 @@
 # Disposable databases for the opt-in real-backend tests of the OpenID
-# Connect client's transaction stores (never used by routine CI). Images
-# are pinned by digest — the ones internal/interop/saml uses — and every
-# port is bound to 127.0.0.1 on a non-default port, distinct from that
-# project's, so both can run at once. Nothing is persisted.
+# Connect client's transaction stores. CI runs the same tests against
+# service containers of the same images (the "Store suites (real
+# backends)" job of .github/workflows/go.yml): bump the digests together.
+# Images are pinned by digest — the ones internal/interop/saml uses — and
+# every port is bound to 127.0.0.1 on a non-default port, distinct from
+# that project's, so both can run at once. Nothing is persisted.
 #
 #   export OIDCCLIENT_DB_PASSWORD="$(openssl rand -hex 16)"
 #   docker compose -f internal/interop/oidcstack/compose.yaml up -d --wait

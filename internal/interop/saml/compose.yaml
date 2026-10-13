@@ -1,6 +1,9 @@
 # Disposable services for the opt-in SAML interoperability and persistence
-# tests of this module (never used by routine CI). Images are pinned by
-# digest; credentials come from the environment and nothing is persisted.
+# tests of this module. CI runs the persistence tests against service
+# containers of the same database images (the "Store suites (real
+# backends)" job of .github/workflows/go.yml): bump the digests together;
+# Keycloak stays opt-in. Images are pinned by digest; credentials come from
+# the environment and nothing is persisted.
 #
 #   export SAMLSP_KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 #   export SAMLSP_DB_PASSWORD="$(openssl rand -hex 16)"

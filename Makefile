@@ -77,6 +77,15 @@ test: _build generate
 	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
 	@rm -f $(BUILD_DIR)/*.cover $(BUILD_DIR)/coverage.body
 
+# The store suites on real PostgreSQL, MySQL, MariaDB and Redis servers,
+# which `make test` runs on SQLite and miniredis only. The header of
+# scripts/test-backends.sh lists the variables naming the servers and
+# starts them locally; CI runs it in the "Store suites (real backends)"
+# job, against service containers.
+.PHONY: test-backends
+test-backends: generate
+	@./scripts/test-backends.sh
+
 # Sends build/coverage.out to Coveralls with goveralls (tools/goveralls). CI
 # passes the workflow token as COVERALLS_TOKEN (goveralls' GitHub Actions
 # setup).

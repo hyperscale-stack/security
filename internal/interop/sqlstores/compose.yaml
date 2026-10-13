@@ -1,9 +1,13 @@
 # Disposable databases for the opt-in real-backend tests of the SQL stores
-# (oauth2/store/sql, oidc/client/store/sql, saml/sp/store/sql); routine CI
-# runs the SQLite cases only. Images are pinned by digest — postgres:16 and
-# mysql:8.0 are the ones the other interop projects use — and every port is
-# bound to 127.0.0.1 on a non-default port, distinct from those projects',
-# so all of them can run at once. Nothing is persisted.
+# (oauth2/store/sql, oidc/client/store/sql, saml/sp/store/sql). CI runs the
+# same tests against service containers of the same images (the "Store
+# suites (real backends)" job of .github/workflows/go.yml): bump the
+# digests together. Images are pinned by digest — postgres:16 and mysql:8.0
+# are the ones the other interop projects use — and every port is bound to
+# 127.0.0.1 on a non-default port, distinct from those projects', so all
+# of them can run at once. Nothing is persisted. With the Redis of
+# internal/interop/oidcstack/compose.yaml, these servers also run
+# `make test-backends` (scripts/test-backends.sh).
 #
 #   export SQLSTORES_DB_PASSWORD="$(openssl rand -hex 16)"
 #   docker compose -f internal/interop/sqlstores/compose.yaml up -d --wait
