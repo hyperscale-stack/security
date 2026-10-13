@@ -53,13 +53,15 @@ future refactor phases.
   anything: consumed and expired codes, expired tokens and revoked
   families stay for the process lifetime. It is meant for development and
   tests only.
-- **PostgreSQL and MySQL are not exercised in CI** — CI runs the SQL
-  store on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
-  READ COMMITTED on PostgreSQL, InnoDB on MySQL) are argued from their
-  locking semantics. The opt-in suite of `internal/interop/sqlstores`
-  (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its `compose.yaml`)
-  runs the conformance suite, `Migrate` concurrently and the MySQL upgrade
-  statements on them, locally only.
+- **Tested servers** — CI runs the SQL store on SQLite and, in its
+  "Store suites (real backends)" job (`make test-backends`), on
+  PostgreSQL 16.15, MySQL 8.0.46 and 8.4.11 and MariaDB 11.4.13: the
+  conformance suite, concurrent `Migrate` and the MySQL upgrade statements
+  (`internal/interop/sqlstores`). The Redis store runs its conformance
+  suite on Redis 7.4.11. Other versions, compatible engines, replicas and
+  proxies are not tested: there the guarantees (row locks, READ COMMITTED
+  on PostgreSQL, InnoDB on MySQL) rest on the locking semantics the
+  package documentation describes.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`, the codes'
@@ -276,21 +278,23 @@ PKCE. Not supported, and refused where a provider could select them:
   (`memory.ErrFull`) until transactions expire or are consumed.
   `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
-  package documentation), and its PostgreSQL and MySQL guarantees are not
-  exercised in CI (SQLite only) — the opt-in runs of
-  `internal/interop/oidcstack` (`TestRealBackend*`, `compose.yaml`) cover
-  them, with Redis, locally. On Redis, a consumption acknowledged by a
-  primary that fails before replicating it can be lost in a failover,
-  making the transaction consumable again: single use then rests on the
-  provider's single-use authorization code and on the binding secret only
-  the user agent holds. The browser test of the binding cookie
-  (`internal/interop/oidcrp`, headless Chrome, `OIDC_BROWSER_TESTS=1`) and
-  the live discovery check against six real providers
-  (`OIDC_LIVE_DISCOVERY=1`) are opt-in and do not run in CI.
+  package documentation). CI (`make test-backends`) runs the conformance
+  suite and the replica races of the SQL and Redis stores on PostgreSQL
+  16.15, MySQL 8.0.46 (end of life since April 2026) and Redis 7.4.11
+  (`internal/interop/oidcstack`, `TestRealBackend*`), and the concurrent
+  `Migrate` of the SQL store also on MySQL 8.4.11 and MariaDB 11.4.13
+  (`internal/interop/sqlstores`); other versions are not tested. On Redis,
+  a consumption acknowledged by a primary that fails before replicating it
+  can be lost in a failover, making the transaction consumable again:
+  single use then rests on the provider's single-use authorization code
+  and on the binding secret only the user agent holds. The browser test of
+  the binding cookie (`internal/interop/oidcrp`, headless Chrome,
+  `OIDC_BROWSER_TESTS=1`) and the live discovery check against six real
+  providers (`OIDC_LIVE_DISCOVERY=1`) are opt-in and do not run in CI.
 - **Opt-in evidence** — the end-to-end suites (`make e2e-oidc`), the
-  conformance-suite runs (`make conformance`), the real-backend, browser
-  and live checks need Docker, Chrome, Tales or the Internet and run
-  locally only; [docs/oidc-conformance.md](docs/oidc-conformance.md) keeps
+  conformance-suite runs (`make conformance`), the browser and live checks
+  need Docker, Chrome, Tales or the Internet and run locally only;
+  [docs/oidc-conformance.md](docs/oidc-conformance.md) keeps
   their latest results and the release checklist.
 - **Provider metadata in the wild** — of the six providers of the pinned
   corpus, only Auth0 lists `none` in `token_endpoint_auth_methods_supported`:
@@ -436,8 +440,12 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Stores** — `saml/sp/storage/memory` never purges anything (development
   and tests only); `saml/sp/store/sql` ships no expiry job (its package
   documentation gives the cleanup statements). CI runs the stores on
-  SQLite and miniredis; PostgreSQL 16, MySQL 8.0 and Redis 7.4 are covered
-  by an opt-in suite (`internal/interop/saml/compose.yaml`).
+  SQLite and miniredis, and (`make test-backends`) their races,
+  conformance suite and payload round trip on PostgreSQL 16.15, MySQL
+  8.0.46 (end of life since April 2026) and Redis 7.4.11
+  (`internal/interop/saml`), and the concurrent `Migrate` of the SQL store
+  also on MySQL 8.4.11 and MariaDB 11.4.13 (`internal/interop/sqlstores`);
+  other versions are not tested.
 - **SP key rollover with Keycloak** — a Keycloak SAML client keeps one SP
   signing certificate: `AdditionalSigningCertificates` cannot announce the
   next key there, and the client's certificate must be replaced when the

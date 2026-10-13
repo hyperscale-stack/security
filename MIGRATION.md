@@ -32,9 +32,9 @@ released on its own cadence.
 | `./internal/integrations`   | `github.com/hyperscale-stack/security/internal/integrations`   | Cross-module end-to-end tests (private)                                              |
 | `./internal/interop/oidcop` | `github.com/hyperscale-stack/security/internal/interop/oidcop` | OpenID Provider interoperability tests with go-oidc + x/oauth2 (private, tests only) |
 | `./internal/interop/oidcrp` | `github.com/hyperscale-stack/security/internal/interop/oidcrp` | OIDC client interoperability tests against zitadel/oidc (private, tests only)        |
-| `./internal/interop/oidcstack` | `github.com/hyperscale-stack/security/internal/interop/oidcstack` | Our RP against our OP end to end, attacks included; opt-in real-backend runs of the client stores (private, tests only) |
+| `./internal/interop/oidcstack` | `github.com/hyperscale-stack/security/internal/interop/oidcstack` | Our RP against our OP end to end, attacks included; real-backend runs of the client stores (CI: `make test-backends`) (private, tests only) |
 | `./internal/interop/saml`   | `github.com/hyperscale-stack/security/internal/interop/saml`   | SAML interoperability tests: crewjam/saml IdP, Keycloak, shared stores, e2e helper (private, tests only) |
-| `./internal/interop/sqlstores` | `github.com/hyperscale-stack/security/internal/interop/sqlstores` | The three SQL stores on SQLite and, opt-in, real PostgreSQL / MySQL / MariaDB: concurrent `Migrate`, the oauth2 conformance suite, the MySQL upgrade statements (private, tests only) |
+| `./internal/interop/sqlstores` | `github.com/hyperscale-stack/security/internal/interop/sqlstores` | The three SQL stores on SQLite and real PostgreSQL / MySQL / MariaDB (CI: `make test-backends`): concurrent `Migrate`, the oauth2 conformance suite, the MySQL upgrade statements (private, tests only) |
 
 `oauth2/storage/memory` is a sub-package of the `oauth2` module (not a
 standalone module): it ships the in-memory `oauth2.Storage` used for dev
@@ -151,6 +151,7 @@ make lint         # golangci-lint (tools/golangci-lint) on every module with the
 make vuln         # govulncheck -test on every module, outside the workspace
 make tidy         # go work sync + go mod tidy on every module and tool + go work sync
 make check-modules # one go line, go.work complete, sync no-op, every module on its own (GOWORK=off)
+make test-backends # the store suites on real PostgreSQL/MySQL/MariaDB/Redis servers (Docker; scripts/test-backends.sh), run by CI
 make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 ```
 

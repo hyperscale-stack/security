@@ -19,7 +19,7 @@ and the OAuth 2.0 Security BCP (RFC 9700).
 | Unit and protocol tests     | `oidc/provider`, `oidc/client`, `oauth2`, `jwt`               | CI                           | every rule of the matrices below, with fakes                                                    |
 | Our client against our provider | `internal/interop/oidcstack`                              | CI                           | complete flows over HTTP, attacks and failures across both modules                              |
 | Independent implementations | `internal/interop/oidcop`, `internal/interop/oidcrp`          | CI                           | our provider through go-oidc + x/oauth2; our client against zitadel/oidc and real metadata      |
-| Real stores                 | `internal/interop/oidcstack` (`TestRealBackend*`)             | opt-in, local                | atomic consumption of login transactions on PostgreSQL 16, MySQL 8.0, Redis 7.4                |
+| Real stores                 | `internal/interop/oidcstack` (`TestRealBackend*`)             | CI (`make test-backends`)    | atomic consumption of login transactions on PostgreSQL 16, MySQL 8.0, Redis 7.4                |
 | Browser end to end          | `e2e/oidc` (Tales), `internal/interop/oidcrp` (chromedp)      | opt-in, local                | the two examples through HTTP and a real Chrome; SameSite behaviour of the binding cookie       |
 | OpenID Foundation suite     | `internal/interop/oidcstack/conformance` (`make conformance`) | opt-in, local                | the suite's OP and RP plans, every module's result pinned                                       |
 | Live                        | `OIDC_LIVE_DISCOVERY=1`, `make e2e-oidc-live`                 | opt-in, manual               | real providers' metadata; a real account's sign-in                                              |
@@ -309,7 +309,8 @@ The release process itself (versions, order, `make release-check`) is in
 [releasing.md](releasing.md). Before tagging `oidc/provider` or
 `oidc/client`, also check:
 
-1. CI is green (`make sync build test lint`): every test cited above.
+1. CI is green (`make sync build test lint`, `make test-backends`): every
+   test cited above.
 2. `make e2e-oidc` passes: 21 scenarios.
 3. `make conformance` exits 0: every OP module ends as listed above (one
    expected warning, one expected skip, four reviews whose images are those
@@ -318,8 +319,8 @@ The release process itself (versions, order, `make release-check`) is in
    show, the provider's error page for the two `redirect_uri` modules),
    every RP module as `testdata/rp-expected.json` pins.
 4. When the stores or the provider's key handling changed, the opt-in
-   runs too: the real backends (`internal/interop/oidcstack/compose.yaml`),
-   `OIDC_BROWSER_TESTS=1`, `OIDC_LIVE_DISCOVERY=1`.
+   runs too: `OIDC_BROWSER_TESTS=1`, `OIDC_LIVE_DISCOVERY=1` (the real
+   stores run in CI, item 1).
 5. Add a row below.
 
 A failure in 1 to 3 blocks the tag. A new expected failure, skip or

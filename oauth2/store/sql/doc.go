@@ -44,11 +44,11 @@
 //     MySQL truncates an over-long value — a subject, an extension's data —
 //     instead of refusing it.
 //
-// The CI of this module exercises SQLite only. The PostgreSQL and MySQL
-// guarantees rest on the locking described in [Store]; the opt-in suite of
-// internal/interop/sqlstores runs the conformance suite, concurrent
-// Migrate and the MySQL upgrade on PostgreSQL, MySQL and MariaDB servers
-// (see its compose.yaml).
+// The tests of this module run on SQLite. The PostgreSQL and MySQL
+// guarantees rest on the locking described in [Store], which the suite of
+// internal/interop/sqlstores checks in CI (make test-backends): the
+// conformance suite, concurrent Migrate and the MySQL upgrade, on
+// PostgreSQL 16, MySQL 8.0 and 8.4 and MariaDB 11.4.
 //
 // # Upgrading
 //

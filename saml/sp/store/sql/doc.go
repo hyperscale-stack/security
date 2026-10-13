@@ -54,10 +54,10 @@
 // or can be dropped and recreated with Migrate: it only holds logins in
 // progress, which fail once either way.
 //
-// The CI of this module exercises SQLite only; the PostgreSQL and MySQL
-// guarantees are argued from the statements above, and checked by the
-// opt-in suites of internal/interop/saml and internal/interop/sqlstores on
-// real servers.
+// The tests of this module run on SQLite. The PostgreSQL and MySQL
+// guarantees are argued from the statements above, and checked in CI
+// (make test-backends) by the suites of internal/interop/saml and
+// internal/interop/sqlstores on PostgreSQL, MySQL and MariaDB servers.
 //
 // # Cleanup
 //

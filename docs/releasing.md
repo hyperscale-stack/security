@@ -38,8 +38,10 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
 
 ## Checklist
 
-1. **master is green.** The `Go` and `govulncheck` workflows passed on the
-   commit to release, and no reachable advisory is open (see below).
+1. **master is green.** The `Go` workflow (both jobs: the build and test
+   of the workspace, and the store suites on real servers) and the
+   `govulncheck` workflow passed on the commit to release, and no reachable
+   advisory is open (see below).
 2. **Release commit** (a pull request to master):
    - `CHANGELOG.md`: turn `[Unreleased]` into `[1.0.0] - YYYY-MM-DD`.
    - Set every in-repo requirement of every module of this release to its new
@@ -147,6 +149,12 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
     `cd <module> && go get <module path>@<version>`, then `make tidy`. For a
     tool: `cd tools/<name> && GOWORK=off go get -tool <package>@<version>`.
     Then `make check-modules` and a pull request.
+- Container images: Dependabot updates neither the service images of the
+  `Store suites (real backends)` job (`.github/workflows/go.yml`) nor the
+  `compose.yaml` files under `internal/interop/`. They pin the same images
+  by digest: bump them together, by hand. `docker buildx imagetools inspect
+  <image>:<tag>` prints a tag's current digest, the image index that covers
+  every platform.
 
 ## Tests of published modules
 
@@ -166,8 +174,12 @@ These are not versioned in the repository; set them once:
   - untick "Allow GitHub Actions to create and approve pull requests";
   - require actions to be pinned to a full-length commit SHA.
 - Rulesets:
-  - `master`: pull request plus the required status check
-    `Build & test (workspace)`;
+  - `master`: pull request plus the required status checks
+    `Build & test (workspace)` and `Store suites (real backends)`, the
+    latter once it has proven stable (its first pull request run, three
+    re-runs and the first push to master, all green). A required check is
+    matched by its job name: renaming a job of `go.yml` needs the same
+    change here, or every pull request waits for a check that never comes;
   - tags `v*` and `**/v*`: creation, update and deletion restricted to
     maintainers.
 - Releases: enable release immutability, so the tag of a published release

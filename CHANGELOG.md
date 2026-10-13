@@ -147,7 +147,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     replay of its 14 captures in CI, including XSW1–XSW8, signature removal
     and comment injection on Apache Santuario output;
   - races across Service Provider instances on shared SQL and Redis stores:
-    SQLite and miniredis in CI, PostgreSQL, MySQL and Redis opt-in;
+    SQLite and miniredis in `make test`, PostgreSQL, MySQL and Redis in CI's
+    `make test-backends` (opt-in locally);
   - IdP metadata retrieval behind a Service Provider: key rollover, fetches
     driven by time only, entity pin, outbound refusals;
   - an opt-in browser suite (`make e2e`, Tales and Chrome) driving
@@ -251,7 +252,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   private and test-only, #86): the `oidc/client/storetest` conformance suite
   and a race of 120 consumers spread over four store instances — 20 rounds,
   a third with a wrong binding — on real PostgreSQL 16, MySQL 8.0 and
-  Redis 7.4 (digest-pinned `compose.yaml`), opt-in through
+  Redis 7.4 (digest-pinned `compose.yaml`), run by CI
+  (`make test-backends`) and opt-in locally through
   `OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`, `OIDCCLIENT_REDIS_ADDR`.
 - **End-to-end tests of the OpenID Connect stack** (`internal/interop/oidcstack`,
   #85, #86): our Relying Party against our Provider over HTTP — every
@@ -617,6 +619,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   with until now (HTTP/2 crashes, request smuggling, `crypto/tls`,
   `encoding/asn1`; govulncheck finds none on go1.27.2). CI runs the version
   `go.work` names. See [MIGRATION.md](MIGRATION.md).
+- **Store suites on real servers in CI**: a second job of the Go
+  workflow, `Store suites (real backends)`, runs the real-backend tests of
+  `internal/interop/sqlstores`, `internal/interop/oidcstack`,
+  `internal/interop/saml` and `oauth2/store/redis` with the race detector,
+  against PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4 and Redis 7.4
+  service containers pinned by the digests of the compose files. They used
+  to run locally only, so the PostgreSQL and MySQL locking the SQL stores
+  rely on was never checked by CI. `make test-backends`
+  (`scripts/test-backends.sh`) runs them wherever the servers are: it
+  fails when a variable is missing, when a suite runs no test, and when a
+  test is skipped — a server the run does not provide. The SAML
+  shared-store tests and the `oauth2/store/redis` legacy-payload tests now
+  report an unset real server as skipped instead of leaving it out.
 - **Module and release checks**: `make check-modules` (run by CI) fails
   unless `go.work` and every `go.mod` share one `go` line, `go.work` lists
   every module, `go work sync` changes nothing and every module builds, vets
@@ -958,10 +973,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   in each package: concurrent calls run one after the other, a waiting call
   waits as long as its context allows, and a failed call creates nothing.
   MySQL, MariaDB and SQLite (with the busy timeout the stores require)
-  already serialized the creation of a table, and run as before. The opt-in
-  suite of the new private module `internal/interop/sqlstores` checks the
-  four engines (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its
-  `compose.yaml`).
+  already serialized the creation of a table, and run as before. The suite
+  of the new private module `internal/interop/sqlstores` checks the four
+  engines (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its
+  `compose.yaml`), in CI too (`make test-backends`).
 - The `oauth2.Storage` contract no longer says that a failed
   `SaveTokenPair` or `RotateRefreshToken` persists nothing (I3). When the
   acknowledgement of a commit is lost, the call fails although all its

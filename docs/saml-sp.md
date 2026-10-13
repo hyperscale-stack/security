@@ -530,7 +530,7 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | Pinned adversarial corpus | `saml/sp/testdata/corpus`, `TestCorpus` | 390 entries over 360 signed responses: wrong issuer, audience, destination, recipient and InResponseTo; the received location and the origin of the POST; time windows; statuses; missing fields; untrusted keys and `KeyInfo` without certificate; XSW1–XSW8 and wrapping variants; duplicate IDs; substitution; algorithms; malformed XML; size and decompression limits; parser differentials; records altered in the store. Each entry pins the full refusal message, or the exact identity, and whether the login was consumed. `TestCorpusCoversEveryRule` requires every refusal rule of the sources in some entry |
 | crewjam/saml IdP | `internal/interop/saml` | SSO over TLS, metadata exchange both ways, request signatures checked by an independent verifier, IdP and SP key rollover, SHA-1 policy, two IdPs and two connections, cross-tenant substitution, replay, concurrent instances |
 | Keycloak replays | `internal/interop/saml/testdata/keycloak-*` | 15 pinned Keycloak responses (14 from 26.7.4, one from 26.0.7); XSW1–XSW8, signature removal, tampering and comment injection applied to the signed 26.7.4 ones |
-| Shared stores | `internal/interop/saml` | three SP instances with their own handles on a SQLite file (WAL) and on miniredis; 16 contenders per race, held at the store until all arrive; the conformance suite, retention over time included |
+| Shared stores | `internal/interop/saml` | three SP instances with their own handles on a SQLite file (WAL) and on miniredis and, in the "Store suites (real backends)" job (`make test-backends`), on PostgreSQL 16, MySQL 8.0 (also with `clientFoundRows`, and as a latin1 database under a non-strict `sql_mode`) and Redis 7.4; 16 contenders per race, held at the store until all arrive; the conformance suite, retention over time included |
 | Metadata retrieval | `internal/interop/saml` | a `MetadataSource` behind a connection: key rollover, a hung refresh that never delays a login, fetches driven by time only, entity pin, policy refusals |
 
 Regenerate the corpus after a deliberate change with
@@ -559,8 +559,9 @@ cd internal/interop/saml
 # "-args -keycloak.fixture", against a Keycloak 26.0.7.
 SAMLSP_KEYCLOAK_URL=http://127.0.0.1:18080 go test -count=1 -run '^TestKeycloakLive$' .
 
-# Shared stores on real servers (MySQL also as a latin1 database under a
-# non-strict sql_mode, which used to alter non-ASCII payloads):
+# Shared stores on real servers, which CI runs too (make test-backends);
+# MySQL also as a latin1 database under a non-strict sql_mode, which used
+# to alter non-ASCII payloads. A backend whose variable is unset is skipped:
 SAMLSP_REDIS_ADDR=127.0.0.1:16379 \
 SAMLSP_POSTGRES_DSN="postgres://samlsp:$SAMLSP_DB_PASSWORD@127.0.0.1:15432/samlsp?sslmode=disable" \
 SAMLSP_MYSQL_DSN="root:$SAMLSP_DB_PASSWORD@tcp(127.0.0.1:13306)/" \
@@ -604,9 +605,9 @@ fixes:
 | crewjam/saml IdP | v0.5.1 | CI, in process | pass |
 | Keycloak (Apache Santuario) | 26.7.4 (`sha256:82a77884…`) | live, K1–K8 | 17/17 subtests pass |
 | Chrome | 154.0.8037.98 | Tales v0.1.0-rc.23, `make e2e` | 16 scenarios pass |
-| PostgreSQL | 16 (`sha256:ca0bd484…`) | conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
-| MySQL | 8.0 (`sha256:7dcddc01…`), with and without `clientFoundRows`, and as a latin1 database under `sql_mode=''` | conformance suite, races (10 rounds, 16 contenders, race detector) and a non-ASCII `AppState` round trip | pass |
-| Redis | 7.4 (`sha256:4fa24486…`), `noeviction` | conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
+| PostgreSQL | 16 (`sha256:ca0bd484…`) | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
+| MySQL | 8.0 (`sha256:7dcddc01…`), with and without `clientFoundRows`, and as a latin1 database under `sql_mode=''` | CI (`make test-backends`): conformance suite, races (10 rounds, 16 contenders, race detector) and a non-ASCII `AppState` round trip | pass |
+| Redis | 7.4 (`sha256:4fa24486…`), `noeviction` | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
 
 What the Keycloak run established:
 - Keycloak applies the client's NameID format only when the AuthnRequest

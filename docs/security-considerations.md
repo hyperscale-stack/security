@@ -702,10 +702,12 @@ MySQL tables use InnoDB, Redis is a standalone server or a Sentinel primary
 (not Cluster) running 6.0 or later with `maxmemory-policy noeviction`, no
 family row or key is deleted before it expires, and durability is the
 backend's: a revocation acknowledged by a primary that fails before
-persisting or replicating it can be lost in a failover. Only SQLite is
-exercised in CI; the PostgreSQL and MySQL guarantees rest on their locking
-semantics, which the opt-in suite of `internal/interop/sqlstores` checks on
-PostgreSQL, MySQL and MariaDB servers.
+persisting or replicating it can be lost in a failover. CI checks these
+guarantees on SQLite and, in its "Store suites (real backends)" job
+(`make test-backends`), on PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4
+(`internal/interop/sqlstores`) and Redis 7.4 (the conformance suite of
+`oauth2/store/redis`). On other versions and engines they rest on the
+locking semantics above.
 
 ### Offline JWT access tokens
 
