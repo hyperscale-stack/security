@@ -114,6 +114,9 @@ func TestSQLStoreReportsErrorsOnClosedDB(t *testing.T) {
 	_, err = store.ConsumeAuthorizationCode(ctx, "h")
 	require.Error(t, err)
 
+	// Migrate runs its statements one by one on SQLite: the first fails.
+	require.ErrorContains(t, store.Migrate(ctx), "sqlstore: migrate: ")
+
 	require.Error(t, store.SaveTokenPair(ctx, testPair("h", "f", time.Minute)))
 	require.Error(t, store.RotateRefreshToken(ctx, "h", testPair("next", "f", time.Minute)))
 	require.ErrorIs(t, store.RevokeRefreshFamily(ctx, "f"), oauth2.ErrTokenFamilyRevocationFailed)

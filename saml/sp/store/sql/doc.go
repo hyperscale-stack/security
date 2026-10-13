@@ -6,7 +6,7 @@
 // login transactions of a SAML Service Provider and its assertion replay
 // cache, shared by every instance of a deployment. Dialects supported:
 // PostgreSQL, MySQL, SQLite. Schema returns the DDL; Store.Migrate applies
-// it.
+// it, and every instance may run it at boot, concurrently.
 //
 // # Atomicity
 //
@@ -36,7 +36,9 @@
 //   - SQLite: one writer at a time; set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option).
 //   - Every column holds ASCII (hex digests, ASCII-only JSON, integers): no
-//     character set, collation or sql_mode requirement.
+//     character set, collation or sql_mode requirement. The keys are 64
+//     lowercase hex digits, validated at every call: no collation takes one
+//     key for another.
 //   - Give the SP a database user limited to the two tables: each record
 //     carries a MAC under samlsp.Config.TransactionKeys, so the database is
 //     trusted for availability and single consumption only.
@@ -53,7 +55,9 @@
 // progress, which fail once either way.
 //
 // The CI of this module exercises SQLite only; the PostgreSQL and MySQL
-// guarantees are argued from the statements above.
+// guarantees are argued from the statements above, and checked by the
+// opt-in suites of internal/interop/saml and internal/interop/sqlstores on
+// real servers.
 //
 // # Cleanup
 //

@@ -28,17 +28,32 @@
 //     error fails the operation, closed.
 //   - Lookups must reach the primary database: a replica DSN or a
 //     read/write-splitting proxy could answer from before a revocation.
-//   - Text is stored as UTF-8 and compared exactly: a PostgreSQL database
-//     in the UTF8 encoding; MySQL tables in utf8mb4 with a strict sql_mode,
-//     since a non-strict MySQL truncates an over-long value — a subject, an
-//     extension's data — instead of refusing it.
+//   - Keys are compared byte for byte. The statements compare the code and
+//     token hashes and the token-family IDs, and no other column. MySQL
+//     and MariaDB compare text under the column's collation —
+//     case- and accent-insensitive by default, trailing spaces ignored by
+//     every PAD SPACE one, utf8mb4_bin included — so [Schema] declares
+//     these columns VARBINARY there; a database created before needs the
+//     statements MIGRATION.md lists. The interactive mysql client shows
+//     them in hexadecimal (--binary-as-hex, on by default in interactive
+//     mode since 8.0.19): read them with CAST(family_id AS CHAR). PostgreSQL
+//     compares them byte for byte under the database's default collation,
+//     which is deterministic, and SQLite under its BINARY collation.
+//   - Text is stored as UTF-8: a PostgreSQL database in the UTF8 encoding;
+//     MySQL tables in utf8mb4 with a strict sql_mode, since a non-strict
+//     MySQL truncates an over-long value — a subject, an extension's data —
+//     instead of refusing it.
 //
-// The CI of this module exercises SQLite only: the PostgreSQL and MySQL
-// guarantees rest on the locking described in [Store].
+// The CI of this module exercises SQLite only. The PostgreSQL and MySQL
+// guarantees rest on the locking described in [Store]; the opt-in suite of
+// internal/interop/sqlstores runs the conformance suite, concurrent
+// Migrate and the MySQL upgrade on PostgreSQL, MySQL and MariaDB servers
+// (see its compose.yaml).
 //
 // # Upgrading
 //
-// Migrate only creates the tables that are missing. When a release adds
+// Migrate only creates the tables that are missing; every instance may run
+// it at boot, concurrently (see [Store.Migrate]). When a release adds
 // columns to existing tables — the issuer and extension_data columns of
 // codes and tokens, or the redirect_uri_omitted flag of codes, for
 // instance — MIGRATION.md lists the ALTER TABLE statements to apply,
@@ -66,7 +81,10 @@
 // Never delete a family row before its expires_at. A missing row fails
 // closed for lookups — the store treats the tokens of an unknown family as
 // revoked — but the next issuance into a family whose revoked row is gone
-// records the family active again, reviving its tokens.
+// records the family active again, reviving its tokens. Nor a token row:
+// a consumed refresh token deleted early reads as an unknown token when
+// presented again, so its reuse is refused but no longer detected, and
+// its family is not revoked.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2

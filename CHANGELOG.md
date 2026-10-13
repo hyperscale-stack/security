@@ -946,7 +946,32 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the former `BOOLEAN NOT NULL DEFAULT 0` column and the store's integer
   comparisons — and the token-family indexes are gone, since MySQL rejects
   their `CREATE INDEX IF NOT EXISTS`. `Schema` returns the same DDL for
-  every dialect.
+  every dialect but for MySQL's key columns (see Security).
+- The `Migrate` of the SQL stores (`oauth2/store/sql`,
+  `oidc/client/store/sql`, `saml/sp/store/sql`) can run concurrently, as
+  every instance of a deployment starting at once does. On PostgreSQL,
+  concurrent `CREATE TABLE IF NOT EXISTS` of one table found it missing in
+  every session, and all but one then failed (`duplicate key value violates
+  unique constraint "pg_type_typname_nsp_index"`, SQLSTATE 23505). There
+  `Migrate` now runs in one transaction that first takes a transaction-level
+  advisory lock (`pg_advisory_xact_lock`), one per store module, documented
+  in each package: concurrent calls run one after the other, a waiting call
+  waits as long as its context allows, and a failed call creates nothing.
+  MySQL, MariaDB and SQLite (with the busy timeout the stores require)
+  already serialized the creation of a table, and run as before. The opt-in
+  suite of the new private module `internal/interop/sqlstores` checks the
+  four engines (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its
+  `compose.yaml`).
+- The `oauth2.Storage` contract no longer says that a failed
+  `SaveTokenPair` or `RotateRefreshToken` persists nothing (I3). When the
+  acknowledgement of a commit is lost, the call fails although all its
+  writes may have been applied — never a part of them — and a client
+  retrying the refresh then presents a consumed token: a reuse, which
+  revokes the family (`docs/security-considerations.md`, "Lost responses
+  look like theft"). A test of the SQL store pins it. The documentation now
+  also says that a consumed refresh token evicted from Redis, or deleted
+  from SQL before its `expires_at`, loses its reuse detection: presented
+  again, it reads as an unknown token and revokes nothing.
 - A failed family revocation after a refresh-token reuse the store detects
   is no longer swallowed: the SQL and Redis stores returned the bare
   `ErrRefreshTokenReused` whatever the revocation did. The error now also
@@ -1802,3 +1827,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   for it on a `Manager` of its own (cookie `__Host-signin`), cross-origin
   posts are refused (`http.CrossOriginProtection`) and the credentials go
   through `basic.Authenticator`.
+- The OAuth2 SQL store (`oauth2/store/sql`) compares its keys byte for byte
+  on MySQL and MariaDB. Those engines compared the token-family IDs and the
+  code and token hashes under the collation of their columns, and the
+  default collations ignore letter case and accents and take canonically
+  equivalent forms (and `ß` / `ss`) for one character; MariaDB's, like
+  every PAD SPACE collation (`utf8mb4_bin` included), also ignore trailing
+  spaces. Two families whose IDs differed only that way were one: revoking
+  one revoked the other, and a pair issued into one joined the other's
+  record (the family isolation, I7, of `oauth2.Storage`). The library's own
+  family IDs and hashes never differ that way; those of custom grants can.
+  `Schema(sqlstore.MySQL)` declares the six key columns `VARBINARY`; an
+  existing MySQL database is converted with the statements of MIGRATION.md,
+  which also record revoked the families such a merge left without a
+  record, so that none is revived.
+  `storetest.RunConformance` checks that every store compares its keys byte
+  for byte (`KeysAreComparedExactly`).

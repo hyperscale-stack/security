@@ -22,9 +22,10 @@ import (
 // and ignored. It creates no index — MySQL has no CREATE INDEX IF NOT
 // EXISTS — see the package documentation for the one on expires_at.
 //
-// The statement is idempotent (CREATE TABLE IF NOT EXISTS). Production
-// deployments typically run it through a migration tool rather than via
-// [Store.Migrate].
+// The statement is idempotent (CREATE TABLE IF NOT EXISTS) and valid
+// inside a PostgreSQL transaction block, where [Store.Migrate] runs it.
+// Production deployments typically run it through a migration tool rather
+// than via Migrate.
 func Schema(_ Dialect) []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS oidc_client_transactions (
@@ -45,13 +46,57 @@ func Schema(_ Dialect) []string {
 	}
 }
 
-// Migrate applies [Schema] to the store's database. It is safe to call
-// repeatedly: it creates the table when missing and never alters it.
+// Migrate applies [Schema] to the store's database: it creates the table
+// when missing and never alters it.
+//
+// It is safe to call repeatedly, and concurrently — every instance of a
+// deployment starting at once. On PostgreSQL, where concurrent CREATE
+// TABLE IF NOT EXISTS of one table can fail, Migrate runs in one
+// transaction that first takes the transaction-level advisory lock
+// -3346565968272468758 (pg_advisory_xact_lock; see [Postgres]): concurrent
+// calls run one after the other, and a failed call creates nothing. A
+// waiting call waits as long as ctx — and the server's lock_timeout or
+// statement_timeout — allows: pass a deadline; the driver cancels the
+// server-side wait when ctx ends. A migration tool applying [Schema]
+// concurrently with Migrate should take the same lock. An engine without
+// pg_advisory_xact_lock cannot use Migrate: apply Schema with your own
+// tool. MySQL serializes the creation of a table on the metadata lock of
+// its name, and SQLite on its write lock — given the busy timeout the
+// package documentation requires, without which a concurrent call fails
+// with SQLITE_BUSY.
 func (s *Store) Migrate(ctx context.Context) error {
+	if lock := s.dialect.migrationLock(); lock != "" {
+		return s.migrateLocked(ctx, lock)
+	}
+
 	for _, stmt := range Schema(s.dialect) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("sqlstore: migrate: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// migrateLocked applies [Schema] in one transaction that first runs lock,
+// the dialect's migration lock: the transaction holds the lock until it
+// commits the table, or rolls everything back.
+func (s *Store) migrateLocked(ctx context.Context, lock string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlstore: migrate: begin: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+	for _, stmt := range append([]string{lock}, Schema(s.dialect)...) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("sqlstore: migrate: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlstore: migrate: commit: %w", err)
 	}
 
 	return nil

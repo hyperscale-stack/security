@@ -37,7 +37,8 @@ type Factory func() oauth2.Storage
 // Besides single-use codes — retained once consumed, so a replay is told
 // from an unknown code — and atomic rotation, it checks the token-family
 // invariants the [oauth2.Storage] godoc states — visibility, gating, atomic
-// writes, reuse, idempotence, isolation — sequentially and under races,
+// writes, reuse, idempotence, isolation, keys compared byte for byte —
+// sequentially and under races,
 // through the public API only, and drives the real authorization_code
 // grant to check that a replayed code revokes the tokens it issued. What
 // it cannot observe stays with each store's own tests: an injected backend
@@ -69,6 +70,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"FamilyRevokeThenRotate", testFamilyRevokeThenRotate},
 		{"FamilyRevokeIsIdempotent", testFamilyRevokeIsIdempotent},
 		{"FamilyRevokeIsolation", testFamilyRevokeIsolation},
+		{"KeysAreComparedExactly", testKeysAreComparedExactly},
 		{"FamilyRevokeRejectsEmptyID", testFamilyRevokeRejectsEmptyID},
 		{"FamilyIDLengthLimit", testFamilyIDLengthLimit},
 		{"FamilyFailedRotationPersistsNothing", testFamilyFailedRotationPersistsNothing},

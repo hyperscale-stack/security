@@ -65,7 +65,9 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
    git push origin oauth2/store/sql/v1.0.0
    ```
 
-   `make release-check` refuses:
+   `make release-check` runs `scripts/release-check.sh`, which needs `git`,
+   `go` and `jq` on the `PATH` (GitHub runners have them; without `jq` the
+   script stops with "jq is required"). It refuses:
    - a malformed or non-v1 tag;
    - a module that is never released;
    - a placeholder requirement (`v0.0.0-00010101000000-000000000000`);

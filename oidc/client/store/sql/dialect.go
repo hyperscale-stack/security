@@ -11,9 +11,10 @@ import (
 )
 
 // Dialect abstracts the few SQL differences the store cares about: the
-// parameter-placeholder style, the locking read of Consume and the
-// transaction isolation level. The store writes every query with "?"
-// placeholders and rebinds them through the dialect.
+// parameter-placeholder style, the locking read of Consume, the
+// transaction isolation level and the serialization of concurrent
+// migrations. The store writes every query with "?" placeholders and
+// rebinds them through the dialect.
 type Dialect interface {
 	// Name returns a stable identifier ("postgres", "mysql", "sqlite").
 	Name() string
@@ -24,7 +25,20 @@ type Dialect interface {
 	lockRow() string
 	// txOptions are the options of the Consume transaction.
 	txOptions() *sql.TxOptions
+	// migrationLock is the statement [Store.Migrate] runs first, in the
+	// transaction creating the table, to serialize concurrent migrations;
+	// "" when the engine serializes the creation of a table itself and
+	// Migrate runs its statement on its own.
+	migrationLock() string
 }
+
+// migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
+// the first eight bytes of SHA-256 of
+// "github.com/hyperscale-stack/security/oidc/client/store/sql.Migrate",
+// big-endian, as a bigint. Advisory locks are local to a database, which
+// the stores of other modules may share: each store module has a key of
+// its own, so that their migrations never wait for one another.
+const migrationLockKey = "-3346565968272468758"
 
 // selectTransaction reads a transaction by its state hash.
 const selectTransaction = `SELECT state_hash, binding_hash, connection_id, issuer, client_id, redirect_uri,
@@ -35,6 +49,8 @@ const selectTransaction = `SELECT state_hash, binding_hash, connection_id, issue
 // at READ COMMITTED whatever the server default, so that its locking read
 // waits for a concurrent consumer and then sees its deletion, where
 // REPEATABLE READ or SERIALIZABLE would abort with a serialization failure.
+// [Store.Migrate] takes the transaction-level advisory lock
+// -3346565968272468758 (pg_advisory_xact_lock) before creating the table.
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The table must be
@@ -80,12 +96,25 @@ func (postgres) txOptions() *sql.TxOptions {
 	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
 }
 
+// migrationLock takes a transaction-level advisory lock: concurrent
+// CREATE TABLE IF NOT EXISTS of one table can both find it missing, and
+// the loser then fails on the unique index of the catalog's row types. A
+// transaction-level lock is released by the COMMIT or ROLLBACK ending the
+// migration, whatever becomes of the connection afterwards.
+func (postgres) migrationLock() string {
+	return "SELECT pg_advisory_xact_lock(" + migrationLockKey + ")"
+}
+
 type mysql struct{}
 
 func (mysql) Name() string              { return "mysql" }
 func (mysql) rebind(q string) string    { return q }
 func (mysql) lockRow() string           { return selectTransaction + " FOR UPDATE" }
 func (mysql) txOptions() *sql.TxOptions { return nil }
+
+// migrationLock is empty: MySQL commits every DDL statement on its own,
+// and serializes the creation of a table on the metadata lock of its name.
+func (mysql) migrationLock() string { return "" }
 
 type sqlite struct{}
 
@@ -97,3 +126,8 @@ func (sqlite) rebind(q string) string { return q }
 func (sqlite) lockRow() string { return selectTransaction }
 
 func (sqlite) txOptions() *sql.TxOptions { return nil }
+
+// migrationLock is empty: SQLite's single writer serializes the creation
+// of the table, and a statement prepared before a concurrent change of the
+// schema is prepared again.
+func (sqlite) migrationLock() string { return "" }

@@ -67,3 +67,15 @@ func TestDialectFamilyStatements(t *testing.T) {
 		FROM oauth2_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
 		postgres{}.rebind(postgres{}.lockRefresh()))
 }
+
+// TestDialectKeyType: the key columns are binary strings on MySQL, which
+// compares them byte for byte whatever the table's collation, and VARCHAR
+// elsewhere — PostgreSQL and SQLite compare those byte for byte already.
+func TestDialectKeyType(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "VARCHAR(64)", postgres{}.keyType(64))
+	assert.Equal(t, "VARCHAR(128)", sqlite{}.keyType(128))
+	assert.Equal(t, "VARBINARY(64)", mysql{}.keyType(64))
+	assert.Equal(t, "VARBINARY(128)", mysql{}.keyType(128))
+}

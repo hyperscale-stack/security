@@ -51,7 +51,10 @@
 //     its retention, is recorded active again by the next issuance into
 //     the family, reviving its tokens. An evicted code key reads as an
 //     unknown code: a replay of it is still refused, but no longer
-//     recognized as one.
+//     recognized as one. An evicted refresh-token key — a consumed one
+//     included, within its lifetime — reads as an unknown token: a reuse
+//     of a rotated token is refused but no longer detected, and its family
+//     is not revoked.
 //
 // go-redis resends a command whose reply was lost; every script is safe to
 // run twice: a resent rotation is not mistaken for a reuse, nor a resent

@@ -19,11 +19,19 @@ import (
 // SMALLINT 0/1 since PostgreSQL has no implicit integer/boolean cast. Token
 // / code raw values are NEVER stored — only their hashes.
 //
-// The DDL sticks to the subset every supported engine accepts, so it is
-// the same for every [Dialect]: the argument is accepted for API stability
-// and ignored. The issuer and extension_data columns of codes and tokens —
-// the realm a grant is bound to and the opaque state an oauth2.Extension
-// recorded for it — are nullable TEXT, the only form every engine accepts
+// The DDL sticks to the subset every supported engine accepts, and is the
+// same for every [Dialect] but for the type of the key columns — the code
+// and token hashes and the token-family IDs, the only columns the
+// statements compare: VARCHAR on PostgreSQL and SQLite, which compare it
+// byte for byte, VARBINARY on MySQL, whose text comparisons follow a
+// collation that may ignore case, accents or trailing spaces. A nil
+// Dialect gets the PostgreSQL / SQLite DDL. A MySQL database created
+// before the key columns were binary is upgraded with the statements
+// MIGRATION.md lists.
+//
+// The issuer and extension_data columns of codes and tokens — the realm a
+// grant is bound to and the opaque state an oauth2.Extension recorded for
+// it — are nullable TEXT, the only form every engine accepts
 // in an ALTER TABLE … ADD COLUMN on a populated table, so a database
 // created before them is upgraded with the statements MIGRATION.md lists
 // and ends up with the same columns as a new one. The store writes an
@@ -33,13 +41,22 @@ import (
 // recorded family start), which every engine also accepts on a populated
 // table: a row written before them reads 0.
 //
-// The statements are idempotent (CREATE TABLE IF NOT EXISTS). Production
-// deployments typically run them through a migration tool rather than via
-// [Store.Migrate], but Migrate is offered for tests and small setups.
-func Schema(_ Dialect) []string {
+// The statements are idempotent (CREATE TABLE IF NOT EXISTS), and each is
+// valid inside a PostgreSQL transaction block, where [Store.Migrate] runs
+// them. Production deployments typically run them through a migration tool
+// rather than via Migrate, but Migrate is offered for tests and small
+// setups.
+func Schema(d Dialect) []string {
+	if d == nil {
+		d = sqlite{}
+	}
+
+	// 64: oauth2.MaxFamilyIDLength, in bytes.
+	hash, family := d.keyType(128), d.keyType(64)
+
 	return []string{
 		`CREATE TABLE IF NOT EXISTS oauth2_auth_codes (
-			code_hash             VARCHAR(128) PRIMARY KEY,
+			code_hash             ` + hash + ` PRIMARY KEY,
 			client_id             VARCHAR(255) NOT NULL,
 			subject               VARCHAR(255) NOT NULL,
 			redirect_uri          TEXT         NOT NULL,
@@ -55,11 +72,11 @@ func Schema(_ Dialect) []string {
 			redirect_uri_omitted  SMALLINT     NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_access_tokens (
-			token_hash VARCHAR(128) PRIMARY KEY,
+			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
 			subject    VARCHAR(255) NOT NULL,
 			scope      TEXT         NOT NULL,
-			family_id  VARCHAR(64)  NOT NULL,
+			family_id  ` + family + `  NOT NULL,
 			audience   VARCHAR(255) NOT NULL,
 			issued_at  BIGINT       NOT NULL,
 			expires_at BIGINT       NOT NULL,
@@ -67,11 +84,11 @@ func Schema(_ Dialect) []string {
 			extension_data TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_refresh_tokens (
-			token_hash VARCHAR(128) PRIMARY KEY,
+			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
 			subject    VARCHAR(255) NOT NULL,
 			scope      TEXT         NOT NULL,
-			family_id  VARCHAR(64)  NOT NULL,
+			family_id  ` + family + `  NOT NULL,
 			consumed   SMALLINT     NOT NULL DEFAULT 0,
 			issued_at  BIGINT       NOT NULL,
 			expires_at BIGINT       NOT NULL,
@@ -80,23 +97,66 @@ func Schema(_ Dialect) []string {
 			family_issued_at BIGINT NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
-			family_id  VARCHAR(64)  PRIMARY KEY,
+			family_id  ` + family + `  PRIMARY KEY,
 			revoked_at BIGINT       NOT NULL DEFAULT 0,
 			expires_at BIGINT       NOT NULL
 		)`,
 	}
 }
 
-// Migrate applies [Schema] to the store's database. It is safe to call
-// repeatedly (every statement is IF NOT EXISTS): it creates the missing
+// Migrate applies [Schema] to the store's database: it creates the missing
 // tables and never alters an existing one — the columns a release adds to
 // an existing table are added with the statements MIGRATION.md lists,
 // through your migration tool, before the release serves traffic.
+//
+// It is safe to call repeatedly, and concurrently — every instance of a
+// deployment starting at once. On PostgreSQL, where concurrent CREATE
+// TABLE IF NOT EXISTS of one table can fail, Migrate runs in one
+// transaction that first takes the transaction-level advisory lock
+// -2450120788798466590 (pg_advisory_xact_lock; see [Postgres]): concurrent
+// calls run one after the other, and a failed call creates nothing. A
+// waiting call waits as long as ctx — and the server's lock_timeout or
+// statement_timeout — allows: pass a deadline; the driver cancels the
+// server-side wait when ctx ends. A migration tool applying [Schema]
+// concurrently with Migrate should take the same lock. An engine without
+// pg_advisory_xact_lock cannot use Migrate: apply Schema with your own
+// tool. MySQL serializes the creation of a table on the metadata lock of
+// its name, and SQLite on its write lock — given the busy timeout the
+// package documentation requires, without which a concurrent call fails
+// with SQLITE_BUSY: there each statement runs on its own.
 func (s *Store) Migrate(ctx context.Context) error {
+	if lock := s.dialect.migrationLock(); lock != "" {
+		return s.migrateLocked(ctx, lock)
+	}
+
 	for _, stmt := range Schema(s.dialect) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("sqlstore: migrate: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// migrateLocked applies [Schema] in one transaction that first runs lock,
+// the dialect's migration lock: the transaction holds the lock until it
+// commits the tables, or rolls everything back.
+func (s *Store) migrateLocked(ctx context.Context, lock string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlstore: migrate: begin: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+	for _, stmt := range append([]string{lock}, Schema(s.dialect)...) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("sqlstore: migrate: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlstore: migrate: commit: %w", err)
 	}
 
 	return nil

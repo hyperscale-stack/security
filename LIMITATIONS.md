@@ -53,15 +53,19 @@ future refactor phases.
   anything: consumed and expired codes, expired tokens and revoked
   families stay for the process lifetime. It is meant for development and
   tests only.
-- **PostgreSQL and MySQL are not exercised in CI** — the SQL store's tests
-  run on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
+- **PostgreSQL and MySQL are not exercised in CI** — CI runs the SQL
+  store on SQLite only; its PostgreSQL and MySQL guarantees (row locks,
   READ COMMITTED on PostgreSQL, InnoDB on MySQL) are argued from their
-  locking semantics, not tested.
+  locking semantics. The opt-in suite of `internal/interop/sqlstores`
+  (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its `compose.yaml`)
+  runs the conformance suite, `Migrate` concurrently and the MySQL upgrade
+  statements on them, locally only.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`, the codes'
-  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) are added
-  with the statements MIGRATION.md lists, through your migration tool.
+  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) and the
+  binary key columns of MySQL are added or converted with the statements
+  MIGRATION.md lists, through your migration tool.
 - **A leaked code can be burned** — codes are consumed before they are
   validated, so a party holding a code (but not its client's credentials or
   PKCE verifier) can make the legitimate exchange fail with
