@@ -1449,7 +1449,7 @@ and `401` to an infrastructure failure. The mapping now comes from
 | Error wrapping no sentinel, `ErrNoExtractor`, a custom `Engine` returning no context or a typed nil | `401` / panic | `500` (with a bare challenge for a Bearer resource) |
 | Realm with a control or non-ASCII character | Go-escaped | `Middleware` / `DefaultErrorMapper` panic |
 | `Middleware(nil)` | panic on the first request | panic at construction |
-| `Authorize(adm, …, nil)` (a nil or typed nil attribute) | `403` on every request | panic at construction |
+| `Authorize(adm, …, nil)` (a nil or typed nil attribute) | panic on every request | panic at construction |
 | Reusing the attribute slice passed to `Authorize` | rewrote the route's policy | no effect (copied) |
 
 To migrate:
@@ -1489,7 +1489,7 @@ unauthenticated.
 | `UnaryAuthorize` without `WithErrorMapper` | `DefaultErrorMapper()` | the authentication interceptor's mapper |
 | A nil engine (`UnaryServerInterceptor(nil)`, `ServerOptions(nil)`, …) | server crash on the first RPC | panic at construction |
 | A custom `Engine` returning no context or a typed nil | server crash | `Internal` |
-| A nil or typed nil attribute given to `UnaryAuthorize` / `StreamAuthorize` / `AuthorizeServerOptions` | `PermissionDenied` on every RPC | panic at construction |
+| A nil or typed nil attribute given to `UnaryAuthorize` / `StreamAuthorize` / `AuthorizeServerOptions` | panic on every RPC: the server crashes | panic at construction |
 | Reusing the attribute slice passed to them | rewrote the RPC's policy | no effect (copied) |
 
 To migrate:
@@ -1523,7 +1523,7 @@ takes the challenge configuration and answers like the gRPC one:
 | Headers staged on the `Carrier`, refused call | dropped | in the error metadata |
 | `NewAuthenticationInterceptor(nil)` | panic on the first RPC | panic at construction |
 | A custom `Engine` returning no context or a typed nil | panic | `Internal` |
-| A nil or typed nil attribute given to `NewAuthorizationInterceptor` | `PermissionDenied` on every RPC | panic at construction; the attributes are copied |
+| A nil or typed nil attribute given to `NewAuthorizationInterceptor` | panic on every RPC | panic at construction; the attributes are copied |
 
 To migrate:
 
