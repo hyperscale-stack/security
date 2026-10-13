@@ -322,8 +322,8 @@ PKCE. Not supported, and refused where a provider could select them:
   with write access to the store allows rebinding again (rotate at once).
 - **Host forwarding** — `CompleteLogin` compares the request's `Host` with
   the ACS URL's host and reads no forwarding header: behind a proxy that
-  rewrites `Host`, forward the original or restore `r.Host` from the
-  trusted proxy's header.
+  rewrites `Host`, forward the original, or pass `CompleteLogin` a copy of
+  the request whose `Host` comes from the trusted proxy's header.
 - **Stores** — `saml/sp/storage/memory` never purges anything (development
   and tests only); `saml/sp/store/sql` ships no expiry job (its package
   documentation gives the cleanup statements). CI runs the stores on

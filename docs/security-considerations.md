@@ -721,7 +721,8 @@ IdP to send one assertion carrying a persistent NameID:
   escaped path, the same host (`r.Host`, never a forwarding header), no
   query string — and `Destination` (required on a signed Response) and
   `Recipient` must equal it. Behind a proxy that rewrites `Host`, forward
-  the original or restore `r.Host` from the trusted proxy's header. A
+  the original, or pass `CompleteLogin` a copy of the request whose `Host`
+  comes from the trusted proxy's header. A
   Success `Response` must carry `InResponseTo`, equal to the request ID.
 
 ### Time
@@ -1202,12 +1203,27 @@ span catalog.
       that cannot do better, with a plan to remove it.
 - [ ] SAML: share the transaction store and the replay cache between
       instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
-      expired SQL rows.
+      expired SQL rows. Give the SP least-privilege access to them: a Redis
+      ACL limited to its key prefix, a database user limited to its two
+      tables.
+- [ ] SAML: load `samlsp.Config.TransactionKeys` from your secret store —
+      the same keys on every instance, distinct from the OpenID Connect
+      client's and the session keys — and rotate them by adding the new key
+      last, then moving it first, then removing the old one after
+      `TransactionTTL`; replace a leaked key at once.
 - [ ] SAML: exempt the ACS routes from CSRF protection, start logins only
       from a same-origin gesture (a POST with a CSRF token, or
       `Sec-Fetch-Site` `same-origin` or `none`), rate-limit the login entry
-      point, serve it on the ACS host, and key accounts on the connection
-      and the persistent NameID — never on an email.
+      point and the ACS per client, serve the login on the ACS host, and
+      key accounts on the connection and the persistent NameID — never on
+      an email.
+- [ ] SAML: let the ACS see the host the browser used: forward the
+      original `Host` at the proxy, or pass `CompleteLogin` a copy of the
+      request whose `Host` comes from your trusted proxy's header.
+- [ ] SAML: set `Connection.ResponseOrigins` to the IdP page's origin when
+      that page lets browsers send it (a Keycloak realm needs its
+      Referrer-Policy header changed first); otherwise keep `TransactionTTL`
+      short and never log full IdP redirect URLs.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and

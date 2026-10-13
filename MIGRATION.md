@@ -1244,9 +1244,9 @@ To migrate:
 4. Deploy knowing that the logins in progress fail once
    (`ErrTransactionIntegrity`); the users start over.
 5. Behind a reverse proxy, forward the original `Host` (nginx:
-   `proxy_set_header Host $host;`), or restore `r.Host` from your trusted
-   proxy's header before calling `CompleteLogin`; never trust a forwarding
-   header a client can set.
+   `proxy_set_header Host $host;`), or pass `CompleteLogin` a copy of the
+   request (`r.Clone`) whose `Host` comes from your trusted proxy's
+   header; never trust a forwarding header a client can set.
 6. Pass `MetadataOptions.EntityID` (or `FetchOptions.EntityID`) to import
    metadata served as an `EntitiesDescriptor`, even of a single entity.
 7. Optionally set `Connection.ResponseOrigins` to the origin of the IdP

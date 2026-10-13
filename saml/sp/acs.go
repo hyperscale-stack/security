@@ -265,7 +265,8 @@ func (sp *ServiceProvider) resolveForACS(ctx context.Context, connectionID strin
 // has none), and compares r.Host with the URL's host, case-insensitively,
 // the scheme's default port standing for an absent one. No forwarding
 // header is ever read: behind a proxy that rewrites Host, the application
-// restores r.Host from its trusted proxy before calling CompleteLogin. The
+// passes CompleteLogin a copy of the request (http.Request.Clone) whose
+// Host comes from its trusted proxy's header. The
 // scheme is not visible behind a TLS-terminating proxy; the Secure,
 // __Host- binding cookie, which browsers send over https only (loopback
 // aside), binds it instead.

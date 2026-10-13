@@ -303,8 +303,9 @@ type Connection struct {
 	// internationalized name). The application MUST mount
 	// [ServiceProvider.CompleteLogin] at exactly this URL: CompleteLogin
 	// refuses a request received at another path or host (r.Host), or with
-	// a query string. Behind a reverse proxy that rewrites Host, restore
-	// r.Host from the trusted proxy's forwarding header first.
+	// a query string. Behind a reverse proxy that rewrites Host, pass it a
+	// copy of the request (http.Request.Clone) whose Host comes from the
+	// trusted proxy's forwarding header.
 	ACSURL string
 
 	// IdentityProvider is the trusted IdP configuration.

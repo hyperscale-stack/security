@@ -392,19 +392,26 @@ mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
   strips a prefix, or rewrites `Host` (nginx's default
   `proxy_set_header Host $proxy_host`), makes every response fail the
   location check (`ErrDestinationMismatch`). Forward the original host
-  (`proxy_set_header Host $host;`), or restore `r.Host` from your trusted
-  proxy's header before `CompleteLogin` — only when every request passes
-  through that proxy, which overwrites the header:
+  (`proxy_set_header Host $host;`), or pass `CompleteLogin` a copy of the
+  request whose `Host` comes from your trusted proxy's header — only when
+  every request passes through that proxy, which overwrites the header (a
+  handler must not modify the request it receives):
 
   ```go
   acs := func(w http.ResponseWriter, r *http.Request) {
-  	if host := r.Header.Get("X-Forwarded-Host"); host != "" { // set by our proxy only
-  		r.Host = host
+  	req := r
+  	if host := r.Header.Get("X-Forwarded-Host"); host != "" { // written by our proxy only
+  		req = r.Clone(r.Context())
+  		req.Host = host
   	}
-  	res, err := sp.CompleteLogin(r.Context(), r, connectionID)
+  	res, err := sp.CompleteLogin(req.Context(), req, connectionID)
   	// ...
   }
   ```
+
+  Behind several proxies `X-Forwarded-Host` may be a comma-separated
+  list: take the value your own proxy wrote, never one a client could
+  have sent.
 - Browsers that mishandle `SameSite=None` (Safari on iOS 12 and macOS
   10.14, Chrome 51–66) cannot complete a login. Blocking third-party
   cookies did not break the login in Chrome (BR2): the ACS POST is a
