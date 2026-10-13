@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/hyperscale-stack/security"
+	"github.com/hyperscale-stack/security/session"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +35,10 @@ func TestSessionAuthenticatorKeepsTheLoadersErrorClass(t *testing.T) {
 		"store down":  {fmt.Errorf("db: %w", security.ErrUnavailable), security.ErrorClassUnavailable},
 		"no sentinel": {errors.New("loader bug"), security.ErrorClassOther},
 	} {
-		_, _, err := engineFor(mgr, stubLoader{err: c.err}).Process(context.Background(), loginCarrier.replay())
+		loader := session.NewMockPrincipalLoader(t)
+		loader.EXPECT().Load(mock.Anything, mock.Anything).Return(nil, nil, c.err).Once()
+
+		_, _, err := engineFor(mgr, loader).Process(context.Background(), loginCarrier.replay())
 
 		assert.Equal(t, c.want, security.ErrorClass(err), name)
 	}
