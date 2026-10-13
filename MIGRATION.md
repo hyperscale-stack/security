@@ -1955,3 +1955,17 @@ To migrate:
    rule, for access and refresh tokens alike.
 3. Tokens written before #83 carry no issuer: they introspect inactive at a
    non-empty issuer until they expire.
+
+### `oauth2`: the RFC 8414 metadata lists what the server serves; GET and HEAD only
+
+| | Before | After |
+| --- | --- | --- |
+| a method other than GET or HEAD | `200`, the document | `405`, `Allow: GET, HEAD` |
+| `response_types_supported`, `response_modes_supported` once an `AuthorizeHandler` enabling the implicit flow is built | `["code"]`, `["query"]` | `["code","token"]`, `["query","fragment"]` |
+| `grant_types_supported` | map order, never `implicit` | sorted; `implicit` with the implicit flow |
+| `revocation_endpoint_auth_methods_supported` | absent — meaning `client_secret_basic` alone (RFC 8414 §2) | the `ServerConfig.ClientAuth` methods |
+| `introspection_endpoint_auth_methods_supported` | absent | the same but `none`; absent when nothing is left |
+
+To migrate: serve the document to GET (a Go `GET` route pattern serves HEAD
+too), and build the `AuthorizeHandler`s before serving it — the implicit
+members reflect the handlers built so far.

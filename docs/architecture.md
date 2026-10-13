@@ -215,8 +215,9 @@ The `oauth2` module is an authorization server, not just a provider:
   `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662, with an optional
   `IntrospectionPolicy` deciding which tokens each caller may see) — the
   last two bound to the issuer of the request, like the grants —
-  `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
-  prefix used in the metadata document is configurable via
+  `/.well-known/oauth-authorization-server` (RFC 8414, listing what the
+  server serves: grants, flows, client authentication methods). The
+  endpoint path prefix used in the metadata document is configurable via
   `ServerConfig.RoutePrefix`.
 - **`Storage`** — an interface with explicit atomicity contracts: a
   single-use `ConsumeAuthorizationCode` — consumed codes are retained until

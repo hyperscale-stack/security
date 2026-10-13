@@ -12,7 +12,8 @@ future refactor phases.
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
-  none, although its RFC 8414 metadata advertises `jwks_uri`: mount the
+  none, although its RFC 8414 metadata advertises `jwks_uri` (the issuer
+  followed by `/.well-known/jwks.json`): mount the
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
   publish your own with `jwtsec.MarshalJWKS` (it refuses private and
   symmetric keys).
@@ -79,9 +80,9 @@ future refactor phases.
   `refresh_token` exchanges; the implicit flow runs its authorization hooks
   and records their context, but its fragment members are fixed (RFC 6749
   §4.2.2), and the `client_credentials` and `password` grants never call it.
-  Response modes: `query` for the code flow — the only one the metadata
-  advertises — and `fragment` only for an enabled implicit flow; `form_post`
-  is refused.
+  Response modes: `query` for the code flow, and `fragment` only for an
+  enabled implicit flow — which the metadata advertises once an
+  `AuthorizeHandler` enabling it is built; `form_post` is refused.
 
 ## OpenID Provider
 

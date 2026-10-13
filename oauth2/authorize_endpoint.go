@@ -229,7 +229,8 @@ type AuthorizeConfig struct {
 	// fragment, exposed to the browser. The OAuth 2.0 Security BCP and
 	// OAuth 2.1 drop the implicit flow; [Server.AuthorizeHandler] panics if
 	// AllowImplicit is set on a server whose profile is not [Profile20].
-	// Opt-in only.
+	// Opt-in only. Once a handler enabling it is built, the metadata
+	// document advertises the flow ([Server.MetadataHandler]).
 	AllowImplicit bool
 	// ImplicitTokens mints the opaque access tokens returned by the
 	// implicit flow. Required when AllowImplicit is set.
@@ -347,6 +348,8 @@ func (s *Server) AuthorizeHandler(cfg AuthorizeConfig, consent ConsentFunc) http
 		if cfg.ImplicitTokens == nil {
 			panic("oauth2: AuthorizeHandler: AllowImplicit requires an ImplicitTokens generator")
 		}
+
+		s.implicit.Store(true)
 	}
 
 	if cfg.CodeTTL <= 0 {

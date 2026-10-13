@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,8 +61,11 @@ type ServerConfig struct {
 	//
 	// The value is normalized at construction: an empty prefix defaults to
 	// "/oauth2", a missing leading slash is added, and a trailing slash is
-	// trimmed ("/" yields a root mount). The .well-known endpoints are not
-	// affected — they live at the host root per RFC 8615.
+	// trimmed ("/" yields a root mount). The .well-known documents are not
+	// affected: the metadata document lives at
+	// /.well-known/oauth-authorization-server followed by the issuer's path
+	// (RFC 8414 §3), and the jwks_uri it advertises is the issuer followed
+	// by /.well-known/jwks.json (see [Server.MetadataHandler]).
 	RoutePrefix string
 	// Now is the clock used to stamp issuance / expiry, and to compute the
 	// expires_in the /token response advertises. Defaults to time.Now
@@ -107,6 +111,10 @@ type Server struct {
 	// dispatch maps Grant.Type() to the Grant instance for O(1) lookup
 	// on /token.
 	dispatch map[string]Grant
+
+	// implicit records that an AuthorizeHandler serving the implicit flow
+	// was built, for the metadata document.
+	implicit atomic.Bool
 }
 
 // NewServer validates cfg and returns a ready-to-mount [Server]. It

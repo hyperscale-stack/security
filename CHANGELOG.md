@@ -812,6 +812,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   only; a token recorded without issuer is inactive at a non-empty issuer.
   Resource servers call `/introspect` at the issuer of the tokens they
   accept. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 metadata answers GET and HEAD only (breaking for other
+  methods)**: any other method gets 405 with `Allow: GET, HEAD` (RFC 8414
+  §3.1). See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -982,6 +985,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`http://127.0.0.1`, `http://[::1]`), as RFC 8252 §7.3 requires for native
   apps: the request is otherwise matched exactly, and the code bound to the
   URI requested.
+- The OAuth2 RFC 8414 metadata lists what the server serves: the `token`
+  response type, the `fragment` response mode and the `implicit` grant type
+  once an `AuthorizeHandler` enabling the implicit flow is built, and the
+  client authentication methods of `/revoke` and `/introspect` (without
+  `none` for the latter), whose absence meant `client_secret_basic` alone
+  (RFC 8414 §2); its grant types are sorted, no longer in map order. The
+  godoc gives the `jwks_uri` and `.well-known` locations actually built.
 - OAuth2 storage failures stop hiding: a token lookup that failed at
   `/introspect` answered `{"active":false}` without reaching `OnError` (it
   still answers so — RFC 7662 §2.1 — and is now reported), and a failing

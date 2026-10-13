@@ -213,9 +213,13 @@ func TestDiscoveryConsistentWithRFC8414Metadata(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rfc8414))
 
 		for member, v := range rfc8414 {
-			if member == "grant_types_supported" {
+			switch member {
+			case "grant_types_supported":
 				assert.ElementsMatch(t, v, oidc[member], member)
 
+				continue
+			case "revocation_endpoint_auth_methods_supported", "introspection_endpoint_auth_methods_supported":
+				// Not published by the discovery document yet.
 				continue
 			}
 
