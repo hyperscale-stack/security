@@ -22,8 +22,12 @@
 # afterwards. The run fails when a variable is missing, when a test fails,
 # when a suite runs no test, and when any test is skipped: a real-backend
 # test skips while its variable is unset, so a skip means a server this
-# run does not provide. A new real-backend test follows that rule, and its
-# variable is added here and to the job.
+# run does not provide. A new real-backend test follows that rule: its
+# variable is added here and to the job, and its package gets a `suite`
+# line below unless this script already runs it — a skip in a package the
+# script does not run is never seen. A new opt-in test of another kind, in
+# a package listed below, goes into that suite's skip pattern, or the run
+# fails on its skip.
 #
 # Locally (Docker), the sqlstores compose file and the Redis of the
 # oidcstack one provide every server:
@@ -72,17 +76,17 @@ failed=
 events='. as $line | try fromjson catch {Action: "output", Output: ($line + "\n")}'
 
 # suite MODULE PACKAGES [SKIP]: runs the tests of PACKAGES in MODULE but
-# those SKIP matches, prints their log, and records MODULE as failed when
-# a test fails, a test is skipped or no test runs.
+# those SKIP matches (an empty pattern skips nothing), prints their log,
+# and records MODULE as failed when a test fails, a test is skipped or no
+# test runs.
 suite() {
 	out="$PWD/build/backends-$(printf '%s' "$1" | tr / -).json"
 	echo "==> $1"
 	status=0
-	if [ -n "${3:-}" ]; then
-		(cd "$1" && go test -race -count=1 -timeout 300s -json -skip "$3" "$2" >"$out") || status=$?
-	else
-		(cd "$1" && go test -race -count=1 -timeout 300s -json "$2" >"$out") || status=$?
-	fi
+	# -count=1: never replay a cached result. The DSNs are fixed strings, so
+	# the test cache would stand in for a run against the servers, and pass
+	# every guard below without reaching any of them.
+	(cd "$1" && go test -race -count=1 -timeout 300s -json -skip "${3:-}" "$2" >"$out") || status=$?
 	jq -Rj "$events"' | select(.Action == "output" or .Action == "build-output") | .Output' "$out"
 	skipped=$(jq -Rr "$events"' | select(.Action == "skip" and .Test != null) | .Test' "$out")
 	passed=$(jq -Rn "[inputs | $events"' | select(.Action == "pass" and .Test != null)] | length' "$out")
