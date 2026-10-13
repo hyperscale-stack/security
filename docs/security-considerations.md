@@ -1139,11 +1139,12 @@ network:
 - **Redirects** are not followed unless `MaxRedirects` allows it; every
   hop is re-checked, and https→http is always refused. Credential-bearing
   requests (token, UserInfo) never follow redirects. `oidc/client`'s
-  discovery and JWK Set requests and `saml/sp`'s metadata requests, whose
-  answers are trusted because of the origin they come from, never follow
-  a redirect to another origin (scheme, host and port), whatever
-  `MaxRedirects` allows: after such a hop another server would only have
-  to write the expected issuer to get its keys trusted.
+  discovery and JWK Set requests, `jwtsec.NewRemoteJWKS`'s JWK Set requests
+  and `saml/sp`'s metadata requests, whose answers are trusted because of
+  the origin they come from, never follow a redirect to another origin
+  (scheme, host and port), whatever `MaxRedirects` allows: after such a hop
+  another server would get its keys trusted — for discovery, by merely
+  writing the expected issuer.
 - **Resources** are bounded: one timeout for the whole exchange (10 s by
   default), a size cap on every body (1 MiB by default) counted after
   transparent decompression — a gzip bomb fails — and a 64 KiB header cap.
