@@ -23,6 +23,12 @@ var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation 
 // turn. Revoking a refresh token revokes its whole family, and
 // revoking an access token revokes its family too (RFC 7009 §2.1).
 //
+// A client revokes its own tokens of that issuer only: a token issued to
+// another client, or under another issuer (OpenID Connect Core §16.15:
+// issuers are separate realms), is left untouched. A token recorded without
+// issuer — written before tokens recorded one — is revoked by its client at
+// any issuer: revocation only takes away.
+//
 // The answer is 200 OK whether or not the token existed or belonged to the
 // caller (RFC 7009 §2.2), and 503 temporarily_unavailable when a failure
 // leaves the revocation undone or unfinished (RFC 7009 §2.2.1): the client
@@ -57,7 +63,7 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, _, _, err := s.authenticateClientAt(r.Context(), r)
+	client, issuer, _, err := s.authenticateClientAt(r.Context(), r)
 	if err != nil {
 		s.refuseRevocation(r.Context(), w, err)
 
@@ -82,7 +88,7 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 
 	// RFC 7009 §2.1: the hint is optional. We try access then refresh
 	// regardless so the caller's hint is treated as advisory.
-	if !s.revoke(r.Context(), client, rawToken) {
+	if !s.revoke(r.Context(), client, issuer, rawToken) {
 		writeErrorResponse(w, errRevocationUnavailable)
 
 		return
@@ -111,16 +117,17 @@ func (s *Server) refuseRevocation(ctx context.Context, w http.ResponseWriter, er
 }
 
 // revoke revokes rawToken when it is an access or a refresh token of
-// client, and reports whether the token can no longer be used: true when it
-// was revoked, is unknown, or belongs to another client; false when a
-// lookup or a revocation failed and the token may still be usable. Each
-// failure is reported to the [ErrorHook]; an unknown token is not.
-func (s *Server) revoke(ctx context.Context, client Client, rawToken string) bool {
+// client at issuer (ownedAt), and reports whether the token can no longer
+// be used — as far as the caller is concerned: true when it was revoked, is
+// unknown, or belongs to another client or issuer; false when a lookup or a
+// revocation failed and the token may still be usable. Each failure is
+// reported to the [ErrorHook]; an unknown token is not.
+func (s *Server) revoke(ctx context.Context, client Client, issuer, rawToken string) bool {
 	hash := HashToken(nil, rawToken)
 
 	at, err := s.cfg.Storage.LookupAccessToken(ctx, hash)
 	if err == nil {
-		return s.revokeAccess(ctx, client, at, hash)
+		return s.revokeAccess(ctx, client, issuer, at, hash)
 	}
 
 	if !s.lookupMissed(ctx, err, "revoke: token lookup failed") {
@@ -132,11 +139,20 @@ func (s *Server) revoke(ctx context.Context, client Client, rawToken string) boo
 		return s.lookupMissed(ctx, err, "revoke: token lookup failed")
 	}
 
-	if rt.ClientID != client.ID() || rt.FamilyID == "" {
+	if !ownedAt(client, issuer, rt.ClientID, rt.Issuer) || rt.FamilyID == "" {
 		return true
 	}
 
 	return s.revokeFamily(ctx, rt.FamilyID)
+}
+
+// ownedAt reports whether a token issued to clientID under tokenIssuer is
+// client's at issuer: its own, and of this issuer (RFC 7009 §2.1; OpenID
+// Connect Core §16.15: a client of one realm cannot revoke another
+// realm's grants). A token recorded without issuer — written before tokens
+// recorded one — is its client's at any issuer: revocation only takes away.
+func ownedAt(client Client, issuer, clientID, tokenIssuer string) bool {
+	return clientID == client.ID() && (tokenIssuer == "" || tokenIssuer == issuer)
 }
 
 // lookupMissed reports whether a failed lookup merely missed the token:
@@ -163,8 +179,8 @@ func (s *Server) lookupMissed(ctx context.Context, err error, what string) bool 
 // is revoked no token of it is usable, and deleting the access token is
 // mere cleanup: a failed delete is reported but leaves the answer
 // unchanged. A token outside any family only goes away when it is deleted.
-func (s *Server) revokeAccess(ctx context.Context, client Client, at *AccessToken, hash string) bool {
-	if at.ClientID != client.ID() {
+func (s *Server) revokeAccess(ctx context.Context, client Client, issuer string, at *AccessToken, hash string) bool {
+	if !ownedAt(client, issuer, at.ClientID, at.Issuer) {
 		return true
 	}
 

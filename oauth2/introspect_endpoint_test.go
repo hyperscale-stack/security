@@ -397,8 +397,10 @@ func TestIntrospectCallerAuthentication(t *testing.T) {
 
 // TestIntrospectDefaultDisclosesToConfidentialResourceServer pins the
 // default: with no policy, any authenticated confidential client sees any
-// token — including one issued to another client, since the resource
-// server asking is usually not the client the token was issued to.
+// access token of the request's issuer — including one issued to another
+// client, since the resource server asking is usually not the client the
+// token was issued to — but no refresh token of another client: they are
+// meant for the authorization server (RFC 6749 §1.5).
 func TestIntrospectDefaultDisclosesToConfidentialResourceServer(t *testing.T) {
 	t.Parallel()
 
@@ -412,9 +414,7 @@ func TestIntrospectDefaultDisclosesToConfidentialResourceServer(t *testing.T) {
 
 	rec = serve(srv.IntrospectHandler(), introspectRequest(rsBillingClientID, rsBillingSecret, "rt-app"))
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, fmt.Sprintf(
-		`{"active":true,"scope":"read","client_id":"app","sub":"alice","exp":%d,"iat":%d,"token_type":"refresh_token"}`,
-		seededRefreshExp.Unix(), seededIssuedAt.Unix()), rec.Body.String())
+	assert.JSONEq(t, inactiveBody, rec.Body.String(), "another client's refresh token")
 }
 
 // tenantKey carries a request-scoped tenant, as a middleware would set it.

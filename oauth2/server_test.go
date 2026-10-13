@@ -393,6 +393,7 @@ func TestIntrospectEndpoint(t *testing.T) {
 			Scope:     "api:read",
 			IssuedAt:  time.Now().Add(-time.Minute),
 			ExpiresAt: time.Now().Add(time.Hour),
+			Issuer:    "https://auth.example",
 		}}))
 
 		body := introspect(t, srv, "live-at")

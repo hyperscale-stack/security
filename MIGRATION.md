@@ -239,14 +239,16 @@ To migrate:
    and `scope` from the `/token` response, or ask a confidential backend.
 3. When several resource servers or tenants share the authorization server,
    set `ServerConfig.IntrospectionPolicy`: without one, any authenticated
-   confidential client may introspect any token. RFC 7662 §4 says protected
-   resources SHOULD be specifically authorized, and when a token can be used
-   only at certain resource servers, the authorization server MUST determine
-   whether it can be used at the one making the call. A denial answers a bare
-   `{"active":false}`, the same bytes as an unknown token; a policy error
-   fails closed the same way and reaches `OnError`, so wire both. A typical
-   policy discloses access tokens to the resource server they are meant for,
-   and refresh tokens to none:
+   confidential client may introspect any access token of the request's
+   issuer, and the refresh tokens issued to it (see
+   [below](#oauth2-introspect-and-revoke-are-bound-to-the-issuer-of-the-request)).
+   RFC 7662 §4 says protected resources SHOULD be specifically authorized,
+   and when a token can be used only at certain resource servers, the
+   authorization server MUST determine whether it can be used at the one
+   making the call. A denial answers a bare `{"active":false}`, the same
+   bytes as an unknown token; a policy error fails closed the same way and
+   reaches `OnError`, so wire both. A typical policy discloses access tokens
+   to the resource server they are meant for, and refresh tokens to none:
 
    ```go
    srv, err := oauth2.NewServer(oauth2.ServerConfig{
@@ -269,8 +271,9 @@ To migrate:
    Do not reduce the check to `caller.ID() == tok.ClientID`: the resource
    server introspecting a token is usually not the client it was issued to,
    so that rule refuses the legitimate calls without enforcing any resource
-   or tenant boundary. The policy only sees active tokens, only after the
-   caller authenticated as a confidential client, and gets the request
+   or tenant boundary. The policy only sees active tokens of the request's
+   issuer, only after the caller authenticated as a confidential client,
+   and gets the request
    context; see the `oauth2.IntrospectionPolicy` godoc for the full
    contract.
 
@@ -1919,3 +1922,36 @@ To migrate:
    `client_id` a 500 — map it.
 2. Custom `ClientAuthenticator`s return their store's failures as such,
    not wrapped in `invalid_client` (the contract already said so).
+
+### `oauth2`: `/introspect` and `/revoke` are bound to the issuer of the request
+
+Codes and tokens record their issuer since #83, and the grants refuse them at
+another issuer — but `/introspect` and `/revoke` ignored it: behind an
+`IssuerResolver` serving several realms, a client registered in two of them
+could introspect or revoke the tokens of one at the other. And without an
+`IntrospectionPolicy`, any confidential client — every resource server —
+could read the claims of any refresh token, although refresh tokens are
+meant for the authorization server and their client (RFC 6749 §1.5).
+
+| | Before | After |
+| --- | --- | --- |
+| a token of another issuer at `/introspect` | active (subject to the policy) | `{"active":false}`, the policy not consulted |
+| a token of another issuer at `/revoke` | revoked when the caller was its client | left untouched; `200` all the same |
+| another client's refresh token at `/introspect`, no `IntrospectionPolicy` | active, claims disclosed | `{"active":false}` |
+| a token recorded without issuer (written before #83) | active at any issuer | `{"active":false}` at a non-empty issuer; still revoked by its client |
+| `IntrospectedToken.Issuer` seen by a policy | any issuer | always the request's issuer |
+
+To migrate:
+
+1. **Roll out with your resource servers.** Each resource server calls
+   `/introspect` — and each client `/revoke` — at the issuer the token was
+   issued under: the `Host` or path your `IssuerResolver` maps to that
+   realm. A resource server calling one URL for every realm now gets
+   `{"active":false}` for the tokens of the others, and a revocation sent
+   there silently does nothing: point them at each realm's endpoints before
+   upgrading.
+2. A resource server that must introspect other clients' refresh tokens
+   needs an `IntrospectionPolicy` allowing it: a policy replaces the default
+   rule, for access and refresh tokens alike.
+3. Tokens written before #83 carry no issuer: they introspect inactive at a
+   non-empty issuer until they expire.

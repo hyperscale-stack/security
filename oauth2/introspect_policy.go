@@ -39,8 +39,10 @@ type IntrospectedToken struct {
 	// IssuerResolver returned no audience.
 	Audience string
 	// Issuer is the issuer the token was issued under — the realm of its
-	// authorization; empty for a token written before tokens recorded it.
-	// A policy enforcing realm boundaries compares it with the caller's.
+	// authorization. A policy only sees the tokens of the issuer the
+	// request resolved to, so it is always that issuer: a token of another
+	// issuer, or recorded without issuer (written before tokens recorded
+	// one), is inactive there without consulting the policy.
 	Issuer string
 	// IssuedAt is the issuance time.
 	IssuedAt time.Time
@@ -68,9 +70,10 @@ type IntrospectedToken struct {
 //     ("introspection policy failed"). Set [ServerConfig.OnError] along with
 //     a policy, or its failures go unseen.
 //
-// The policy only runs for an active token — an unknown, expired or
-// consumed one answers {"active":false} without consulting it — and only
-// once the caller has authenticated, so caller.Type() is always
+// The policy only runs for an active token of the issuer the request
+// resolved to — an unknown, expired or consumed token, or one of another
+// issuer, answers {"active":false} without consulting it — and only once
+// the caller has authenticated, so caller.Type() is always
 // [ClientConfidential]. caller is the client the authentication returned —
 // the [ClientStore] record for the built-in methods — so it can be
 // type-asserted to your own [Client] implementation to read tenant
@@ -80,7 +83,8 @@ type IntrospectedToken struct {
 // Do not reduce the check to caller.ID() == token.ClientID: the resource
 // server introspecting a token is usually not the client it was issued to.
 // Refresh tokens carry no audience and are meant for their client alone:
-// refuse them to resource servers.
+// without a policy, only that client sees one; a policy decides for them
+// too, so refuse them to resource servers.
 //
 // The policy runs synchronously on the request goroutine, before any byte
 // of the response is written, and may be called concurrently. It MUST NOT

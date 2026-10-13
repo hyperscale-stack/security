@@ -20,7 +20,8 @@
 //     client's client_id is no credential), and the optional
 //     ServerConfig.IntrospectionPolicy decides which active tokens each
 //     caller may see, enforcing resource and tenant boundaries (RFC 7662
-//     §4).
+//     §4); without one, a refresh token is disclosed to its own client
+//     only.
 //   - Clients get only what they declare: the grant types of
 //     Client.GrantTypes — checked at /token for every grant, custom ones
 //     included, before it runs — and the scopes of Client.Scopes, an empty
@@ -46,9 +47,10 @@
 //     failed after a refresh-token reuse or an authorization-code replay,
 //     and a failed IntrospectionPolicy. See ErrorHook.
 //   - Every authorization is bound to the issuer the IssuerResolver
-//     returned at /authorize: the code and every token record it, and the
+//     returned at /authorize: the code and every token record it, the
 //     authorization_code and refresh_token grants refuse them at another
-//     issuer. Every authorization response names that issuer in its iss
+//     issuer, /introspect answers them inactive and /revoke leaves them
+//     untouched there. Every authorization response names that issuer in its iss
 //     parameter (RFC 9207), errors included. A client implementing
 //     IssuerBoundClient is unknown at the issuers it is not registered at.
 //   - ServerConfig.Extension plugs an optional protocol extension — the

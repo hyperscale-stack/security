@@ -72,7 +72,8 @@ future refactor phases.
   several issuers, a client is known at every issuer unless it implements
   `IssuerBoundClient` (`DefaultClient.IssuerValues`) or the store is scoped
   by issuer.
-- **`/introspect` returns no `iss`** — the token's issuer reaches an
+- **`/introspect` returns no `iss`** — an active token is always of the
+  issuer the request resolved to; the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
   `refresh_token` exchanges; the implicit flow runs its authorization hooks

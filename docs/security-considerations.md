@@ -309,15 +309,18 @@ keys by `kid` against a JWKS provider (static or remote).
   validity and claims of a token they held — through `none`, or through
   Basic/Post with the client's registered secret — so `/introspect` refuses
   every caller that is not a confidential client. By default, any
-  authenticated confidential client may then introspect any token.
-  RFC 7662 §4 adds that protected resources SHOULD be specifically
-  authorized, and that when a token can be used only at certain resource
-  servers the authorization server MUST determine whether it can be used at
-  the caller: that decision is `ServerConfig.IntrospectionPolicy`, which
-  sees the authenticated caller and the token's metadata before anything is
-  disclosed. Refuse refresh tokens to resource servers — they are meant for
-  the client alone, and a resource server that ignores `token_type` could
-  accept one as a bearer token. A withheld token and a failed policy answer
+  authenticated confidential client may then introspect any access token of
+  the request's issuer, and a refresh token only if it was issued to it:
+  refresh tokens are meant for the authorization server and their client
+  (RFC 6749 §1.5), and a resource server that ignores `token_type` could
+  accept one as a bearer token. RFC 7662 §4 adds that protected resources
+  SHOULD be specifically authorized, and that when a token can be used only
+  at certain resource servers the authorization server MUST determine
+  whether it can be used at the caller: that decision is
+  `ServerConfig.IntrospectionPolicy`, which sees the authenticated caller
+  and the token's metadata before anything is disclosed — and replaces the
+  default, so refuse refresh tokens to resource servers there too. A
+  withheld token and a failed policy answer
   the same bytes as an unknown token (`{"active":false}`), so the response
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
@@ -336,8 +339,14 @@ keys by `kid` against a JWKS provider (static or remote).
   boundary: it must return the same issuer for `/authorize` and `/token` of
   a realm, and the `ConsentFunc` must authenticate the resource owner within
   `AuthorizeRequest.Issuer` — a session of another realm is no
-  authentication. `IntrospectedToken.Issuer` lets an `IntrospectionPolicy`
-  enforce the same boundary.
+  authentication. `/introspect` and `/revoke` keep the same boundary: at
+  the issuer the request resolves to, a token issued under another issuer
+  answers `{"active":false}` and is not revoked (the answer is 200 all the
+  same), so a client registered in several realms can neither read nor
+  revoke another realm's tokens, and an `IntrospectionPolicy` only sees
+  tokens of the request's issuer. A token recorded without issuer — written
+  before tokens recorded one — is inactive at a non-empty issuer, but its
+  client can still revoke it: revocation only takes away.
 - **Clients and realms** — one `ClientStore` behind several issuers makes
   every client known at every issuer: a client of realm A could send realm
   B's end-users to B's genuine login page and obtain their codes and
@@ -1451,8 +1460,9 @@ span catalog.
       session-bound token, or `net/http.CrossOriginProtection`); replace
       the anti-framing headers of `/authorize` only for origins you trust.
 - [ ] Register the resource servers calling `/introspect` as confidential
-      clients, and set `ServerConfig.IntrospectionPolicy` when several
-      resource servers or tenants share the authorization server.
+      clients, have them call it at the issuer of the tokens they accept,
+      and set `ServerConfig.IntrospectionPolicy` when several resource
+      servers or tenants share the authorization server.
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.

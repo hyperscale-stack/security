@@ -213,7 +213,8 @@ The `oauth2` module is an authorization server, not just a provider:
   opt-in legacy `implicit` flow, with an application-supplied consent hook;
   every authorization response names its issuer, RFC 9207),
   `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662, with an optional
-  `IntrospectionPolicy` deciding which tokens each caller may see),
+  `IntrospectionPolicy` deciding which tokens each caller may see) — the
+  last two bound to the issuer of the request, like the grants —
   `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
   prefix used in the metadata document is configurable via
   `ServerConfig.RoutePrefix`.

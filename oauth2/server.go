@@ -73,11 +73,12 @@ type ServerConfig struct {
 	// carry them (the storage failures of /revoke and /introspect, a failed
 	// [IntrospectionPolicy]). Optional; see [ErrorHook].
 	OnError ErrorHook
-	// IntrospectionPolicy, when set, decides which active tokens each
-	// confidential caller of /introspect may see — the place to enforce
-	// resource and tenant boundaries (RFC 7662 §4). A withheld token
-	// answers {"active":false}, exactly like an unknown one. Optional; nil
-	// lets any authenticated confidential client introspect any token. See
+	// IntrospectionPolicy, when set, decides which active tokens of the
+	// request's issuer each confidential caller of /introspect may see —
+	// the place to enforce resource and tenant boundaries (RFC 7662 §4). A
+	// withheld token answers {"active":false}, exactly like an unknown one.
+	// Optional; nil discloses every access token to any authenticated
+	// confidential client, and a refresh token to its own client only. See
 	// [IntrospectionPolicy].
 	IntrospectionPolicy IntrospectionPolicy
 	// MaxRequestBytes bounds every request the server parses: the query

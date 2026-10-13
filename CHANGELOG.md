@@ -91,7 +91,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   never the token value). A denial answers a bare `{"active":false}`, the
   same bytes as an unknown token; a policy error fails closed the same way
   and reaches `OnError` as a `server_error`. Optional: without a policy, any
-  authenticated confidential client may introspect any token.
+  authenticated confidential client may introspect any access token of the
+  request's issuer, and the refresh tokens issued to it.
 - **OAuth2 token-family primitives**: `oauth2.ErrTokenFamilyRevoked`
   (`invalid_grant`) refuses an operation on a revoked token family;
   `oauth2.ErrTokenFamilyRevocationFailed`, a plain sentinel that never
@@ -346,8 +347,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrInvalidRequestURI`, `ErrInvalidRequestObject`).
 - **OAuth2 grant context on codes and tokens**: `AuthorizationCode`,
   `AccessToken` and `RefreshToken` gain `Issuer` and `ExtensionData`;
-  `AuthorizeRequest.Issuer` and `IntrospectedToken.Issuer` expose the realm
-  (an `IntrospectionPolicy` can now enforce it, RFC 7662 §4).
+  `AuthorizeRequest.Issuer` and `IntrospectedToken.Issuer` expose the realm,
+  which `/introspect` and `/revoke` enforce (see Changed).
 - **OAuth2 refresh-token gate**: `grant.Config.RefreshTokenScope` makes the
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
@@ -804,6 +805,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `server_error` at `/token` and `/introspect`, `temporarily_unavailable` at
   `/revoke` — and reported to `OnError`, instead of an unknown client. See
   [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `/introspect` and `/revoke` are bound to the issuer of the
+  request (breaking for multi-issuer deployments)**: a token issued under
+  another issuer introspects `{"active":false}` and is not revoked; without
+  an `IntrospectionPolicy`, a refresh token is disclosed to its own client
+  only; a token recorded without issuer is inactive at a non-empty issuer.
+  Resource servers call `/introspect` at the issuer of the tokens they
+  accept. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1576,3 +1584,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   methods ("none method reserved to public clients", "method not allowed
   for client"). Every failed client authentication now reads "client
   authentication failed" (RFC 6749 §5.2); the detail goes to `OnError`.
+- OAuth2 realms no longer leak through `/introspect` and `/revoke`: behind
+  an `IssuerResolver` serving several issuers, a client registered in two
+  realms could introspect — and revoke — the tokens of one at the other,
+  while the grants refused them there (OIDC Core §16.15). And without an
+  `IntrospectionPolicy`, any confidential client — every resource server —
+  could read the claims of any client's refresh token (RFC 6749 §1.5).
