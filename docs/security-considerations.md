@@ -83,8 +83,10 @@ a character never reaches the application's lookups and logs (log
 injection, a user-id that displays as another one). RFC 8264's
 FreeformClass, the base of RFC 8265's OpaqueString profile for passwords,
 disallows them too (but for the zero-width joiner and non-joiner after a
-virama, which this library refuses as well): refuse them when a password is
-set, or the account cannot sign in with Basic (reset its password).
+virama, which this library refuses as well): refuse them when a password or
+a user-id is chosen, or the account cannot sign in with Basic (reset the
+password; rename the account or give it an alias — a Persian or Indic name
+written with U+200C or U+200D, for instance).
 
 ### Online guessing and hashing cost
 

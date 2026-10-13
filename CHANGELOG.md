@@ -798,8 +798,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (after RFC 8264's FreeformClass, the base of RFC 8265's OpaqueString), at
   most 3072 bytes, several spaces allowed after the scheme, and `Basic`
   without credentials is malformed (it used to be ignored). **Breaking:** an
-  account whose password contains such a character can no longer sign in
-  with Basic — reset its password.
+  account whose password or user-id contains such a character can no longer
+  sign in with Basic — reset the password; rename the account or give it an
+  alias (a Persian or Indic name written with U+200C or U+200D, for
+  instance).
   `basic.Authenticator` applies the same checks — a form login building the
   value with `basic.New` included — and also refuses an empty user-id
   (`ErrBadFormat`, 401) before any lookup; the `Extractor` still lets an

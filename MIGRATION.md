@@ -2128,7 +2128,11 @@ To migrate:
    logins through `basic.Authenticator` included): reset its password. When
    a password is set, refuse these characters (RFC 8265's OpaqueString
    disallows them, but for the zero-width joiners after a virama), so that
-   no new account gets locked out.
+   no new account gets locked out. **The same holds for a user-id** — a
+   Persian or Indic name written with ZERO WIDTH NON-JOINER U+200C or
+   ZERO WIDTH JOINER U+200D, for instance: rename the account or give it an
+   alias without these characters, and refuse them when a user-id is
+   chosen.
 3. Read the typed user-id with `Username()`, the authenticated identity with
    `Name()` or `Principal().Subject()`; log `Name()`, never `Username()`.
 4. A custom authenticator consuming `basic.Authentication` with an empty

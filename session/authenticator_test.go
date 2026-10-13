@@ -122,9 +122,13 @@ func TestNewAuthenticatorPanicsOnNilLoader(t *testing.T) {
 func TestSessionAuthenticatorRejectsForeignAuthentication(t *testing.T) {
 	t.Parallel()
 
-	a := session.NewAuthenticator(stubLoader{})
+	a := session.NewAuthenticator(session.NewMockPrincipalLoader(t)) // never called
 
-	_, err := a.Authenticate(context.Background(), security.Anonymous())
+	// A value of another scheme: a type of its own around the anonymous one.
+	foreign := struct{ security.Authentication }{security.Anonymous()}
+
+	out, err := a.Authenticate(context.Background(), foreign)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, security.ErrUnsupportedCredential)
+	assert.Equal(t, security.Anonymous(), out, "a failure returns the anonymous authentication, never its input")
 }

@@ -480,7 +480,9 @@ PKCE. Not supported, and refused where a provider could select them:
   Unicode format character (an emoji sequence joined with U+200D, a soft
   hyphen, a byte order mark) or a line or paragraph separator no longer
   signs in with Basic: reset it, and refuse these characters when passwords
-  are set (RFC 8265 OpaqueString).
+  are set (RFC 8265 OpaqueString). The same goes for a user-id — a Persian
+  or Indic name written with U+200C or U+200D, for instance: rename the
+  account or give it an alias without them.
 
 ## Passwords
 
