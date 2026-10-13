@@ -992,6 +992,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `none` for the latter), whose absence meant `client_secret_basic` alone
   (RFC 8414 §2); its grant types are sorted, no longer in map order. The
   godoc gives the `jwks_uri` and `.well-known` locations actually built.
+- The OpenID Provider discovery document agrees with the RFC 8414 metadata
+  again (RFC 9068 §4): it publishes
+  `revocation_endpoint_auth_methods_supported` — whose absence meant
+  `client_secret_basic` alone (RFC 8414 §2) — and
+  `introspection_endpoint_auth_methods_supported` (without `none`), and
+  sorts `grant_types_supported`.
 - `oauth2.DefaultClient.SecretMatches` no longer discloses the length of
   the registered secret through its timing: `subtle.ConstantTimeCompare`
   answers at once when the lengths differ, so it now compares the SHA-256

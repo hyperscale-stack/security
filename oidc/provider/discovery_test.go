@@ -13,6 +13,8 @@ import (
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/clientauth"
+	"github.com/hyperscale-stack/security/oauth2/grant"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,10 +58,12 @@ func TestDiscoveryDocument(t *testing.T) {
 		"scopes_supported": ["openid", "profile", "email", "address", "phone", "offline_access"],
 		"response_types_supported": ["code"],
 		"response_modes_supported": ["query"],
-		"grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
+		"grant_types_supported": ["authorization_code", "client_credentials", "refresh_token"],
 		"subject_types_supported": ["public"],
 		"id_token_signing_alg_values_supported": ["RS256", "ES256"],
 		"token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
+		"revocation_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
+		"introspection_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
 		"code_challenge_methods_supported": ["S256"],
 		"claims_supported": ["sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr", "at_hash"],
 		"claims_parameter_supported": true,
@@ -195,35 +199,44 @@ func TestDiscoveryFailsClosed(t *testing.T) {
 	})
 }
 
+// withClientAuth replaces the server's client authentication methods.
+func withClientAuth(auths ...oauth2.ClientAuthenticator) envOption {
+	return func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) { s.ClientAuth = auths }
+}
+
 // TestDiscoveryConsistentWithRFC8414Metadata pins RFC 9068 §4: values
 // published through RFC 8414 and OpenID Connect Discovery MUST be
-// consistent.
+// consistent. Every member of the RFC 8414 document is published alike;
+// the authentication methods of /revoke and /introspect are also omitted
+// alike, since their omission has a meaning of its own (RFC 8414 §2).
 func TestDiscoveryConsistentWithRFC8414Metadata(t *testing.T) {
 	t.Parallel()
 
-	for _, prefix := range []string{"", "/connect"} {
-		e := newEnv(t, withRoutePrefix(prefix), withResolver(fixedIssuer{issuer: "https://op.example/tenant-a"}))
+	cases := map[string][]envOption{
+		"default routes":      nil,
+		"route prefix":        {withRoutePrefix("/connect")},
+		"public clients only": {withClientAuth(clientauth.NewNone())},
+	}
+
+	for name, opts := range cases {
+		e := newEnv(t, append(opts, withResolver(fixedIssuer{issuer: "https://op.example/tenant-a"}))...)
 
 		oidc := discovery(t, e, get("/tenant-a/.well-known/openid-configuration"))
 
 		rec := serve(e.op.Server().MetadataHandler(), get("/.well-known/oauth-authorization-server/tenant-a"))
-		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, http.StatusOK, rec.Code, name)
 
 		var rfc8414 map[string]any
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rfc8414))
 
 		for member, v := range rfc8414 {
-			switch member {
-			case "grant_types_supported":
-				assert.ElementsMatch(t, v, oidc[member], member)
+			assert.Equal(t, v, oidc[member], "%s: %s", name, member)
+		}
 
-				continue
-			case "revocation_endpoint_auth_methods_supported", "introspection_endpoint_auth_methods_supported":
-				// Not published by the discovery document yet.
-				continue
-			}
-
-			assert.Equal(t, v, oidc[member], member)
+		for _, member := range []string{"revocation_endpoint_auth_methods_supported", "introspection_endpoint_auth_methods_supported"} {
+			_, inOIDC := oidc[member]
+			_, inRFC8414 := rfc8414[member]
+			assert.Equal(t, inRFC8414, inOIDC, "%s: %s published alike", name, member)
 		}
 	}
 }

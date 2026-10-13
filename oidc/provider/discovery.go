@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -34,6 +35,12 @@ var protocolClaims = []string{
 //     true, authorization_response_iss_parameter_supported true (RFC 9207);
 //   - offline_access among the scopes only when a refresh_token grant is
 //     registered; acr_values_supported only when configured;
+//   - grant_types_supported sorted; token_endpoint_auth_methods_supported
+//     and revocation_endpoint_auth_methods_supported (omitted, it would
+//     mean client_secret_basic alone, RFC 8414 §2) the server's ClientAuth
+//     methods, introspection_endpoint_auth_methods_supported the same but
+//     "none" — /introspect answers confidential clients only — omitted when
+//     no method is left;
 //   - no registration_endpoint, no encryption, request-object, signed
 //     UserInfo or session-management metadata.
 //
@@ -101,6 +108,8 @@ type discoveryDocument struct {
 	SubjectTypesSupported                      []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported           []string `json:"id_token_signing_alg_values_supported"`
 	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+	RevocationEndpointAuthMethodsSupported     []string `json:"revocation_endpoint_auth_methods_supported"`
+	IntrospectionEndpointAuthMethodsSupported  []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
 	CodeChallengeMethodsSupported              []string `json:"code_challenge_methods_supported"`
 	ClaimsSupported                            []string `json:"claims_supported"`
 	ACRValuesSupported                         []string `json:"acr_values_supported,omitempty"`
@@ -114,6 +123,7 @@ func (p *Provider) discoveryDocument(issuer string, snap *keySnapshot) discovery
 	sc := p.server.Config()
 	base := strings.TrimSuffix(issuer, "/")
 	routes := base + sc.RoutePrefix
+	methods := authMethods(sc.ClientAuth)
 
 	return discoveryDocument{
 		Issuer:                                     issuer,
@@ -129,7 +139,9 @@ func (p *Provider) discoveryDocument(issuer string, snap *keySnapshot) discovery
 		GrantTypesSupported:                        grantTypes(sc.Grants),
 		SubjectTypesSupported:                      []string{"public"},
 		IDTokenSigningAlgValuesSupported:           algorithmNames(snap),
-		TokenEndpointAuthMethodsSupported:          authMethods(sc.ClientAuth),
+		TokenEndpointAuthMethodsSupported:          methods,
+		RevocationEndpointAuthMethodsSupported:     methods,
+		IntrospectionEndpointAuthMethodsSupported:  confidentialAuthMethods(methods),
 		CodeChallengeMethodsSupported:              pkceMethods(sc.Profile),
 		ClaimsSupported:                            p.claimsSupported,
 		ACRValuesSupported:                         p.cfg.ACRValuesSupported,
@@ -151,11 +163,15 @@ func (p *Provider) scopesSupported() []string {
 	return scopes
 }
 
+// grantTypes lists the registered grant types, sorted — the oauth2
+// metadata's order.
 func grantTypes(grants []oauth2.Grant) []string {
 	out := make([]string, 0, len(grants))
 	for _, g := range grants {
 		out = appendUnique(out, g.Type())
 	}
+
+	slices.Sort(out)
 
 	return out
 }
@@ -164,6 +180,25 @@ func authMethods(auths []oauth2.ClientAuthenticator) []string {
 	out := make([]string, 0, len(auths))
 	for _, a := range auths {
 		out = appendUnique(out, a.Method())
+	}
+
+	return out
+}
+
+// authMethodNone is the client authentication method of a public client,
+// which authenticates nothing (RFC 7591 §2).
+const authMethodNone = "none"
+
+// confidentialAuthMethods is methods without "none" — /introspect answers
+// confidential clients only — as the oauth2 metadata lists them; empty, the
+// member is omitted.
+func confidentialAuthMethods(methods []string) []string {
+	out := make([]string, 0, len(methods))
+
+	for _, m := range methods {
+		if m != authMethodNone {
+			out = append(out, m)
+		}
 	}
 
 	return out
