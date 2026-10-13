@@ -130,3 +130,26 @@ func TestCompleteLogin_CertificatelessKeyInfo(t *testing.T) {
 			" (a KeyInfo without certificate in an assertion covered by a signed Response)", err.Error())
 	})
 }
+
+// TestCompleteLogin_CertificateElementAfterACutKeyInfo: once the
+// certificate-less KeyInfo of the Response signature is closed, an element
+// named X509Certificate later in the document (an attribute value carrying
+// a user certificate, which an IdP may release) is not attributed to it:
+// the KeyInfo is still cut and the login completes (code review nit 5).
+func TestCompleteLogin_CertificateElementAfterACutKeyInfo(t *testing.T) {
+	t.Parallel()
+
+	res, err := flow(t, newEnv(t), respOpts{
+		unsignedAssert: true, signResponse: true,
+		before: func(_, a *etree.Element) {
+			attr := child(a, "AttributeStatement").CreateElement("saml:Attribute")
+			attr.CreateAttr("Name", "userCertificate")
+			cert := attr.CreateElement("saml:AttributeValue").CreateElement("ds:X509Certificate")
+			cert.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
+			cert.SetText("AQAB")
+		},
+		after: keyInfoContent(responseSignature, keyName),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, nameIDValue, res.Identity.NameID.Value)
+}

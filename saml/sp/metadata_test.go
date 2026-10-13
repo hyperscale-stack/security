@@ -287,6 +287,22 @@ func TestParseIdentityProviderMetadata_EntitiesDescriptor(t *testing.T) {
 	_, err = parseMetadata(idpMetadataSpec{root: two}.render(t), samlsp.MetadataOptions{})
 	require.ErrorIs(t, err, samlsp.ErrInvalidMetadata)
 
+	// The pin selects exactly one entity: an aggregate served by the IdP
+	// that does not list it, or lists it twice, is refused — never an index
+	// out of range, never the first of two (code review finding 2).
+	entity := string(idpMetadataSpec{}.render(t))
+	for name, doc := range map[string]string{
+		"pinned entity absent": `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">` +
+			`<md:EntityDescriptor entityID="https://other.example.com"/></md:EntitiesDescriptor>`,
+		"pinned entity listed twice": `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">` +
+			entity + entity + `</md:EntitiesDescriptor>`,
+	} {
+		idp, err := parseMetadata([]byte(doc), samlsp.MetadataOptions{EntityID: idpEntity})
+		require.ErrorIs(t, err, samlsp.ErrInvalidMetadata, name)
+		require.ErrorContains(t, err, "expected exactly one matching EntityDescriptor", name)
+		assert.Nil(t, idp, name)
+	}
+
 	// An aggregate is imported only with a pinned entity ID, even when it
 	// lists a single entity: the next version of the document may list
 	// more, and the pin is what decides which one is trusted.

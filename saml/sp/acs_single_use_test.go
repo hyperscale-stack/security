@@ -19,6 +19,7 @@ import (
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
 	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -338,4 +339,38 @@ func TestCompleteLogin_LastGoodCertificateFirst(t *testing.T) {
 	first, second := measure("_first-login"), measure("_second-login")
 	t.Logf("KeyInfo-less login signed by the third candidate: %d KiB, then %d KiB", first>>10, second>>10)
 	require.Less(t, float64(second), 0.75*float64(first), "the certificate that verified last is tried first")
+}
+
+// TestCompleteLogin_LostConsumptionRaceIsFinal: another instance consumed
+// the transaction between this instance's lookup, which still saw it
+// pending, and its consumption. The store's refusal ends the request:
+// no identity, and neither the verifier nor the replay cache is reached
+// (the mock has no MarkAssertionUsed expectation). The consumption is
+// asked with the derived ID and the presented binding (audit SAML-01,
+// SAML-I8; code review finding 1).
+func TestCompleteLogin_LostConsumptionRaceIsFinal(t *testing.T) {
+	t.Parallel()
+
+	for _, lost := range []error{samlsp.ErrTransactionConsumed, samlsp.ErrTransactionNotFound, samlsp.ErrBrowserBindingMismatch} {
+		t.Run(lost.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			mem := memory.New()
+			store := samlsp.NewMockStorage(t)
+			store.EXPECT().SaveTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.SaveTransaction).Once()
+			store.EXPECT().LookupTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.LookupTransaction).Once()
+
+			e := newEnv(t, func(c *samlsp.Config, _ *samlsp.Connection) { c.Transactions, c.ReplayCache = store, store })
+			e.store = mem
+
+			lr := begin(t, e, samlsp.LoginOptions{})
+			store.EXPECT().ConsumeTransaction(mock.Anything, txKey(connID, lr.relayState), bindingKey(lr.cookie.Value)).
+				Return(lost).Once()
+
+			res, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
+			assert.Nil(t, res, "a lost consumption race never logs in")
+			require.ErrorIs(t, err, lost)
+			require.ErrorIs(t, err, samlsp.ErrRejected)
+		})
+	}
 }
