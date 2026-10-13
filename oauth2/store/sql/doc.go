@@ -28,13 +28,26 @@
 //     error fails the operation, closed.
 //   - Lookups must reach the primary database: a replica DSN or a
 //     read/write-splitting proxy could answer from before a revocation.
-//   - Text is stored as UTF-8 and compared exactly: a PostgreSQL database
-//     in the UTF8 encoding; MySQL tables in utf8mb4 with a strict sql_mode,
-//     since a non-strict MySQL truncates an over-long value — a subject, an
-//     extension's data — instead of refusing it.
+//   - Keys are compared byte for byte. The statements compare the code and
+//     token hashes and the token-family IDs, and no other column. MySQL
+//     and MariaDB compare text under the column's collation —
+//     case- and accent-insensitive by default, trailing spaces ignored by
+//     every PAD SPACE one, utf8mb4_bin included — so [Schema] declares
+//     these columns VARBINARY there; a database created before needs the
+//     statements MIGRATION.md lists. The mysql client shows them in
+//     hexadecimal: read them with CAST(family_id AS CHAR). PostgreSQL
+//     compares them byte for byte under the database's default collation,
+//     which is deterministic, and SQLite under its BINARY collation.
+//   - Text is stored as UTF-8: a PostgreSQL database in the UTF8 encoding;
+//     MySQL tables in utf8mb4 with a strict sql_mode, since a non-strict
+//     MySQL truncates an over-long value — a subject, an extension's data —
+//     instead of refusing it.
 //
-// The CI of this module exercises SQLite only: the PostgreSQL and MySQL
-// guarantees rest on the locking described in [Store].
+// The CI of this module exercises SQLite only. The PostgreSQL and MySQL
+// guarantees rest on the locking described in [Store]; the opt-in suite of
+// internal/interop/sqlstores runs the conformance suite, concurrent
+// Migrate and the MySQL upgrade on PostgreSQL, MySQL and MariaDB servers
+// (see its compose.yaml).
 //
 // # Upgrading
 //

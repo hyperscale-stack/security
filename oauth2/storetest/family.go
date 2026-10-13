@@ -268,6 +268,76 @@ func testFamilyRevokeIsolation(t *testing.T, s oauth2.Storage) {
 	requireUsable(t, s, cc)
 }
 
+// lookAlikeKeys are pairs of keys that a comparison under a
+// case-insensitive, accent-insensitive or space-padding collation — the
+// default ones of MySQL and MariaDB, and every PAD SPACE one, utf8mb4_bin
+// included — takes for one key. They differ only in letter case, an
+// accent, the Unicode form of a character (é precomposed, and e followed
+// by a combining acute accent), an expansion (ß and ss) or a trailing
+// space.
+var lookAlikeKeys = [][2]string{
+	{"Fam-Case-Az09", "fAM-cASE-aZ09"},
+	{"fam-accent-e", "fam-accent-\u00e9"},
+	{"fam-form-\u00e9", "fam-form-e\u0301"},
+	{"fam-strasse", "fam-stra\u00dfe"},
+	{"fam-space", "fam-space "},
+}
+
+// testKeysAreComparedExactly checks that a store tells keys apart byte for
+// byte (I7). Of two look-alike family IDs, revoking one leaves the other
+// usable, and a revocation recorded for one before any issuance does not
+// refuse the first pair of the other. Tokens and codes whose hashes differ
+// only in letter case are records of their own, each consumed on its own.
+func testKeysAreComparedExactly(t *testing.T, s oauth2.Storage) {
+	for i, ids := range lookAlikeKeys {
+		kept := newPair(fmt.Sprintf("alike-kept-%d", i), ids[0])
+		revoked := newPair(fmt.Sprintf("alike-revoked-%d", i), ids[1])
+
+		mustSave(t, s, kept)
+		mustSave(t, s, revoked)
+		mustNoError(t, s.RevokeRefreshFamily(ctx(), ids[1]), fmt.Sprintf("revoke family %q", ids[1]))
+		requireUnusable(t, s, revoked)
+		requireUsable(t, s, kept)
+
+		mustNoError(t, s.RevokeRefreshFamily(ctx(), "early-"+ids[0]), fmt.Sprintf("revoke family %q", "early-"+ids[0]))
+
+		first := newPair(fmt.Sprintf("alike-first-%d", i), "early-"+ids[1])
+		mustSave(t, s, first)
+		requireUsable(t, s, first)
+	}
+
+	upper, lower := newPair("Alike-Hash", "fam-alike-upper"), newPair("aLIKE-hASH", "fam-alike-lower")
+	mustSave(t, s, upper)
+	mustSave(t, s, lower)
+	requireOwnFamily(t, s, upper)
+	requireOwnFamily(t, s, lower)
+
+	codes := []*oauth2.AuthorizationCode{sampleCode("Alike-Code"), sampleCode("aLIKE-cODE")}
+	for _, code := range codes {
+		mustNoError(t, s.SaveAuthorizationCode(ctx(), code), "save code "+code.CodeHash)
+	}
+
+	for _, code := range codes {
+		got, err := s.ConsumeAuthorizationCode(ctx(), code.CodeHash)
+		mustNoError(t, err, "consume code "+code.CodeHash)
+		requireRecord(t, got, code, "consume code "+code.CodeHash)
+	}
+}
+
+// requireOwnFamily asserts that the lookups of pair's tokens find its own
+// records: those of the family it was saved in.
+func requireOwnFamily(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
+	t.Helper()
+
+	at, err := s.LookupAccessToken(ctx(), pair.Access.TokenHash)
+	mustNoError(t, err, "lookup access token "+pair.Access.TokenHash)
+	mustEqual(t, at.FamilyID, pair.Access.FamilyID, "family of access token "+pair.Access.TokenHash)
+
+	rt, err := s.LookupRefreshToken(ctx(), pair.Refresh.TokenHash)
+	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
+	mustEqual(t, rt.FamilyID, pair.Refresh.FamilyID, "family of refresh token "+pair.Refresh.TokenHash)
+}
+
 // testFamilyRevokeRejectsEmptyID refuses to revoke the empty family ID,
 // which would otherwise reach every token outside a family.
 func testFamilyRevokeRejectsEmptyID(t *testing.T, s oauth2.Storage) {

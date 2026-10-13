@@ -37,6 +37,10 @@ type Dialect interface {
 	// "" when the engine serializes the creation of a table itself and
 	// Migrate runs its statements one by one.
 	migrationLock() string
+	// keyType is the column type [Schema] gives a key of at most length
+	// bytes — a code or token hash, a token-family ID: the only columns
+	// the statements compare. It must compare them byte for byte.
+	keyType(length int) string
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -66,7 +70,8 @@ const (
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The tables must be
-// InnoDB: the store relies on its row locks.
+// InnoDB: the store relies on its row locks. Its key columns are
+// VARBINARY (see [Schema]).
 var MySQL Dialect = mysql{}
 
 // SQLite is the SQLite dialect (? placeholders). SQLite has no row locks:
@@ -119,6 +124,13 @@ func (postgres) migrationLock() string {
 	return "SELECT pg_advisory_xact_lock(" + migrationLockKey + ")"
 }
 
+// keyType is VARCHAR: PostgreSQL compares text byte for byte under a
+// deterministic collation, which a database's default collation is. A
+// VARCHAR(n) silently drops the spaces past n characters, which no key
+// reaches: the store refuses a family ID over 64 bytes, and oauth2.HashToken
+// hashes are 64 characters.
+func (postgres) keyType(length int) string { return varchar(length) }
+
 type mysql struct{}
 
 func (mysql) Name() string           { return "mysql" }
@@ -130,6 +142,12 @@ func (mysql) insertFamily() string {
 	return `INSERT INTO oauth2_token_families (family_id, revoked_at, expires_at) VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE family_id = family_id`
 }
+
+// keyType is VARBINARY: MySQL and MariaDB compare text under the column's
+// collation — case- and accent-insensitive by default, trailing spaces
+// ignored by every PAD SPACE one, utf8mb4_bin included — and binary
+// strings byte for byte.
+func (mysql) keyType(length int) string { return "VARBINARY(" + strconv.Itoa(length) + ")" }
 
 func (mysql) lockFamily() string  { return lockFamilyForUpdate }
 func (mysql) lockRefresh() string { return lockRefreshForUpdate }
@@ -149,6 +167,13 @@ func (sqlite) Name() string           { return dialectSQLite }
 func (sqlite) rebind(q string) string { return q }
 
 func (sqlite) insertFamily() string { return insertFamilyOnConflict }
+
+// keyType is VARCHAR: SQLite compares text byte for byte under its default
+// BINARY collation.
+func (sqlite) keyType(length int) string { return varchar(length) }
+
+// varchar is the VARCHAR(length) column type.
+func varchar(length int) string { return "VARCHAR(" + strconv.Itoa(length) + ")" }
 
 // lockFamily and lockRefresh are plain reads: SQLite has no FOR UPDATE,
 // and the write that opens every store transaction already holds the

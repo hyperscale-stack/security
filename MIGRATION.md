@@ -2268,3 +2268,107 @@ for `oauth2/store/sql`, `(-3346565968272468758)` for `oidc/client/store/sql`,
 `(1266919442082856213)` for `saml/sp/store/sql`). An engine without
 `pg_advisory_xact_lock` cannot use `Migrate`: apply `Schema` with your own
 tool.
+
+### `oauth2/store/sql`: MySQL compares keys byte for byte
+
+On MySQL and MariaDB the SQL store compared its keys — token-family IDs,
+code and token hashes — under the collation of their columns. The default
+ones ignore letter case and accents and take canonically equivalent Unicode
+forms (and `ß` / `ss`) for one character: `utf8mb4_0900_ai_ci` on MySQL 8,
+`utf8mb4_uca1400_ai_ci` on MariaDB 11. Those of MariaDB, like every `_bin`
+collation, also ignore trailing spaces. Two families whose IDs differed only
+that way were one family: revoking one revoked the other, and a pair issued
+into one joined the other's record — against the isolation the
+`oauth2.Storage` contract promises (I7). The library's own family IDs (random
+or derived, base64url) and its hashes (lowercase hex) never differ that way;
+the family IDs of custom grants can. `Schema(sqlstore.MySQL)` now declares
+the six key columns `VARBINARY`, which MySQL and MariaDB compare byte for
+byte; PostgreSQL and SQLite already did.
+
+|                                                                | Before                                       | After                                            |
+| -------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------ |
+| MySQL key columns (`code_hash`, `token_hash` ×2, `family_id` ×3) | `VARCHAR(n)`, compared under the collation   | `VARBINARY(n)`, compared byte for byte           |
+| PostgreSQL and SQLite tables                                   | `VARCHAR(n)`, compared byte for byte         | unchanged                                        |
+| `Migrate` on an existing MySQL database                        | creates the missing tables                   | unchanged: it never alters a table (steps below) |
+| A token merged into a look-alike family's record               | shares that family's state                   | reads revoked once upgraded                      |
+| `storetest.RunConformance`                                     | —                                            | checks that a store compares keys byte for byte  |
+
+To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
+
+1. **Preflight**, on the tables as they are, before any `ALTER`:
+
+   ```sql
+   -- Tokens merged into the record of a look-alike family:
+   -- access tokens, refresh tokens (expected: 0, 0).
+   SELECT
+     (SELECT COUNT(*) FROM oauth2_access_tokens t
+        JOIN oauth2_token_families f ON f.family_id = t.family_id
+        WHERE CAST(t.family_id AS BINARY) <> CAST(f.family_id AS BINARY)),
+     (SELECT COUNT(*) FROM oauth2_refresh_tokens t
+        JOIN oauth2_token_families f ON f.family_id = t.family_id
+        WHERE CAST(t.family_id AS BINARY) <> CAST(f.family_id AS BINARY));
+   -- The longest keys, in bytes: family IDs at most 64, hashes at most 128.
+   SELECT
+     (SELECT COALESCE(MAX(LENGTH(family_id)), 0) FROM oauth2_token_families),
+     (SELECT COALESCE(MAX(LENGTH(family_id)), 0) FROM oauth2_access_tokens),
+     (SELECT COALESCE(MAX(LENGTH(family_id)), 0) FROM oauth2_refresh_tokens),
+     (SELECT COALESCE(MAX(LENGTH(code_hash)), 0) FROM oauth2_auth_codes),
+     (SELECT COALESCE(MAX(LENGTH(token_hash)), 0) FROM oauth2_access_tokens),
+     (SELECT COALESCE(MAX(LENGTH(token_hash)), 0) FROM oauth2_refresh_tokens);
+   ```
+
+   The counts are 0 unless custom family IDs differ only by case, accents,
+   Unicode form or trailing spaces. When they are not, run steps 2 and 3
+   with token writes stopped: between the `ALTER` of
+   `oauth2_token_families` and step 3, an issuance into such a family would
+   record it active and revive the tokens it shares with a revoked family. A
+   key longer than its column makes step 2 fail (it runs in strict mode):
+   delete those rows first — the store refuses such keys since #82.
+2. **Convert the key columns and record the orphaned families revoked**, in
+   one session, before traffic resumes:
+
+   ```sql
+   SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'STRICT_ALL_TABLES');
+   ALTER TABLE oauth2_access_tokens  MODIFY token_hash VARBINARY(128) NOT NULL, MODIFY family_id VARBINARY(64) NOT NULL;
+   ALTER TABLE oauth2_refresh_tokens MODIFY token_hash VARBINARY(128) NOT NULL, MODIFY family_id VARBINARY(64) NOT NULL;
+   ALTER TABLE oauth2_token_families MODIFY family_id  VARBINARY(64)  NOT NULL;
+   INSERT INTO oauth2_token_families (family_id, revoked_at, expires_at)
+   SELECT o.family_id, UNIX_TIMESTAMP(), GREATEST(MAX(o.expires_at), UNIX_TIMESTAMP() + 86400)
+   FROM (SELECT family_id, expires_at FROM oauth2_access_tokens  WHERE family_id <> ''
+         UNION ALL
+         SELECT family_id, expires_at FROM oauth2_refresh_tokens WHERE family_id <> '') o
+   WHERE NOT EXISTS (SELECT 1 FROM oauth2_token_families f WHERE f.family_id = o.family_id)
+   GROUP BY o.family_id;
+   ```
+
+   The `INSERT` runs after the `ALTER`s — before them, the look-alike would
+   collide with its family's key. It records revoked every family that
+   tokens name but that has no record of its own once keys compare byte for
+   byte: the look-alikes the collation merged, and families whose record
+   was lost (tokens issued before #82, a premature cleanup). Their tokens
+   already read revoked (I8); the record keeps a later issuance from
+   recording them active, for `oauth2.FamilyRevocationRetention` (86400 s)
+   at least. A look-alike that shared an *active* family's record therefore
+   reads revoked: its users sign in again.
+3. **Optionally, convert the codes' table.** The library's code hashes are
+   lowercase hex, which no collation confuses, so this only matters for
+   hashes of your own. It rebuilds a table `/authorize` writes to: run it at
+   a quiet time (`Migrate` creates it binary on a new database).
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes MODIFY code_hash VARBINARY(128) NOT NULL;
+   ```
+
+4. **Plan the window.** Each `ALTER` rebuilds its table. MySQL 8.0 and 8.4
+   copy it and block its writes meanwhile (`ALGORITHM=COPY`, `LOCK=SHARED`).
+   MariaDB 11.2 and later can rebuild it with `LOCK=NONE`. While
+   `oauth2_token_families` is rebuilt, every issuance, rotation and
+   revocation waits. Run it at a quiet time, or use an online schema-change
+   tool with the same column definitions. The store works before, during
+   and after the conversion; until it is done, comparisons stay as they
+   were.
+5. **Read the keys** with `CAST(family_id AS CHAR)`: the `mysql` client
+   shows binary columns in hexadecimal (`--binary-as-hex`, its default
+   since 8.0.19).
+6. **Custom stores** compare family IDs and hashes byte for byte, and pass
+   `storetest.RunConformance`, which now checks it (`KeysAreComparedExactly`).

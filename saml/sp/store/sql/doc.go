@@ -36,7 +36,9 @@
 //   - SQLite: one writer at a time; set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option).
 //   - Every column holds ASCII (hex digests, ASCII-only JSON, integers): no
-//     character set, collation or sql_mode requirement.
+//     character set, collation or sql_mode requirement. The keys are 64
+//     lowercase hex digits, validated at every call: no collation takes one
+//     key for another.
 //   - Give the SP a database user limited to the two tables: each record
 //     carries a MAC under samlsp.Config.TransactionKeys, so the database is
 //     trusted for availability and single consumption only.

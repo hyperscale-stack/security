@@ -19,7 +19,7 @@ const FamilyRevocationRetention = 24 * time.Hour
 // [Storage] accepts: [TokenPair.Validate] and every RevokeRefreshFamily
 // implementation refuse a longer one with invalid_request, so no backend
 // can silently truncate two identifiers into the same family (the SQL
-// store keeps them in a VARCHAR(64) column).
+// store keeps them in a VARCHAR(64) column, VARBINARY(64) on MySQL).
 const MaxFamilyIDLength = 64
 
 // AuthorizationCodeStore persists single-use authorization codes (RFC 6749

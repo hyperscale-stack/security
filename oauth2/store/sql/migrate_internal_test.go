@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -56,6 +57,7 @@ func lockingStore(t *testing.T, lock string) (*Store, *sql.DB) {
 
 	d := NewMockDialect(t)
 	d.EXPECT().migrationLock().Return(lock)
+	d.EXPECT().keyType(mock.Anything).RunAndReturn(sqlite{}.keyType).Maybe()
 
 	return &Store{db: db, dialect: d}, db
 }

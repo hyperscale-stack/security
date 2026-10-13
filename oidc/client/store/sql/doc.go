@@ -25,7 +25,11 @@
 //   - PostgreSQL: Consume runs at READ COMMITTED whatever the server
 //     default (see [Postgres]).
 //   - MySQL: the table must use InnoDB (row locks); utf8mb4 is not
-//     required — every column holds ASCII.
+//     required — every column holds ASCII. Nor is a binary collation: the
+//     keys are 64 lowercase hex digits — validated at Save; oidcclient
+//     passes the canonical hex(SHA-256(state)) to Consume, and the binding
+//     hash is compared in Go, in constant time — so no collation takes one
+//     key for another.
 //   - SQLite: one writer at a time. Set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option) so a
 //     concurrent consumer waits instead of failing with SQLITE_BUSY; a busy

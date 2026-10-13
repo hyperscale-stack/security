@@ -946,7 +946,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the former `BOOLEAN NOT NULL DEFAULT 0` column and the store's integer
   comparisons — and the token-family indexes are gone, since MySQL rejects
   their `CREATE INDEX IF NOT EXISTS`. `Schema` returns the same DDL for
-  every dialect.
+  every dialect but for MySQL's key columns (see Security).
 - The `Migrate` of the SQL stores (`oauth2/store/sql`,
   `oidc/client/store/sql`, `saml/sp/store/sql`) can run concurrently, as
   every instance of a deployment starting at once does. On PostgreSQL,
@@ -1817,3 +1817,18 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   for it on a `Manager` of its own (cookie `__Host-signin`), cross-origin
   posts are refused (`http.CrossOriginProtection`) and the credentials go
   through `basic.Authenticator`.
+- The OAuth2 SQL store (`oauth2/store/sql`) compares its keys byte for byte
+  on MySQL and MariaDB. Those engines compared the token-family IDs and the
+  code and token hashes under the collation of their columns, and the
+  default collations ignore letter case and accents and take canonically
+  equivalent forms (and `ß` / `ss`) for one character; MariaDB's, like
+  every `_bin` collation, also ignore trailing spaces. Two families whose
+  IDs differed only that way were one: revoking one revoked the other, and a
+  pair issued into one joined the other's record (the family isolation, I7,
+  of `oauth2.Storage`). The library's own family IDs and hashes never differ
+  that way; those of custom grants can. `Schema(sqlstore.MySQL)` declares
+  the six key columns `VARBINARY`; an existing MySQL database is converted
+  with the statements of MIGRATION.md, which also record revoked the
+  families such a merge left without a record, so that none is revived.
+  `storetest.RunConformance` checks that every store compares its keys byte
+  for byte (`KeysAreComparedExactly`).

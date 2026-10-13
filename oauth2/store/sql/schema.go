@@ -19,11 +19,19 @@ import (
 // SMALLINT 0/1 since PostgreSQL has no implicit integer/boolean cast. Token
 // / code raw values are NEVER stored — only their hashes.
 //
-// The DDL sticks to the subset every supported engine accepts, so it is
-// the same for every [Dialect]: the argument is accepted for API stability
-// and ignored. The issuer and extension_data columns of codes and tokens —
-// the realm a grant is bound to and the opaque state an oauth2.Extension
-// recorded for it — are nullable TEXT, the only form every engine accepts
+// The DDL sticks to the subset every supported engine accepts, and is the
+// same for every [Dialect] but for the type of the key columns — the code
+// and token hashes and the token-family IDs, the only columns the
+// statements compare: VARCHAR on PostgreSQL and SQLite, which compare it
+// byte for byte, VARBINARY on MySQL, whose text comparisons follow a
+// collation that may ignore case, accents or trailing spaces. A nil
+// Dialect gets the PostgreSQL / SQLite DDL. A MySQL database created
+// before the key columns were binary is upgraded with the statements
+// MIGRATION.md lists.
+//
+// The issuer and extension_data columns of codes and tokens — the realm a
+// grant is bound to and the opaque state an oauth2.Extension recorded for
+// it — are nullable TEXT, the only form every engine accepts
 // in an ALTER TABLE … ADD COLUMN on a populated table, so a database
 // created before them is upgraded with the statements MIGRATION.md lists
 // and ends up with the same columns as a new one. The store writes an
@@ -38,10 +46,17 @@ import (
 // them. Production deployments typically run them through a migration tool
 // rather than via Migrate, but Migrate is offered for tests and small
 // setups.
-func Schema(_ Dialect) []string {
+func Schema(d Dialect) []string {
+	if d == nil {
+		d = sqlite{}
+	}
+
+	// 64: oauth2.MaxFamilyIDLength, in bytes.
+	hash, family := d.keyType(128), d.keyType(64)
+
 	return []string{
 		`CREATE TABLE IF NOT EXISTS oauth2_auth_codes (
-			code_hash             VARCHAR(128) PRIMARY KEY,
+			code_hash             ` + hash + ` PRIMARY KEY,
 			client_id             VARCHAR(255) NOT NULL,
 			subject               VARCHAR(255) NOT NULL,
 			redirect_uri          TEXT         NOT NULL,
@@ -57,11 +72,11 @@ func Schema(_ Dialect) []string {
 			redirect_uri_omitted  SMALLINT     NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_access_tokens (
-			token_hash VARCHAR(128) PRIMARY KEY,
+			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
 			subject    VARCHAR(255) NOT NULL,
 			scope      TEXT         NOT NULL,
-			family_id  VARCHAR(64)  NOT NULL,
+			family_id  ` + family + `  NOT NULL,
 			audience   VARCHAR(255) NOT NULL,
 			issued_at  BIGINT       NOT NULL,
 			expires_at BIGINT       NOT NULL,
@@ -69,11 +84,11 @@ func Schema(_ Dialect) []string {
 			extension_data TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_refresh_tokens (
-			token_hash VARCHAR(128) PRIMARY KEY,
+			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
 			subject    VARCHAR(255) NOT NULL,
 			scope      TEXT         NOT NULL,
-			family_id  VARCHAR(64)  NOT NULL,
+			family_id  ` + family + `  NOT NULL,
 			consumed   SMALLINT     NOT NULL DEFAULT 0,
 			issued_at  BIGINT       NOT NULL,
 			expires_at BIGINT       NOT NULL,
@@ -82,7 +97,7 @@ func Schema(_ Dialect) []string {
 			family_issued_at BIGINT NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
-			family_id  VARCHAR(64)  PRIMARY KEY,
+			family_id  ` + family + `  PRIMARY KEY,
 			revoked_at BIGINT       NOT NULL DEFAULT 0,
 			expires_at BIGINT       NOT NULL
 		)`,
