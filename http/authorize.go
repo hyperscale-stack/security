@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/hyperscale-stack/security"
 )
@@ -21,12 +22,9 @@ import (
 // or, without one, [DefaultErrorMapper]("Bearer", [DefaultRealm]): 403 for an
 // authenticated principal, 401 with a challenge for an unauthenticated one
 // (RFC 9110 §15.5.2, §15.5.4: it lacks credentials, it is asked for them).
-// Authorize panics if adm is nil.
+// Authorize copies attrs, and panics if adm or one of attrs is nil (a typed
+// nil included): a route's policy is static configuration.
 func Authorize(adm security.AccessDecisionManager, attrs ...security.Attribute) func(http.Handler) http.Handler {
-	if adm == nil {
-		panic("httpsec: Authorize: nil AccessDecisionManager")
-	}
-
 	return AuthorizeWith(adm, nil, attrs...)
 }
 
@@ -38,10 +36,7 @@ func AuthorizeWith(
 	mapper ErrorMapper,
 	attrs ...security.Attribute,
 ) func(http.Handler) http.Handler {
-	if adm == nil {
-		panic("httpsec: Authorize: nil AccessDecisionManager")
-	}
-
+	attrs = mustPolicy(adm, attrs)
 	fallback := DefaultErrorMapper(defaultChallengeScheme, DefaultRealm)
 
 	return func(next http.Handler) http.Handler {
@@ -65,6 +60,22 @@ func AuthorizeWith(
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// mustPolicy checks the static configuration of [Authorize] and returns a
+// copy of attrs, so the caller reusing its slice cannot rewrite the policy.
+func mustPolicy(adm security.AccessDecisionManager, attrs []security.Attribute) []security.Attribute {
+	if adm == nil {
+		panic("httpsec: Authorize: nil AccessDecisionManager")
+	}
+
+	for i, a := range attrs {
+		if isNil(a) {
+			panic(fmt.Sprintf("httpsec: Authorize: nil Attribute at index %d", i))
+		}
+	}
+
+	return slices.Clone(attrs)
 }
 
 // refusal turns an access denial of an unauthenticated principal into

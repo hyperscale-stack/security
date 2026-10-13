@@ -27,7 +27,8 @@ const (
 )
 
 // errEngineContract reports a custom [security.Engine] that returned no
-// context or no authentication without an error: an internal error.
+// context or no authentication (nil or a typed nil) without an error: an
+// internal error.
 var errEngineContract = errors.New("httpsec: the engine returned no context or authentication")
 
 // Middleware wires a [security.Engine] into the net/http pipeline.
@@ -43,9 +44,13 @@ var errEngineContract = errors.New("httpsec: the engine returned no context or a
 //
 // The middleware makes its error mapper available to [Authorize], so the
 // authorization step answers with the same challenge. Middleware panics at
-// construction on an invalid challenge configuration (see
-// [DefaultErrorMapper]).
+// construction on a nil engine and on an invalid challenge configuration
+// (see [DefaultErrorMapper]).
 func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.Handler {
+	if engine == nil {
+		panic("httpsec: Middleware: nil Engine")
+	}
+
 	cfg := buildConfig(opts...)
 
 	return func(next http.Handler) http.Handler {
@@ -68,7 +73,7 @@ func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.
 				cfg.errorMapper.Map(w, r, err)
 
 				return
-			case newCtx == nil || auth == nil:
+			case newCtx == nil || isNil(auth):
 				cfg.errorMapper.Map(w, r, errEngineContract)
 
 				return

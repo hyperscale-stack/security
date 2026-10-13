@@ -153,7 +153,7 @@ func TestMiddlewareAnswersOutagesAndBrokenContracts(t *testing.T) {
 
 		require.NotPanics(t, func() { rec = serve(c.handler, bearerRequest()) }, name)
 		assert.Equal(t, c.status, rec.Code, name)
-		assert.Empty(t, rec.Header().Values("WWW-Authenticate"), name)
+		assert.Equal(t, []string{bearerAPI}, rec.Header().Values("WWW-Authenticate"), "RFC 6750 §3: %s", name)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestMiddlewareEngineWithoutExtractor(t *testing.T) {
 
 	rec := serve(httpsec.Middleware(engine)(next204()), httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Empty(t, rec.Header().Values("WWW-Authenticate"))
+	assert.Equal(t, []string{bearerAPI}, rec.Header().Values("WWW-Authenticate"))
 
 	rec = serve(httpsec.Middleware(engine, httpsec.WithAnonymousFallback(true))(next204()), httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusNoContent, rec.Code)

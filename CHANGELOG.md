@@ -675,8 +675,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   credential is 401 without error code (was 400), an unauthenticated
   principal refused by `Authorize` 401 (was 403), a repeated `Authorization`
   field 400, an `ErrUnavailable` 503, and an error wrapping no sentinel 500
-  (was 401). `Authorize` answers with the challenge of the `Middleware` in
-  front of it instead of a hard-coded bare `Bearer`. See
+  (was 401); a Bearer resource challenges every refusal, 400 and 5xx
+  included (RFC 6750 §3). `Authorize` answers with the challenge of the
+  `Middleware` in front of it instead of a hard-coded bare `Bearer`, copies
+  its attributes and panics on a nil one; `Middleware` panics on a nil
+  engine. See
   [MIGRATION.md](MIGRATION.md).
 - The `httpsec.Middleware` span records `http.request.method` (`_OTHER`
   for a method outside RFC 9110 / RFC 5789) instead of `http.method`, and
@@ -817,6 +820,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   returning an undefined `Decision` now fail closed (an error, a denial, the
   anonymous authentication, a deny vote) — typed nils included. An
   extractor's typed nil is "no credential".
+- A custom `Engine` returning a typed nil `Authentication` made
+  `httpsec.Middleware` panic; it is now answered 500, like a nil one.
 - `grpcsec` sends the metadata staged on its `Carrier` as the response
   header, refused RPCs included, as its documentation said; it was dropped.
   A custom `Engine` returning no authentication no longer panics the

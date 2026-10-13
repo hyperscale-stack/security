@@ -59,9 +59,10 @@ func TestDefaultErrorMapperAnswers(t *testing.T) {
 		challenge     []string
 	}{
 		{"invalid request, bearer", "Bearer", security.ErrInvalidRequest, bearerTokenSent, http.StatusBadRequest, challenge(invalidRequest)},
-		{"invalid request, no token", "Bearer", security.ErrInvalidRequest, "", http.StatusBadRequest, nil},
-		{"unavailable", "Bearer", security.ErrUnavailable, bearerTokenSent, http.StatusServiceUnavailable, nil},
-		{"unavailable joined with a verdict", "Bearer", refused(security.ErrTokenNotFound, security.ErrUnavailable), bearerTokenSent, http.StatusServiceUnavailable, nil},
+		{"invalid request, no token", "Bearer", security.ErrInvalidRequest, "", http.StatusBadRequest, challenge(bearerAPI)},
+		{"invalid request, basic credentials", "Bearer", security.ErrInvalidRequest, "Basic dTpw", http.StatusBadRequest, challenge(bearerAPI)},
+		{"unavailable", "Bearer", security.ErrUnavailable, bearerTokenSent, http.StatusServiceUnavailable, challenge(bearerAPI)},
+		{"unavailable joined with a verdict", "Bearer", refused(security.ErrTokenNotFound, security.ErrUnavailable), bearerTokenSent, http.StatusServiceUnavailable, challenge(bearerAPI)},
 		{"expired token", "Bearer", security.ErrTokenExpired, bearerTokenSent, http.StatusUnauthorized, challenge(invalidToken)},
 		{"token not found", "Bearer", security.ErrTokenNotFound, bearerTokenSent, http.StatusUnauthorized, challenge(invalidToken)},
 		{"bad signature (invalid credentials)", "Bearer", fmt.Errorf("jwt: invalid signature: %w", security.ErrInvalidCredentials), bearerTokenSent, http.StatusUnauthorized, challenge(invalidToken)},
@@ -74,15 +75,17 @@ func TestDefaultErrorMapperAnswers(t *testing.T) {
 		{"insufficient scope, bearer", "Bearer", security.ErrInsufficientScope, bearerTokenSent, http.StatusForbidden, challenge(insufficient)},
 		{"access denied without a bearer token", "Bearer", security.ErrAccessDenied, "", http.StatusForbidden, challenge(bearerAPI)},
 		{"anonymous denial", "Bearer", fmt.Errorf("%w: %w", security.ErrAuthenticationRequired, security.ErrAccessDenied), "", http.StatusUnauthorized, challenge(bearerAPI)},
-		{"no extractor", "Bearer", security.ErrNoExtractor, "", http.StatusInternalServerError, nil},
-		{"no sentinel", "Bearer", errors.New("boom"), bearerTokenSent, http.StatusInternalServerError, nil},
-		{"refusal without a sentinel", "Bearer", refused(errors.New("boom")), bearerTokenSent, http.StatusInternalServerError, nil},
+		{"no extractor", "Bearer", security.ErrNoExtractor, "", http.StatusInternalServerError, challenge(bearerAPI)},
+		{"no sentinel", "Bearer", errors.New("boom"), bearerTokenSent, http.StatusInternalServerError, challenge(bearerAPI)},
+		{"refusal without a sentinel", "Bearer", refused(errors.New("boom")), bearerTokenSent, http.StatusInternalServerError, challenge(bearerAPI)},
 		{"lowercase scheme keeps the codes", "bearer", security.ErrTokenExpired, bearerTokenSent, http.StatusUnauthorized,
 			challenge(`bearer realm="api", error="invalid_token", error_description="The access token is invalid or has expired."`)},
 		{"basic, invalid credentials", "Basic", security.ErrInvalidCredentials, "Basic dTpw", http.StatusUnauthorized, challenge(basicAPI)},
 		{"basic, authentication required", "Basic", security.ErrAuthenticationRequired, "", http.StatusUnauthorized, challenge(basicAPI)},
 		{"basic, access denied", "Basic", security.ErrAccessDenied, "Basic dTpw", http.StatusForbidden, challenge(basicAPI)},
 		{"basic, invalid request", "Basic", security.ErrInvalidRequest, "Basic dTpw", http.StatusBadRequest, nil},
+		{"basic, unavailable", "Basic", security.ErrUnavailable, "Basic dTpw", http.StatusServiceUnavailable, nil},
+		{"basic, no sentinel", "Basic", errors.New("boom"), "Basic dTpw", http.StatusInternalServerError, nil},
 		{"basic, bearer token sent", "Basic", security.ErrInvalidCredentials, bearerTokenSent, http.StatusUnauthorized, challenge(basicAPI)},
 		{"custom scheme", "Negotiate", security.ErrInvalidCredentials, bearerTokenSent, http.StatusUnauthorized, challenge(`Negotiate realm="api"`)},
 	}
@@ -107,6 +110,7 @@ func TestDefaultErrorMapperDefaultsSchemeAndRealm(t *testing.T) {
 	}{
 		{"", "", bearerAPI},
 		{"Basic", "", basicAPI},
+		{"basic", "", `basic realm="api", charset="UTF-8"`},
 		{"Bearer", "hyperscale", `Bearer realm="hyperscale"`},
 		{"Bearer", "a \"quoted\" \\ realm\twith tab", `Bearer realm="a \"quoted\" \\ realm` + "\t" + `with tab"`},
 	} {

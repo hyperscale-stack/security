@@ -1164,12 +1164,12 @@ outage never reads as a verdict on the credentials:
 
 | Class | HTTP | `WWW-Authenticate` (scheme S, realm R) | gRPC / ConnectRPC |
 | --- | --- | --- | --- |
-| `invalid_request` (e.g. repeated `Authorization`) | 400 | Bearer + bearer token sent: `error="invalid_request"` | `InvalidArgument` |
-| `unavailable` (`ErrUnavailable`) | 503 | — | `Unavailable` |
+| `invalid_request` (e.g. repeated `Authorization`) | 400 | Bearer: `Bearer realm=R`; + bearer token sent: `error="invalid_request"` | `InvalidArgument` |
+| `unavailable` (`ErrUnavailable`) | 503 | Bearer: `Bearer realm=R` | `Unavailable` |
 | `token_expired`, `token_not_found`, `client_secret_mismatch`, `invalid_credentials` | 401 | `S realm=R`; Bearer + bearer token sent: `error="invalid_token"` (RFC 9068 §4) | `Unauthenticated` |
 | `authentication_required`, `unsupported_credential` | 401 | `S realm=R` — no error code (RFC 6750 §3.1) | `Unauthenticated` |
 | `insufficient_scope`, `access_denied` | 403 | `S realm=R`; Bearer + bearer token sent: `error="insufficient_scope"` | `PermissionDenied` |
-| `no_extractor`, `_OTHER` (no sentinel: a broken contract) | 500 | — | `Internal` |
+| `no_extractor`, `_OTHER` (no sentinel: a broken contract) | 500 | Bearer: `Bearer realm=R` | `Internal` |
 
 A ConnectRPC error travels over HTTP with the status of the HTTP column, and
 the `connectrpcsec` default mapper puts the same `WWW-Authenticate`
@@ -1179,7 +1179,10 @@ every Connect 401 carries one.
 Every 401 carries a challenge with a realm (`api` by default; RFC 9110
 §11.6.1, RFC 7617 §2, RFC 6750 §3), a Basic one also `charset="UTF-8"`
 (RFC 7617 §2.1), and the realm is sent as an RFC 9110 quoted-string — a
-realm a quoted-string cannot carry is refused at startup. An unauthenticated
+realm a quoted-string cannot carry is refused at startup. A Bearer resource
+challenges every refusal, 400 and 5xx included: RFC 6750 §3 requires the
+challenge whenever the request carried no access token that enables
+access. An unauthenticated
 principal refused by `httpsec.Authorize` is asked to authenticate (401), an
 authenticated one refused (403) (RFC 9110 §15.5.2, §15.5.4); `Authorize`
 answers with the challenge of the `Middleware` in front of it. The RFC 6750

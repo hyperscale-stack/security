@@ -346,6 +346,16 @@ PKCE. Not supported, and refused where a provider could select them:
   (`connectrpcsec`) adapters are shipped. Other transports can be added
   downstream by implementing `security.Carrier` (header fields only — never
   the URL or cookies) and mapping errors with `security.ErrorClass`.
+- **One challenge scheme per middleware** — the default error mappers
+  advertise the one scheme configured with `WithChallengeScheme`, even when
+  the engine accepts several (Basic and Bearer): RFC 9110 §11.6.1 allows a
+  401 to list several challenges, but a client is only told about that
+  scheme. Use one middleware per scheme, or a custom `ErrorMapper` that
+  writes every challenge.
+- **Basic credentials are not NFC-normalized yet** — a Basic challenge
+  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 also says the server
+  expects the user-id and password in Unicode Normalization Form C; `basic`
+  checks them as received.
 
 ## Sessions
 

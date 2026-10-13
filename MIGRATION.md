@@ -1444,10 +1444,13 @@ and `401` to an infrastructure failure. The mapping now comes from
 | Wrong password next to an authenticator bailing out | `400`, no challenge | `401` with challenge |
 | Authenticated principal refused by `Authorize` | `403 Bearer` | `403 S realm=R` (`error="insufficient_scope"` for a bearer request) |
 | Unauthenticated principal refused by `Authorize` | `403 Bearer` | `401` with the `Middleware`'s challenge |
-| Repeated `Authorization` field | first value used | `400` (`invalid_request` for a bearer request) |
-| `ErrUnavailable` (store, key set down) | `401` | `503` |
-| Error wrapping no sentinel, `ErrNoExtractor` | `401` | `500` |
+| Repeated `Authorization` field | first value used | `400` with the challenge for a Bearer resource (`invalid_request` for a bearer request) |
+| `ErrUnavailable` (store, key set down) | `401` | `503` (with a bare challenge for a Bearer resource) |
+| Error wrapping no sentinel, `ErrNoExtractor`, a custom `Engine` returning no context or a typed nil | `401` / panic | `500` (with a bare challenge for a Bearer resource) |
 | Realm with a control or non-ASCII character | Go-escaped | `Middleware` / `DefaultErrorMapper` panic |
+| `Middleware(nil)` | panic on the first request | panic at construction |
+| `Authorize(adm, …, nil)` (a nil or typed nil attribute) | `403` on every request | panic at construction |
+| Reusing the attribute slice passed to `Authorize` | rewrote the route's policy | no effect (copied) |
 
 To migrate:
 

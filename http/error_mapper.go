@@ -38,22 +38,25 @@ type ErrorMapper interface {
 // [security.ErrorClass](err), with challenge scheme S and realm R:
 //
 //	class                                 status  WWW-Authenticate
-//	invalid_request                       400     Bearer + bearer token sent: error="invalid_request"
-//	unavailable                           503     —
+//	invalid_request                       400     Bearer realm=R; + bearer token sent: error="invalid_request"
+//	unavailable                           503     Bearer realm=R
 //	token_expired, token_not_found,
 //	client_secret_mismatch,
 //	invalid_credentials                   401     S realm=R; Bearer + bearer token sent: error="invalid_token"
 //	authentication_required,
 //	unsupported_credential                401     S realm=R (no error code, RFC 6750 §3.1)
 //	insufficient_scope, access_denied     403     S realm=R; Bearer + bearer token sent: error="insufficient_scope"
-//	no_extractor, _OTHER                  500     —
+//	no_extractor, _OTHER                  500     Bearer realm=R
 //
-// A 401 always carries a challenge (RFC 9110 §11.6.1); a Basic challenge
-// also carries charset="UTF-8" (RFC 7617 §2.1). The RFC 6750 error codes are
-// sent only when the request carried a bearer token in its Authorization
-// field: invalid_token for every failed check of the token (RFC 9068 §4),
-// insufficient_scope for a valid token refused by the access decision.
-// An unavailable dependency is not a failed check: 503, no error code. The
+// A Bearer resource challenges every refusal, 5xx included: RFC 6750 §3
+// requires the challenge whenever the request carried no access token that
+// enables access. Another scheme challenges the 401 — which always carries
+// one (RFC 9110 §11.6.1) — and the 403; a Basic challenge also carries
+// charset="UTF-8" (RFC 7617 §2.1). The RFC 6750 error codes are sent only
+// when the request carried a bearer token in an Authorization field:
+// invalid_token for every failed check of the token (RFC 9068 §4),
+// insufficient_scope for a valid token refused by the access decision. An
+// unavailable dependency is not a failed check: 503, no error code. The
 // error_description is a fixed, generic string per code — the error chain
 // is never reflected into the response.
 //
@@ -108,23 +111,17 @@ func (m *defaultErrorMapper) Map(w http.ResponseWriter, r *http.Request, err err
 	http.Error(w, http.StatusText(o.status), o.status)
 }
 
-// challengeFor returns the WWW-Authenticate value of an outcome, or "".
+// challengeFor returns the WWW-Authenticate value of an outcome, or "". A
+// Bearer resource challenges every refusal — RFC 6750 §3: the request
+// carried no access token enabling access — with the §3.1 error code only
+// for a request that carried a bearer token; another scheme challenges the
+// 401 (RFC 9110 §11.6.1) and the 403.
 func (m *defaultErrorMapper) challengeFor(o outcome, r *http.Request) string {
-	withCode := m.bearer && o.code != "" && r != nil && bearerTokenSent(r.Header.Values("Authorization"))
-
-	switch o.status {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		if withCode {
-			return m.challenge + `, error="` + o.code + `", error_description="` + o.description + `"`
-		}
-
+	switch {
+	case m.bearer && o.code != "" && r != nil && bearerTokenSent(r.Header.Values("Authorization")):
+		return m.challenge + `, error="` + o.code + `", error_description="` + o.description + `"`
+	case m.bearer, o.status == http.StatusUnauthorized, o.status == http.StatusForbidden:
 		return m.challenge
-	case http.StatusBadRequest:
-		if withCode {
-			return m.challenge + `, error="` + o.code + `", error_description="` + o.description + `"`
-		}
-
-		return ""
 	default:
 		return ""
 	}
