@@ -78,6 +78,7 @@ func TestReasonName(t *testing.T) {
 
 	for sentinel, want := range map[error]string{
 		ErrTransactionIntegrity: "transaction_integrity",
+		ErrOriginMismatch:       "origin_mismatch",
 	} {
 		assert.Equal(t, want, reasonName(reject(sentinel, "", nil)))
 		assert.Equal(t, want, reasonName(fmt.Errorf("samlsp: x: %w", sentinel)))

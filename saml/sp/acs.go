@@ -49,7 +49,9 @@ type LoginResult struct {
 //  4. the connection (from the application's route) is resolved and
 //     validated; the request must have been received at its ACS URL — same
 //     path, same host (r.Host, never a forwarding header), no query string
-//     (Core §3.2.2, Bindings §3.5.5.2);
+//     (Core §3.2.2, Bindings §3.5.5.2); when the connection sets
+//     ResponseOrigins, the request's Origin (or, without one, its Referer's
+//     origin) must be one of them;
 //  5. the lexical gate (no DTD or processing instruction, bounded elements,
 //     tokens, depth, attributes, namespace declarations and prefixes,
 //     attribute value lengths, unique attributes, declared prefixes), then
@@ -113,6 +115,10 @@ func (sp *ServiceProvider) CompleteLogin(ctx context.Context, r *http.Request, c
 	annotateConnection(span, conn)
 
 	if err := checkACSLocation(r, conn); err != nil {
+		return nil, err
+	}
+
+	if err := checkResponseOrigin(r, conn.ResponseOrigins); err != nil {
 		return nil, err
 	}
 

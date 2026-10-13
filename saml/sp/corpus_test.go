@@ -126,6 +126,13 @@ type corpusKnobs struct {
 	// would: "relax" drops its ForceAuthn, "rebind" binds it to the "other"
 	// cookie (audit STORE-02).
 	Tamper string `json:"tamper,omitempty"`
+	// ResponseOrigins sets Connection.ResponseOrigins of the posted
+	// connection (audit SAML-02).
+	ResponseOrigins []string `json:"responseOrigins,omitempty"`
+	// Origin lists the Origin header lines of the POST (none by default).
+	Origin []string `json:"origin,omitempty"`
+	// Referer is the Referer header of the POST (none by default).
+	Referer string `json:"referer,omitempty"`
 }
 
 // corpusReplayKey names a replay-cache entry.
@@ -232,6 +239,7 @@ var corpusSentinels = map[string]error{
 	"ErrResponseStatus":                samlsp.ErrResponseStatus,
 	"ErrIssuerMismatch":                samlsp.ErrIssuerMismatch,
 	"ErrDestinationMismatch":           samlsp.ErrDestinationMismatch,
+	"ErrOriginMismatch":                samlsp.ErrOriginMismatch,
 	"ErrRecipientMismatch":             samlsp.ErrRecipientMismatch,
 	"ErrAudienceMismatch":              samlsp.ErrAudienceMismatch,
 	"ErrInResponseToMismatch":          samlsp.ErrInResponseToMismatch,
@@ -456,6 +464,10 @@ func corpusResolver(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 			conn.IdentityProvider.ValidUntil = m.Instant
 		}
 
+		if id == postTo {
+			conn.ResponseOrigins = k.ResponseOrigins
+		}
+
 		for _, name := range trust {
 			cert, ok := certs[name]
 			require.True(t, ok, "unknown key %q", name)
@@ -513,6 +525,14 @@ func corpusRequest(t testing.TB, m *corpusManifest, f corpusEntry, tx corpusTx, 
 
 	req := httptest.NewRequest(http.MethodPost, acs.String(), strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	for _, origin := range f.Knobs.Origin {
+		req.Header.Add("Origin", origin)
+	}
+
+	if f.Knobs.Referer != "" {
+		req.Header.Set("Referer", f.Knobs.Referer)
+	}
 
 	switch f.Knobs.Cookie {
 	case "", "tx":

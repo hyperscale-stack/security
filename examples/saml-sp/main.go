@@ -34,6 +34,13 @@
 // of at least 32 bytes, separated by commas, the same on every instance and
 // kept in a secret store (openssl rand -hex 32). Unset, a random key is
 // drawn for this process only.
+//
+// SAMLSP_RESPONSE_ORIGINS, when set, lists the origins of the IdP pages
+// allowed to post responses to the ACS (samlsp.Connection.ResponseOrigins),
+// separated by commas, e.g. https://idp.example.com: a response posted from
+// another site — the login CSRF a leaked IdP redirect URL allows — is then
+// refused. Leave it unset for an IdP whose response page hides its origin
+// (Referrer-Policy no-referrer): browsers then post "Origin: null".
 package main
 
 import (
@@ -67,6 +74,9 @@ type appConfig struct {
 	// transactionKeys protect the pending logins in the transaction store
 	// (samlsp.Config.TransactionKeys): secret, the same on every instance.
 	transactionKeys [][]byte
+	// responseOrigins are the IdP origins allowed to post to the ACS
+	// (samlsp.Connection.ResponseOrigins); empty: not checked.
+	responseOrigins []string
 	now             func() time.Time
 }
 
@@ -108,6 +118,7 @@ func newServer(cfg appConfig) (http.Handler, error) {
 		ACSURL:           cfg.baseURL + "/saml/" + cfg.connectionID + "/acs",
 		IdentityProvider: *idp,
 		NameIDFormat:     samlsp.NameIDFormatPersistent,
+		ResponseOrigins:  cfg.responseOrigins,
 	}
 
 	// Resolution validates connections on every use; checking at startup
@@ -379,7 +390,10 @@ func main() {
 		log.Fatalf("saml-sp: %v", err)
 	}
 
-	handler, err := newServer(appConfig{baseURL: baseURL, connectionID: "corp", idpMetadata: metadata, transactionKeys: keys})
+	handler, err := newServer(appConfig{
+		baseURL: baseURL, connectionID: "corp", idpMetadata: metadata, transactionKeys: keys,
+		responseOrigins: responseOrigins(os.Getenv("SAMLSP_RESPONSE_ORIGINS")),
+	})
 	if err != nil {
 		log.Fatalf("saml-sp: %v", err)
 	}
@@ -391,6 +405,20 @@ func main() {
 
 	log.Print("saml-sp: listening")
 	log.Fatal(newHTTPServer(addr, handler).ListenAndServe())
+}
+
+// responseOrigins splits SAMLSP_RESPONSE_ORIGINS on commas; the connection
+// validates each origin.
+func responseOrigins(raw string) []string {
+	var out []string
+
+	for part := range strings.SplitSeq(raw, ",") {
+		if origin := strings.TrimSpace(part); origin != "" {
+			out = append(out, origin)
+		}
+	}
+
+	return out
 }
 
 // errKeyNotHex reports a malformed SAMLSP_TRANSACTION_KEYS entry.

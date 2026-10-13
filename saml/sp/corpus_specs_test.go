@@ -2484,6 +2484,8 @@ func (g *corpusGen) limitSpecs() []corpusSpec {
 func (g *corpusGen) replaySpecs() []corpusSpec {
 	baseline := func() []byte { return g.xml("acme", respOpts{}) }
 	refs := []string{"SAML Profiles §4.1.4.5", "SAML errata E90"}
+	originRefs := []string{"WHATWG Fetch §3.2 (Origin)", "RFC 6454 §6.2, §7", "audit SAML-02 (Connection.ResponseOrigins)"}
+	idpOrigins := []string{"https://idp.example.com"}
 
 	return []corpusSpec{
 		{
@@ -2535,6 +2537,62 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 			id: "replay/other-browser", attack: "posted by another browser's binding cookie (login CSRF)", refs: refs,
 			knobs: corpusKnobs{Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrBrowserBindingMismatch", ""),
+		},
+		{
+			id:     "replay/posted-from-another-site",
+			attack: "the IdP's response to a leaked in-flight request, auto-posted into the victim's browser from the attacker's page (login CSRF)",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"https://attacker.example"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "Origin is not an allowed response origin"),
+		},
+		{
+			id:     "replay/posted-with-an-opaque-origin",
+			attack: "a POST whose origin the posting page hides (referrer policy no-referrer, sandboxed frame): Origin null",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"null"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "opaque origin (Origin: null)"),
+		},
+		{
+			id:     "replay/posted-with-two-origins",
+			attack: "two Origin headers, one of them the IdP's",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"https://attacker.example", idpOrigins[0]}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "several Origin headers"),
+		},
+		{
+			id:     "replay/posted-without-origin-from-another-referer",
+			attack: "no Origin header, a Referer on the attacker's site",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Referer: attackerURL},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "Referer is not from an allowed response origin"),
+		},
+		{
+			id:     "replay/posted-without-origin-or-referer",
+			attack: "neither Origin nor Referer while the connection requires the IdP's origin",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "neither an Origin nor a single Referer"),
+		},
+		{
+			id:     "replay/posted-from-the-idp-origin",
+			attack: "the IdP's own auto-post page (Origin of the IdP)",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: idpOrigins},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "replay/posted-without-origin-from-the-idp-referer",
+			attack: "a browser that sends no Origin, from the IdP's page: judged on the Referer's origin",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Referer: "https://IDP.example.com:443/sso?tenant=acme"},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "replay/posted-from-another-site-without-response-origins",
+			attack: "the login CSRF POST at a connection without ResponseOrigins (opt-in): accepted, the documented residual risk",
+			refs:   originRefs, knobs: corpusKnobs{Origin: []string{"https://attacker.example"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
 		},
 		{
 			id:     "replay/record-rebound-in-the-store",

@@ -9204,6 +9204,331 @@
       }
     },
     {
+      "id": "replay/posted-from-another-site",
+      "category": "replay",
+      "attack": "the IdP's response to a leaked in-flight request, auto-posted into the victim's browser from the attacker's page (login CSRF)",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "origin": [
+          "https://attacker.example"
+        ]
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrOriginMismatch",
+        "detail": "Origin is not an allowed response origin"
+      }
+    },
+    {
+      "id": "replay/posted-with-an-opaque-origin",
+      "category": "replay",
+      "attack": "a POST whose origin the posting page hides (referrer policy no-referrer, sandboxed frame): Origin null",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "origin": [
+          "null"
+        ]
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrOriginMismatch",
+        "detail": "opaque origin (Origin: null)"
+      }
+    },
+    {
+      "id": "replay/posted-with-two-origins",
+      "category": "replay",
+      "attack": "two Origin headers, one of them the IdP's",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "origin": [
+          "https://attacker.example",
+          "https://idp.example.com"
+        ]
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrOriginMismatch",
+        "detail": "several Origin headers"
+      }
+    },
+    {
+      "id": "replay/posted-without-origin-from-another-referer",
+      "category": "replay",
+      "attack": "no Origin header, a Referer on the attacker's site",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "referer": "https://attacker.example/landing"
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrOriginMismatch",
+        "detail": "Referer is not from an allowed response origin"
+      }
+    },
+    {
+      "id": "replay/posted-without-origin-or-referer",
+      "category": "replay",
+      "attack": "neither Origin nor Referer while the connection requires the IdP's origin",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ]
+      },
+      "expect": {
+        "outcome": "rejected",
+        "sentinel": "ErrOriginMismatch",
+        "detail": "neither an Origin nor a single Referer"
+      }
+    },
+    {
+      "id": "replay/posted-from-the-idp-origin",
+      "category": "replay",
+      "attack": "the IdP's own auto-post page (Origin of the IdP)",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "origin": [
+          "https://idp.example.com"
+        ]
+      },
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "replay/posted-without-origin-from-the-idp-referer",
+      "category": "replay",
+      "attack": "a browser that sends no Origin, from the IdP's page: judged on the Referer's origin",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "responseOrigins": [
+          "https://idp.example.com"
+        ],
+        "referer": "https://IDP.example.com:443/sso?tenant=acme"
+      },
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
+      "id": "replay/posted-from-another-site-without-response-origins",
+      "category": "replay",
+      "attack": "the login CSRF POST at a connection without ResponseOrigins (opt-in): accepted, the documented residual risk",
+      "refs": [
+        "WHATWG Fetch §3.2 (Origin)",
+        "RFC 6454 §6.2, §7",
+        "audit SAML-02 (Connection.ResponseOrigins)"
+      ],
+      "file": "baseline/assertion-signed.xml",
+      "sha256": "a33826c689e21bfdf04815722b7353daec30c5607cf07c4e10a777f477d51848",
+      "transaction": "acme",
+      "knobs": {
+        "origin": [
+          "https://attacker.example"
+        ]
+      },
+      "expect": {
+        "outcome": "accepted",
+        "identity": {
+          "ConnectionID": "acme",
+          "Issuer": "https://idp.example.com/acme",
+          "Audience": "https://sp.example.com/saml/acme",
+          "NameID": {
+            "Value": "alice-pairwise-0001",
+            "Format": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+            "NameQualifier": "https://idp.example.com/acme",
+            "SPNameQualifier": "https://sp.example.com/saml/acme"
+          },
+          "Attributes": [
+            {
+              "Name": "mail",
+              "NameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+              "FriendlyName": "",
+              "Values": [
+                "alice@example.com"
+              ]
+            },
+            {
+              "Name": "groups",
+              "NameFormat": "",
+              "FriendlyName": "",
+              "Values": [
+                "admins",
+                "devs"
+              ]
+            },
+            {
+              "Name": "urn:oid:1.3.6.1.4.1.5923.1.1.1.10",
+              "NameFormat": "",
+              "FriendlyName": "eduPersonTargetedID",
+              "Values": [
+                "targeted-7"
+              ]
+            }
+          ],
+          "SessionIndex": "_session-42",
+          "AuthnInstant": "2026-10-12T10:00:00Z",
+          "SessionNotOnOrAfter": "2026-10-12T18:00:00Z",
+          "AuthnContextClassRef": "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+          "AssertionID": "_a7f3c2b1e0d9a8f7e6d5c4b3a2f1e0d9c8b7a6f5",
+          "ProxyRestriction": null
+        }
+      }
+    },
+    {
       "id": "replay/record-rebound-in-the-store",
       "category": "replay",
       "attack": "a writer of the transaction store binds the pending login to the attacker's cookie, which posts it",

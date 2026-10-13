@@ -557,7 +557,28 @@ func (b *browser) mustSignIn(t testing.TB, sp *serviceProvider, conn string) (*u
 
 // post submits the form with the browser's cookies and returns the status.
 func (b *browser) post(form postForm) (int, error) {
-	resp, err := b.client.PostForm(form.action, url.Values{"SAMLResponse": {form.samlResponse}, "RelayState": {form.relayState}})
+	return b.postWith(form, nil)
+}
+
+// postWith submits the form with the browser's cookies and the given
+// header lines (Origin, Referer) and returns the status.
+func (b *browser) postWith(form postForm, header http.Header) (int, error) {
+	body := url.Values{"SAMLResponse": {form.samlResponse}, "RelayState": {form.relayState}}.Encode()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, form.action, strings.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	for name, values := range header {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
+	}
+
+	resp, err := b.client.Do(req)
 	if err != nil {
 		return 0, err
 	}

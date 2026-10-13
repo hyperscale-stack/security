@@ -176,6 +176,14 @@ var (
 	// Bindings §3.5.5.2).
 	ErrDestinationMismatch = newRejection("destination mismatch")
 
+	// ErrOriginMismatch reports an ACS request, on a connection that sets
+	// ResponseOrigins, whose Origin header — or, from a browser that sent
+	// none, whose Referer — is not one of them: a response posted from
+	// another site than the IdP's pages (login CSRF, audit SAML-02), or from
+	// a page whose referrer policy hides its origin ("null"). Nothing is
+	// consumed.
+	ErrOriginMismatch = newRejection("response not posted from the identity provider")
+
 	// ErrRecipientMismatch reports a bearer SubjectConfirmationData
 	// Recipient other than the connection's ACS URL.
 	ErrRecipientMismatch = newRejection("recipient mismatch")

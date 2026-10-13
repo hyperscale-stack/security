@@ -123,11 +123,13 @@ scenario "BR1 cross-site POST to the ACS carries the binding cookie" {
           }
         }
 
-        # The ACS request: cross-site, with the binding cookie and the
-        # SameSite=None control, without the Lax and Strict controls.
+        # The ACS request: cross-site, from the IdP's page (its Origin is
+        # what Connection.ResponseOrigins checks), with the binding cookie
+        # and the SameSite=None control, without the Lax and Strict controls.
         acs = {
           host           = "sp.test"
           sec_fetch_site = "cross-site"
+          origin         = "${config.idp}"
           cookies = {
             "__Host-samlsp"     = true
             "__Host-ctl-none"   = true

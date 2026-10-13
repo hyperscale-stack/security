@@ -277,6 +277,39 @@ func TestReplayAndBrowserBinding(t *testing.T) {
 	require.NoError(t, f.sp.last(t).err)
 }
 
+// TestResponseOrigins: a connection with ResponseOrigins refuses crewjam's
+// response posted from another site, or with neither Origin nor Referer,
+// before the transaction is touched; the same login then completes from
+// the IdP's origin (audit SAML-02).
+func TestResponseOrigins(t *testing.T) {
+	t.Parallel()
+
+	f := federate(t, rsaSHA256, spOptions{}, nil)
+	idpOrigin := f.idp.srv.URL // https://127.0.0.1:port, a serialized origin
+
+	f.sp.mu.Lock()
+	c := f.sp.conns["acme"]
+	c.ResponseOrigins = []string{idpOrigin}
+	f.sp.conns["acme"] = c
+	f.sp.mu.Unlock()
+
+	alice := newBrowser(t, f.sp.srv)
+	_, form := alice.mustSignIn(t, f.sp, "acme")
+
+	status, err := alice.postWith(form, http.Header{"Origin": {"https://attacker.example"}})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, status)
+	require.ErrorIs(t, f.sp.last(t).err, samlsp.ErrOriginMismatch)
+
+	require.Equal(t, http.StatusForbidden, alice.mustPost(t, form), "neither Origin nor Referer")
+	require.ErrorIs(t, f.sp.last(t).err, samlsp.ErrOriginMismatch)
+
+	status, err = alice.postWith(form, http.Header{"Origin": {idpOrigin}})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, f.sp.last(t).err)
+}
+
 func TestConcurrentLoginsAcrossInstances(t *testing.T) {
 	t.Parallel()
 

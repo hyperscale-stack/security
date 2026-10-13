@@ -321,6 +321,21 @@ type Connection struct {
 	// relax anything else (inclusive canonicalization and RSA keys under
 	// 2048 bits stay refused).
 	InsecureAllowSHA1 bool
+
+	// ResponseOrigins, when set, are the origins of the IdP pages allowed
+	// to post responses to this connection's ACS, serialized as browsers
+	// send them in Origin (RFC 6454 §6.2: "https://idp.example.com", a port
+	// only when not the default; http only on a loopback host); at most 8.
+	// CompleteLogin then requires the request's Origin header to be one of
+	// them — or, from a browser that sends no Origin, its Referer's origin —
+	// and refuses anything else, "null" included, before touching the
+	// transaction (ErrOriginMismatch). It closes the login CSRF that a
+	// leaked in-flight IdP redirect URL allows (audit SAML-02). Leave it
+	// empty for an IdP whose response page hides its origin — Referrer-Policy
+	// no-referrer or same-origin, a cross-origin redirect before the POST —
+	// since browsers then send "Origin: null" (Fetch §3.2), which no check
+	// can tell from an attacker's page.
+	ResponseOrigins []string
 }
 
 // Validate checks the connection; it returns an error matching
@@ -346,6 +361,10 @@ func (c *Connection) Validate() error {
 		if err := validateEntityID(c.NameIDFormat); err != nil {
 			return fmt.Errorf("%w: NameID format: %w", ErrInvalidConnection, err)
 		}
+	}
+
+	if err := validateResponseOrigins(c.ResponseOrigins); err != nil {
+		return err
 	}
 
 	return c.IdentityProvider.Validate()

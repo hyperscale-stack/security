@@ -94,6 +94,7 @@ var reasons = []struct {
 	{ErrResponseStatus, "response_status"},
 	{ErrIssuerMismatch, "issuer_mismatch"},
 	{ErrDestinationMismatch, "destination_mismatch"},
+	{ErrOriginMismatch, "origin_mismatch"},
 	{ErrRecipientMismatch, "recipient_mismatch"},
 	{ErrAudienceMismatch, "audience_mismatch"},
 	{ErrInResponseToMismatch, "in_response_to_mismatch"},

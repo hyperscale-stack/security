@@ -69,6 +69,7 @@ scenario "BR3 login CSRF into a browser without a binding cookie" {
         last_rejection  = contains("samlsp: missing browser binding cookie:")
         acs = {
           sec_fetch_site = "cross-site"
+          origin         = "${config.attacker}"
           cookies = {
             "__Host-samlsp" = not_exists()
           }
@@ -197,8 +198,11 @@ scenario "BR3 login CSRF into a browser with its own binding cookie" {
         signed_in       = 0
         rejection_count = 1
         last_rejection  = contains("samlsp: browser binding mismatch:")
+        # Posted from the attacker's page: its Origin, which
+        # Connection.ResponseOrigins refuses before any transaction lookup.
         acs = {
           sec_fetch_site = "cross-site"
+          origin         = "${config.attacker}"
           cookies = {
             "__Host-samlsp" = true
           }
