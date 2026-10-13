@@ -42,6 +42,10 @@ import (
 // corpusDir holds the pinned corpus, relative to the package directory.
 const corpusDir = "testdata/corpus"
 
+// corpusTransactionKeys protect the corpus transactions: the manifest pins
+// their records, Integrity included, so the key is fixed (test only).
+var corpusTransactionKeys = [][]byte{[]byte("samlsp corpus transaction key, 32+ bytes, test only")}
+
 // corpusManifest is testdata/corpus/manifest.json.
 type corpusManifest struct {
 	Version       int                         `json:"version"`
@@ -93,6 +97,11 @@ type corpusKnobs struct {
 	PostTo string `json:"postTo,omitempty"`
 	// Path is "acs" (default) or "other": a request received elsewhere.
 	Path string `json:"path,omitempty"`
+	// Host is "" (the ACS URL's host) or "other": a request received at
+	// another host.
+	Host string `json:"host,omitempty"`
+	// Query, when set, is appended to the ACS URL as its query string.
+	Query string `json:"query,omitempty"`
 	// Trust overrides the trusted keys of the posted connection.
 	Trust []string `json:"trust,omitempty"`
 	// AllowSHA1 sets Connection.InsecureAllowSHA1.
@@ -113,10 +122,24 @@ type corpusKnobs struct {
 	// MetadataExpired makes the posted connection's IdP metadata expire at
 	// the corpus instant (Metadata §4.3.2, errata E94).
 	MetadataExpired bool `json:"metadataExpired,omitempty"`
+	// Tamper edits the stored transaction record as a writer of the store
+	// would: "relax" drops its ForceAuthn, "rebind" binds it to the "other"
+	// cookie (audit STORE-02).
+	Tamper string `json:"tamper,omitempty"`
+	// ResponseOrigins sets Connection.ResponseOrigins of the posted
+	// connection (audit SAML-02).
+	ResponseOrigins []string `json:"responseOrigins,omitempty"`
+	// Origin lists the Origin header lines of the POST (none by default).
+	Origin []string `json:"origin,omitempty"`
+	// Referer is the Referer header of the POST (none by default).
+	Referer string `json:"referer,omitempty"`
 }
 
 // corpusReplayKey names a replay-cache entry.
 type corpusReplayKey struct {
+	// Connection is the connection the assertion was consumed at (default:
+	// the posted connection).
+	Connection  string `json:"connection,omitempty"`
 	Issuer      string `json:"issuer"`
 	AssertionID string `json:"assertionID"`
 }
@@ -208,6 +231,7 @@ var corpusSentinels = map[string]error{
 	"ErrMissingBrowserBinding":         samlsp.ErrMissingBrowserBinding,
 	"ErrTransactionExpired":            samlsp.ErrTransactionExpired,
 	"ErrTransactionMismatch":           samlsp.ErrTransactionMismatch,
+	"ErrTransactionIntegrity":          samlsp.ErrTransactionIntegrity,
 	"ErrMalformedResponse":             samlsp.ErrMalformedResponse,
 	"ErrEncryptedAssertionUnsupported": samlsp.ErrEncryptedAssertionUnsupported,
 	"ErrUnsupportedAlgorithm":          samlsp.ErrUnsupportedAlgorithm,
@@ -215,6 +239,7 @@ var corpusSentinels = map[string]error{
 	"ErrResponseStatus":                samlsp.ErrResponseStatus,
 	"ErrIssuerMismatch":                samlsp.ErrIssuerMismatch,
 	"ErrDestinationMismatch":           samlsp.ErrDestinationMismatch,
+	"ErrOriginMismatch":                samlsp.ErrOriginMismatch,
 	"ErrRecipientMismatch":             samlsp.ErrRecipientMismatch,
 	"ErrAudienceMismatch":              samlsp.ErrAudienceMismatch,
 	"ErrInResponseToMismatch":          samlsp.ErrInResponseToMismatch,
@@ -337,6 +362,7 @@ const (
 	otherHandle  = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
 	attackerURL  = "https://attacker.example/landing"
 	otherACSPath = "/elsewhere"
+	otherACSHost = "other.sp.example.com"
 )
 
 // runCorpusEntry replays one entry through CompleteLogin, the form either
@@ -354,10 +380,12 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 
 	store := &countingStore{Store: memory.New()}
 	ctx := context.Background()
-	require.NoError(t, store.SaveTransaction(ctx, &tx.Record))
+	rec := tamperRecord(t, tx.Record, f.Knobs.Tamper)
+	require.NoError(t, store.SaveTransaction(ctx, &rec))
 
 	if pk := f.Knobs.PreMarked; pk != nil {
-		require.NoError(t, store.Store.MarkAssertionUsed(ctx, replayKeyHex(pk.Issuer, pk.AssertionID), m.Instant.Add(time.Hour)))
+		require.NoError(t, store.Store.MarkAssertionUsed(ctx, replayKeyHex(cmpOr(pk.Connection, postTo), pk.Issuer, pk.AssertionID),
+			m.Instant.Add(time.Hour)))
 	}
 
 	now := m.Instant
@@ -369,6 +397,7 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 	}
 
 	sp, err := samlsp.New(samlsp.Config{
+		TransactionKeys: corpusTransactionKeys,
 		Connections:     conns,
 		Transactions:    store,
 		ReplayCache:     store,
@@ -390,6 +419,24 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 		result: res, err: cerr, consumes: store.consumes, marks: store.marks,
 		consumed: errors.Is(lerr, samlsp.ErrTransactionConsumed),
 	}
+}
+
+// tamperRecord returns the record edited as the Tamper knob says.
+func tamperRecord(t testing.TB, rec samlsp.TransactionRecord, how string) samlsp.TransactionRecord {
+	t.Helper()
+
+	switch how {
+	case "":
+	case "relax":
+		require.Contains(t, rec.Payload, `,"fa":true`, "a ForceAuthn transaction")
+		rec.Payload = strings.Replace(rec.Payload, `,"fa":true`, "", 1)
+	case "rebind":
+		rec.BindingHash = bindingKey(otherHandle)
+	default:
+		t.Fatalf("unknown Tamper knob %q", how)
+	}
+
+	return rec
 }
 
 // corpusResolver resolves the manifest's connections, with the knobs
@@ -415,6 +462,10 @@ func corpusResolver(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 
 		if id == postTo && k.MetadataExpired {
 			conn.IdentityProvider.ValidUntil = m.Instant
+		}
+
+		if id == postTo {
+			conn.ResponseOrigins = k.ResponseOrigins
 		}
 
 		for _, name := range trust {
@@ -452,6 +503,12 @@ func corpusRequest(t testing.TB, m *corpusManifest, f corpusEntry, tx corpusTx, 
 		acs.Path = otherACSPath
 	}
 
+	if f.Knobs.Host == "other" {
+		acs.Host = otherACSHost
+	}
+
+	acs.RawQuery = f.Knobs.Query
+
 	form := url.Values{"SAMLResponse": {encodeCorpusValue(t, f.Knobs.Encoding, data)}}
 
 	switch f.Knobs.RelayState {
@@ -468,6 +525,14 @@ func corpusRequest(t testing.TB, m *corpusManifest, f corpusEntry, tx corpusTx, 
 
 	req := httptest.NewRequest(http.MethodPost, acs.String(), strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	for _, origin := range f.Knobs.Origin {
+		req.Header.Add("Origin", origin)
+	}
+
+	if f.Knobs.Referer != "" {
+		req.Header.Set("Referer", f.Knobs.Referer)
+	}
 
 	switch f.Knobs.Cookie {
 	case "", "tx":

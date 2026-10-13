@@ -22,6 +22,9 @@
 //		Connections:  resolver, // the application's connections
 //		Transactions: store,    // shared by every instance
 //		ReplayCache:  store,
+//		// Secret, the same on every instance: protects the stored
+//		// transactions against tampering (32 random bytes or more).
+//		TransactionKeys: [][]byte{transactionKey},
 //		// Optional: sign AuthnRequests (required by IdPs that want them).
 //		SigningKey:         key,
 //		SigningCertificate: cert,
@@ -48,11 +51,16 @@
 // the options and an opaque AppState) under a random RelayState handle and
 // binds it to the browser with a __Host- prefixed cookie: SameSite=None,
 // because the IdP's POST to the ACS is cross-site and would not carry a Lax
-// or Strict cookie. CompleteLogin accepts a Response only for an unexpired,
-// unconsumed transaction of the same browser and connection, whose signed
-// SubjectConfirmationData answers its request ID; it consumes the
-// transaction atomically (one winner across instances) and records the
-// assertion in the replay cache. Unsolicited (IdP-initiated) responses are
+// or Strict cookie. The stored record carries a MAC under a server-held key
+// ([Config].TransactionKeys), verified before any stored field is used: a
+// writer of the store can neither rebind a transaction nor relax its
+// checks ([ErrTransactionIntegrity]). CompleteLogin accepts a Response only
+// for an unexpired, unconsumed transaction of the same browser and
+// connection, whose signed SubjectConfirmationData answers its request ID.
+// It consumes the transaction atomically (one winner across instances)
+// before verifying any signature: a login allows one verification, and a
+// response refused from then on ends it (the user starts over). It then
+// records the assertion in the replay cache. Unsolicited (IdP-initiated) responses are
 // refused, and RelayState is never a URL: the application's return target
 // stays server-side in [LoginOptions].AppState (no open redirect).
 //
@@ -70,8 +78,9 @@
 //     namespace-well-formed names (no empty prefix or local part);
 //     [Config].MaxResponseSize bytes (256 KiB by default, 1 MiB at most).
 //     An element may not carry two attributes of one local name, whatever
-//     their prefixes, nor a prefixed attribute named like a SAML or
-//     XML-DSig one: etree, which the pre-check reads with, and encoding/xml,
+//     their prefixes, a prefixed attribute named like a SAML or XML-DSig
+//     one, nor an xml: attribute other than xml:lang, xml:space, xml:base
+//     and xml:id: etree, which the pre-check reads with, and encoding/xml,
 //     which gosaml2 and goxmldsig decode with, would read them differently.
 //   - Shape: exactly one Assertion, child of the Response, with unique IDs,
 //     one Issuer, one Subject with one NameID and one bearer
@@ -83,7 +92,9 @@
 //   - Signatures: the Response or its Assertion must be signed (errata E93
 //     and E26), each signature enveloped in its parent, referencing its ID,
 //     with exactly the enveloped-signature and exclusive C14N transforms and
-//     no ds:Object. Signature methods RSA or ECDSA with SHA-256/384/512,
+//     no ds:Object; a KeyInfo without certificate counts as absent (it is
+//     cut from the verified bytes where no digest covers it, Core §5.4.5).
+//     Signature methods RSA or ECDSA with SHA-256/384/512,
 //     SHA-256/384/512 digests; SHA-1 only for a connection that sets
 //     [Connection].InsecureAllowSHA1; inclusive C14N, HMAC and unknown
 //     algorithms never. IdP keys are RSA of 2048 to 8192 bits or ECDSA

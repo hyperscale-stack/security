@@ -248,6 +248,8 @@ func TestBeginLogin_PersistsBoundTransaction(t *testing.T) {
 
 	assert.Equal(t, bindingKey(res.cookie.Value), rec.BindingHash)
 	assert.True(t, rec.ExpiresAt.Equal(t0.Add(samlsp.DefaultTransactionTTL)))
+	assert.Equal(t, integrityHex(testTransactionKeys[0], rec), rec.Integrity,
+		"the documented MAC under the first transaction key, computed independently")
 	assert.NotContains(t, rec.Payload, res.relayState, "the raw handle is never stored")
 	assert.NotContains(t, rec.Payload, res.cookie.Value, "the cookie value is never stored")
 
@@ -358,7 +360,7 @@ func TestBeginLogin_Failures(t *testing.T) {
 		{name: "relative context", opts: samlsp.LoginOptions{RequestedAuthnContext: []string{"mfa"}}, target: samlsp.ErrInvalidLoginOptions},
 		{name: "context too long", opts: samlsp.LoginOptions{RequestedAuthnContext: []string{longContext}}, target: samlsp.ErrInvalidLoginOptions},
 		{name: "store failure", setup: func(e *env) {
-			sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: failingStore{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+			sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: failingStore{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 			require.NoError(t, err)
 			e.sp = sp
 		}, target: boom},
@@ -412,6 +414,37 @@ func TestBeginLogin_MaximalOptionsFitTheStore(t *testing.T) {
 	res := begin(t, e, samlsp.LoginOptions{AppState: strings.Repeat("é", 1024), RequestedAuthnContext: contexts})
 	_, err := e.store.LookupTransaction(context.Background(), txKey(connID, res.relayState))
 	require.NoError(t, err)
+}
+
+// TestBeginLogin_PayloadIsASCII: the transaction payload is ASCII-only
+// JSON (every other character \u-escaped), so every store column type and
+// character set keeps it unchanged — a latin1, non-strict MySQL altered a
+// raw UTF-8 AppState (audit STORE-I2) — and the AppState comes back exact.
+func TestBeginLogin_PayloadIsASCII(t *testing.T) {
+	t.Parallel()
+
+	const appState = "/retour?ville=Z\u00fcrich&ok=\u2713&emoji=\U0001f600&ctl=\u007f&c1=\u0080"
+
+	e := newEnv(t)
+	res := begin(t, e, samlsp.LoginOptions{AppState: appState})
+
+	rec, err := e.store.LookupTransaction(context.Background(), txKey(connID, res.relayState))
+	require.NoError(t, err)
+
+	for i := 0; i < len(rec.Payload); i++ {
+		require.Less(t, rec.Payload[i], byte(0x80), "byte %d of the payload is not ASCII: %q", i, rec.Payload)
+	}
+
+	assert.Contains(t, rec.Payload, `\u00fc`)
+	assert.Contains(t, rec.Payload, `\ud83d\ude00`, "a surrogate pair above U+FFFF")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(rec.Payload), &payload))
+	assert.Equal(t, appState, payload["app"])
+
+	out, err := complete(e, res, respond(t, res.requestID, respOpts{}))
+	require.NoError(t, err)
+	assert.Equal(t, appState, out.AppState)
 }
 
 func TestBeginLogin_OptionsOverflowingThePayload(t *testing.T) {

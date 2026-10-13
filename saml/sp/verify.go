@@ -5,6 +5,7 @@
 package samlsp
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/xml"
@@ -28,13 +29,14 @@ const gosamlMaxTokens = 3*(2*MaxResponseElements+4096) + 1
 // with the connection's trusted certificates and returns the decoded,
 // verified response: every value comes from the digested canonical bytes.
 //
-// When a signature has no KeyInfo and the connection trusts several
-// certificates, goxmldsig cannot select one ("Missing x509 Element"), so
-// the certificates are tried alone (Core §5.4.5 lets KeyInfo be absent;
-// plan review F7): the three most recent valid at now−skew, since each
-// attempt re-runs the whole verification (code review F4). A KeyInfo
-// certificate, when present, only selects among the trusted ones by exact
-// equality.
+// When a signature has no KeyInfo (or had one without certificate, cut by
+// the pre-check) and the connection trusts several certificates, goxmldsig
+// cannot select one ("Missing x509 Element"), so the certificates are tried
+// alone (Core §5.4.5 lets KeyInfo be absent; plan review F7): the three most
+// recent valid at now−skew, since each attempt re-runs the whole
+// verification (code review F4), the one that verified the connection's
+// last such signature first (audit SAML-01). A KeyInfo certificate, when
+// present, only selects among the trusted ones by exact equality.
 func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, now time.Time) (*types.Response, error) {
 	certs := conn.IdentityProvider.SigningCertificates
 	at := now.Add(-sp.cfg.ClockSkew)
@@ -43,11 +45,21 @@ func (sp *ServiceProvider) verifyResponse(raw *rawResponse, conn *Connection, no
 		return sp.validateWith(raw, conn, at, certs)
 	}
 
+	candidates := rolloverCandidates(certs, at)
+
+	if v, ok := sp.lastCert.Load(conn.ID); ok {
+		if fp, ok := v.([sha256.Size]byte); ok {
+			candidates = preferCertificate(candidates, fp)
+		}
+	}
+
 	var lastErr error
 
-	for _, c := range rolloverCandidates(certs, at) {
+	for _, c := range candidates {
 		resp, err := sp.validateWith(raw, conn, at, []*x509.Certificate{c})
 		if err == nil {
+			sp.lastCert.Store(conn.ID, sha256.Sum256(c.Raw))
+
 			return resp, nil
 		}
 
@@ -83,6 +95,22 @@ func rolloverCandidates(certs []*x509.Certificate, at time.Time) []*x509.Certifi
 	slices.SortStableFunc(out, func(a, b *x509.Certificate) int { return b.NotBefore.Compare(a.NotBefore) })
 
 	return out[:min(len(out), maxRolloverAttempts)]
+}
+
+// preferCertificate moves the certificate whose DER has the SHA-256 fp to
+// the front of candidates, keeping the order of the others; candidates
+// without it are returned unchanged. It never adds a certificate.
+func preferCertificate(candidates []*x509.Certificate, fp [sha256.Size]byte) []*x509.Certificate {
+	i := slices.IndexFunc(candidates, func(c *x509.Certificate) bool { return sha256.Sum256(c.Raw) == fp })
+	if i <= 0 {
+		return candidates
+	}
+
+	out := make([]*x509.Certificate, 0, len(candidates))
+	out = append(out, candidates[i])
+	out = append(out, candidates[:i]...)
+
+	return append(out, candidates[i+1:]...)
 }
 
 // validateWith runs gosaml2 with the given trusted certificates. gosaml2's

@@ -133,7 +133,10 @@ func parseXSDuration(s string) (time.Duration, error) {
 		}
 	}
 
-	if !p.sawUnit || (p.inTime && !p.sawTimeUnit) || p.total > math.MaxInt64 {
+	// float64(math.MaxInt64) is exactly 2^63, which int64 cannot hold: the
+	// conversion of a total of 2^63 would be implementation-defined
+	// (MinInt64 on amd64, MaxInt64 on arm64), so it is refused as well.
+	if !p.sawUnit || (p.inTime && !p.sawTimeUnit) || p.total >= math.MaxInt64 {
 		return 0, errBadDuration
 	}
 

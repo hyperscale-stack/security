@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Key size policy (OWASP SAML cheat sheet: RSA ≥ 2048 bits).
@@ -45,7 +46,11 @@ type IdentityProvider struct {
 	// whose KeyInfo carries a certificate selects it among these by exact
 	// equality; without KeyInfo, the three most recent (by NotBefore) valid
 	// certificates are tried, since each attempt costs a full verification.
-	// Keys must be
+	// A KeyInfo carrying no certificate (KeyName, KeyValue… — Core §5.4.5
+	// puts no restriction on KeyInfo) selects nothing and counts as absent:
+	// it is cut from the verified bytes, except from an Assertion whose
+	// Response is signed, which digests it (that response is refused with
+	// ErrInvalidSignature). Keys must be
 	// RSA of at least 2048 bits, or ECDSA P-256, P-384 or P-521. ECDSA is
 	// verified as goxmldsig implements it (ASN.1 DER signature values): IdPs
 	// that follow XML Signature 1.1 (raw r‖s values) fail closed. The
@@ -152,6 +157,7 @@ var (
 	errBadURL         = errors.New("not an absolute https URL (http only on a loopback host)")
 	errACSQuery       = errors.New("ACS URL must not carry a query string")
 	errACSPath        = errors.New("ACS URL must have a path")
+	errACSHost        = errors.New("ACS URL host must be ASCII (the IDNA A-label browsers send in Host)")
 )
 
 // validateEntityID checks an entity ID: an absolute URI of at most 1024
@@ -251,7 +257,24 @@ func validateACSURL(raw string) error {
 		return errACSPath
 	}
 
+	// CompleteLogin compares the request's Host with this host: browsers
+	// send an internationalized host name in its ASCII (punycode) form.
+	if !isASCII(u.Host) {
+		return errACSHost
+	}
+
 	return nil
+}
+
+// isASCII reports whether s holds ASCII characters only.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Connection is one application-defined trust relationship between the SP
@@ -276,8 +299,13 @@ type Connection struct {
 	// ACSURL is the AssertionConsumerService URL (HTTP-POST binding) of this
 	// connection: the exact Destination and Recipient the responses must
 	// carry. Required; https (http on loopback for development), a path, no
-	// query string. The application MUST mount
-	// [ServiceProvider.CompleteLogin] at exactly this path.
+	// query string, an ASCII host (the punycode form of an
+	// internationalized name). The application MUST mount
+	// [ServiceProvider.CompleteLogin] at exactly this URL: CompleteLogin
+	// refuses a request received at another path or host (r.Host), or with
+	// a query string. Behind a reverse proxy that rewrites Host, pass it a
+	// copy of the request (http.Request.Clone) whose Host comes from the
+	// trusted proxy's forwarding header.
 	ACSURL string
 
 	// IdentityProvider is the trusted IdP configuration.
@@ -294,6 +322,21 @@ type Connection struct {
 	// relax anything else (inclusive canonicalization and RSA keys under
 	// 2048 bits stay refused).
 	InsecureAllowSHA1 bool
+
+	// ResponseOrigins, when set, are the origins of the IdP pages allowed
+	// to post responses to this connection's ACS, serialized as browsers
+	// send them in Origin (RFC 6454 §6.2: "https://idp.example.com", a port
+	// only when not the default; http only on a loopback host); at most 8.
+	// CompleteLogin then requires the request's Origin header to be one of
+	// them — or, from a browser that sends no Origin, its Referer's origin —
+	// and refuses anything else, "null" included, before touching the
+	// transaction (ErrOriginMismatch). It closes the login CSRF that a
+	// leaked in-flight IdP redirect URL allows (audit SAML-02). Leave it
+	// empty for an IdP whose response page hides its origin — Referrer-Policy
+	// no-referrer or same-origin, a cross-origin redirect before the POST —
+	// since browsers then send "Origin: null" (Fetch §3.2), which no check
+	// can tell from an attacker's page.
+	ResponseOrigins []string
 }
 
 // Validate checks the connection; it returns an error matching
@@ -319,6 +362,10 @@ func (c *Connection) Validate() error {
 		if err := validateEntityID(c.NameIDFormat); err != nil {
 			return fmt.Errorf("%w: NameID format: %w", ErrInvalidConnection, err)
 		}
+	}
+
+	if err := validateResponseOrigins(c.ResponseOrigins); err != nil {
+		return err
 	}
 
 	return c.IdentityProvider.Validate()

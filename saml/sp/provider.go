@@ -5,19 +5,28 @@
 package samlsp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sync"
 )
 
 // ServiceProvider is the SAML Service Provider. It is safe for concurrent
 // use and keeps no per-request state: transactions and consumed assertions
 // live in the configured stores, so any number of instances can serve the
-// same users. Build one with [New].
+// same users. It only remembers, per connection ID, which trusted
+// certificate last verified a signature without KeyInfo, to try it first
+// next time: an ordering hint, never a trust decision (one small entry per
+// connection that ever needed it, kept for the ServiceProvider's
+// lifetime). Build one with [New].
 type ServiceProvider struct {
 	cfg Config
 	// metadataCerts are the DER certificates published with use="signing":
 	// the signing certificate first, then the additional ones.
 	metadataCerts [][]byte
+	// lastCert maps a connection ID to the SHA-256 of the DER certificate
+	// that last verified one of its KeyInfo-less signatures.
+	lastCert sync.Map
 }
 
 // New validates cfg, applies the defaults and returns a [ServiceProvider].
@@ -28,6 +37,14 @@ func New(cfg Config) (*ServiceProvider, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+
+	// The ServiceProvider never shares key bytes with its caller.
+	keys := make([][]byte, len(cfg.TransactionKeys))
+	for i, key := range cfg.TransactionKeys {
+		keys[i] = bytes.Clone(key)
+	}
+
+	cfg.TransactionKeys = keys
 
 	sp := &ServiceProvider{cfg: cfg}
 

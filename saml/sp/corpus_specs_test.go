@@ -45,6 +45,7 @@ const (
 	verifyFailed    = "signature verification failed"
 	twoLocalNames   = "two attributes of one local name"
 	prefixedSAML    = "prefixed attribute named like a SAML or XML-DSig attribute"
+	xmlAttribute    = "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id"
 	duplicateID     = "duplicate identifier"
 	notNSWellFormed = "name not namespace-well-formed"
 )
@@ -62,6 +63,9 @@ var (
 	refPolicy     = "#87 user decision Q1 (algorithm policy)"
 	refNamespaces = "Namespaces in XML 1.0 §3 (QName) and §7 (namespace-well-formedness)"
 	refQ2         = "#87 user decision Q2 (ambiguous shapes refused)"
+	// refXMLNamespace: the xml prefix is reserved and only xml:lang,
+	// xml:space, xml:base and xml:id are defined (audit SAML-I1).
+	refXMLNamespace = "Namespaces in XML 1.0 §3 (reserved xml prefix), XML 1.0 §2.10/§2.12, XML Base, xml:id"
 )
 
 // chainA composes assertion edits.
@@ -121,6 +125,16 @@ func unsignedCopy(el *etree.Element) *etree.Element {
 	}
 
 	return c
+}
+
+// replaceChildren empties el of its child elements and fills it with
+// content.
+func replaceChildren(el *etree.Element, content func(*etree.Element)) {
+	for _, c := range el.ChildElements() {
+		el.RemoveChild(c)
+	}
+
+	content(el)
 }
 
 // setNameID returns an edit setting the NameID text.
@@ -288,6 +302,19 @@ func (g *corpusGen) baselineSpecs() []corpusSpec {
 			expect: accepted(base),
 		},
 		{
+			id: "baseline/xml-namespace-attributes", attack: "xml:lang, xml:space, xml:base and xml:id on a signed Attribute (the names the XML namespace defines)",
+			build: func() []byte {
+				return g.xml("acme", onAssertion(func(a *etree.Element) {
+					attr := path(a, "AttributeStatement", "Attribute")
+					attr.CreateAttr("xml:lang", "en")
+					attr.CreateAttr("xml:space", "preserve")
+					attr.CreateAttr("xml:base", "https://idp.example.com/")
+					attr.CreateAttr("xml:id", "_attribute-mail")
+				}))
+			},
+			expect: accepted(base),
+		},
+		{
 			id: "baseline/rollover-no-keyinfo", attack: "two trusted keys, signed by the new one without KeyInfo (rollover retry)",
 			knobs: corpusKnobs{Trust: []string{"idp-a", "idp-b"}},
 			build: func() []byte {
@@ -355,13 +382,6 @@ func (g *corpusGen) baselineSpecs() []corpusSpec {
 			id: "baseline/unsigned-response-without-destination", attack: "unsigned Response without Destination (Bindings §3.5.5.2 only requires it when signed)",
 			build: func() []byte {
 				return g.xml("acme", onResponse(func(r *etree.Element) { r.RemoveAttr("Destination") }))
-			},
-			expect: accepted(base),
-		},
-		{
-			id: "baseline/without-response-inresponseto", attack: "Response InResponseTo absent (optional); the signed bearer confirmation correlates",
-			build: func() []byte {
-				return g.xml("acme", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
 			},
 			expect: accepted(base),
 		},
@@ -556,19 +576,21 @@ func (g *corpusGen) correlationSpecs() []corpusSpec {
 			expect: rejected("ErrInResponseToMismatch", "Response InResponseTo is not the request ID"),
 		},
 		{
-			id: "correlation/scd-inresponseto-other-transaction", attack: "signed bearer confirmation answering another transaction, Response InResponseTo removed",
-			refs: []string{refProfiles, "SAML Bindings §3.5.5.2"},
+			id:     "correlation/scd-inresponseto-other-transaction",
+			attack: "signed bearer confirmation answering another transaction, unsigned Response InResponseTo rewritten to this one",
+			refs:   []string{refProfiles, "SAML Bindings §3.5.5.2"},
 			build: func() []byte {
-				return g.xml("acme-2", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
+				return g.xml("acme-2", onResponse(func(r *etree.Element) { r.CreateAttr("InResponseTo", g.txs["acme"].RequestID) }))
 			},
 			expect: rejected("ErrInResponseToMismatch", "InResponseTo is not the request ID"),
 		},
 		{
-			id: "correlation/rewrapped-assertion", attack: "assertion signed for another transaction rewrapped in a new Response (new ID, no InResponseTo)",
-			refs: []string{"SAML Profiles §4.1.4.5"},
+			id:     "correlation/rewrapped-assertion",
+			attack: "assertion signed for another transaction rewrapped in a new Response (new ID, InResponseTo of this transaction)",
+			refs:   []string{"SAML Profiles §4.1.4.5"},
 			build: func() []byte {
 				return g.xml("acme-2", onResponse(func(r *etree.Element) {
-					r.RemoveAttr("InResponseTo")
+					r.CreateAttr("InResponseTo", g.txs["acme"].RequestID)
 					r.CreateAttr("ID", "_evil-rewrapped-response")
 				}))
 			},
@@ -600,6 +622,28 @@ func (g *corpusGen) correlationSpecs() []corpusSpec {
 			refs: []string{"SAML Bindings §3.5.5.2"}, knobs: corpusKnobs{Path: "other"},
 			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrDestinationMismatch", "request received outside the connection's ACS path"),
+		},
+		{
+			id: "correlation/received-at-another-host", attack: "response received at another host than the connection's ACS URL",
+			refs:  []string{"SAML Core §3.2.2 (Destination)", "SAML Bindings §3.5.5.2", "SAML Profiles §4.1.4.3"},
+			knobs: corpusKnobs{Host: "other"},
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrDestinationMismatch", "request received at another host than the connection's ACS URL"),
+		},
+		{
+			id: "correlation/received-with-a-query", attack: "response received at the ACS URL with a query string appended",
+			refs:  []string{"SAML Core §3.2.2 (Destination)", "SAML Bindings §3.5.5.2"},
+			knobs: corpusKnobs{Query: "next=https://attacker.example/"},
+			build: func() []byte { return g.xml("acme", respOpts{}) }, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrDestinationMismatch", "request received with a query string"),
+		},
+		{
+			id: "correlation/response-without-inresponseto", attack: "Success Response without InResponseTo (solicited: it MUST answer the request)",
+			refs: []string{"SAML Core §3.2.2 (InResponseTo)"},
+			build: func() []byte {
+				return g.xml("acme", onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
+			},
+			expect: rejected("ErrUnsolicitedResponse", "no InResponseTo on the Response"),
 		},
 		{
 			id: "correlation/globex-response-at-acme", attack: "globex's response (its IdP key) delivered to acme",
@@ -759,11 +803,7 @@ func (g *corpusGen) timeSpecs() []corpusSpec {
 		{
 			id: "time/stale-authentication-with-forceauthn", tx: "acme-forceauthn",
 			attack: "ForceAuthn requested, AuthnInstant an hour before the request", refs: []string{"SAML Core §3.4.1"},
-			build: func() []byte {
-				return g.xml("acme-forceauthn", onAssertion(func(a *etree.Element) {
-					child(a, "AuthnStatement").CreateAttr("AuthnInstant", ts(-time.Hour))
-				}))
-			},
+			build:  g.staleForceAuthn,
 			expect: rejected("ErrStaleAuthentication", ""),
 		},
 		{
@@ -773,6 +813,14 @@ func (g *corpusGen) timeSpecs() []corpusSpec {
 			expect: rejected("ErrTransactionExpired", ""),
 		},
 	}
+}
+
+// staleForceAuthn answers the ForceAuthn transaction with an
+// authentication an hour old.
+func (g *corpusGen) staleForceAuthn() []byte {
+	return g.xml("acme-forceauthn", onAssertion(func(a *etree.Element) {
+		child(a, "AuthnStatement").CreateAttr("AuthnInstant", ts(-time.Hour))
+	}))
 }
 
 func (g *corpusGen) statusSpecs() []corpusSpec {
@@ -809,6 +857,37 @@ func (g *corpusGen) statusSpecs() []corpusSpec {
 				return g.statusResponseXML("acme", setStatus("urn:oasis:names:tc:SAML:2.0:status:AdminLoggedIn", "", ""))
 			},
 			expect: statusOf("urn:oasis:names:tc:SAML:2.0:status:AdminLoggedIn", "", "", "non-standard status"),
+		},
+		{
+			id: "status/success-with-whitespace", attack: "a Success status code followed by a TAB: Success once sanitized, not the URI (audit SAML-I6)",
+			refs: refStatus,
+			build: func() []byte {
+				return g.xml("acme", compact(respOpts{raw: func(s string) string {
+					return strings.Replace(s, `status:Success"`, `status:Success&#x9;"`, 1)
+				}}))
+			},
+			expect: rejected("ErrMalformedResponse", "malformed Success status code"),
+		},
+		{
+			id:     "status/message-with-format-characters",
+			attack: "StatusMessage carrying bidi overrides, zero-width characters and line separators (log and display spoofing, audit SAML-I7)",
+			refs:   append(refStatus, "Unicode TR #36 §2"),
+			build: func() []byte {
+				return g.statusResponseXML("acme", setStatus(responderCode, authnFailed,
+					"Sign-in failed\u202e\u2066 for\u200b admin\u2028level=error\u2029\ufeff\u00ad user=mallory"))
+			},
+			expect: statusOf(responderCode, authnFailed, "Sign-in failed for adminlevel=error user=mallory", "Responder, AuthnFailed"),
+		},
+		{
+			id: "status/signed-error-response", attack: "an error status in a signed Response (its KeyInfo is not examined: no signature work for an error)",
+			refs: refStatus,
+			build: func() []byte {
+				return g.xml("acme", respOpts{signResponse: true, unsignedAssert: true, before: func(r, a *etree.Element) {
+					r.RemoveChild(a)
+					setStatus(requesterCode, authnFailed, "")(r)
+				}})
+			},
+			expect: statusOf(requesterCode, authnFailed, "", "Requester, AuthnFailed"),
 		},
 		{
 			id: "status/error-with-assertion", attack: "error status carrying an assertion", refs: refStatus,
@@ -1089,13 +1168,112 @@ func (g *corpusGen) keySpecs() []corpusSpec {
 			expect: rejected("ErrInvalidSignature", verifyFailed),
 		},
 		{
-			id: "keys/keyinfo-keyname-only", attack: "KeyInfo with a KeyName only (unsupported, fails closed)", refs: refKeys,
+			id: "keys/keyinfo-keyname-only", attack: "KeyInfo with a KeyName only: cut from the verified bytes, the trusted certificate verifies (Core §5.4.5)",
+			refs: refKeys,
 			build: func() []byte {
 				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
 					ki.CreateElement("ds:KeyName").SetText("idp-a")
 				})})
 			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-key-value-only", attack: "KeyInfo with an RSAKeyValue only, signed by the trusted key (cut, verified)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					kv := ki.CreateElement("ds:KeyValue").CreateElement("ds:RSAKeyValue")
+					kv.CreateElement("ds:Modulus").SetText("AQAB")
+					kv.CreateElement("ds:Exponent").SetText("AQAB")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-keyname-only-two-trusted", attack: "KeyName-only KeyInfo, two trusted keys, signed by the second (cut, rollover retry)",
+			refs: refKeys, knobs: corpusKnobs{Trust: []string{"idp-a", "idp-b"}},
+			build: func() []byte {
+				return g.xml("acme", respOpts{assertionSig: sigOpts{signer: g.keys["idp-b"]}, after: replaceKeyInfo(func(ki *etree.Element) {
+					ki.CreateElement("ds:KeyName").SetText("idp-b")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-keyname-only-on-the-response", attack: "only the Response is signed, its KeyInfo a KeyName (cut: no digest covers it)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{unsignedAssert: true, signResponse: true, after: func(r *etree.Element) {
+					replaceChildren(path(child(r, "Signature"), "KeyInfo"), func(ki *etree.Element) {
+						ki.CreateElement("ds:KeyName").SetText("idp-a")
+					})
+				}})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-self-closing", attack: "an empty, self-closing KeyInfo (cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(*etree.Element) {})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-comment-and-cdata", attack: "a KeyInfo whose comment and CDATA spell X509Certificate (no such element: cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					ki.CreateComment(" <ds:X509Certificate> ")
+					ki.CreateElement("ds:KeyName").CreateCData("<ds:X509Certificate>")
+				})})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id: "keys/keyinfo-default-namespace", attack: "a certificate-less KeyInfo in the default namespace (resolved alike by both parsers: cut)", refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: func(r *etree.Element) {
+					sig := assertionSignature(r)
+					old := path(sig, "KeyInfo")
+					ki := etree.NewElement("KeyInfo")
+					ki.CreateAttr("xmlns", nsDS)
+					ki.CreateElement("KeyName").SetText("idp-a")
+					sig.InsertChildAt(old.Index(), ki)
+					sig.RemoveChild(old)
+				}})
+			},
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "keys/keyinfo-certificate-in-another-namespace",
+			attack: "the trusted certificate in an X509Certificate of another namespace: never cut (any element so named counts), and goxmldsig, reading the XML-DSig namespace only, finds no certificate",
+			refs:   refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: replaceKeyInfo(func(ki *etree.Element) {
+					c := ki.CreateElement("ds:X509Data").CreateElement("f:X509Certificate")
+					c.CreateAttr("xmlns:f", "urn:example:foreign")
+					c.SetText(certText("idp-a"))
+				})})
+			},
 			expect: rejected("ErrInvalidSignature", verifyFailed),
+		},
+		{
+			id: "keys/keyinfo-elsewhere-not-cut", attack: "certificate-less KeyInfo elements in the envelope and in the signed bearer confirmation (not signature positions: not cut)",
+			refs: refKeys,
+			build: func() []byte {
+				return g.xml("acme", respOpts{
+					beforeAssertion: func(a *etree.Element) {
+						ki := scd(a).CreateElement("ds:KeyInfo")
+						ki.CreateAttr("xmlns:ds", nsDS)
+						ki.CreateElement("ds:KeyName").SetText("hok")
+					},
+					after: func(r *etree.Element) {
+						ext := etree.NewElement("samlp:Extensions")
+						ki := ext.CreateElement("ds:KeyInfo")
+						ki.CreateAttr("xmlns:ds", nsDS)
+						ki.CreateElement("ds:KeyName").SetText("decoy")
+						r.InsertChildAt(child(r, "Issuer").Index()+1, ext)
+					},
+				})
+			},
+			expect: accepted(baselineIdentity()),
 		},
 		{
 			id: "keys/keyinfo-rsa-key-value", attack: "attacker signature with an RSAKeyValue-only KeyInfo", refs: refKeys,
@@ -1783,6 +1961,33 @@ func (g *corpusGen) signatureSpecs() []corpusSpec {
 			expect: rejected("ErrInvalidSignature", signatureShape),
 		},
 		{
+			id:     "signature/keyinfo-without-certificate-under-signed-response",
+			attack: "both signed; the Assertion KeyInfo is a KeyName, covered by the Response signature: cutting it would break that digest",
+			refs:   append(refs, "SAML Core §5.4.5"),
+			build: func() []byte {
+				return g.xml("acme", respOpts{signResponse: true, before: func(_, a *etree.Element) {
+					replaceChildren(path(child(a, "Signature"), "KeyInfo"), func(ki *etree.Element) {
+						ki.CreateElement("ds:KeyName").SetText("idp-a")
+					})
+				}})
+			},
+			expect: rejected("ErrInvalidSignature", "a KeyInfo without certificate in an assertion covered by a signed Response"),
+		},
+		{
+			id: "signature/keyinfo-outside-dsig-namespace", attack: "a KeyInfo of the empty namespace in the signature (not XML-DSig: profile refused)", refs: refs,
+			build: func() []byte {
+				return g.xml("acme", respOpts{after: func(r *etree.Element) {
+					sig := assertionSignature(r)
+					old := path(sig, "KeyInfo")
+					ki := etree.NewElement("KeyInfo")
+					ki.CreateAttr("xmlns", "")
+					sig.InsertChildAt(old.Index(), ki)
+					sig.RemoveChild(old)
+				}})
+			},
+			expect: rejected("ErrInvalidSignature", signatureShape),
+		},
+		{
 			id: "signature/two-key-infos", attack: "two KeyInfo elements", refs: refs,
 			build: func() []byte {
 				return g.xml("acme", respOpts{after: func(r *etree.Element) {
@@ -2010,6 +2215,53 @@ func (g *corpusGen) differentialSpecs() []corpusSpec {
 			expect: rejected("ErrMalformedResponse", prefixedSAML),
 		},
 		corpusSpec{
+			id:     "differential/xml-not-before-on-bearer-confirmation",
+			attack: "xml:NotBefore on the signed bearer SubjectConfirmationData: encoding/xml reads it as the NotBefore the profile forbids",
+			refs:   append(refs, refXMLNamespace, "SAML Profiles §4.1.4.2"),
+			build: func() []byte {
+				return g.xml("acme", compact(onAssertion(func(a *etree.Element) {
+					scd(a).CreateAttr("xml:NotBefore", ts(-time.Minute))
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-destination-on-signed-response",
+			attack: "xml:Destination instead of Destination on a signed Response (Bindings §3.5.5.2 requires Destination)",
+			refs:   append(refs, refXMLNamespace, "SAML Bindings §3.5.5.2"),
+			build: func() []byte {
+				return g.xml("acme", compact(respOpts{signResponse: true, before: func(r, _ *etree.Element) {
+					r.RemoveAttr("Destination")
+					r.CreateAttr("xml:Destination", acsURL)
+				}}))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-session-not-on-or-after",
+			attack: "xml:SessionNotOnOrAfter with a time zone offset: escapes the UTC time-format rule",
+			refs:   append(refs, refXMLNamespace, "SAML Core §1.3.3"),
+			build: func() []byte {
+				return g.xml("acme", compact(onAssertion(func(a *etree.Element) {
+					st := child(a, "AuthnStatement")
+					st.RemoveAttr("SessionNotOnOrAfter")
+					st.CreateAttr("xml:SessionNotOnOrAfter", "2026-10-12T20:00:00+05:00")
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
+			id:     "differential/xml-undefined-attribute",
+			attack: "an attribute of the reserved XML namespace that it does not define (xml:evil) on the Status",
+			refs:   append(refs, refXMLNamespace),
+			build: func() []byte {
+				return g.xml("acme", compact(onResponse(func(r *etree.Element) {
+					child(r, "Status").CreateAttr("xml:evil", "_evil")
+				})))
+			},
+			expect: rejected("ErrMalformedResponse", xmlAttribute),
+		},
+		corpusSpec{
 			id: "differential/lone-prefixed-algorithm", attack: "evil:Algorithm without Algorithm on DigestMethod (re-signed)", refs: refs,
 			build: func() []byte {
 				return g.xml("acme", compact(respOpts{before: g.resignAssertion(func(sig *etree.Element) {
@@ -2232,6 +2484,8 @@ func (g *corpusGen) limitSpecs() []corpusSpec {
 func (g *corpusGen) replaySpecs() []corpusSpec {
 	baseline := func() []byte { return g.xml("acme", respOpts{}) }
 	refs := []string{"SAML Profiles §4.1.4.5", "SAML errata E90"}
+	originRefs := []string{"WHATWG Fetch §3.2 (Origin)", "RFC 6454 §6.2, §7", "audit SAML-02 (Connection.ResponseOrigins)"}
+	idpOrigins := []string{"https://idp.example.com"}
 
 	return []corpusSpec{
 		{
@@ -2239,6 +2493,14 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 			refs: refs, knobs: corpusKnobs{PreMarked: &corpusReplayKey{Issuer: idpEntity, AssertionID: assertionID}},
 			build: baseline, file: "baseline/assertion-signed.xml",
 			expect: corpusExpect{Outcome: outcomeRejected, Sentinel: "ErrAssertionReplayed", Consumed: true},
+		},
+		{
+			id:     "replay/assertion-consumed-at-another-connection",
+			attack: "the same issuer and assertion ID already consumed at initech, whose IdP squats acme's entity ID (no shared replay namespace)",
+			refs:   append(refs, "#87 decision D1 (identities unique within a connection)"),
+			knobs:  corpusKnobs{PreMarked: &corpusReplayKey{Connection: "initech", Issuer: idpEntity, AssertionID: assertionID}},
+			build:  baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
 		},
 		{
 			id: "replay/without-relay-state", attack: "IdP-initiated style POST without RelayState", refs: append(refs, "SAML Profiles §4.1.5"),
@@ -2275,6 +2537,76 @@ func (g *corpusGen) replaySpecs() []corpusSpec {
 			id: "replay/other-browser", attack: "posted by another browser's binding cookie (login CSRF)", refs: refs,
 			knobs: corpusKnobs{Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
 			expect: rejected("ErrBrowserBindingMismatch", ""),
+		},
+		{
+			id:     "replay/posted-from-another-site",
+			attack: "the IdP's response to a leaked in-flight request, auto-posted into the victim's browser from the attacker's page (login CSRF)",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"https://attacker.example"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "Origin is not an allowed response origin"),
+		},
+		{
+			id:     "replay/posted-with-an-opaque-origin",
+			attack: "a POST whose origin the posting page hides (referrer policy no-referrer, sandboxed frame): Origin null",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"null"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "opaque origin (Origin: null)"),
+		},
+		{
+			id:     "replay/posted-with-two-origins",
+			attack: "two Origin headers, one of them the IdP's",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: []string{"https://attacker.example", idpOrigins[0]}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "several Origin headers"),
+		},
+		{
+			id:     "replay/posted-without-origin-from-another-referer",
+			attack: "no Origin header, a Referer on the attacker's site",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Referer: attackerURL},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "Referer is not from an allowed response origin"),
+		},
+		{
+			id:     "replay/posted-without-origin-or-referer",
+			attack: "neither Origin nor Referer while the connection requires the IdP's origin",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrOriginMismatch", "neither an Origin nor a single Referer"),
+		},
+		{
+			id:     "replay/posted-from-the-idp-origin",
+			attack: "the IdP's own auto-post page (Origin of the IdP)",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Origin: idpOrigins},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "replay/posted-without-origin-from-the-idp-referer",
+			attack: "a browser that sends no Origin, from the IdP's page: judged on the Referer's origin",
+			refs:   originRefs, knobs: corpusKnobs{ResponseOrigins: idpOrigins, Referer: "https://IDP.example.com:443/sso?tenant=acme"},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "replay/posted-from-another-site-without-response-origins",
+			attack: "the login CSRF POST at a connection without ResponseOrigins (opt-in): accepted, the documented residual risk",
+			refs:   originRefs, knobs: corpusKnobs{Origin: []string{"https://attacker.example"}},
+			build: baseline, file: "baseline/assertion-signed.xml",
+			expect: accepted(baselineIdentity()),
+		},
+		{
+			id:     "replay/record-rebound-in-the-store",
+			attack: "a writer of the transaction store binds the pending login to the attacker's cookie, which posts it",
+			refs:   append(refs, "audit STORE-02 (transaction integrity MAC)"),
+			knobs:  corpusKnobs{Tamper: "rebind", Cookie: "other"}, build: baseline, file: "baseline/assertion-signed.xml",
+			expect: rejected("ErrTransactionIntegrity", ""),
+		},
+		{
+			id: "replay/record-relaxed-in-the-store", tx: "acme-forceauthn",
+			attack: "a writer of the transaction store drops ForceAuthn from the pending login; the IdP reuses an hour-old session",
+			refs:   []string{"SAML Core §3.4.1", "audit STORE-02 (transaction integrity MAC)"},
+			knobs:  corpusKnobs{Tamper: "relax"}, build: g.staleForceAuthn, file: "time/stale-authentication-with-forceauthn.xml",
+			expect: rejected("ErrTransactionIntegrity", ""),
 		},
 	}
 }

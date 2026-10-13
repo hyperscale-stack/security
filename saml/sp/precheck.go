@@ -25,8 +25,19 @@ type rawResponse struct {
 	// keyInfoMissing reports a signature without KeyInfo: the certificate
 	// rollover retry applies.
 	keyInfoMissing bool
+	// responseSigned reports a signature of the Response itself.
+	responseSigned bool
+	// keyInfo is the KeyInfo of the Response signature and of the
+	// Assertion signature, by keyInfoPosition (index 0 is unused).
+	keyInfo [3]keyInfoState
 	// proxyCountPresent reports a ProxyRestriction with a Count attribute.
 	proxyCountPresent bool
+}
+
+// keyInfoState describes the KeyInfo of one signature as the tree shows
+// it: present, and holding no element named X509Certificate.
+type keyInfoState struct {
+	present, certless bool
 }
 
 // responseStatus is the decoded <samlp:Status> (sanitized diagnostics).
@@ -34,6 +45,8 @@ type responseStatus struct {
 	code, subCode, message string
 }
 
+// success reports a Success status; readStatus refused any code that is
+// Success only once sanitized, so code is then exactly the URI.
 func (s responseStatus) success() bool { return s.code == statusSuccess }
 
 // gateRejection maps a lexical-gate refusal to a rejection.
@@ -52,13 +65,29 @@ func gateRejection(err error) error {
 // checks the envelope (an error response carries no assertion and is never
 // trusted).
 func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
-	if err := checkXML(data, responseLimits); err != nil {
+	scan, err := scanXML(data, responseLimits)
+	if err != nil {
 		return nil, gateRejection(err)
 	}
 
+	raw, err := precheckTree(data, allowSHA1)
+	if err != nil {
+		return nil, err
+	}
+
+	return cutCertificatelessKeyInfo(raw, scan, allowSHA1)
+}
+
+// precheckTree applies the structural rules to a document the lexical gate
+// accepted.
+func precheckTree(data []byte, allowSHA1 bool) (*rawResponse, error) {
 	doc := etree.NewDocument()
 	if err := doc.ReadFromBytes(data); err != nil {
 		return nil, reject(ErrMalformedResponse, "not well-formed XML", nil)
+	}
+
+	if err := checkTokens(doc); err != nil {
+		return nil, err
 	}
 
 	root := doc.Root()
@@ -97,7 +126,7 @@ func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
 		return nil, err
 	}
 
-	if raw.keyInfoMissing, err = checkSignatures(root, assertion, allowSHA1); err != nil {
+	if err := checkSignatures(root, assertion, allowSHA1, raw); err != nil {
 		return nil, err
 	}
 
@@ -106,6 +135,52 @@ func precheck(data []byte, allowSHA1 bool) (*rawResponse, error) {
 	}
 
 	return raw, nil
+}
+
+// errDirective is the detail of checkTokens.
+const errDirective = "DTD or processing instruction in the parsed document"
+
+// checkTokens refuses, in the parsed tree, a DTD or any other directive and
+// any processing instruction but a leading XML declaration (XML 1.0 §2.8).
+// The lexical gate refuses them first: this second check, on another
+// parser's view of the document, keeps the refusal from resting on one
+// tokenizer — etree, gosaml2, goxmldsig and the round-trip validator all
+// ignore a DTD (audit SAML-I10).
+func checkTokens(doc *etree.Document) error {
+	for i, tok := range doc.Child {
+		if pi, ok := tok.(*etree.ProcInst); ok && i == 0 && pi.Target == prefixXML {
+			continue
+		}
+
+		if isDirective(tok) {
+			return reject(ErrMalformedResponse, errDirective, nil)
+		}
+	}
+
+	if doc.Root() == nil {
+		return nil // refused by checkEnvelope
+	}
+
+	return walk(doc.Root(), func(el *etree.Element) error {
+		for _, tok := range el.Child {
+			if isDirective(tok) {
+				return reject(ErrMalformedResponse, errDirective, nil)
+			}
+		}
+
+		return nil
+	})
+}
+
+// isDirective reports a directive (DTD, entity declaration) or a
+// processing instruction.
+func isDirective(tok etree.Token) bool {
+	switch tok.(type) {
+	case *etree.Directive, *etree.ProcInst:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkEnvelope checks the root, the identifiers, the absence of encrypted
@@ -177,15 +252,24 @@ var samlAttributeNames = map[string]bool{
 	"NameFormat": true, "FriendlyName": true, "Algorithm": true, "URI": true, "Type": true, "PrefixList": true,
 }
 
+// xmlAttributes are the attributes the XML namespace defines (XML 1.0
+// §2.10 and §2.12, XML Base, xml:id): its other names are reserved.
+var xmlAttributes = map[string]bool{"lang": true, "space": true, "base": true, "id": true}
+
 // checkPrefixedAttributes refuses a prefixed attribute named like a SAML or
-// XML-DSig attribute (xml:* aside). gosaml2 and goxmldsig decode with
-// encoding/xml, which matches attributes by local name: foo:Destination
-// would be read as the Destination, while this pre-check reads unprefixed
-// attributes only (code review F3).
+// XML-DSig attribute, and an xml:-prefixed attribute other than xml:lang,
+// xml:space, xml:base and xml:id. gosaml2 and goxmldsig decode with
+// encoding/xml, which matches attributes by local name: foo:Destination or
+// xml:NotBefore would be read as the Destination or the NotBefore, while
+// this pre-check reads unprefixed attributes only (code review F3, audit
+// SAML-I1). The gate keeps the xml prefix bound to the XML namespace.
 func checkPrefixedAttributes(root *etree.Element) error {
 	return walk(root, func(el *etree.Element) error {
 		for _, a := range el.Attr {
-			if a.Space != "" && a.Space != prefixXMLNS && a.Space != prefixXML && samlAttributeNames[a.Key] {
+			switch {
+			case a.Space == prefixXML && !xmlAttributes[a.Key]:
+				return reject(ErrMalformedResponse, "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id", nil)
+			case a.Space != "" && a.Space != prefixXMLNS && a.Space != prefixXML && samlAttributeNames[a.Key]:
 				return reject(ErrMalformedResponse, "prefixed attribute named like a SAML or XML-DSig attribute", nil)
 			}
 		}
@@ -326,7 +410,15 @@ func readStatus(root *etree.Element) (responseStatus, error) {
 		return responseStatus{}, reject(ErrMalformedResponse, "repeated StatusCode or StatusMessage", nil)
 	}
 
-	st := responseStatus{code: sanitizeURI(attrValue(codes[0], "Value"))}
+	// Success is decided on the exact value (Core §3.2.2.2), as gosaml2
+	// does: a code that only becomes Success once sanitized is neither a
+	// login nor an error status to report as "Success".
+	code := attrValue(codes[0], "Value")
+	st := responseStatus{code: sanitizeURI(code)}
+
+	if st.code == statusSuccess && code != statusSuccess {
+		return responseStatus{}, reject(ErrMalformedResponse, "malformed Success status code", nil)
+	}
 
 	if len(subs) == 1 {
 		st.subCode = sanitizeURI(attrValue(subs[0], "Value"))

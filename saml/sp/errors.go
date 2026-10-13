@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/hyperscale-stack/security"
 )
@@ -83,8 +84,10 @@ var (
 	// already purged after expiry.
 	ErrTransactionNotFound = newRejection("transaction not found")
 
-	// ErrTransactionConsumed reports a transaction that already completed:
-	// a replayed or concurrent duplicate response.
+	// ErrTransactionConsumed reports a transaction already consumed: a
+	// replayed or concurrent duplicate response, or any response after one
+	// refused once the transaction was consumed (a login allows one
+	// verification: the user starts over).
 	ErrTransactionConsumed = newRejection("transaction already consumed")
 
 	// ErrBrowserBindingMismatch reports a response presented by a browser
@@ -93,8 +96,15 @@ var (
 	ErrBrowserBindingMismatch = newRejection("browser binding mismatch")
 
 	// ErrAssertionReplayed reports an assertion ID already consumed for its
-	// issuer (Profiles §4.1.4.5).
+	// issuer at the connection (Profiles §4.1.4.5).
 	ErrAssertionReplayed = newRejection("assertion replayed")
+
+	// ErrTransactionIntegrity reports a transaction record that does not
+	// match its integrity MAC under any of Config.TransactionKeys: altered
+	// in the store, or written under a key no longer configured (instances
+	// that do not share the keys, a key removed before TransactionTTL
+	// elapsed). Nothing is consumed.
+	ErrTransactionIntegrity = newRejection("transaction altered in the store")
 )
 
 // Rejections of [ServiceProvider.CompleteLogin]; every one matches
@@ -111,9 +121,10 @@ var (
 	ErrResponseTooLarge = newRejection("response exceeds a resource limit")
 
 	// ErrUnsolicitedResponse reports a response not correlated to an
-	// SP-initiated request: no RelayState handle, or no InResponseTo in the
-	// bearer SubjectConfirmationData. IdP-initiated SSO is not supported
-	// (Profiles §4.1.5, errata E90).
+	// SP-initiated request: no RelayState handle, a Success Response without
+	// InResponseTo (Core §3.2.2), or no InResponseTo in the bearer
+	// SubjectConfirmationData. IdP-initiated SSO is not supported (Profiles
+	// §4.1.5, errata E90).
 	ErrUnsolicitedResponse = newRejection("unsolicited response")
 
 	// ErrMissingBrowserBinding reports an ACS request without the
@@ -160,8 +171,18 @@ var (
 
 	// ErrDestinationMismatch reports a Destination other than the
 	// connection's ACS URL, a signed Response without Destination, or an ACS
-	// request received at another path (Bindings §3.5.5.2).
+	// request received elsewhere than at that URL: another path, another
+	// host (the request's Host), or with a query string (Core §3.2.2,
+	// Bindings §3.5.5.2).
 	ErrDestinationMismatch = newRejection("destination mismatch")
+
+	// ErrOriginMismatch reports an ACS request, on a connection that sets
+	// ResponseOrigins, whose Origin header — or, from a browser that sent
+	// none, whose Referer — is not one of them: a response posted from
+	// another site than the IdP's pages (login CSRF, audit SAML-02), or from
+	// a page whose referrer policy hides its origin ("null"). Nothing is
+	// consumed.
+	ErrOriginMismatch = newRejection("response not posted from the identity provider")
 
 	// ErrRecipientMismatch reports a bearer SubjectConfirmationData
 	// Recipient other than the connection's ACS URL.
@@ -208,9 +229,12 @@ var (
 // expiry, and InResponseTo when present); nothing is consumed.
 //
 // Code, SubCode and Message come from a message that may be unsigned: they
-// are diagnostics, never authenticated. Control characters are stripped and
-// each value is capped at 256 bytes. Message MUST NOT be rendered to end
-// users. ConnectionID and AppState come from the server-side transaction, so
+// are diagnostics, never authenticated. Code and SubCode keep visible ASCII
+// only; Message loses its control, Unicode format (bidi, zero-width) and
+// line or paragraph separator characters; each value is capped at 256
+// bytes. Message MUST NOT be rendered to end users. A Success code is never
+// reported here: a code that is Success only once sanitized is refused as
+// ErrMalformedResponse. ConnectionID and AppState come from the server-side transaction, so
 // the application can send the user back where the login started.
 //
 // errors.Is(err, ErrResponseStatus) and errors.Is(err, ErrRejected) hold.
@@ -300,13 +324,17 @@ func (e *rejection) Unwrap() []error {
 // maxDiagnosticLen caps diagnostic strings copied from untrusted messages.
 const maxDiagnosticLen = 256
 
-// sanitizeDiagnostic keeps printable characters only (no control characters,
-// so no log injection) and caps the length.
+// sanitizeDiagnostic keeps printable characters only and caps the length:
+// control characters (no log injection), Unicode format characters (bidi
+// overrides and isolates, zero-width characters, soft hyphen, byte order
+// mark) and the line and paragraph separators are stripped, so the text
+// cannot spoof a log line or reorder what is displayed (Unicode TR #36
+// §2). Letters of every script are kept.
 func sanitizeDiagnostic(s string) string {
 	var b strings.Builder
 
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
 			continue
 		}
 

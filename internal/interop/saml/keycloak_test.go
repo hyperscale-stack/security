@@ -46,7 +46,7 @@ func TestKeycloakResponse(t *testing.T) {
 
 	complete := func(samlResponse string, now time.Time) (*samlsp.LoginResult, error) {
 		store := memory.New()
-		rec := login.Transaction
+		rec := withIntegrity(login.Transaction)
 		require.NoError(t, store.SaveTransaction(context.Background(), &rec))
 
 		sp := keycloakSP(t, metadata, store, func() time.Time { return now }, nil)

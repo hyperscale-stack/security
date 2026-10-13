@@ -20,9 +20,10 @@ func validConfig() samlsp.Config {
 	store := memory.New()
 
 	return samlsp.Config{
-		Connections:  newResolver(),
-		Transactions: store,
-		ReplayCache:  store,
+		Connections:     newResolver(),
+		Transactions:    store,
+		ReplayCache:     store,
+		TransactionKeys: testTransactionKeys,
 	}
 }
 
@@ -38,6 +39,16 @@ func TestNew_ValidatesConfig(t *testing.T) {
 		{"missing connections", func(c *samlsp.Config) { c.Connections = nil }},
 		{"missing transactions", func(c *samlsp.Config) { c.Transactions = nil }},
 		{"missing replay cache", func(c *samlsp.Config) { c.ReplayCache = nil }},
+		{"missing transaction keys", func(c *samlsp.Config) { c.TransactionKeys = nil }},
+		{"empty transaction key list", func(c *samlsp.Config) { c.TransactionKeys = [][]byte{} }},
+		{"transaction key of 31 bytes", func(c *samlsp.Config) { c.TransactionKeys = [][]byte{make([]byte, samlsp.MinTransactionKeySize-1)} }},
+		{"nil transaction key", func(c *samlsp.Config) { c.TransactionKeys = [][]byte{nil} }},
+		{"a short key after a good one", func(c *samlsp.Config) {
+			c.TransactionKeys = [][]byte{make([]byte, 32), []byte("short")}
+		}},
+		{"five transaction keys", func(c *samlsp.Config) {
+			c.TransactionKeys = [][]byte{make([]byte, 32), make([]byte, 32), make([]byte, 32), make([]byte, 32), make([]byte, 32)}
+		}},
 		{"TTL below 1s", func(c *samlsp.Config) { c.TransactionTTL = time.Millisecond }},
 		{"TTL above max", func(c *samlsp.Config) { c.TransactionTTL = samlsp.MaxTransactionTTL + time.Second }},
 		{"negative skew", func(c *samlsp.Config) { c.ClockSkew = -time.Second }},
@@ -94,6 +105,12 @@ func TestNew_ValidatesConfig(t *testing.T) {
 			sp, err := samlsp.New(cfg)
 			require.ErrorIs(t, err, samlsp.ErrInvalidConfig)
 			assert.Nil(t, sp)
+
+			for _, key := range cfg.TransactionKeys {
+				if len(key) > 0 {
+					assert.NotContains(t, err.Error(), string(key), "an error never echoes a key")
+				}
+			}
 		})
 	}
 }
@@ -120,6 +137,9 @@ func TestNew_AcceptsBoundsAndDefaults(t *testing.T) {
 			c.MetadataCacheDuration = time.Minute
 		}},
 		{"custom cookie", func(c *samlsp.Config) { c.CookieName = "__Host-tenant-sso" }},
+		{"four transaction keys of the minimum size", func(c *samlsp.Config) {
+			c.TransactionKeys = [][]byte{make([]byte, 32), make([]byte, 32), make([]byte, 32), make([]byte, 32)}
+		}},
 		{"signing key with rollover certificates", func(c *samlsp.Config) {
 			c.SigningKey, c.SigningCertificate = k.sp.signer, k.sp.cert
 			c.AdditionalSigningCertificates = []*x509.Certificate{k.spNext.cert}

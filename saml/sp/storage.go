@@ -7,7 +7,6 @@ package samlsp
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -22,19 +21,29 @@ const storeKeyLen = 64
 // SP-initiated login. The store treats Payload as opaque: only the
 // [ServiceProvider] encodes and decodes it. No secret is stored: ID and
 // BindingHash are SHA-256 digests of the RelayState handle and of the
-// browser-binding cookie, which never reach the store.
+// browser-binding cookie, which never reach the store, and Integrity is a
+// MAC whose key the store never sees. A record altered in the store fails
+// its login (ErrTransactionIntegrity): the store is trusted for
+// availability and single consumption only.
 type TransactionRecord struct {
 	// ID is the store key: 64 lowercase hex characters.
 	ID string
 	// BindingHash is the digest the consuming browser must match: 64
 	// lowercase hex characters.
 	BindingHash string
-	// Payload is the SP-encoded transaction state (valid UTF-8, no NUL,
-	// at most MaxTransactionPayloadSize bytes).
+	// Payload is the SP-encoded transaction state: 7-bit ASCII without NUL
+	// (the SP's JSON escapes every other character, so any column type and
+	// character set stores it unchanged), at most MaxTransactionPayloadSize
+	// bytes.
 	Payload string
 	// ExpiresAt is the expiry, in whole seconds. Stores MUST return it
 	// unchanged.
 	ExpiresAt time.Time
+	// Integrity is the record's MAC under a server-held transaction key
+	// (Config.TransactionKeys), over ID, BindingHash, Payload and ExpiresAt:
+	// 64 lowercase hex characters. Stores persist and return it unchanged;
+	// they never compute or check it.
+	Integrity string
 }
 
 // Validate checks the record before any store I/O; it returns an error
@@ -52,16 +61,31 @@ func (r *TransactionRecord) Validate() error {
 		return fmt.Errorf("binding hash: %w", err)
 	}
 
+	if err := ValidateStoreKey(r.Integrity); err != nil {
+		return fmt.Errorf("integrity: %w", err)
+	}
+
 	switch {
 	case r.Payload == "":
 		return fmt.Errorf("%w: empty payload", ErrInvalidStoreRecord)
 	case len(r.Payload) > MaxTransactionPayloadSize:
 		return fmt.Errorf("%w: payload over %d bytes", ErrInvalidStoreRecord, MaxTransactionPayloadSize)
-	case !utf8.ValidString(r.Payload) || strings.IndexByte(r.Payload, 0) >= 0:
-		return fmt.Errorf("%w: payload is not NUL-free UTF-8", ErrInvalidStoreRecord)
+	case !isPayloadASCII(r.Payload):
+		return fmt.Errorf("%w: payload is not NUL-free 7-bit ASCII", ErrInvalidStoreRecord)
 	}
 
 	return ValidateExpiry(r.ExpiresAt)
+}
+
+// isPayloadASCII reports whether s holds bytes 0x01 to 0x7F only.
+func isPayloadASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 || s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+
+	return true
 }
 
 // ValidateStoreKey checks that key is 64 lowercase hexadecimal characters,
@@ -103,22 +127,27 @@ func ValidateExpiry(t time.Time) error {
 // The conformance suite in package storetest checks this contract.
 type TransactionStore interface {
 	// SaveTransaction stores a new record. It never overwrites: an existing
-	// ID yields ErrTransactionExists.
+	// ID — even saved with identical content, consumed or not — yields
+	// ErrTransactionExists. Only a resend of the very same call (a retry
+	// after a lost reply) may be recognized as its own success.
 	SaveTransaction(ctx context.Context, rec *TransactionRecord) error
 
-	// LookupTransaction returns the record without consuming it. It returns
-	// ErrTransactionNotFound for an unknown (or purged) ID and
-	// ErrTransactionConsumed for a consumed one.
+	// LookupTransaction returns the record, every field unchanged, without
+	// consuming it. It returns ErrTransactionNotFound for an unknown (or
+	// purged) ID and ErrTransactionConsumed for a consumed one.
 	LookupTransaction(ctx context.Context, id string) (*TransactionRecord, error)
 
 	// ConsumeTransaction marks the record consumed if, and only if, it
-	// exists, is not consumed yet and bindingHash equals its BindingHash.
+	// exists, is not consumed yet and bindingHash — the digest of the
+	// binding cookie the consuming browser presented — equals its
+	// BindingHash.
 	// Among any number of concurrent callers on any number of instances, at
 	// most one gets nil. Others get, in this precedence:
 	// ErrTransactionNotFound, ErrTransactionConsumed, then
 	// ErrBrowserBindingMismatch — the latter without consuming. A consumed
 	// record is retained until its ExpiresAt (a replay is then reported as
-	// ErrTransactionConsumed) and MAY be purged afterwards.
+	// ErrTransactionConsumed) and MAY be purged afterwards; it never becomes
+	// unconsumed.
 	ConsumeTransaction(ctx context.Context, id, bindingHash string) error
 }
 

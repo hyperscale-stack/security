@@ -32,6 +32,9 @@ const (
 	AttrReason = attribute.Key("samlsp.reason")
 	// AttrInsecureSHA1 is set when the connection accepts SHA-1.
 	AttrInsecureSHA1 = attribute.Key("samlsp.insecure_sha1")
+	// AttrTransactionConsumed is set when the call consumed the login
+	// transaction: on a rejection, the user must start the login over.
+	AttrTransactionConsumed = attribute.Key("samlsp.transaction_consumed")
 )
 
 // startSpan starts a span of this module.
@@ -83,6 +86,7 @@ var reasons = []struct {
 	{ErrTransactionConsumed, "transaction_consumed"},
 	{ErrTransactionExpired, "transaction_expired"},
 	{ErrTransactionMismatch, "transaction_mismatch"},
+	{ErrTransactionIntegrity, "transaction_integrity"},
 	{ErrMalformedResponse, "malformed_response"},
 	{ErrEncryptedAssertionUnsupported, "encrypted_assertion"},
 	{ErrUnsupportedAlgorithm, "unsupported_algorithm"},
@@ -90,6 +94,7 @@ var reasons = []struct {
 	{ErrResponseStatus, "response_status"},
 	{ErrIssuerMismatch, "issuer_mismatch"},
 	{ErrDestinationMismatch, "destination_mismatch"},
+	{ErrOriginMismatch, "origin_mismatch"},
 	{ErrRecipientMismatch, "recipient_mismatch"},
 	{ErrAudienceMismatch, "audience_mismatch"},
 	{ErrInResponseToMismatch, "in_response_to_mismatch"},

@@ -32,6 +32,8 @@ func TestCompleteLogin_SignatureFailures(t *testing.T) {
 
 	k := keys(t)
 
+	// Every case but the unsigned response is refused by the verifier,
+	// after the consumption.
 	cases := []struct {
 		name string
 		o    respOpts
@@ -60,21 +62,19 @@ func TestCompleteLogin_SignatureFailures(t *testing.T) {
 		{"KeyInfo carries an untrusted certificate", respOpts{after: func(r *etree.Element) {
 			path(assertionSignature(r), "KeyInfo", "X509Data", "X509Certificate").SetText(certB64(k.attacker.cert))
 		}}},
-		{"KeyInfo without certificate (KeyName only)", respOpts{after: func(r *etree.Element) {
-			ki := path(assertionSignature(r), "KeyInfo")
-			for _, c := range ki.ChildElements() {
-				ki.RemoveChild(c)
-			}
-
-			ki.CreateElement("ds:KeyName").SetText("idp-key-1")
-		}}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reject(t, tc.o, samlsp.ErrInvalidSignature)
+			if tc.name == "no signature at all" {
+				reject(t, tc.o, samlsp.ErrInvalidSignature) // the profile refuses it before the consumption
+
+				return
+			}
+
+			rejectConsumed(t, tc.o, samlsp.ErrInvalidSignature)
 		})
 	}
 }
@@ -342,6 +342,60 @@ func TestCompleteLogin_PrefixedSAMLAttributes(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestCompleteLogin_XMLNamespaceAttributes: the xml prefix is reserved and
+// only xml:lang, xml:space, xml:base and xml:id are defined in its
+// namespace. encoding/xml (gosaml2) matches attributes by local name, so
+// xml:NotBefore, xml:Destination or xml:SessionNotOnOrAfter would be read
+// as the SAML attributes the pre-check never saw (audit SAML-I1).
+func TestCompleteLogin_XMLNamespaceAttributes(t *testing.T) {
+	t.Parallel()
+
+	refused := map[string]respOpts{
+		// Profiles §4.1.4.2: a bearer SubjectConfirmationData MUST NOT carry NotBefore.
+		"xml:NotBefore on the bearer confirmation": onAssertion(func(a *etree.Element) {
+			scd(a).CreateAttr("xml:NotBefore", ts(-time.Minute))
+		}),
+		// Bindings §3.5.5.2: a signed Response must carry Destination.
+		"xml:Destination standing for the Destination of a signed Response": {signResponse: true, before: func(r, _ *etree.Element) {
+			r.RemoveAttr("Destination")
+			r.CreateAttr("xml:Destination", acsURL)
+		}},
+		// Core §1.3.3: time values are UTC; the pre-check reads unprefixed attributes only.
+		"xml:SessionNotOnOrAfter with an offset": onAssertion(func(a *etree.Element) {
+			st := child(a, "AuthnStatement")
+			st.RemoveAttr("SessionNotOnOrAfter")
+			st.CreateAttr("xml:SessionNotOnOrAfter", "2026-10-12T20:00:00+05:00")
+		}),
+		"an undefined xml attribute on the Status": onResponse(func(r *etree.Element) {
+			child(r, "Status").CreateAttr("xml:evil", "x")
+		}),
+	}
+
+	for name, o := range refused {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			res, err := complete(e, lr, respond(t, lr.requestID, o))
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrMalformedResponse)
+			assert.Contains(t, err.Error(), "attribute in the xml namespace other than xml:lang, xml:space, xml:base or xml:id")
+		})
+	}
+
+	// The four names the XML namespace defines remain allowed.
+	_, err := flow(t, newEnv(t), onAssertion(func(a *etree.Element) {
+		attr := path(a, "AttributeStatement", "Attribute")
+		attr.CreateAttr("xml:lang", "en")
+		attr.CreateAttr("xml:space", "preserve")
+		attr.CreateAttr("xml:base", "https://idp.example.com/")
+		attr.CreateAttr("xml:id", "_attribute-1")
+	}))
+	require.NoError(t, err)
+}
+
 func TestCompleteLogin_SignatureStructureValidlySigned(t *testing.T) {
 	t.Parallel()
 
@@ -417,7 +471,7 @@ func TestCompleteLogin_InclusiveNamespacesPrefixList(t *testing.T) {
 	reject(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: prefixes(33)}}, samlsp.ErrInvalidSignature)
 
 	// The resigning helper is sound: a tampered SignedInfo fails.
-	reject(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: "xs"}, after: func(r *etree.Element) {
+	rejectConsumed(t, respOpts{assertionSig: sigOpts{inclusivePrefixes: "xs"}, after: func(r *etree.Element) {
 		path(assertionSignature(r), "SignedInfo", "Reference", "Transforms").ChildElements()[1].
 			FindElement("./InclusiveNamespaces").CreateAttr("PrefixList", "xs xsi")
 	}}, samlsp.ErrInvalidSignature)
@@ -631,7 +685,7 @@ func TestCompleteLogin_CommentInNameIDIsCanonical(t *testing.T) {
 
 	// With exc-c14n#WithComments the comment is signed content: injecting
 	// one breaks the signature.
-	reject(t, respOpts{assertionSig: sigOpts{canon: exclusiveWithComments()}, raw: func(s string) string {
+	rejectConsumed(t, respOpts{assertionSig: sigOpts{canon: exclusiveWithComments()}, raw: func(s string) string {
 		return strings.Replace(s, ">"+nameIDValue+"<", ">alice-pair<!-- x -->wise-0001<", 1)
 	}}, samlsp.ErrInvalidSignature)
 }
@@ -678,7 +732,7 @@ func TestCompleteLogin_CertificateRollover(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reject(t, tc.o, samlsp.ErrInvalidSignature, tc.opts...)
+			rejectConsumed(t, tc.o, samlsp.ErrInvalidSignature, tc.opts...)
 		})
 	}
 }

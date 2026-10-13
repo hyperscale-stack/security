@@ -105,7 +105,7 @@ func key(label string) string {
 func record(label string) *samlsp.TransactionRecord {
 	return &samlsp.TransactionRecord{
 		ID: key("tx/" + label), BindingHash: key("b/" + label), Payload: `{"v":1}`,
-		ExpiresAt: time.Now().Add(time.Hour).Truncate(time.Second),
+		ExpiresAt: time.Now().Add(time.Hour).Truncate(time.Second), Integrity: key("i/" + label),
 	}
 }
 
@@ -120,15 +120,16 @@ func TestStoredValues(t *testing.T) {
 	require.NoError(t, store.MarkAssertionUsed(ctx, key("a"), rec.ExpiresAt))
 
 	var (
-		binding, payload string
-		consumed         int
-		expires          int64
+		binding, payload, integrity string
+		consumed                    int
+		expires                     int64
 	)
 
-	require.NoError(t, db.QueryRow(`SELECT binding_hash, payload, consumed, expires_at FROM samlsp_transactions WHERE id = ?`, rec.ID).
-		Scan(&binding, &payload, &consumed, &expires))
+	require.NoError(t, db.QueryRow(`SELECT binding_hash, payload, consumed, expires_at, integrity FROM samlsp_transactions WHERE id = ?`, rec.ID).
+		Scan(&binding, &payload, &consumed, &expires, &integrity))
 	assert.Equal(t, rec.BindingHash, binding)
 	assert.Equal(t, rec.Payload, payload)
+	assert.Equal(t, rec.Integrity, integrity)
 	assert.Equal(t, 0, consumed)
 	assert.Equal(t, rec.ExpiresAt.Unix(), expires)
 
@@ -138,6 +139,36 @@ func TestStoredValues(t *testing.T) {
 
 	require.NoError(t, db.QueryRow(`SELECT expires_at FROM samlsp_used_assertions WHERE assertion_key = ?`, key("a")).Scan(&expires))
 	assert.Equal(t, rec.ExpiresAt.Unix(), expires)
+}
+
+// TestPreIntegrityTableIsAStoreFailure: on a table created before the
+// integrity column (Migrate never alters a table), saving fails as an
+// infrastructure error, never as a rejection or a silent success.
+func TestPreIntegrityTableIsAStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec(`CREATE TABLE samlsp_transactions (
+		id           VARCHAR(64) PRIMARY KEY,
+		binding_hash VARCHAR(64) NOT NULL,
+		payload      TEXT        NOT NULL,
+		consumed     SMALLINT    NOT NULL DEFAULT 0,
+		expires_at   BIGINT      NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	store, err := sqlstore.New(db, sqlstore.SQLite)
+	require.NoError(t, err)
+	require.NoError(t, store.Migrate(context.Background()), "Migrate leaves the existing table as it is")
+
+	err = store.SaveTransaction(context.Background(), record("old table"))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, samlsp.ErrRejected)
+	require.NotErrorIs(t, err, samlsp.ErrTransactionExists)
 }
 
 func TestInsertFailureIsNotAConflict(t *testing.T) {

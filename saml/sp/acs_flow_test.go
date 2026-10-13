@@ -6,6 +6,7 @@ package samlsp_test
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func replayKeyHex(issuer, id string) string { return digestHex("samlsp-v1/assertion", issuer, id) }
+func replayKeyHex(conn, issuer, id string) string {
+	return digestHex("samlsp-v2/assertion", conn, issuer, id)
+}
 
 // requireRejected asserts err matches target and ErrRejected, and that the
 // transaction of lr was not consumed.
@@ -36,10 +39,24 @@ func requireRejected(t *testing.T, e *env, lr loginResult, err error, target err
 	require.ErrorIs(t, err, security.ErrInvalidCredentials)
 
 	_, lerr := e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
-	require.NoError(t, lerr, "a rejected response consumes nothing")
+	require.NoError(t, lerr, "a response refused before the consumption consumes nothing")
 }
 
-// reject runs a full flow with o and asserts the rejection.
+// requireRejectedConsumed asserts a rejection after the consumption of the
+// transaction: the login is over, the user starts over (audit SAML-01).
+func requireRejectedConsumed(t *testing.T, e *env, lr loginResult, err error, target error) {
+	t.Helper()
+
+	require.ErrorIs(t, err, target)
+	require.ErrorIs(t, err, samlsp.ErrRejected)
+	require.ErrorIs(t, err, security.ErrInvalidCredentials)
+
+	_, lerr := e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
+	require.ErrorIs(t, lerr, samlsp.ErrTransactionConsumed, "a response refused after the consumption ends the login")
+}
+
+// reject runs a full flow with o and asserts a rejection before the
+// consumption: the transaction is untouched.
 func reject(t *testing.T, o respOpts, target error, opts ...envOption) {
 	t.Helper()
 
@@ -49,6 +66,19 @@ func reject(t *testing.T, o respOpts, target error, opts ...envOption) {
 	res, err := complete(e, lr, respond(t, lr.requestID, o))
 	assert.Nil(t, res)
 	requireRejected(t, e, lr, err, target)
+}
+
+// rejectConsumed runs a full flow with o and asserts a rejection after the
+// consumption (signature verification or a processing rule).
+func rejectConsumed(t *testing.T, o respOpts, target error, opts ...envOption) {
+	t.Helper()
+
+	e := newEnv(t, opts...)
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	res, err := complete(e, lr, respond(t, lr.requestID, o))
+	assert.Nil(t, res)
+	requireRejectedConsumed(t, e, lr, err, target)
 }
 
 func TestCompleteLogin_Success(t *testing.T) {
@@ -84,7 +114,7 @@ func TestCompleteLogin_Success(t *testing.T) {
 	// The transaction is consumed and the assertion recorded.
 	_, err = e.store.LookupTransaction(context.Background(), txKey(connID, lr.relayState))
 	require.ErrorIs(t, err, samlsp.ErrTransactionConsumed)
-	require.ErrorIs(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(idpEntity, assertionID), t0.Add(time.Hour)),
+	require.ErrorIs(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(connID, idpEntity, assertionID), t0.Add(time.Hour)),
 		samlsp.ErrAssertionReplayed)
 }
 
@@ -172,7 +202,7 @@ func newSpyEnv(t *testing.T, spy *spyCache, opts ...envOption) *env {
 	e := newEnv(t, opts...)
 	spy.ReplayCache = e.store
 
-	sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: e.store, ReplayCache: spy, Now: e.clock.Now})
+	sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: e.store, ReplayCache: spy, Now: e.clock.Now})
 	require.NoError(t, err)
 
 	e.sp = sp
@@ -210,7 +240,7 @@ func TestCompleteLogin_ReplayCacheKeyAndRetention(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Len(t, spy.keys, 1)
-			assert.Equal(t, replayKeyHex(idpEntity, assertionID), spy.keys[0], "keyed per issuer (Profiles §4.1.4.5)")
+			assert.Equal(t, replayKeyHex(connID, idpEntity, assertionID), spy.keys[0], "keyed per connection and issuer (Profiles §4.1.4.5)")
 			assert.True(t, spy.exps[0].Equal(tc.wantExp), "got %s, want %s", spy.exps[0], tc.wantExp)
 		})
 	}
@@ -220,7 +250,7 @@ func TestCompleteLogin_ReplayedAssertionRejected(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	require.NoError(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(idpEntity, assertionID), t0.Add(time.Hour)))
+	require.NoError(t, e.store.MarkAssertionUsed(context.Background(), replayKeyHex(connID, idpEntity, assertionID), t0.Add(time.Hour)))
 
 	lr := begin(t, e, samlsp.LoginOptions{})
 	_, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
@@ -236,7 +266,7 @@ func TestCompleteLogin_ConcurrentConsumptionAcrossInstances(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t)
-	other, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: e.store, ReplayCache: e.store, Now: e.clock.Now})
+	other, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: e.store, ReplayCache: e.store, Now: e.clock.Now})
 	require.NoError(t, err)
 
 	instances := []*samlsp.ServiceProvider{e.sp, other}
@@ -286,7 +316,23 @@ func TestCompleteLogin_ConcurrentConsumptionAcrossInstances(t *testing.T) {
 func TestCompleteLogin_FailureSemantics(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a rejected response consumes nothing", func(t *testing.T) {
+	t.Run("a response refused before the consumption consumes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t)
+		lr := begin(t, e, samlsp.LoginOptions{})
+
+		_, err := complete(e, lr, respond(t, lr.requestID, onResponse(func(r *etree.Element) {
+			r.CreateAttr("InResponseTo", "_evil-other-request")
+		})))
+		require.ErrorIs(t, err, samlsp.ErrInResponseToMismatch)
+		assert.NotContains(t, err.Error(), "evil", "error messages never echo message content")
+
+		_, err = complete(e, lr, respond(t, lr.requestID, respOpts{}))
+		require.NoError(t, err, "the transaction survived the response refused before the consumption")
+	})
+
+	t.Run("a response refused after the consumption ends the login", func(t *testing.T) {
 		t.Parallel()
 
 		e := newEnv(t)
@@ -299,7 +345,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		assert.NotContains(t, err.Error(), "evil", "error messages never echo message content")
 
 		_, err = complete(e, lr, respond(t, lr.requestID, respOpts{}))
-		require.NoError(t, err, "the transaction survived the forged response")
+		require.ErrorIs(t, err, samlsp.ErrTransactionConsumed, "one verification per login: the user starts over (audit SAML-01)")
 	})
 
 	t.Run("replay cache failure after consumption", func(t *testing.T) {
@@ -324,7 +370,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: lookupFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: lookupFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)
@@ -339,7 +385,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: consumeFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: consumeFailing{e.store, boom}, ReplayCache: e.store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)
@@ -353,13 +399,17 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 		e := newEnv(t)
 		lr := begin(t, e, samlsp.LoginOptions{})
 
+		// A payload the SP cannot decode, under a valid MAC: written with
+		// the key, so a store failure, not a rejection.
 		store := memory.New()
-		require.NoError(t, store.SaveTransaction(context.Background(), &samlsp.TransactionRecord{
+		rec := &samlsp.TransactionRecord{
 			ID: txKey(connID, lr.relayState), BindingHash: bindingKey(lr.cookie.Value),
 			Payload: `{"v":99}`, ExpiresAt: t0.Add(time.Hour),
-		}))
+		}
+		rec.Integrity = integrityHex(testTransactionKeys[0], rec)
+		require.NoError(t, store.SaveTransaction(context.Background(), rec))
 
-		sp, err := samlsp.New(samlsp.Config{Connections: e.resolver, Transactions: store, ReplayCache: store, Now: e.clock.Now})
+		sp, err := samlsp.New(samlsp.Config{TransactionKeys: testTransactionKeys, Connections: e.resolver, Transactions: store, ReplayCache: store, Now: e.clock.Now})
 		require.NoError(t, err)
 
 		_, err = sp.CompleteLogin(context.Background(), acsRequest(respond(t, lr.requestID, respOpts{}), lr.relayState, lr.cookie.Value), connID)
@@ -773,6 +823,74 @@ func TestCompleteLogin_StatusError(t *testing.T) {
 	assert.LessOrEqual(t, len(se.Message), 256)
 }
 
+// TestCompleteLogin_SuccessStatusIsExact: Success is decided on the exact
+// status code (Core §3.2.2.2). A code that is Success only once white space
+// or control characters are stripped is malformed: neither a login (gosaml2
+// compares the raw value) nor a *StatusError claiming "Success" (audit
+// SAML-I6). It is refused before any signature work and consumes nothing.
+func TestCompleteLogin_SuccessStatusIsExact(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]string{
+		"trailing tab":      `status:Success&#x9;"`,
+		"trailing newline":  `status:Success&#xA;"`,
+		"trailing space":    `status:Success "`,
+		"carriage return":   `status:Success&#xD;"`,
+		"non-breaking byte": "status:Success\u0085\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			xml := respondXML(t, lr.requestID, respOpts{})
+			require.Contains(t, xml, `status:Success"`)
+
+			res, err := complete(e, lr, encodeString(strings.Replace(xml, `status:Success"`, value, 1)))
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrMalformedResponse)
+			require.NotErrorIs(t, err, samlsp.ErrResponseStatus)
+			assert.Equal(t, samlsp.ErrMalformedResponse.Error()+" (malformed Success status code)", err.Error())
+		})
+	}
+
+	// A non-Success code with white space stays an IdP error status.
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	path(r, "Status", "StatusCode").CreateAttr("Value", " urn:oasis:names:tc:SAML:2.0:status:Requester\t")
+
+	_, err := complete(e, lr, encodeElement(t, r))
+
+	var se *samlsp.StatusError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, "urn:oasis:names:tc:SAML:2.0:status:Requester", se.Code)
+}
+
+// TestCompleteLogin_StatusMessageFormatCharacters: the StatusMessage comes
+// from an unauthenticated message; Unicode format and separator characters
+// (bidi overrides, zero-width characters, line and paragraph separators)
+// would let it spoof a log line or a rendering, so they are stripped like
+// control characters, while letters of every script stay (audit SAML-I7).
+func TestCompleteLogin_StatusMessageFormatCharacters(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	path(r, "Status", "StatusCode").CreateAttr("Value", "urn:oasis:names:tc:SAML:2.0:status:Responder")
+	child(r, "Status").CreateElement("samlp:StatusMessage").SetText(
+		"Échec\u202e\u2066 認証\u200b\u200c\u200d\u200e\u200f\u2028level=error\u2029\ufeff\u00ad\u2060\u061c ok")
+
+	_, err := complete(e, lr, encodeElement(t, r))
+
+	var se *samlsp.StatusError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, "Échec 認証level=error ok", se.Message)
+}
+
 // encodeElement serializes and base64-encodes an element.
 func encodeElement(t testing.TB, el *etree.Element) string {
 	t.Helper()
@@ -784,4 +902,164 @@ func encodeElement(t testing.TB, el *etree.Element) string {
 	require.NoError(t, err)
 
 	return encodeString(s)
+}
+
+// TestCompleteLogin_ACSLocation: a response is accepted only where the
+// connection's ACS URL says it is delivered — same path (escaped form), same
+// host (r.Host, case-insensitively, the scheme's default port filled in) and
+// no query string (Core §3.2.2 Destination: "the actual recipient MUST
+// check that the URI reference identifies the location at which the message
+// was received"; Bindings §3.5.5.2; Profiles §4.1.4.3; audit SAML-I9).
+// Each refusal comes before any signature work and consumes nothing.
+func TestCompleteLogin_ACSLocation(t *testing.T) {
+	t.Parallel()
+
+	request := func(target string, lr loginResult, body string) *http.Request {
+		form := url.Values{"SAMLResponse": {body}, "RelayState": {lr.relayState}}
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: samlsp.DefaultCookieName, Value: lr.cookie.Value})
+
+		return req
+	}
+
+	const (
+		hostDetail  = "request received at another host than the connection's ACS URL"
+		queryDetail = "request received with a query string"
+		pathDetail  = "request received outside the connection's ACS path"
+	)
+
+	refused := []struct {
+		name, target, host, detail string
+	}{
+		{"another host", "https://other.example.com/saml/acme/acs", "", hostDetail},
+		{"another port", "https://sp.example.com:8443/saml/acme/acs", "", hostDetail},
+		{"a sibling host", "https://evil.sp.example.com/saml/acme/acs", "", hostDetail},
+		{"a trailing dot", acsURL, "sp.example.com.", hostDetail},
+		{"no Host", acsURL, "-", hostDetail},
+		{"a query string", acsURL + "?x=1", "", queryDetail},
+		{"an empty query string", acsURL + "?", "", queryDetail},
+		{"an escaped slash in the path", "https://sp.example.com/saml/acme%2Facs", "", pathDetail},
+		{"another path", "https://sp.example.com/saml/acme/acs2", "", pathDetail},
+	}
+
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			req := request(tc.target, lr, respond(t, lr.requestID, respOpts{}))
+
+			switch tc.host {
+			case "-":
+				req.Host = ""
+			case "":
+			default:
+				req.Host = tc.host
+			}
+
+			res, err := e.sp.CompleteLogin(context.Background(), req, connID)
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrDestinationMismatch)
+			assert.Equal(t, samlsp.ErrDestinationMismatch.Error()+" ("+tc.detail+")", err.Error())
+		})
+	}
+
+	accepted := []struct {
+		name, target, host string
+	}{
+		{"the ACS URL", acsURL, ""},
+		{"the default port spelled out", "https://sp.example.com:443/saml/acme/acs", ""},
+		{"an upper-case Host", acsURL, "SP.Example.COM"},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			req := request(tc.target, lr, respond(t, lr.requestID, respOpts{}))
+			if tc.host != "" {
+				req.Host = tc.host
+			}
+
+			res, err := e.sp.CompleteLogin(context.Background(), req, connID)
+			require.NoError(t, err)
+			assert.Equal(t, nameIDValue, res.Identity.NameID.Value)
+		})
+	}
+}
+
+// TestCompleteLogin_ReplayCacheIsPerConnection: a tenant may configure a
+// connection whose IdP claims another tenant's IdP entity ID (identities
+// are unique within a connection only). Before the replay cache was scoped
+// by connection, an assertion ID consumed at the squatting connection was
+// then refused as a replay at the victim's (audit SAML-I2). An assertion
+// cannot be accepted at two connections anyway: its Audience, Recipient
+// and InResponseTo bind it to one transaction of one connection.
+func TestCompleteLogin_ReplayCacheIsPerConnection(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t) // connection acme trusts idpA for idpEntity
+	k := keys(t)
+
+	const evilID, evilSP, evilACS = "evil", "https://sp.example.com/saml/evil", "https://sp.example.com/saml/evil/acs"
+
+	e.resolver.set(&samlsp.Connection{
+		ID: evilID, SPEntityID: evilSP, ACSURL: evilACS,
+		IdentityProvider: samlsp.IdentityProvider{
+			EntityID: idpEntity, // collides with acme's IdP entity ID
+			SSOURL:   "https://attacker.example/sso", SigningCertificates: []*x509.Certificate{k.attacker.cert},
+		},
+	})
+
+	// The squatter signs in at her connection with an assertion whose ID is
+	// the one acme's IdP uses next (here the fixture's fixed assertion ID).
+	rec := httptest.NewRecorder()
+	redirect, err := e.sp.BeginLogin(context.Background(), rec, httptest.NewRequest(http.MethodGet, "/login", nil), evilID,
+		samlsp.LoginOptions{})
+	require.NoError(t, err)
+
+	u, err := url.Parse(redirect)
+	require.NoError(t, err)
+
+	evil := loginResult{url: u, relayState: u.Query().Get("RelayState"), cookie: rec.Result().Cookies()[0]}
+	evil.request = decodeAuthnRequest(t, u)
+	evil.requestID = evil.request.SelectAttrValue("ID", "")
+
+	body := respond(t, evil.requestID, respOpts{
+		assertionSig: sigOpts{signer: k.attacker},
+		before: func(r, _ *etree.Element) {
+			r.RemoveAttr("Destination")
+			r.CreateAttr("Destination", evilACS)
+		},
+		beforeAssertion: func(a *etree.Element) {
+			scd(a).CreateAttr("Recipient", evilACS)
+			path(a, "Conditions", "AudienceRestriction", "Audience").SetText(evilSP)
+		},
+	})
+
+	form := url.Values{"SAMLResponse": {body}, "RelayState": {evil.relayState}}
+	post := httptest.NewRequest(http.MethodPost, evilACS, strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.AddCookie(&http.Cookie{Name: samlsp.DefaultCookieName, Value: evil.cookie.Value})
+
+	res, err := e.sp.CompleteLogin(context.Background(), post, evilID)
+	require.NoError(t, err)
+	require.Equal(t, assertionID, res.Identity.AssertionID)
+
+	// The victim's genuine login at acme, signed by acme's IdP key.
+	victim := begin(t, e, samlsp.LoginOptions{})
+	res, err = complete(e, victim, respond(t, victim.requestID, respOpts{}))
+	require.NoError(t, err, "the squatter's consumption does not burn acme's assertion IDs")
+	assert.Equal(t, assertionID, res.Identity.AssertionID)
+
+	// The same assertion at the same connection is still a replay.
+	again := begin(t, e, samlsp.LoginOptions{})
+	_, err = complete(e, again, respond(t, again.requestID, respOpts{}))
+	require.ErrorIs(t, err, samlsp.ErrAssertionReplayed)
 }

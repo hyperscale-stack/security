@@ -295,15 +295,17 @@ func TestMetadataFetchesDependOnTimeOnly(t *testing.T) {
 	require.EqualValues(t, 1, f.md.hits.Load())
 
 	// Responses of a rogue IdP, signed by an unknown key, for acme's own
-	// transaction.
+	// transactions: one per login, since a transaction buys a single
+	// verification (audit SAML-01).
 	rogue := newIdentityProvider(t, newKey(t, "rogue"), rsaSHA256)
 	rogue.registerSP(t, f.sp.metadata(t, "acme"))
 
 	mallory := newBrowser(t, f.sp.srv)
-	redirect := mallory.redirectOf(t, f.sp.srv.URL+"/login/acme")
-	forged := answerForgedRequest(t, mallory, rogue, f.acme, authnRequest(t, redirect).ID, redirect.Query().Get("RelayState"))
 
 	for range 100 {
+		redirect := mallory.redirectOf(t, f.sp.srv.URL+"/login/acme")
+		forged := answerForgedRequest(t, mallory, rogue, f.acme, authnRequest(t, redirect).ID, redirect.Query().Get("RelayState"))
+
 		require.Equal(t, http.StatusForbidden, mallory.mustPost(t, forged))
 		require.ErrorIs(t, f.sp.last(t).err, samlsp.ErrInvalidSignature)
 	}

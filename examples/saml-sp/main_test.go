@@ -217,7 +217,7 @@ type harness struct {
 	offset atomic.Int64 // clock offset
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, opts ...func(*appConfig)) *harness {
 	t.Helper()
 
 	h := &harness{t: t, idp: newTestIdP(t)}
@@ -225,12 +225,18 @@ func newHarness(t *testing.T) *harness {
 	srv := httptest.NewUnstartedServer(nil)
 	h.base = "http://" + srv.Listener.Addr().String()
 
-	handler, err := newServer(appConfig{
-		baseURL:      h.base,
-		connectionID: "corp",
-		idpMetadata:  h.idp.metadata(),
-		now:          func() time.Time { return time.Now().Add(time.Duration(h.offset.Load())) },
-	})
+	cfg := appConfig{
+		baseURL:         h.base,
+		connectionID:    "corp",
+		idpMetadata:     h.idp.metadata(),
+		transactionKeys: testTransactionKeys,
+		now:             func() time.Time { return time.Now().Add(time.Duration(h.offset.Load())) },
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	handler, err := newServer(cfg)
 	require.NoError(t, err)
 
 	srv.Config.Handler = handler
@@ -563,4 +569,91 @@ func TestNewServerRejectsBadMetadata(t *testing.T) {
 
 	_, err = newServer(appConfig{baseURL: "ftp://example.com", connectionID: "corp", idpMetadata: newTestIdP(t).metadata()})
 	require.Error(t, err)
+}
+
+// testTransactionKeys protect the example's transactions in the tests.
+var testTransactionKeys = [][]byte{[]byte("saml-sp example test key, 32+ bytes")}
+
+func TestTransactionKeysFromEnvironment(t *testing.T) {
+	keys, err := transactionKeys("")
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "a random development key when none is configured")
+	assert.Len(t, keys[0], samlsp.MinTransactionKeySize)
+
+	other, err := transactionKeys("  ")
+	require.NoError(t, err)
+	assert.NotEqual(t, keys, other, "drawn at random")
+
+	k1, k2 := strings.Repeat("ab", 32), strings.Repeat("cd", 48)
+
+	keys, err = transactionKeys(k1 + ", " + k2)
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, keys)
+
+	// A malformed key is reported by its position: the decoder's error would
+	// echo one of its characters into the log.
+	_, err = transactionKeys(k1 + "," + strings.Repeat("ab", 31) + "zQ")
+	require.ErrorIs(t, err, errKeyNotHex)
+	assert.EqualError(t, err, "SAMLSP_TRANSACTION_KEYS: key 2: not hex-encoded")
+}
+
+func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
+	t.Parallel()
+
+	_, err := newServer(appConfig{
+		baseURL: "http://127.0.0.1:1", connectionID: "corp", idpMetadata: newTestIdP(t).metadata(),
+		transactionKeys: [][]byte{[]byte("too short")},
+	})
+	require.ErrorIs(t, err, samlsp.ErrInvalidConfig)
+}
+
+func TestResponseOriginsFromEnvironment(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, responseOrigins(""))
+	assert.Empty(t, responseOrigins(" , "))
+	assert.Equal(t, []string{"https://idp.example.test", "https://idp2.example.test:8443"},
+		responseOrigins(" https://idp.example.test,https://idp2.example.test:8443 ,"))
+}
+
+// TestSAMLSPExampleResponseOrigins: with SAMLSP_RESPONSE_ORIGINS, a
+// response posted from another site is refused (the generic page, no
+// session) and the login started by this browser stays usable from the
+// IdP's page.
+func TestSAMLSPExampleResponseOrigins(t *testing.T) {
+	t.Parallel()
+
+	const idpOrigin = "https://idp.example.test"
+
+	h := newHarness(t, func(c *appConfig) { c.responseOrigins = []string{idpOrigin} })
+	id, relayState := h.startLogin(h.client, "/account")
+	samlResponse := h.respond(id, time.Now().Add(time.Hour))
+
+	postFrom := func(origin string) *http.Response {
+		form := url.Values{"SAMLResponse": {samlResponse}, "RelayState": {relayState}}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.base+"/saml/corp/acs", strings.NewReader(form.Encode()))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+
+		resp, err := h.client.Do(req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+
+		return resp
+	}
+
+	resp := postFrom("https://attacker.example")
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "the generic failure page")
+	assert.Empty(t, resp.Cookies(), "no session")
+
+	resp = postFrom(idpOrigin)
+	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	assert.Equal(t, "/account", resp.Header.Get("Location"))
+
+	_, err := newServer(appConfig{
+		baseURL: "http://127.0.0.1:1", connectionID: "corp", idpMetadata: newTestIdP(t).metadata(),
+		transactionKeys: testTransactionKeys, responseOrigins: []string{"https://idp.example.test/"},
+	})
+	require.ErrorIs(t, err, samlsp.ErrInvalidConnection, "a malformed origin is refused at startup")
 }

@@ -1192,3 +1192,71 @@ To migrate:
    often. Set it once every instance runs this release: an instance still
    on the previous one writes refresh tokens without a family start, so
    each rotation it serves restarts the bound.
+
+### `saml/sp`: a server-held key protects the login transactions; one verification per login; stricter location and correlation checks (security audit 2026-10-12)
+
+The SAML Service Provider stored its login transactions without integrity
+protection: whoever could write to the transaction store — a shared Redis,
+a database user — could rebind a captured response to another browser or
+request, or drop the `ForceAuthn` and `RequestedAuthnContext` requirements of
+a login. A transaction also allowed any number of signature verifications,
+a response was checked against the path of the URL it was received at only,
+and several parser and correlation details deviated from SAML 2.0 Core. The
+fixes change the configuration, the stored records and some refusals:
+
+| | Before | After |
+| --- | --- | --- |
+| `Config.TransactionKeys` | — | REQUIRED: 1 to 4 keys of at least 32 bytes; `New` fails with `ErrInvalidConfig` otherwise |
+| `TransactionRecord.Integrity` | — | HMAC-SHA256 under `TransactionKeys[0]` over the ID, `BindingHash`, `Payload` and `ExpiresAt`; required by `Validate`; verified under any of the keys, in constant time, before any stored field is used |
+| a record altered in the store | used as stored | `ErrTransactionIntegrity`, nothing consumed |
+| logins in progress at the upgrade | — | fail once with `ErrTransactionIntegrity` (the user signs in again) |
+| SQL store | `samlsp_transactions` without `integrity` | column `integrity VARCHAR(64) NOT NULL`; `Migrate` does not alter an existing table |
+| Redis store | hash fields `b`, `p`, `e` (+ `c`) | + `i` (integrity) and `n` (nonce of the saving call); a second save of an existing transaction, even identical, is `ErrTransactionExists` |
+| custom stores | — | persist and return `Integrity` unchanged; `storetest.RunConformance` checks it, an identical second save, and retention over time (a run takes about 1.5 s more) |
+| `TransactionRecord.Payload` | NUL-free UTF-8 | NUL-free 7-bit ASCII (the SP escapes every other character): no store needs `utf8mb4` or a strict `sql_mode` for it |
+| a response refused after the browser binding, transaction, status and `InResponseTo` checks (signature, issuer, audience, times…) | transaction kept, any number of retries | transaction consumed before the verification: one verification per login, the user restarts the login (`ErrTransactionConsumed` for any later POST) |
+| the ACS request | path checked | escaped path, host (`r.Host`) and no query string checked: `ErrDestinationMismatch` |
+| a Success `Response` without `InResponseTo` | accepted | `ErrUnsolicitedResponse` (Core §3.2.2) |
+| a Success status code followed by white space | refused after signature work (`ErrResponseStatus`) | `ErrMalformedResponse`, before any signature work |
+| `xml:` attributes other than `xml:lang`, `xml:space`, `xml:base`, `xml:id` | accepted | `ErrMalformedResponse` |
+| a `KeyInfo` without `X509Certificate` | `ErrInvalidSignature` | treated as absent (cut from the verified bytes); still `ErrInvalidSignature` on an Assertion covered by a signed Response |
+| replay cache key | digest of (issuer, assertion ID) | digest of (connection, issuer, assertion ID) |
+| an `EntitiesDescriptor` (aggregate) without a pinned entity ID | imported when it lists one entity | `ErrInvalidMetadata` |
+| `Connection.ACSURL` | any host | an ASCII host (the punycode form of an internationalized name) |
+| `Connection.ResponseOrigins` | — | optional: the IdP origins allowed to post to the ACS (`Origin`, else `Referer`); `ErrOriginMismatch` otherwise |
+| `fmt` / `log/slog` of a `Config` or a `*ServiceProvider` | every field, signing key included | settings only, with every `fmt` verb; keys redacted |
+
+To migrate:
+
+1. Generate a transaction key: 32 bytes or more from a cryptographic source
+   (`openssl rand -hex 32`). Keep it in your secret store, and use a key
+   distinct from the OpenID Connect client's transaction keys and from the
+   session keys.
+2. Set `Config.TransactionKeys: [][]byte{key}` on every instance — the same
+   keys everywhere (`examples/saml-sp` reads `SAMLSP_TRANSACTION_KEYS`, hex
+   keys separated by commas).
+3. With `saml/sp/store/sql`, add the column before deploying:
+   `ALTER TABLE samlsp_transactions ADD COLUMN integrity VARCHAR(64) NOT NULL DEFAULT ''`
+   (PostgreSQL, MySQL and SQLite), or drop the table and run `Migrate`: it
+   only holds logins in progress. With `saml/sp/store/redis`, nothing to do.
+   A custom `TransactionStore` must persist `TransactionRecord.Integrity`
+   and return it unchanged: run `storetest.RunConformance` against it.
+4. Deploy knowing that the logins in progress fail once
+   (`ErrTransactionIntegrity`); the users start over.
+5. Behind a reverse proxy, forward the original `Host` (nginx:
+   `proxy_set_header Host $host;`), or pass `CompleteLogin` a copy of the
+   request (`r.Clone`) whose `Host` comes from your trusted proxy's
+   header; never trust a forwarding header a client can set.
+6. Pass `MetadataOptions.EntityID` (or `FetchOptions.EntityID`) to import
+   metadata served as an `EntitiesDescriptor`, even of a single entity.
+7. Optionally set `Connection.ResponseOrigins` to the origin of the IdP
+   page that posts the responses, when that page lets browsers send it.
+   Keycloak's default realm does not: its POST page sends
+   `Referrer-Policy: no-referrer`, so browsers post `Origin: null`. Leave
+   the option unset there, or first set the realm's Referrer-Policy header
+   (Realm settings → Security defenses → Headers) to
+   `strict-origin-when-cross-origin`.
+8. To rotate a transaction key later without failing a login: add the new
+   key last on every instance; once all of them run with it, move it first;
+   remove the old key once `TransactionTTL` (10 minutes by default) has
+   elapsed.

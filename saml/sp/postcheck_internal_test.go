@@ -10,6 +10,7 @@ package samlsp
 // are tested here on hand-built decoded responses.
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
 	"errors"
 	"testing"
@@ -243,6 +244,23 @@ func TestRolloverCandidates(t *testing.T) {
 	assert.Equal(t, []*x509.Certificate{c4, c3, c2}, got)
 	assert.Equal(t, []*x509.Certificate{c2, c1}, rolloverCandidates([]*x509.Certificate{c1, c2}, pcNow))
 	assert.Empty(t, rolloverCandidates([]*x509.Certificate{expired, future}, pcNow))
+}
+
+// TestPreferCertificate: the certificate that last verified moves to the
+// front, the others keep their order, and nothing is ever added (audit
+// SAML-01: an ordering hint, never a trust decision).
+func TestPreferCertificate(t *testing.T) {
+	t.Parallel()
+
+	c1, c2, c3 := &x509.Certificate{Raw: []byte("one")}, &x509.Certificate{Raw: []byte("two")}, &x509.Certificate{Raw: []byte("three")}
+	all := []*x509.Certificate{c1, c2, c3}
+
+	assert.Equal(t, []*x509.Certificate{c3, c1, c2}, preferCertificate(all, sha256.Sum256([]byte("three"))))
+	assert.Equal(t, []*x509.Certificate{c2, c1, c3}, preferCertificate(all, sha256.Sum256([]byte("two"))))
+	assert.Equal(t, all, preferCertificate(all, sha256.Sum256([]byte("one"))))
+	assert.Equal(t, all, preferCertificate(all, sha256.Sum256([]byte("absent"))), "a certificate no longer a candidate is not added")
+	assert.Equal(t, []*x509.Certificate{c1, c2, c3}, all, "the candidates are not modified")
+	assert.Empty(t, preferCertificate(nil, sha256.Sum256([]byte("one"))))
 }
 
 func TestVerifyResponse_NoValidCertificate(t *testing.T) {

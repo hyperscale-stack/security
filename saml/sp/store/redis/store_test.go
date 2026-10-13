@@ -63,8 +63,8 @@ func key(label string) string {
 
 func record(label string, ttl time.Duration) *samlsp.TransactionRecord {
 	return &samlsp.TransactionRecord{
-		ID: key("tx/" + label), BindingHash: key("b/" + label), Payload: `{"v":1,"app":"/é"}`,
-		ExpiresAt: time.Now().Add(ttl).Truncate(time.Second),
+		ID: key("tx/" + label), BindingHash: key("b/" + label), Payload: `{"v":1,"app":"/\u00e9"}`,
+		ExpiresAt: time.Now().Add(ttl).Truncate(time.Second), Integrity: key("i/" + label),
 	}
 }
 
@@ -80,6 +80,8 @@ func TestKeyLayoutAndPrefix(t *testing.T) {
 
 	assert.Equal(t, rec.BindingHash, mr.HGet("tenant1:tx:"+rec.ID, "b"))
 	assert.Equal(t, rec.Payload, mr.HGet("tenant1:tx:"+rec.ID, "p"))
+	assert.Equal(t, rec.Integrity, mr.HGet("tenant1:tx:"+rec.ID, "i"))
+	assert.Regexp(t, "^[0-9a-f]{32}$", mr.HGet("tenant1:tx:"+rec.ID, "n"), "the saving call's nonce")
 	assert.True(t, mr.Exists("tenant1:as:"+key("a")))
 	assert.InDelta(t, time.Hour, mr.TTL("tenant1:tx:"+rec.ID), float64(2*time.Second), "expires at the transaction expiry")
 

@@ -137,10 +137,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   crewjam/saml's IdP over TLS and replays a pinned Keycloak 26.0.7 login.
 - **SAML adversarial and interoperability evidence** (#88), all in tests
   and documentation:
-  - a pinned corpus of 359 signed responses (`saml/sp/testdata/corpus`)
-    with a deterministic generator. Each entry pins its outcome: the full
-    refusal message or the exact identity. A meta-test requires every
-    refusal rule of the sources in some entry;
+  - a pinned corpus of 390 entries over 360 signed responses
+    (`saml/sp/testdata/corpus`) with a deterministic generator. Each entry
+    pins its outcome — the full refusal message or the exact identity —
+    and whether it consumed the login. A meta-test requires every refusal
+    rule of the sources in some entry;
   - a live Keycloak 26.7.4 suite (opt-in, digest-pinned compose) and the
     replay of its 14 captures in CI, including XSW1–XSW8, signature removal
     and comment injection on Apache Santuario output;
@@ -598,6 +599,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `family_issued_at BIGINT NOT NULL DEFAULT 0` column existing databases add
   with the `ALTER TABLE` of [MIGRATION.md](MIGRATION.md)).
 
+- **SAML Service Provider (breaking, security audit).** `samlsp.New`
+  requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
+  `TransactionRecord` gains `Integrity`, which every store persists (SQL
+  column `integrity`, Redis field `i`) and `Validate` requires; the payload
+  must be 7-bit ASCII. A response refused after the binding and transaction
+  checks consumes the transaction. A Success `Response` without
+  `InResponseTo`, a request received on another host or with a query
+  string, an `xml:` attribute outside the XML namespace's four names and an
+  `EntitiesDescriptor` imported without a pinned entity ID are refused;
+  `Connection.ACSURL` needs an ASCII host. New: `ErrTransactionIntegrity`,
+  `ErrOriginMismatch`, `Connection.ResponseOrigins`,
+  `MinTransactionKeySize`, `MaxTransactionKeys`, the span attribute
+  `samlsp.transaction_consumed`. See [MIGRATION.md](MIGRATION.md).
+
 ### Fixed
 
 - `oidcclient.Client.StartLogin` capped the binding cookies at four by
@@ -695,6 +710,26 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `application/x-www-form-urlencoded` body and does not check the content
   type; client grant types are compared exactly, not case-insensitively; and
   `Profile20BCP` refuses the legacy `password` grant as well as `implicit`.
+
+- The SAML Redis store answered `ErrTransactionExists` only when a second
+  save differed from the stored transaction: an identical one succeeded. It
+  now recognizes only a resend of the same call (its nonce).
+- A SAML login's `AppState` came back altered from a SQL store whose column
+  or connection character set could not represent it under a non-strict
+  `sql_mode` (a latin1 MySQL replaced characters with `?`): the transaction
+  payload is now ASCII-only JSON.
+- `saml/sp/storetest` checks retention over time: a store forgetting a
+  consumption or a replay mark shortly after recording it used to pass;
+  records past their expiry may be purged, never altered.
+- `xs:duration` values of exactly 2^63 nanoseconds are refused on every
+  platform (they parsed as the minimum or maximum duration depending on the
+  architecture).
+- A SAML signature whose `KeyInfo` carries no certificate (a `KeyName` or a
+  `KeyValue` only, which Core §5.4.5 allows) is verified like one without
+  `KeyInfo` instead of failing.
+- Unicode format and line/paragraph separator characters (bidirectional
+  overrides, zero-width characters) are stripped from a SAML
+  `StatusError.Message`.
 
 ### Removed
 
@@ -848,6 +883,44 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `p:=""`, `xmlns:=""`), which encoding/xml keeps whole, colon included, in
   no namespace. No reader disagreed on them yet; they are refused, like the
   other names readers could read differently (`ErrMalformedResponse`).
+- SAML login transactions carry a MAC under a server-held key
+  (`samlsp.Config.TransactionKeys`, required), verified in constant time
+  before any stored field is used. Whoever could write to the transaction
+  store could rebind a pending login to her own browser — completing it with
+  a victim's captured response — or drop its `ForceAuthn` and
+  `RequestedAuthnContext` requirements; such a record now fails with
+  `ErrTransactionIntegrity`, and the stores are trusted for availability and
+  single consumption only. The transaction is consumed with the digest of
+  the cookie the browser presented, never the stored one.
+- A SAML login allows one signature verification. `CompleteLogin` consumes
+  the transaction after the browser binding, transaction, status and
+  `InResponseTo` checks and before any signature work: one `BeginLogin` no
+  longer buys unlimited verifications — up to three gosaml2 runs each when a
+  signature has no `KeyInfo` — sequential or concurrent, and a refused
+  response ends the login. For signatures without `KeyInfo`, the certificate
+  that verified the connection's last such signature is tried first.
+- `samlsp.Connection.ResponseOrigins` (opt-in) refuses a response posted to
+  the ACS from another origin than the IdP's pages (`ErrOriginMismatch`),
+  closing the login CSRF a leaked in-flight IdP redirect URL allowed: the
+  IdP's response to the victim's request, obtained for the attacker's
+  account and auto-posted from the attacker's page, signed the victim in as
+  the attacker.
+- The SAML ACS checks where a response was received (Core §3.2.2,
+  Bindings §3.5.5.2): the request's escaped path, its host (`r.Host`) and
+  the absence of a query string must be the connection's ACS URL's. A
+  Success `Response` must carry `InResponseTo`, equal to the request ID.
+- Parser differentials refused before any signature work: `xml:`
+  attributes other than `xml:lang`, `xml:space`, `xml:base` and `xml:id`
+  (`xml:NotBefore`, `xml:Destination` were read by encoding/xml as the SAML
+  attributes, unchecked by the pre-check), DTDs and processing instructions
+  in the parsed tree as well as in the token stream, and a status code that
+  is Success only once white space is stripped.
+- The SAML replay cache is keyed by connection: a tenant whose IdP reuses
+  another IdP's entity ID can no longer burn the assertion IDs of the other
+  tenant's connection.
+- A `samlsp.Config` or `*samlsp.ServiceProvider` printed with `fmt` (any
+  verb) or logged with `slog` no longer reveals the signing key or the
+  transaction keys.
 - The HTTP `DefaultErrorMapper` no longer reflects the wrapped error chain
   into the `WWW-Authenticate` header. The RFC 6750 `error_description` is now
   a fixed, generic string per error code, so internal context (timestamps,

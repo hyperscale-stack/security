@@ -29,6 +29,10 @@ import (
 // t0 is the fixed instant of every test clock.
 var t0 = time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 
+// testTransactionKeys are the transaction keys of the tests (a constant:
+// nothing secret, and transactions survive a new ServiceProvider).
+var testTransactionKeys = [][]byte{[]byte("samlsp test transaction key, 32+ bytes, test only")}
+
 // keyPair is a test key with a self-signed certificate valid around t0.
 type keyPair struct {
 	signer crypto.Signer
@@ -228,10 +232,11 @@ func newEnv(t testing.TB, opts ...envOption) *env {
 	clk := newClock()
 
 	cfg := samlsp.Config{
-		Connections:  res,
-		Transactions: store,
-		ReplayCache:  store,
-		Now:          clk.Now,
+		Connections:     res,
+		Transactions:    store,
+		ReplayCache:     store,
+		TransactionKeys: testTransactionKeys,
+		Now:             clk.Now,
 	}
 
 	for _, o := range opts {

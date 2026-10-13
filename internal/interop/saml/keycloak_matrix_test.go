@@ -63,7 +63,7 @@ func replayKeycloak(t *testing.T, c keycloakCase, allowSHA1 bool, response strin
 	}
 
 	store := memory.New()
-	rec := c.Transaction
+	rec := withIntegrity(c.Transaction)
 	require.NoError(t, store.SaveTransaction(context.Background(), &rec))
 
 	sp, err := samlsp.New(samlsp.Config{
@@ -76,7 +76,7 @@ func replayKeycloak(t *testing.T, c keycloakCase, allowSHA1 bool, response strin
 
 			return &cp, nil
 		}),
-		Transactions: store, ReplayCache: store, Now: now,
+		Transactions: store, ReplayCache: store, TransactionKeys: testTransactionKeys, Now: now,
 	})
 	require.NoError(t, err)
 

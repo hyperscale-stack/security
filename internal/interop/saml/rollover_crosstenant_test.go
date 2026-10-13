@@ -231,10 +231,11 @@ func TestCrossTenantSameIdP(t *testing.T) {
 // own entity ID and key, behind two connections of one SP. Each tenant
 // signs in through its own IdP. The administrator of IdP-B (another
 // tenant) cannot sign anyone in at connection A: neither with a genuine
-// response of IdP-B for her own tenant, nor with one IdP-B issued for
-// connection A's SP and A's own request. In both cases the first guard is
-// the signature, verified against connection A's IdP keys only, before
-// any Destination, InResponseTo or Issuer comparison.
+// response of IdP-B for her own tenant — it answers another request, which
+// the Response's InResponseTo says before any signature work (Core
+// §3.2.2) — nor with one IdP-B issued for connection A's SP and A's own
+// request, refused by the signature, verified against connection A's IdP
+// keys only, before any Destination, Audience or Issuer comparison.
 func TestTwoIdentityProvidersTwoConnections(t *testing.T) {
 	t.Parallel()
 
@@ -267,8 +268,8 @@ func TestTwoIdentityProvidersTwoConnections(t *testing.T) {
 
 	genuine.action, genuine.relayState = acme.ACSURL, redirect.Query().Get("RelayState")
 	require.Equal(t, http.StatusForbidden, mallory.mustPost(t, genuine))
-	require.ErrorIs(t, sp.last(t).err, samlsp.ErrInvalidSignature)
-	require.Contains(t, sp.last(t).err.Error(), "(signature verification failed)")
+	require.ErrorIs(t, sp.last(t).err, samlsp.ErrInResponseToMismatch)
+	require.Contains(t, sp.last(t).err.Error(), "(Response InResponseTo is not the request ID)")
 
 	// IdP-B answers acme's own request for acme's SP (an IdP administrator
 	// can register any SP metadata): Destination, Audience and InResponseTo

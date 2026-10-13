@@ -43,11 +43,11 @@ func TestCompleteLogin_Versions(t *testing.T) {
 func TestCompleteLogin_Destination(t *testing.T) {
 	t.Parallel()
 
-	reject(t, respOpts{signResponse: true, before: func(r, _ *etree.Element) { r.RemoveAttr("Destination") }},
+	rejectConsumed(t, respOpts{signResponse: true, before: func(r, _ *etree.Element) { r.RemoveAttr("Destination") }},
 		samlsp.ErrDestinationMismatch)
-	reject(t, respOpts{signResponse: true, before: func(r, _ *etree.Element) { r.CreateAttr("Destination", "https://other.example.com/acs") }},
+	rejectConsumed(t, respOpts{signResponse: true, before: func(r, _ *etree.Element) { r.CreateAttr("Destination", "https://other.example.com/acs") }},
 		samlsp.ErrDestinationMismatch)
-	reject(t, onResponse(func(r *etree.Element) { r.CreateAttr("Destination", "https://sp.example.com/saml/globex/acs") }),
+	rejectConsumed(t, onResponse(func(r *etree.Element) { r.CreateAttr("Destination", "https://sp.example.com/saml/globex/acs") }),
 		samlsp.ErrDestinationMismatch)
 
 	// An unsigned Response may omit Destination (Bindings §3.5.5.2 only
@@ -60,25 +60,32 @@ func TestCompleteLogin_Issuer(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		o    respOpts
+		name     string
+		o        respOpts
+		consumed bool // refused by a processing rule, after the consumption
 	}{
-		{"response issuer of another IdP", onResponse(func(r *etree.Element) { child(r, "Issuer").SetText("https://idp.example.com/globex") })},
-		{"assertion issuer of another IdP", onAssertion(func(a *etree.Element) { child(a, "Issuer").SetText("https://idp.example.com/globex") })},
-		{"response without issuer (strict profile)", onResponse(func(r *etree.Element) { r.RemoveChild(child(r, "Issuer")) })},
-		{"two response issuers", onResponse(func(r *etree.Element) { r.InsertChildAt(0, child(r, "Issuer").Copy()) })},
+		{"response issuer of another IdP", onResponse(func(r *etree.Element) { child(r, "Issuer").SetText("https://idp.example.com/globex") }), true},
+		{"assertion issuer of another IdP", onAssertion(func(a *etree.Element) { child(a, "Issuer").SetText("https://idp.example.com/globex") }), true},
+		{"response without issuer (strict profile)", onResponse(func(r *etree.Element) { r.RemoveChild(child(r, "Issuer")) }), false},
+		{"two response issuers", onResponse(func(r *etree.Element) { r.InsertChildAt(0, child(r, "Issuer").Copy()) }), false},
 		{"response issuer format not entity", onResponse(func(r *etree.Element) {
 			child(r, "Issuer").CreateAttr("Format", samlsp.NameIDFormatPersistent)
-		})},
+		}), false},
 		{"assertion issuer format not entity", onAssertion(func(a *etree.Element) {
 			child(a, "Issuer").CreateAttr("Format", samlsp.NameIDFormatEmailAddress)
-		})},
-		{"assertion without issuer", onAssertion(func(a *etree.Element) { a.RemoveChild(child(a, "Issuer")) })},
+		}), false},
+		{"assertion without issuer", onAssertion(func(a *etree.Element) { a.RemoveChild(child(a, "Issuer")) }), false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if tc.consumed {
+				rejectConsumed(t, tc.o, samlsp.ErrIssuerMismatch)
+
+				return
+			}
 
 			reject(t, tc.o, samlsp.ErrIssuerMismatch)
 		})
@@ -101,24 +108,37 @@ func TestCompleteLogin_InResponseTo(t *testing.T) {
 	})
 
 	reject(t, onResponse(func(r *etree.Element) { r.CreateAttr("InResponseTo", "_other") }), samlsp.ErrInResponseToMismatch)
-	reject(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("InResponseTo", "_other") }), samlsp.ErrInResponseToMismatch)
-	reject(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("InResponseTo") }), samlsp.ErrUnsolicitedResponse)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("InResponseTo", "_other") }), samlsp.ErrInResponseToMismatch)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("InResponseTo") }), samlsp.ErrUnsolicitedResponse)
 
-	// The Response-level InResponseTo is optional.
-	_, err := flow(t, newEnv(t), onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") }))
-	require.NoError(t, err)
+	// Core §3.2.2: a response to a request whose ID is known MUST carry
+	// InResponseTo; a Success without it is unsolicited, refused before any
+	// signature work (audit SAML-I11).
+	e := newEnv(t)
+	lr := begin(t, e, samlsp.LoginOptions{})
+	_, err := complete(e, lr, respond(t, lr.requestID, onResponse(func(r *etree.Element) { r.RemoveAttr("InResponseTo") })))
+	requireRejected(t, e, lr, err, samlsp.ErrUnsolicitedResponse)
+	assert.Equal(t, samlsp.ErrUnsolicitedResponse.Error()+" (no InResponseTo on the Response)", err.Error())
+
+	// An error status may lack it (a malformed request has no ID to answer).
+	r := buildResponse(respParams{requestID: lr.requestID, issued: t0})
+	r.RemoveAttr("InResponseTo")
+	path(r, "Status", "StatusCode").CreateAttr("Value", "urn:oasis:names:tc:SAML:2.0:status:Requester")
+
+	_, err = complete(e, lr, encodeElement(t, r))
+	requireRejected(t, e, lr, err, samlsp.ErrResponseStatus)
 }
 
 func TestCompleteLogin_SubjectConfirmation(t *testing.T) {
 	t.Parallel()
 
-	reject(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("Recipient", "https://sp.example.com/saml/globex/acs") }),
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("Recipient", "https://sp.example.com/saml/globex/acs") }),
 		samlsp.ErrRecipientMismatch)
-	reject(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("Recipient") }), samlsp.ErrRecipientMismatch)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("Recipient") }), samlsp.ErrRecipientMismatch)
 	reject(t, onAssertion(func(a *etree.Element) {
 		path(a, "Subject", "SubjectConfirmation").CreateAttr("Method", "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key")
 	}), samlsp.ErrInvalidAssertion)
-	reject(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("NotOnOrAfter") }), samlsp.ErrInvalidAssertion)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { scd(a).RemoveAttr("NotOnOrAfter") }), samlsp.ErrInvalidAssertion)
 	reject(t, onAssertion(func(a *etree.Element) { scd(a).CreateAttr("NotBefore", ts(-time.Minute)) }), samlsp.ErrInvalidAssertion)
 	reject(t, onAssertion(func(a *etree.Element) {
 		sc := path(a, "Subject", "SubjectConfirmation")
@@ -141,14 +161,17 @@ func timeBoundary(t *testing.T, o respOpts, accept, rejectAt time.Duration, want
 
 	e := newEnv(t)
 	lr := begin(t, e, samlsp.LoginOptions{})
-	resp := respond(t, lr.requestID, o)
 
 	e.clock.set(t0.Add(rejectAt))
-	_, err := complete(e, lr, resp)
-	requireRejected(t, e, lr, err, want)
+	_, err := complete(e, lr, respond(t, lr.requestID, o))
+	requireRejectedConsumed(t, e, lr, err, want)
+
+	// The same response to a new login, at the boundary.
+	e.clock.set(t0)
+	lr = begin(t, e, samlsp.LoginOptions{})
 
 	e.clock.set(t0.Add(accept))
-	_, err = complete(e, lr, resp)
+	_, err = complete(e, lr, respond(t, lr.requestID, o))
 	require.NoError(t, err, "accepted at the boundary")
 }
 
@@ -207,14 +230,14 @@ func TestCompleteLogin_TimeBoundaries(t *testing.T) {
 		e.clock.set(t0.Add(5*time.Minute + 30*time.Second))
 
 		_, err := complete(e, lr, respond(t, lr.requestID, respOpts{}))
-		requireRejected(t, e, lr, err, samlsp.ErrAssertionExpired)
+		requireRejectedConsumed(t, e, lr, err, samlsp.ErrAssertionExpired)
 	})
 }
 
 func TestCompleteLogin_Conditions(t *testing.T) {
 	t.Parallel()
 
-	reject(t, onAssertion(func(a *etree.Element) {
+	rejectConsumed(t, onAssertion(func(a *etree.Element) {
 		child(a, "Conditions").CreateAttr("NotBefore", ts(5*time.Minute))
 	}), samlsp.ErrInvalidAssertion) // NotBefore >= NotOnOrAfter (Core §2.5.1.2)
 
@@ -280,12 +303,13 @@ func TestCompleteLogin_Audience(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			want := samlsp.ErrAudienceMismatch
 			if tc.name == "empty restriction" {
-				want = samlsp.ErrInvalidAssertion
+				reject(t, onAssertion(tc.f), samlsp.ErrInvalidAssertion) // structural, before the consumption
+
+				return
 			}
 
-			reject(t, onAssertion(tc.f), want)
+			rejectConsumed(t, onAssertion(tc.f), samlsp.ErrAudienceMismatch)
 		})
 	}
 
@@ -331,10 +355,10 @@ func TestCompleteLogin_IssueInstant(t *testing.T) {
 
 	skew := samlsp.DefaultClockSkew
 
-	reject(t, onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", ts(skew+time.Second)) }), samlsp.ErrAssertionNotYetValid)
-	reject(t, onResponse(func(r *etree.Element) { r.CreateAttr("IssueInstant", ts(skew+time.Second)) }), samlsp.ErrAssertionNotYetValid)
-	reject(t, onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", ts(-skew-time.Second)) }), samlsp.ErrInvalidAssertion)
-	reject(t, onResponse(func(r *etree.Element) { r.CreateAttr("IssueInstant", ts(-skew-time.Second)) }), samlsp.ErrInvalidAssertion)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", ts(skew+time.Second)) }), samlsp.ErrAssertionNotYetValid)
+	rejectConsumed(t, onResponse(func(r *etree.Element) { r.CreateAttr("IssueInstant", ts(skew+time.Second)) }), samlsp.ErrAssertionNotYetValid)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", ts(-skew-time.Second)) }), samlsp.ErrInvalidAssertion)
+	rejectConsumed(t, onResponse(func(r *etree.Element) { r.CreateAttr("IssueInstant", ts(-skew-time.Second)) }), samlsp.ErrInvalidAssertion)
 	reject(t, onResponse(func(r *etree.Element) { r.RemoveAttr("IssueInstant") }), samlsp.ErrMalformedResponse)
 
 	_, err := flow(t, newEnv(t), onAssertion(func(a *etree.Element) { a.CreateAttr("IssueInstant", ts(-skew)) }))
@@ -354,7 +378,7 @@ func TestCompleteLogin_AuthnStatement(t *testing.T) {
 		ac := child(stmt(a), "AuthnContext")
 		ac.AddChild(child(ac, "AuthnContextClassRef").Copy())
 	}), samlsp.ErrInvalidAssertion)
-	reject(t, onAssertion(func(a *etree.Element) {
+	rejectConsumed(t, onAssertion(func(a *etree.Element) {
 		stmt(a).CreateAttr("AuthnInstant", ts(samlsp.DefaultClockSkew+time.Second))
 	}), samlsp.ErrAssertionNotYetValid)
 
@@ -382,7 +406,7 @@ func TestCompleteLogin_NameID(t *testing.T) {
 
 	nid := func(a *etree.Element) *etree.Element { return path(a, "Subject", "NameID") }
 
-	reject(t, onAssertion(func(a *etree.Element) { nid(a).SetText("") }), samlsp.ErrInvalidAssertion)
+	rejectConsumed(t, onAssertion(func(a *etree.Element) { nid(a).SetText("") }), samlsp.ErrInvalidAssertion)
 	reject(t, onAssertion(func(a *etree.Element) { path(a, "Subject").RemoveChild(nid(a)) }), samlsp.ErrInvalidAssertion)
 	reject(t, onAssertion(func(a *etree.Element) {
 		s := path(a, "Subject")
@@ -416,7 +440,7 @@ func TestCompleteLogin_NameIDFormatPolicy(t *testing.T) {
 		path(a, "Subject", "NameID").CreateAttr("Format", samlsp.NameIDFormatEmailAddress)
 	})
 
-	reject(t, email, samlsp.ErrNameIDFormatMismatch, persistent)
+	rejectConsumed(t, email, samlsp.ErrNameIDFormatMismatch, persistent)
 
 	_, err := flow(t, newEnv(t, persistent), respOpts{})
 	require.NoError(t, err)

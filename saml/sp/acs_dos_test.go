@@ -212,11 +212,13 @@ func TestCompleteLogin_WorstCaseWithinLimitsIsBounded(t *testing.T) {
 
 		t.Logf("worst case, %s (%d KiB, untrusted signer): %v, %d KiB allocated", size.name,
 			base64.StdEncoding.DecodedLen(len(body))>>10, elapsed.Round(time.Microsecond), alloc>>10)
-		requireRejected(t, e, lr, err, samlsp.ErrInvalidSignature)
+		requireRejectedConsumed(t, e, lr, err, samlsp.ErrInvalidSignature)
 		require.Less(t, alloc, uint64(worstCaseBudgetBytes))
 		requireFaster(t, elapsed, worstCaseBudgetTime, size.name)
 
-		// The same shape signed by the trusted key is a valid login.
+		// The same shape signed by the trusted key is a valid login (a new
+		// one: the refused response ended the first).
+		lr = begin(t, e, samlsp.LoginOptions{})
 		body = worstCaseResponse(t, lr.requestID, sigOpts{signer: k.idpA}, size.valueLen)
 		elapsed, alloc = cost(func() { _, err = complete(e, lr, body) })
 
@@ -246,7 +248,7 @@ func TestCompleteLogin_RolloverRetryIsBounded(t *testing.T) {
 		var err error
 
 		_, alloc := cost(func() { _, err = complete(e, lr, body) })
-		requireRejected(t, e, lr, err, samlsp.ErrInvalidSignature)
+		requireRejectedConsumed(t, e, lr, err, samlsp.ErrInvalidSignature)
 
 		return alloc
 	}

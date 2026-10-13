@@ -132,7 +132,34 @@ func (s nsScope) lookup(prefix string) (string, bool) {
 // gateFrame is an open element.
 type gateFrame struct {
 	name xml.Name // raw name (prefix in Space)
+	ns   string   // namespace URI the name resolves to ("" for none)
 	own  map[string]string
+}
+
+// keyInfoPosition is a place of a response where the gate records a
+// ds:KeyInfo: the only two places a signature may sit (pre-check).
+type keyInfoPosition int
+
+const (
+	keyInfoResponse  keyInfoPosition = iota + 1 // Response/Signature/KeyInfo
+	keyInfoAssertion                            // Response/Assertion/Signature/KeyInfo
+)
+
+// keyInfoSpan is a ds:KeyInfo the gate met at a keyInfoPosition: its bytes
+// are data[start:end], its raw name qname, and hasCert reports a descendant
+// element named X509Certificate in any namespace — wider than the XML-DSig
+// namespace goxmldsig reads it from, so that a KeyInfo goxmldsig could take
+// a certificate from is never cut.
+type keyInfoSpan struct {
+	pos        keyInfoPosition
+	start, end int64
+	qname      string
+	hasCert    bool
+}
+
+// gateScan is what the gate learned while streaming a document.
+type gateScan struct {
+	keyInfo []keyInfoSpan
 }
 
 // gate streams data with a strict encoding/xml decoder (no entity map, no
@@ -152,52 +179,68 @@ type gate struct {
 	stack    []gateFrame
 	elements int
 	rootSeen bool
+	scan     gateScan
+	// openKeyInfo is the index in scan.keyInfo of the ds:KeyInfo being
+	// read, -1 when none.
+	openKeyInfo int
 }
 
 // checkXML runs the gate over data (BOM already stripped).
 func checkXML(data []byte, lim xmlLimits) error {
+	_, err := scanXML(data, lim)
+
+	return err
+}
+
+// scanXML runs the gate over data (BOM already stripped) and returns what
+// it recorded on the way.
+func scanXML(data []byte, lim xmlLimits) (*gateScan, error) {
 	if int64(len(data)) > lim.maxBytes {
-		return gateTooLarge("XML document too large")
+		return nil, gateTooLarge("XML document too large")
 	}
 
-	g := &gate{lim: lim, scope: nsScope{}}
+	g := &gate{lim: lim, scope: nsScope{}, openKeyInfo: -1}
 
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = true
 
 	for tokens := 0; ; tokens++ {
+		// InputOffset is the end of the previous token, so the start of
+		// this one; after RawToken, the end of this one.
+		start := dec.InputOffset()
+
 		tok, err := dec.RawToken()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 
 		if err != nil {
-			return gateMalformed("not well-formed XML")
+			return nil, gateMalformed("not well-formed XML")
 		}
 
 		if tokens >= lim.maxTokens {
-			return gateTooLarge("too many XML tokens")
+			return nil, gateTooLarge("too many XML tokens")
 		}
 
-		if err := g.token(tok, tokens == 0); err != nil {
-			return err
+		if err := g.token(tok, tokens == 0, start, dec.InputOffset()); err != nil {
+			return nil, err
 		}
 	}
 
 	if !g.rootSeen || len(g.stack) != 0 {
-		return gateMalformed("missing or unclosed root element")
+		return nil, gateMalformed("missing or unclosed root element")
 	}
 
-	return nil
+	return &g.scan, nil
 }
 
-// token checks one token.
-func (g *gate) token(tok xml.Token, first bool) error {
+// token checks one token spanning data[start:end].
+func (g *gate) token(tok xml.Token, first bool, start, end int64) error {
 	switch t := tok.(type) {
 	case xml.StartElement:
-		return g.start(t)
+		return g.start(t, start)
 	case xml.EndElement:
-		return g.end(t)
+		return g.end(t, end)
 	case xml.CharData:
 		if len(g.stack) == 0 && !isXMLSpace(t) {
 			return gateMalformed("text outside the root element")
@@ -224,8 +267,8 @@ func isXMLSpace(b []byte) bool {
 	return true
 }
 
-// start checks a start tag and opens its namespace scope.
-func (g *gate) start(t xml.StartElement) error {
+// start checks a start tag found at offset and opens its namespace scope.
+func (g *gate) start(t xml.StartElement, offset int64) error {
 	if len(g.stack) == 0 {
 		if g.rootSeen {
 			return gateMalformed("more than one root element")
@@ -265,7 +308,60 @@ func (g *gate) start(t xml.StartElement) error {
 		return err
 	}
 
-	return g.checkAttributes(t.Attr)
+	if err := g.checkAttributes(t.Attr); err != nil {
+		return err
+	}
+
+	g.trackKeyInfo(t.Name, offset)
+
+	return nil
+}
+
+// trackKeyInfo resolves the namespace of the element just opened (the
+// default namespace included) and records a ds:KeyInfo found at a
+// keyInfoPosition, or an X509Certificate inside the one being read. The
+// pre-check cross-checks these records with its own tree before any
+// KeyInfo is cut (Core §5.4.5; see precheck_keyinfo.go).
+func (g *gate) trackKeyInfo(n xml.Name, offset int64) {
+	top := &g.stack[len(g.stack)-1]
+	top.ns, _ = g.scope.lookup(n.Space)
+
+	if g.openKeyInfo >= 0 && n.Local == tagX509Certificate {
+		g.scan.keyInfo[g.openKeyInfo].hasCert = true
+	}
+
+	pos := g.keyInfoPosition()
+	if pos == 0 {
+		return
+	}
+
+	qname := n.Local
+	if n.Space != "" {
+		qname = n.Space + ":" + n.Local
+	}
+
+	g.scan.keyInfo = append(g.scan.keyInfo, keyInfoSpan{pos: pos, start: offset, qname: qname})
+	g.openKeyInfo = len(g.scan.keyInfo) - 1
+}
+
+// keyInfoPosition reports where the element on top of the stack is, when it
+// is a ds:KeyInfo child of the ds:Signature of the root Response or of an
+// Assertion child of that root; 0 otherwise.
+func (g *gate) keyInfoPosition() keyInfoPosition {
+	is := func(f gateFrame, ns, local string) bool { return f.ns == ns && f.name.Local == local }
+
+	st := g.stack
+
+	switch {
+	case !is(st[len(st)-1], nsDSig, "KeyInfo") || !is(st[0], nsProtocol, "Response"):
+		return 0
+	case len(st) == 3 && is(st[1], nsDSig, tagSignature):
+		return keyInfoResponse
+	case len(st) == 4 && is(st[1], nsAssertion, "Assertion") && is(st[2], nsDSig, tagSignature):
+		return keyInfoAssertion
+	default:
+		return 0
+	}
 }
 
 // declarations collects the namespace declarations of a start tag and
@@ -403,8 +499,9 @@ func isIDName(local string) bool {
 	return local == "ID" || local == "Id" || local == "id"
 }
 
-// end checks that an end tag matches its start tag and closes its scope.
-func (g *gate) end(t xml.EndElement) error {
+// end checks that an end tag, ending at offset, matches its start tag and
+// closes its scope.
+func (g *gate) end(t xml.EndElement, offset int64) error {
 	if len(g.stack) == 0 {
 		return gateMalformed("unbalanced end tag")
 	}
@@ -412,6 +509,11 @@ func (g *gate) end(t xml.EndElement) error {
 	top := g.stack[len(g.stack)-1]
 	if top.name != t.Name {
 		return gateMalformed("mismatched end tag")
+	}
+
+	if g.openKeyInfo >= 0 && g.keyInfoPosition() != 0 {
+		g.scan.keyInfo[g.openKeyInfo].end = offset
+		g.openKeyInfo = -1
 	}
 
 	g.stack = g.stack[:len(g.stack)-1]

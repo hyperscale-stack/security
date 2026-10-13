@@ -201,9 +201,10 @@ func keycloakSP(t *testing.T, metadata []byte, store samlsp.Storage, now func() 
 
 			return &c, nil
 		}),
-		Transactions: store,
-		ReplayCache:  store,
-		Now:          now,
+		Transactions:    store,
+		ReplayCache:     store,
+		TransactionKeys: testTransactionKeys,
+		Now:             now,
 	}
 
 	if key != nil {

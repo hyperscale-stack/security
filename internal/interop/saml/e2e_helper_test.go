@@ -86,9 +86,12 @@ type e2eForm struct{ URL, SAMLResponse, RelayState string }
 // e2eExchange is one request to the SP sites and its response.
 type e2eExchange struct {
 	host, method, path, secFetchSite string
-	cookies                          []string
-	status                           int
-	setCookies                       []string
+	// origin is the Origin header ("" when absent): the evidence behind
+	// Connection.ResponseOrigins (audit SAML-02).
+	origin     string
+	cookies    []string
+	status     int
+	setCookies []string
 }
 
 // e2eHelper holds the IdP and the recorded evidence.
@@ -546,7 +549,7 @@ func (h *e2eHelper) record(r *http.Request, host string, status int, setCookies 
 
 	h.exchanges = append(h.exchanges, e2eExchange{
 		host: host, method: r.Method, path: r.URL.Path, secFetchSite: r.Header.Get("Sec-Fetch-Site"),
-		cookies: names, status: status, setCookies: setCookies,
+		origin: r.Header.Get("Origin"), cookies: names, status: status, setCookies: setCookies,
 	})
 
 	for _, raw := range setCookies {
@@ -846,7 +849,7 @@ func (h *e2eHelper) snapshot() map[string]any {
 
 		return map[string]any{
 			"host": e.host, "method": e.method, "path": e.path, "status": e.status,
-			"sec_fetch_site": e.secFetchSite, "cookies": cookies, "set_cookies": set,
+			"sec_fetch_site": e.secFetchSite, "origin": e.origin, "cookies": cookies, "set_cookies": set,
 		}
 	}
 
