@@ -172,26 +172,22 @@ var providerParameters = []string{
 // the answer ambiguous.
 var unredirectableParameters = []string{paramClientID, paramRedirectURI, paramResponseMode}
 
-// repeated reports whether form carries name more than once (RFC 6749 §3.1:
-// "MUST NOT be included more than once"). An empty value is an omitted one
-// (§3.1), so it is no repetition — except as the first occurrence of a
-// parameter the core reads, which the provider refuses in OpenID requests
-// (the core itself reads the non-empty occurrence).
+// repeated reports whether form carries name more than once with a value
+// (RFC 6749 §3.1: "MUST NOT be included more than once"). An empty
+// occurrence is an omitted one, wherever it stands (§3.1: "Parameters sent
+// without a value MUST be treated as if they were omitted from the
+// request"): the provider reads, as the oauth2 core does, the non-empty
+// occurrence.
 func repeated(form url.Values, name string) bool {
-	values := form[name]
 	nonEmpty := 0
 
-	for _, v := range values {
+	for _, v := range form[name] {
 		if v != "" {
 			nonEmpty++
 		}
 	}
 
-	if nonEmpty > 1 {
-		return true
-	}
-
-	return nonEmpty == 1 && values[0] == "" && slices.Contains(coreParameters, name)
+	return nonEmpty > 1
 }
 
 // value returns the value of name in form — its non-empty occurrence, if
@@ -208,14 +204,13 @@ func value(form url.Values, name string) string {
 
 // checkRedirection refuses, with a bare 400, an OpenID request whose answer
 // could not be redirected safely: a repeated client_id, redirect_uri or
-// response_mode — the core refuses one repeated with values itself, with a
-// bare 400, so only an empty first occurrence is left here (see repeated) —
-// or no redirect_uri — REQUIRED for OpenID requests (Core §3.1.2.1), even
-// when the client registered a single one (RFC 6749 §4.1.2.1, Core
-// §3.1.2.6). It applies to the requests the oauth2 core accepts: the core's
-// own checks — response type, scope, PKCE — run first and redirect their
-// errors to the redirect URI it trusted, the client's sole registered one
-// when the request names none.
+// response_mode — which the core already refuses, with a bare 400, before
+// any extension runs: defense in depth — or no redirect_uri — REQUIRED for
+// OpenID requests (Core §3.1.2.1), even when the client registered a
+// single one (RFC 6749 §4.1.2.1, Core §3.1.2.6). It applies to the
+// requests the oauth2 core accepts: the core's own checks — response type,
+// scope, PKCE — run first and redirect their errors to the redirect URI it
+// trusted, the client's sole registered one when the request names none.
 func checkRedirection(form url.Values) error {
 	for _, name := range unredirectableParameters {
 		if repeated(form, name) {

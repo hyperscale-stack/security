@@ -5,11 +5,14 @@
 package oidcprovider
 
 import (
+	"net/url"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // allocatedPerCall returns the bytes f allocates, averaged over n calls.
@@ -60,4 +63,28 @@ func TestListParametersParseWithoutAmplification(t *testing.T) {
 	perOversized := allocatedPerCall(calls, func() { kept = tokens(longList) })
 	assert.Less(t, perOversized, uint64(1<<10), "oversized list: %d bytes per call", perOversized)
 	assert.Nil(t, kept, "an oversized list is ignored")
+}
+
+// TestCheckRedirectionRefusesRepeatedUnredirectableParameters pins the
+// provider's own refusal of a client_id, redirect_uri or response_mode
+// included more than once with a value (RFC 6749 §3.1), with a bare 400:
+// defense in depth, since the oauth2 core refuses them before any
+// extension runs, so no request through the handler reaches it. An empty
+// occurrence is no repetition.
+func TestCheckRedirectionRefusesRepeatedUnredirectableParameters(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range unredirectableParameters {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			form := url.Values{paramRedirectURI: {"https://client.example/cb"}}
+
+			form[name] = []string{"https://client.example/cb", "https://client.example/cb"}
+			require.ErrorIs(t, checkRedirection(form), oauth2.ErrUnredirectableRequest)
+
+			form[name] = []string{"", "https://client.example/cb"}
+			assert.NoError(t, checkRedirection(form))
+		})
+	}
 }

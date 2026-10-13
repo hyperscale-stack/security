@@ -915,6 +915,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   keep the caller's `ACRValuesSupported` slice: a later write by the caller
   reached the discovery document's `acr_values_supported` unvalidated, and
   raced its handler.
+- `oidc/provider` treats an empty occurrence of a request parameter as
+  omitted wherever it stands, as the oauth2 core does (RFC 6749 §3.1:
+  "Parameters sent without a value MUST be treated as if they were omitted
+  from the request"). An OpenID request carrying `nonce=&nonce=n-1` — an
+  empty first occurrence of any parameter the core reads — was refused, with
+  `invalid_request` or, for `client_id`, `redirect_uri` and
+  `response_mode`, a bare `400`; it is now served like `nonce=n-1`. Two
+  occurrences with a value are still refused.
 
 ### Removed
 
