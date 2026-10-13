@@ -38,7 +38,8 @@ func spellings(name string) []string {
 }
 
 // beginRefused runs Begin with opts against an OP whose authorization
-// endpoint has query, and checks that nothing was stored nor returned.
+// endpoint has query, and checks that nothing was returned nor stored: the
+// store is a mock without expectations, so any call to it fails the test.
 func beginRefused(t *testing.T, query string, opts oidcclient.AuthOptions) error {
 	t.Helper()
 
@@ -47,15 +48,11 @@ func beginRefused(t *testing.T, query string, opts oidcclient.AuthOptions) error
 		op.set(func(op *fakeOP) { op.metadata["authorization_endpoint"] = op.srv.URL + "/authorize?" + query })
 	}
 
-	store := newSpyStore()
+	store := oidcclient.NewMockTransactionStore(t)
 	c := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = store })
 
 	ar, err := c.Begin(context.Background(), opts)
 	assert.Nil(t, ar)
-
-	store.mu.Lock()
-	assert.Empty(t, store.saved, "nothing stored for a refused request")
-	store.mu.Unlock()
 
 	return err
 }
