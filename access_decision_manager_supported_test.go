@@ -10,24 +10,9 @@ import (
 
 	"github.com/hyperscale-stack/security"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-// recordingVoter supports the attributes with the given prefix and records
-// the attributes it is asked to vote on.
-type recordingVoter struct {
-	scriptedVoter
-
-	seen []string
-}
-
-func (r *recordingVoter) Vote(ctx context.Context, auth security.Authentication, attrs []security.Attribute) security.Decision {
-	for _, a := range attrs {
-		r.seen = append(r.seen, a.String())
-	}
-
-	return r.scriptedVoter.Vote(ctx, auth, attrs)
-}
 
 // User decision U2: an attribute that no voter supports denies the
 // decision, whatever the strategy or the abstain fallback — it used to be
@@ -37,12 +22,12 @@ func TestDecideDeniesWhenAnAttributeIsSupportedByNoVoter(t *testing.T) {
 	attrs := []security.Attribute{stringAttr("scope:read"), stringAttr("role:ADMIN"), stringAttr("role:USER")}
 
 	for name, adm := range map[string]security.AccessDecisionManager{
-		"affirmative": security.NewAffirmativeDecisionManager(&scriptedVoter{prefix: "scope:", vote: security.DecisionGrant}),
+		"affirmative": security.NewAffirmativeDecisionManager(prefixVoter(t, "scope:", security.DecisionGrant)),
 		"consensus": security.NewConsensusDecisionManager([]security.Voter{
-			&scriptedVoter{prefix: "scope:", vote: security.DecisionGrant},
+			prefixVoter(t, "scope:", security.DecisionGrant),
 		}, security.WithTieBreak(security.DecisionGrant)),
 		"unanimous": security.NewUnanimousDecisionManager([]security.Voter{
-			&scriptedVoter{prefix: "scope:", vote: security.DecisionGrant},
+			prefixVoter(t, "scope:", security.DecisionGrant),
 		}, security.WithAbstainFallback(security.DecisionGrant)),
 	} {
 		spans := spanRecorder(func() {
@@ -56,7 +41,7 @@ func TestDecideDeniesWhenAnAttributeIsSupportedByNoVoter(t *testing.T) {
 }
 
 func TestDecideSupportedAttributesRecordNoUnsupportedCount(t *testing.T) {
-	adm := security.NewAffirmativeDecisionManager(&scriptedVoter{prefix: "scope:", vote: security.DecisionGrant})
+	adm := security.NewAffirmativeDecisionManager(prefixVoter(t, "scope:", security.DecisionGrant))
 
 	spans := spanRecorder(func() {
 		require.NoError(t, adm.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(),
@@ -72,16 +57,23 @@ func TestDecideSupportedAttributesRecordNoUnsupportedCount(t *testing.T) {
 func TestDecidePassesEachVoterOnlyTheAttributesItSupports(t *testing.T) {
 	t.Parallel()
 
-	scopes := &recordingVoter{scriptedVoter: scriptedVoter{prefix: "scope:", vote: security.DecisionGrant}}
-	roles := &recordingVoter{scriptedVoter: scriptedVoter{prefix: "role:", vote: security.DecisionGrant}}
+	// Each mock accepts one Vote, with exactly the attributes it supports.
+	scopes := security.NewMockVoter(t)
+	scopes.EXPECT().Supports(mock.Anything).RunAndReturn(hasPrefix("scope:"))
+	scopes.EXPECT().Vote(mock.Anything, mock.Anything, []security.Attribute{stringAttr("scope:read"), stringAttr("scope:write")}).
+		Return(security.DecisionGrant).Once()
+
+	roles := security.NewMockVoter(t)
+	roles.EXPECT().Supports(mock.Anything).RunAndReturn(hasPrefix("role:"))
+	roles.EXPECT().Vote(mock.Anything, mock.Anything, []security.Attribute{stringAttr("role:ADMIN")}).
+		Return(security.DecisionGrant).Once()
+
 	adm := security.NewUnanimousDecisionManager([]security.Voter{scopes, roles})
 
 	err := adm.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(),
 		[]security.Attribute{stringAttr("scope:read"), stringAttr("role:ADMIN"), stringAttr("scope:write")})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"scope:read", "scope:write"}, scopes.seen)
-	assert.Equal(t, []string{"role:ADMIN"}, roles.seen)
 }
 
 // The audit's positive baseline, pinned: every strategy denies when there is
@@ -90,7 +82,7 @@ func TestEveryStrategyDeniesByDefault(t *testing.T) {
 	t.Parallel()
 
 	alice := newFakeAuth("alice").withAuthenticated()
-	abstain := &scriptedVoter{prefix: "scope:", vote: security.DecisionAbstain}
+	abstain := prefixVoter(t, "scope:", security.DecisionAbstain)
 
 	for name, adm := range map[string]security.AccessDecisionManager{
 		"affirmative":           security.NewAffirmativeDecisionManager(abstain),
@@ -114,8 +106,8 @@ func TestEveryStrategyDeniesByDefault(t *testing.T) {
 func TestDecideDeniesWithoutAttributesOrVotersWhateverTheFallback(t *testing.T) {
 	t.Parallel()
 
-	abstain := &scriptedVoter{prefix: "scope:", vote: security.DecisionAbstain}
-	grant := &scriptedVoter{prefix: "scope:", vote: security.DecisionGrant}
+	abstain := prefixVoter(t, "scope:", security.DecisionAbstain)
+	grant := prefixVoter(t, "scope:", security.DecisionGrant)
 
 	for name, adm := range map[string]security.AccessDecisionManager{
 		"unanimous, fallback grant": security.NewUnanimousDecisionManager([]security.Voter{abstain},
@@ -145,9 +137,9 @@ func TestConsensusDeniesOnAMajorityOfDenies(t *testing.T) {
 	t.Parallel()
 
 	adm := security.NewConsensusDecisionManager([]security.Voter{
-		&scriptedVoter{prefix: "scope:", vote: security.DecisionDeny},
-		&scriptedVoter{prefix: "scope:", vote: security.DecisionDeny},
-		&scriptedVoter{prefix: "scope:", vote: security.DecisionGrant},
+		prefixVoter(t, "scope:", security.DecisionDeny),
+		prefixVoter(t, "scope:", security.DecisionDeny),
+		prefixVoter(t, "scope:", security.DecisionGrant),
 	}, security.WithTieBreak(security.DecisionGrant))
 
 	err := adm.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(), []security.Attribute{stringAttr("scope:read")})

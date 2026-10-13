@@ -128,11 +128,9 @@ func spanNamed(t *testing.T, spans []sdktrace.ReadOnlySpan, name string) sdktrac
 func TestEngineSpanRecordsTheErrorClassNotTheMessage(t *testing.T) {
 	const typed = "MyP@ssw0rd-typed-in-user-field"
 
-	authn := security.AuthenticatorFunc(func(context.Context, security.Authentication) (security.Authentication, error) {
-		return nil, fmt.Errorf("basic: load user %q: %w (%w)", typed,
-			errors.New("sql: no rows for email alice@example.com"), security.ErrInvalidCredentials)
-	})
-	engine := security.NewEngine(security.NewManager(authn), scriptedExtractor{auth: newFakeAuth(typed).withCredentials("x")})
+	authn := authenticatorReturning(t, nil, fmt.Errorf("basic: load user %q: %w (%w)", typed,
+		errors.New("sql: no rows for email alice@example.com"), security.ErrInvalidCredentials))
+	engine := security.NewEngine(security.NewManager(authn), extractorReturning(t, newFakeAuth(typed).withCredentials("x"), nil))
 
 	spans := spanRecorder(func() {
 		_, _, err := engine.Process(context.Background(), newMapCarrier())
@@ -157,7 +155,7 @@ func TestEngineSpanRecordsTheClassOfAnExtractorError(t *testing.T) {
 	const secret = "Basic dXNlcjpTM2NyM3Qh"
 
 	engine := security.NewEngine(security.NewManager(),
-		scriptedExtractor{err: fmt.Errorf("basic: bad header %q: %w", secret, security.ErrInvalidCredentials)})
+		extractorReturning(t, nil, fmt.Errorf("basic: bad header %q: %w", secret, security.ErrInvalidCredentials)))
 
 	spans := spanRecorder(func() {
 		_, _, err := engine.Process(context.Background(), newMapCarrier())
@@ -187,13 +185,13 @@ func TestFailureSpansRecordTheirClass(t *testing.T) {
 			return err
 		}},
 		{"plain refusal", "security.Manager.Authenticate", security.ErrorClassOther, func() error {
-			_, err := security.NewManager(&scriptedAuthenticator{name: "x", err: errors.New("boom")}).
+			_, err := security.NewManager(authenticatorReturning(t, nil, errors.New("boom"))).
 				Authenticate(context.Background(), newFakeAuth("alice"))
 
 			return err
 		}},
 		{"denied", "security.AccessDecisionManager.Decide", security.ErrorClassAccessDenied, func() error {
-			return security.NewAffirmativeDecisionManager(constDecisionVoter{d: security.DecisionDeny}).
+			return security.NewAffirmativeDecisionManager(decidingVoter(t, security.DecisionDeny)).
 				Decide(context.Background(), newFakeAuth("alice").withAuthenticated(), []security.Attribute{stringAttr("x")})
 		}},
 	}
@@ -214,9 +212,9 @@ func TestFailureSpansRecordTheirClass(t *testing.T) {
 
 func TestSuccessfulSpansCarryNoErrorType(t *testing.T) {
 	authed := newFakeAuth("alice").withAuthenticated()
-	engine := security.NewEngine(security.NewManager(&scriptedAuthenticator{name: "ok", result: authed}),
-		scriptedExtractor{auth: newFakeAuth("alice")})
-	adm := security.NewAffirmativeDecisionManager(constDecisionVoter{d: security.DecisionGrant})
+	engine := security.NewEngine(security.NewManager(authenticatorReturning(t, authed, nil)),
+		extractorReturning(t, newFakeAuth("alice"), nil))
+	adm := security.NewAffirmativeDecisionManager(decidingVoter(t, security.DecisionGrant))
 
 	spans := spanRecorder(func() {
 		_, _, err := engine.Process(context.Background(), newMapCarrier())

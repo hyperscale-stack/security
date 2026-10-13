@@ -11,63 +11,9 @@ import (
 
 	"github.com/hyperscale-stack/security"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-// authReadingVoter dereferences the Authentication it is given: it proves
-// that Decide never hands a nil Authentication to a voter.
-type authReadingVoter struct{}
-
-func (authReadingVoter) Supports(security.Attribute) bool { return true }
-
-func (authReadingVoter) Vote(_ context.Context, auth security.Authentication, _ []security.Attribute) security.Decision {
-	if auth.IsAuthenticated() {
-		return security.DecisionGrant
-	}
-
-	return security.DecisionDeny
-}
-
-// constDecisionVoter supports everything and returns a fixed, possibly
-// undefined, Decision.
-type constDecisionVoter struct{ d security.Decision }
-
-func (constDecisionVoter) Supports(security.Attribute) bool { return true }
-
-func (v constDecisionVoter) Vote(context.Context, security.Authentication, []security.Attribute) security.Decision {
-	return v.d
-}
-
-// derefAuth reads a field in every method: a typed nil — (*derefAuth)(nil),
-// the classic `var out *T; return out, nil` — satisfies Authentication but
-// panics on its first method call.
-type derefAuth struct{ name string }
-
-func (a *derefAuth) Principal() security.Principal { return fakePrincipal{subject: a.name} }
-func (a *derefAuth) Credentials() any              { return a.name }
-func (a *derefAuth) Authorities() []string         { return []string{a.name} }
-func (a *derefAuth) IsAuthenticated() bool         { return a.name != "" }
-func (a *derefAuth) Name() string                  { return a.name }
-
-// derefAttr is the Attribute counterpart of derefAuth.
-type derefAttr struct{ name string }
-
-func (a *derefAttr) String() string { return a.name }
-
-var (
-	typedNilAuth security.Authentication = (*derefAuth)(nil)
-	typedNilAttr security.Attribute      = (*derefAttr)(nil)
-)
-
-// scriptedManager is a custom Manager returning a fixed result.
-type scriptedManager struct {
-	result security.Authentication
-	err    error
-}
-
-func (m scriptedManager) Authenticate(context.Context, security.Authentication) (security.Authentication, error) {
-	return m.result, m.err
-}
 
 // credentialSentinels are the sentinels that state a verdict on the
 // credentials; a contract violation must wrap none of them.
@@ -138,11 +84,8 @@ func TestEngineFailsClosedWhenAnAuthenticatorReturnsNoAuthenticatedValue(t *test
 			t.Parallel()
 
 			engine := security.NewEngine(
-				security.NewManager(security.AuthenticatorFunc(
-					func(context.Context, security.Authentication) (security.Authentication, error) {
-						return result, nil
-					})),
-				scriptedExtractor{auth: newFakeAuth("alice").withCredentials("pw")},
+				security.NewManager(authenticatorReturning(t, result, nil)),
+				extractorReturning(t, newFakeAuth("alice").withCredentials("pw"), nil),
 			)
 
 			var (
@@ -181,8 +124,8 @@ func TestEngineFailsClosedWhenTheManagerReturnsNoAuthenticatedValue(t *testing.T
 			t.Parallel()
 
 			engine := security.NewEngine(
-				scriptedManager{result: result},
-				scriptedExtractor{auth: newFakeAuth("alice").withCredentials("pw")},
+				managerReturning(t, result, nil),
+				extractorReturning(t, newFakeAuth("alice").withCredentials("pw"), nil),
 			)
 
 			var (
@@ -211,11 +154,17 @@ func TestEngineFailsClosedWhenTheManagerReturnsNoAuthenticatedValue(t *testing.T
 func TestEngineFailureLeavesNoCredentialsInContext(t *testing.T) {
 	t.Parallel()
 
+	// The refusing authenticator hands its input — the credentials — back
+	// with its error.
+	refusing := security.NewMockAuthenticator(t)
+	refusing.EXPECT().Supports(mock.Anything).Return(true)
+	refusing.EXPECT().Authenticate(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, a security.Authentication) (security.Authentication, error) {
+			return a, fmt.Errorf("load user: %w", security.ErrInvalidCredentials)
+		})
+
 	cases := map[string]security.Manager{
-		"refused": security.NewManager(security.AuthenticatorFunc(
-			func(_ context.Context, a security.Authentication) (security.Authentication, error) {
-				return a, fmt.Errorf("load user: %w", security.ErrInvalidCredentials)
-			})),
+		"refused":     security.NewManager(refusing),
 		"unsupported": security.NewManager(),
 	}
 
@@ -223,7 +172,7 @@ func TestEngineFailureLeavesNoCredentialsInContext(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			engine := security.NewEngine(manager, scriptedExtractor{auth: newFakeAuth("alice").withCredentials("S3cr3t!")})
+			engine := security.NewEngine(manager, extractorReturning(t, newFakeAuth("alice").withCredentials("S3cr3t!"), nil))
 
 			ctx, got, err := engine.Process(context.Background(), newMapCarrier())
 
@@ -242,7 +191,7 @@ func TestEngineFailureLeavesNoCredentialsInContext(t *testing.T) {
 func TestManagerFailureReturnsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	refusing := &scriptedAuthenticator{name: "x", err: security.ErrInvalidCredentials}
+	refusing := authenticatorReturning(t, nil, security.ErrInvalidCredentials)
 
 	for name, m := range map[string]security.Manager{
 		"no authenticator": security.NewManager(),
@@ -261,14 +210,16 @@ func TestManagerFailureReturnsAnonymous(t *testing.T) {
 func TestManagerTreatsARuntimeBailOutAsAnAbstention(t *testing.T) {
 	t.Parallel()
 
-	bailOut := func() *scriptedAuthenticator {
-		return &scriptedAuthenticator{name: "bail", err: fmt.Errorf("out of scope: %w", security.ErrUnsupportedCredential)}
+	bailOut := func(t *testing.T) *security.MockAuthenticator {
+		t.Helper()
+
+		return authenticatorReturning(t, nil, fmt.Errorf("out of scope: %w", security.ErrUnsupportedCredential))
 	}
 
 	t.Run("bail-out then refusal", func(t *testing.T) {
 		t.Parallel()
 
-		m := security.NewManager(bailOut(), &scriptedAuthenticator{name: "basic", err: security.ErrInvalidCredentials})
+		m := security.NewManager(bailOut(t), authenticatorReturning(t, nil, security.ErrInvalidCredentials))
 
 		_, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
 
@@ -280,7 +231,7 @@ func TestManagerTreatsARuntimeBailOutAsAnAbstention(t *testing.T) {
 	t.Run("bail-outs only", func(t *testing.T) {
 		t.Parallel()
 
-		m := security.NewManager(bailOut(), bailOut())
+		m := security.NewManager(bailOut(t), bailOut(t))
 
 		_, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
 
@@ -294,10 +245,7 @@ func TestManagerTreatsARuntimeBailOutAsAnAbstention(t *testing.T) {
 		t.Parallel()
 
 		for _, verdict := range []error{security.ErrInvalidRequest, security.ErrUnavailable, security.ErrInvalidCredentials} {
-			m := security.NewManager(&scriptedAuthenticator{
-				name: "joined",
-				err:  fmt.Errorf("%w: %w", security.ErrUnsupportedCredential, verdict),
-			})
+			m := security.NewManager(authenticatorReturning(t, nil, fmt.Errorf("%w: %w", security.ErrUnsupportedCredential, verdict)))
 
 			_, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
 
@@ -310,7 +258,7 @@ func TestManagerTreatsARuntimeBailOutAsAnAbstention(t *testing.T) {
 		t.Parallel()
 
 		winner := newFakeAuth("alice").withAuthenticated()
-		m := security.NewManager(bailOut(), &scriptedAuthenticator{name: "ok", result: winner})
+		m := security.NewManager(bailOut(t), authenticatorReturning(t, winner, nil))
 
 		got, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
 
@@ -330,7 +278,7 @@ func TestManagerTreatsAMissingOrUnauthenticatedResultAsARefusal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			violator := &scriptedAuthenticator{name: "violator", result: result}
+			violator := authenticatorReturning(t, result, nil)
 
 			var err error
 
@@ -343,8 +291,7 @@ func TestManagerTreatsAMissingOrUnauthenticatedResultAsARefusal(t *testing.T) {
 			assertNoCredentialSentinel(t, err)
 
 			winner := newFakeAuth("alice").withAuthenticated()
-			m := security.NewManager(&scriptedAuthenticator{name: "violator", result: result},
-				&scriptedAuthenticator{name: "ok", result: winner})
+			m := security.NewManager(authenticatorReturning(t, result, nil), authenticatorReturning(t, winner, nil))
 
 			got, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
 
@@ -358,7 +305,7 @@ func TestManagerTreatsAMissingOrUnauthenticatedResultAsARefusal(t *testing.T) {
 func TestDecideDeniesANilAttribute(t *testing.T) {
 	t.Parallel()
 
-	adm := security.NewAffirmativeDecisionManager(constDecisionVoter{d: security.DecisionGrant})
+	adm := security.NewAffirmativeDecisionManager(decidingVoter(t, security.DecisionGrant))
 	admin := newFakeAuth("root", "ROLE_ADMIN").withAuthenticated()
 
 	for name, attrs := range map[string][]security.Attribute{
@@ -379,7 +326,7 @@ func TestDecideDeniesANilAttribute(t *testing.T) {
 func TestDecideTreatsANilAuthenticationAsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	adm := security.NewAffirmativeDecisionManager(authReadingVoter{})
+	adm := security.NewAffirmativeDecisionManager(authReadingVoter(t))
 
 	for name, auth := range map[string]security.Authentication{"nil": nil, "typed nil": typedNilAuth} {
 		var err error
@@ -397,9 +344,9 @@ func TestDecideTreatsANilAuthenticationAsAnonymous(t *testing.T) {
 func TestEngineTreatsATypedNilExtractionAsNoCredential(t *testing.T) {
 	t.Parallel()
 
-	authenticator := &scriptedAuthenticator{name: "any", result: newFakeAuth("mallory").withAuthenticated()}
-	next := &countingExtractor{}
-	engine := security.NewEngine(security.NewManager(authenticator), scriptedExtractor{auth: typedNilAuth}, next)
+	authenticator := security.NewMockAuthenticator(t) // never consulted: any call fails the test
+	next := extractorReturning(t, nil, nil)
+	engine := security.NewEngine(security.NewManager(authenticator), extractorReturning(t, typedNilAuth, nil), next)
 
 	var (
 		ctx  context.Context
@@ -411,8 +358,8 @@ func TestEngineTreatsATypedNilExtractionAsNoCredential(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, security.Anonymous(), auth)
-	assert.Equal(t, 1, next.calls, "the next extractor is consulted")
-	assert.Zero(t, authenticator.calls(), "nothing was extracted")
+	next.AssertNumberOfCalls(t, "Extract", 1) // the next extractor is consulted
+	authenticator.AssertNotCalled(t, "Authenticate", mock.Anything, mock.Anything)
 
 	stored, _ := security.FromContext(ctx)
 	assert.Equal(t, security.Anonymous(), stored)
@@ -423,10 +370,8 @@ func TestEngineTreatsATypedNilExtractionAsNoCredential(t *testing.T) {
 func TestEngineExtractorFailureLeavesNoCredentials(t *testing.T) {
 	t.Parallel()
 
-	engine := security.NewEngine(security.NewManager(), scriptedExtractor{
-		auth: newFakeAuth("alice").withCredentials("S3cr3t!"),
-		err:  fmt.Errorf("malformed: %w", security.ErrInvalidRequest),
-	})
+	engine := security.NewEngine(security.NewManager(), extractorReturning(t,
+		newFakeAuth("alice").withCredentials("S3cr3t!"), fmt.Errorf("malformed: %w", security.ErrInvalidRequest)))
 
 	ctx, got, err := engine.Process(context.Background(), newMapCarrier())
 
@@ -445,25 +390,26 @@ func TestConstructorsCopyTheirSlices(t *testing.T) {
 
 	alice := newFakeAuth("alice").withAuthenticated()
 
-	extractors := []security.Extractor{scriptedExtractor{auth: newFakeAuth("alice")}}
-	authenticators := []security.Authenticator{&scriptedAuthenticator{name: "ok", result: alice}}
+	extractors := []security.Extractor{extractorReturning(t, newFakeAuth("alice"), nil)}
+	authenticators := []security.Authenticator{authenticatorReturning(t, alice, nil)}
 	engine := security.NewEngine(security.NewManager(authenticators...), extractors...)
 
-	extractors[0] = scriptedExtractor{err: security.ErrInvalidRequest}
-	authenticators[0] = &scriptedAuthenticator{name: "ko", err: security.ErrInvalidCredentials}
+	// The replacements are never consulted: any call fails the test.
+	extractors[0] = security.NewMockExtractor(t)
+	authenticators[0] = security.NewMockAuthenticator(t)
 
 	_, got, err := engine.Process(context.Background(), newMapCarrier())
 	require.NoError(t, err)
 	assert.Equal(t, security.Authentication(alice), got)
 
-	voters := []security.Voter{constDecisionVoter{d: security.DecisionGrant}}
+	voters := []security.Voter{decidingVoter(t, security.DecisionGrant)}
 	adms := map[string]security.AccessDecisionManager{
 		"affirmative": security.NewAffirmativeDecisionManager(voters...),
 		"consensus":   security.NewConsensusDecisionManager(voters),
 		"unanimous":   security.NewUnanimousDecisionManager(voters),
 	}
 
-	voters[0] = constDecisionVoter{d: security.DecisionDeny}
+	voters[0] = security.NewMockVoter(t)
 
 	for name, adm := range adms {
 		assert.NoError(t, adm.Decide(context.Background(), alice, []security.Attribute{stringAttr("x")}), name)
@@ -475,8 +421,8 @@ func TestDecideCountsAnUndefinedDecisionAsDeny(t *testing.T) {
 
 	attrs := []security.Attribute{stringAttr("x")}
 	alice := newFakeAuth("alice").withAuthenticated()
-	undefined := constDecisionVoter{d: security.Decision(42)}
-	grant := constDecisionVoter{d: security.DecisionGrant}
+	undefined := decidingVoter(t, security.Decision(42))
+	grant := decidingVoter(t, security.DecisionGrant)
 
 	unanimous := security.NewUnanimousDecisionManager([]security.Voter{undefined},
 		security.WithAbstainFallback(security.DecisionGrant))
@@ -492,8 +438,8 @@ func TestConsensusDeniesWhenAllAbstain(t *testing.T) {
 	t.Parallel()
 
 	adm := security.NewConsensusDecisionManager([]security.Voter{
-		constDecisionVoter{d: security.DecisionAbstain},
-		constDecisionVoter{d: security.DecisionAbstain},
+		decidingVoter(t, security.DecisionAbstain),
+		decidingVoter(t, security.DecisionAbstain),
 	}, security.WithTieBreak(security.DecisionGrant))
 
 	err := adm.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(), []security.Attribute{stringAttr("x")})
@@ -504,7 +450,8 @@ func TestConsensusDeniesWhenAllAbstain(t *testing.T) {
 func TestConstructorsRefuseNilDependencies(t *testing.T) {
 	t.Parallel()
 
-	voter := constDecisionVoter{d: security.DecisionGrant}
+	voter := security.NewMockVoter(t)
+	extractor := security.NewMockExtractor(t)
 
 	cases := []struct {
 		name string
@@ -512,9 +459,9 @@ func TestConstructorsRefuseNilDependencies(t *testing.T) {
 		fn   func()
 	}{
 		{"engine nil manager", "security: NewEngine: nil Manager",
-			func() { security.NewEngine(nil, scriptedExtractor{}) }},
+			func() { security.NewEngine(nil, extractor) }},
 		{"engine nil extractor", "security: NewEngine: nil Extractor at index 1",
-			func() { security.NewEngine(security.NewManager(), scriptedExtractor{}, nil) }},
+			func() { security.NewEngine(security.NewManager(), extractor, nil) }},
 		{"manager nil authenticator", "security: NewManager: nil Authenticator at index 0",
 			func() { security.NewManager(nil) }},
 		{"affirmative nil voter", "security: NewAffirmativeDecisionManager: nil Voter at index 0",
