@@ -68,20 +68,31 @@ func (d faultyDriver) Open(string) (driver.Conn, error) { return d.conn, nil }
 func openFaulty(t *testing.T, conn *faultyConn) *sqlstore.Store {
 	t.Helper()
 
+	return openFaultyDialect(t, conn, sqlstore.Postgres)
+}
+
+func openFaultyDialect(t *testing.T, conn *faultyConn, d sqlstore.Dialect) *sqlstore.Store {
+	t.Helper()
+
 	db := sql.OpenDB(faultyConnector{conn: conn})
 	t.Cleanup(func() { _ = db.Close() })
 
-	store, err := sqlstore.New(db, sqlstore.Postgres)
+	store, err := sqlstore.New(db, d)
 	require.NoError(t, err)
 
 	return store
 }
 
+// TestMigrateFailure: a failing statement fails Migrate, on the locked
+// path (PostgreSQL: the advisory lock is the first statement) and on the
+// per-statement one (SQLite).
 func TestMigrateFailure(t *testing.T) {
 	t.Parallel()
 
-	store := openFaulty(t, &faultyConn{execErr: errors.New("permission denied")})
-	require.ErrorContains(t, store.Migrate(context.Background()), "permission denied")
+	for _, d := range []sqlstore.Dialect{sqlstore.Postgres, sqlstore.SQLite} {
+		store := openFaultyDialect(t, &faultyConn{execErr: errors.New("permission denied")}, d)
+		require.ErrorContains(t, store.Migrate(context.Background()), "permission denied", d.Name())
+	}
 }
 
 func TestConsumeClassificationFailures(t *testing.T) {
