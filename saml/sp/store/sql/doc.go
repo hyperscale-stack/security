@@ -55,7 +55,9 @@
 // progress, which fail once either way.
 //
 // The CI of this module exercises SQLite only; the PostgreSQL and MySQL
-// guarantees are argued from the statements above.
+// guarantees are argued from the statements above, and checked by the
+// opt-in suites of internal/interop/saml and internal/interop/sqlstores on
+// real servers.
 //
 // # Cleanup
 //

@@ -39,7 +39,9 @@
 //
 // The CI of this module exercises SQLite only, with several connections
 // racing on a database file; the PostgreSQL and MySQL guarantees rest on
-// the locking described in [Store].
+// the locking described in [Store], which the opt-in suites of
+// internal/interop/oidcstack and internal/interop/sqlstores check on real
+// servers.
 //
 // # Cleanup
 //

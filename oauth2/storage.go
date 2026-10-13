@@ -51,7 +51,10 @@ type AuthorizationCodeStore interface {
 	//     issued: it MUST NOT be used to issue tokens;
 	//   - [ErrCodeAlreadyUsed] when the code is unknown: never saved, or
 	//     no longer retained;
-	//   - a wrapped error on a backend failure.
+	//   - a wrapped error on a backend failure — whose outcome may be
+	//     unknown: when the acknowledgement of the commit is lost, the code
+	//     may be consumed all the same, and a retried exchange is then a
+	//     replay.
 	//
 	// Both refusals match [ErrCodeAlreadyUsed] (invalid_grant). A decorator
 	// or wrapper MUST return the store's error unchanged or wrapped with
@@ -151,9 +154,16 @@ type RefreshTokenStore interface {
 //     a consumed token) without persisting anything. A lookup concurrent
 //     with R may still see F active: it is ordered before R.
 //   - I3, atomic writes: SaveTokenPair and RotateRefreshToken apply all
-//     their writes or none. A failed call persists no token and consumes
-//     nothing; the one exception is reuse, which only records F as
-//     revoked.
+//     their writes or none, never a part of them. A call refused by the
+//     contract — invalid_request, invalid_grant, [ErrTokenFamilyRevoked] —
+//     persists no token and consumes nothing; the one exception is reuse,
+//     which only records F as revoked. A backend failure can leave the
+//     outcome unknown: when the acknowledgement of the commit is lost (the
+//     connection drops, or the context ends while the backend commits),
+//     the call fails although all its writes may have been applied. Callers
+//     never reuse the pair they passed — every call carries a freshly
+//     generated one — and a client retrying a refresh after such a failure
+//     presents a consumed token: a reuse, which revokes F.
 //   - I4, reuse: RotateRefreshToken on a consumed token of a non-revoked
 //     family fails with [ErrRefreshTokenReused]; one of an already revoked
 //     family may fail with [ErrTokenFamilyRevoked] instead (both are

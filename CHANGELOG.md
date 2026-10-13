@@ -962,6 +962,16 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   suite of the new private module `internal/interop/sqlstores` checks the
   four engines (PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4, from its
   `compose.yaml`).
+- The `oauth2.Storage` contract no longer says that a failed
+  `SaveTokenPair` or `RotateRefreshToken` persists nothing (I3). When the
+  acknowledgement of a commit is lost, the call fails although all its
+  writes may have been applied — never a part of them — and a client
+  retrying the refresh then presents a consumed token: a reuse, which
+  revokes the family (`docs/security-considerations.md`, "Lost responses
+  look like theft"). A test of the SQL store pins it. The documentation now
+  also says that a consumed refresh token evicted from Redis, or deleted
+  from SQL before its `expires_at`, loses its reuse detection: presented
+  again, it reads as an unknown token and revokes nothing.
 - A failed family revocation after a refresh-token reuse the store detects
   is no longer swallowed: the SQL and Redis stores returned the bare
   `ErrRefreshTokenReused` whatever the revocation did. The error now also

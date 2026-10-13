@@ -651,9 +651,14 @@ never has to find the family's tokens:
   tokens exists; the revocation is kept for at least
   `oauth2.FamilyRevocationRetention` (24 hours), and never for less than the
   lifetime of the family's tokens, so a late issuance is still refused.
-- **Atomicity.** A failed issuance or rotation persists no token and
-  consumes nothing: a failed exchange no longer leaves an access token
-  behind.
+- **Atomicity.** An issuance or rotation applies all its writes or none,
+  never a part of them. One the store refuses — a revoked family, a reuse,
+  a malformed pair — persists no token and consumes nothing: a failed
+  exchange no longer leaves an access token behind. A backend failure can
+  leave the outcome unknown: when the acknowledgement of a commit is lost,
+  the call fails although all its writes may have been applied, and a
+  client retrying the refresh then presents a consumed token — a reuse
+  (see "Lost responses look like theft" below).
 - **Idempotence and isolation.** Revoking a revoked family changes nothing
   and succeeds; a revoked family never becomes active again. Revoking one
   family affects no other family and no token outside a family, and the
@@ -676,7 +681,11 @@ never has to find the family's tokens:
   predating token families — is treated as revoked. This protects lookups
   only: the next issuance into a family whose revoked state was lost records
   it active again and revives its tokens, so a revoked family's state must
-  never be lost within its retention — no eviction, no early cleanup.
+  never be lost within its retention — no eviction, no early cleanup. A
+  consumed refresh token must not be lost either: one evicted from Redis,
+  or deleted from SQL before its `expires_at`, reads as an unknown token
+  when presented again — `invalid_grant`, revoking nothing — so a stolen
+  token's reuse goes undetected.
 - **Lost responses look like theft.** When the response to a successful
   rotation is lost, the client retries with the presented token, which is
   now a reuse: the family is revoked and the user re-authenticates. This is
@@ -695,7 +704,8 @@ family row or key is deleted before it expires, and durability is the
 backend's: a revocation acknowledged by a primary that fails before
 persisting or replicating it can be lost in a failover. Only SQLite is
 exercised in CI; the PostgreSQL and MySQL guarantees rest on their locking
-semantics.
+semantics, which the opt-in suite of `internal/interop/sqlstores` checks on
+PostgreSQL, MySQL and MariaDB servers.
 
 ### Offline JWT access tokens
 

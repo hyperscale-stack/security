@@ -80,7 +80,10 @@
 // Never delete a family row before its expires_at. A missing row fails
 // closed for lookups — the store treats the tokens of an unknown family as
 // revoked — but the next issuance into a family whose revoked row is gone
-// records the family active again, reviving its tokens.
+// records the family active again, reviving its tokens. Nor a token row:
+// a consumed refresh token deleted early reads as an unknown token when
+// presented again, so its reuse is refused but no longer detected, and
+// its family is not revoked.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oauth2
