@@ -6,10 +6,12 @@ package main
 
 import (
 	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -119,11 +121,12 @@ func TestExampleOAuth2AuthorizationCodeFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, string(page), "Approve")
 
-	// 2. Approving redirects to the callback with an authorization code.
+	// 2. Approving redirects to the callback with an authorization code —
+	// 303 See Other: the answer to a POST (RFC 9700 §4.12).
 	resp, err = client.PostForm(srv.URL+"/oauth2/authorize?"+authz, url.Values{"decision": {"approve"}})
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-	require.Equal(t, http.StatusFound, resp.StatusCode)
+	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
 
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
@@ -193,4 +196,134 @@ func refreshExchange(t *testing.T, client *http.Client, baseURL, raw string) *ht
 	require.NoError(t, err)
 
 	return resp
+}
+
+// TestExampleConsentIsProtected drives the consent page the way a browser
+// does: the page cannot be framed nor cached, a decision posted from another
+// site is refused (RFC 6749 §10.12) and issues nothing, while an
+// authorization request posted from another site — which RFC 6749 §3.1 and
+// OpenID Connect allow — still shows the consent page.
+func TestExampleConsentIsProtected(t *testing.T) {
+	t.Parallel()
+
+	handler, err := buildServer()
+	require.NoError(t, err)
+
+	authz := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {demoClientID},
+		"redirect_uri":          {"http://localhost:1337/callback"},
+		"scope":                 {"api:read"},
+		"state":                 {"demo-state"},
+		"code_challenge":        {pkceChallenge},
+		"code_challenge_method": {"S256"},
+	}
+
+	serve := func(req *http.Request) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec
+	}
+	post := func(form url.Values, site string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/oauth2/authorize?"+authz.Encode(), strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", site)
+
+		return req
+	}
+
+	page := serve(httptest.NewRequest(http.MethodGet, "/oauth2/authorize?"+authz.Encode(), nil))
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.Equal(t, "DENY", page.Header().Get("X-Frame-Options"))
+	assert.Contains(t, page.Header().Values("Content-Security-Policy"), "frame-ancestors 'none'")
+	assert.Equal(t, "no-store", page.Header().Get("Cache-Control"))
+	assert.Equal(t, "same-origin", page.Header().Get("Referrer-Policy"))
+
+	forged := serve(post(url.Values{"decision": {"approve"}}, "cross-site"))
+	assert.Equal(t, http.StatusForbidden, forged.Code, "a cross-site decision is refused")
+	assert.Empty(t, forged.Header().Get("Location"), "no code")
+
+	request := serve(post(url.Values{}, "cross-site"))
+	assert.Equal(t, http.StatusOK, request.Code, "a cross-site authorization request shows the consent page")
+	assert.Contains(t, request.Body.String(), "Approve")
+
+	approved := serve(post(url.Values{"decision": {"approve"}}, "same-origin"))
+	require.Equal(t, http.StatusSeeOther, approved.Code)
+
+	loc, err := url.Parse(approved.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, loc.Query().Get("code"))
+}
+
+// consentForm extracts the action and the hidden fields of the consent
+// page's form, as a browser submits them.
+func consentForm(t *testing.T, page string) (string, url.Values) {
+	t.Helper()
+
+	action := regexp.MustCompile(`<form method="post" action="([^"]*)">`).FindStringSubmatch(page)
+	require.Len(t, action, 2, page)
+
+	fields := url.Values{}
+	for _, m := range regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`).FindAllStringSubmatch(page, -1) {
+		fields.Add(html.UnescapeString(m[1]), html.UnescapeString(m[2]))
+	}
+
+	return html.UnescapeString(action[1]), fields
+}
+
+// TestExampleConsentKeepsABodyPostedRequest: an authorization request
+// POSTed with its parameters in the body (RFC 6749 §3.1, OpenID Connect
+// Core §3.1.2.1) gets a consent page whose form posts the request back
+// with the decision, so the approval issues a code.
+func TestExampleConsentKeepsABodyPostedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler, err := buildServer()
+	require.NoError(t, err)
+
+	authz := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {demoClientID},
+		"redirect_uri":          {"http://localhost:1337/callback"},
+		"scope":                 {"api:read"},
+		"state":                 {"demo-state"},
+		"code_challenge":        {pkceChallenge},
+		"code_challenge_method": {"S256"},
+	}
+
+	post := func(target string, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec
+	}
+
+	withEmptyDecision := url.Values{"decision": {""}}
+	for k, v := range authz {
+		withEmptyDecision[k] = v
+	}
+
+	// An empty decision in the request is no decision: the page must not
+	// post it back ahead of the button's.
+	for name, request := range map[string]url.Values{"request": authz, "request with an empty decision": withEmptyDecision} {
+		page := post("/oauth2/authorize", request)
+		require.Equal(t, http.StatusOK, page.Code, name)
+
+		action, fields := consentForm(t, page.Body.String())
+		assert.NotContains(t, fields, "decision", name)
+		fields.Add("decision", "approve")
+
+		approved := post(action, fields)
+		require.Equal(t, http.StatusSeeOther, approved.Code, "%s: %s", name, approved.Body.String())
+
+		loc, err := url.Parse(approved.Header().Get("Location"))
+		require.NoError(t, err)
+		assert.NotEmpty(t, loc.Query().Get("code"), name)
+		assert.Equal(t, "demo-state", loc.Query().Get("state"), name)
+	}
 }

@@ -287,7 +287,36 @@ keys by `kid` against a JWKS provider (static or remote).
   public a client that cannot keep its credentials confidential (RFC 6749
   §2.1). `/introspect` answers `ClientConfidential` callers only: a public
   client (whatever the method, `none` included) or an untyped client gets
-  `401 invalid_client`.
+  `401 invalid_client`. Every failed client authentication reads the same —
+  `401 invalid_client`, "client authentication failed", the Basic
+  challenge — whether the client is unknown, of another issuer, presented a
+  wrong secret, used a method it may not use or a malformed credential: the
+  answer neither confirms a client exists nor discloses its type and
+  methods; the detail reaches `OnError` only. Two residual signals remain,
+  both acceptable since client identifiers are not secret (RFC 6749 §2.2):
+  the response time — an unknown client skips `SecretMatches`, so a slow
+  matcher (a password hash for human-chosen secrets) makes it ~100 ms
+  faster: such a matcher runs a dummy verification for unknown clients — and
+  `/authorize`, which tells an unknown `client_id` from an unregistered
+  `redirect_uri` by design (RFC 6749 §4.1.2.1 asks it to inform the resource
+  owner).
+- **Client secrets and guessing** — a client secret is a password the
+  server verifies on every `/token`, `/revoke` and `/introspect` request:
+  RFC 6749 §2.3.1 has the authorization server protect these endpoints
+  against brute force, and RFC 7662 §4 warns that an un-throttled
+  `/introspect` lets an attacker fish for valid tokens. The server does not
+  throttle — every failed client authentication answers the same `401
+  invalid_client` and reaches `OnError` — so rate-limit the three endpoints
+  per `client_id` and per source address in front of the handlers, and
+  alert on the failures. Generate secrets with at least 128 bits of entropy
+  (RFC 6749 §10.10: a guessing probability of at most 2^-128, 2^-160
+  recommended — 32 random bytes), out of reach of online guessing. At
+  rest, keep a hash: `DefaultClient` holds its secret in cleartext — for
+  tests, examples and static configurations — and compares SHA-256 digests
+  in constant time, so its timing discloses neither the secret nor its
+  length; a production `Client` implements `SecretMatcher` over the stored
+  SHA-256 of a generated secret, compared in constant time, or over a
+  password hash for a human-chosen one (with the dummy verification above).
 - **Token introspection** — RFC 7662 §4 requires the authorization server
   to authenticate the protected resources calling `/introspect`. A public
   client cannot authenticate: its `client_id` ships inside every copy of the
@@ -297,18 +326,28 @@ keys by `kid` against a JWKS provider (static or remote).
   validity and claims of a token they held — through `none`, or through
   Basic/Post with the client's registered secret — so `/introspect` refuses
   every caller that is not a confidential client. By default, any
-  authenticated confidential client may then introspect any token.
-  RFC 7662 §4 adds that protected resources SHOULD be specifically
-  authorized, and that when a token can be used only at certain resource
-  servers the authorization server MUST determine whether it can be used at
-  the caller: that decision is `ServerConfig.IntrospectionPolicy`, which
-  sees the authenticated caller and the token's metadata before anything is
-  disclosed. Refuse refresh tokens to resource servers — they are meant for
-  the client alone, and a resource server that ignores `token_type` could
-  accept one as a bearer token. A withheld token and a failed policy answer
+  authenticated confidential client may then introspect any access token of
+  the request's issuer, and a refresh token only if it was issued to it:
+  refresh tokens are meant for the authorization server and their client
+  (RFC 6749 §1.5), and a resource server that ignores `token_type` could
+  accept one as a bearer token. RFC 7662 §4 adds that protected resources
+  SHOULD be specifically authorized, and that when a token can be used only
+  at certain resource servers the authorization server MUST determine
+  whether it can be used at the caller: that decision is
+  `ServerConfig.IntrospectionPolicy`, which sees the authenticated caller
+  and the token's metadata before anything is disclosed — and replaces the
+  default, so refuse refresh tokens to resource servers there too. A
+  withheld token and a failed policy answer
   the same bytes as an unknown token (`{"active":false}`), so the response
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
+- **Token revocation** — `/revoke` revokes the caller's own tokens of the
+  request's issuer: a refresh token with its whole family, an access token
+  with its family too (RFC 7009 §2.1). A token issued to another client, or
+  under another issuer, is left untouched and answered with the `200` of an
+  invalid token (RFC 7009 §2.2) — a deliberate deviation from RFC 7009
+  §2.1, which refuses such a request with an error: the error would confirm
+  to whoever holds a token that it is valid for another client.
 - **Issuer binding (realms)** — a subject is only meaningful within its
   issuer (OIDC Core §16.15). Every endpoint resolves the issuer of the
   request through the `IssuerResolver` before it loads the client;
@@ -324,8 +363,14 @@ keys by `kid` against a JWKS provider (static or remote).
   boundary: it must return the same issuer for `/authorize` and `/token` of
   a realm, and the `ConsentFunc` must authenticate the resource owner within
   `AuthorizeRequest.Issuer` — a session of another realm is no
-  authentication. `IntrospectedToken.Issuer` lets an `IntrospectionPolicy`
-  enforce the same boundary.
+  authentication. `/introspect` and `/revoke` keep the same boundary: at
+  the issuer the request resolves to, a token issued under another issuer
+  answers `{"active":false}` and is not revoked (the answer is 200 all the
+  same), so a client registered in several realms can neither read nor
+  revoke another realm's tokens, and an `IntrospectionPolicy` only sees
+  tokens of the request's issuer. A token recorded without issuer — written
+  before tokens recorded one — is inactive at a non-empty issuer, but its
+  client can still revoke it: revocation only takes away.
 - **Clients and realms** — one `ClientStore` behind several issuers makes
   every client known at every issuer: a client of realm A could send realm
   B's end-users to B's genuine login page and obtain their codes and
@@ -333,8 +378,8 @@ keys by `kid` against a JWKS provider (static or remote).
   (`DefaultClient.IssuerValues`) exists at its issuers only: elsewhere
   `/authorize` answers the bare 400 of an unknown `client_id`, never
   redirected (RFC 6749 §4.1.2.1), and `/token`, `/revoke` and `/introspect`
-  fail its authentication as an unknown client's (`401 invalid_client`,
-  "unknown client"), whatever the secret — the same bytes in both cases, so
+  fail its authentication as any other (`401 invalid_client`, "client
+  authentication failed"), whatever the secret — the same bytes in both cases, so
   realm B can neither be used by A's clients nor enumerate them or check
   their secrets. The binding is checked before the client's secret and
   redirect URI, and again on the client an authenticator returns. A
@@ -353,6 +398,83 @@ keys by `kid` against a JWKS provider (static or remote).
   `ConsentFunc` error is always a `server_error`. A refusal's description
   and URI travel in the client's URL — browser history, logs, `Referer` —
   so they must never carry personal data.
+- **Redirect URIs** — a request's `redirect_uri` must equal a registered
+  one, byte for byte (RFC 6749 §3.1.2.3, RFC 9700 §2.1: simple string
+  comparison, no pattern), with one exception RFC 8252 §7.3 makes
+  mandatory: a registered loopback IP redirect URI (`http://127.0.0.1` or
+  `http://[::1]`) accepts any port, the rest of the URI unchanged — native
+  apps listen on an ephemeral port — and the code is bound to the URI
+  requested. `http://localhost` gets no such variance (RFC 8252 §8.3
+  recommends the IP literal). The registered URI a request resolves to must
+  pass `oauth2.ValidateRedirectURI` — absolute, no fragment, a host, no
+  userinfo and a port within 1–65535 for http(s), a private-use scheme
+  holding a "." (RFC 8252 §8.4, which also rules out `javascript:`, `data:`
+  and `urn:ietf:wg:oauth:2.0:oob`), a query naming no
+  response parameter — or the request gets a bare 400, never a redirect
+  (RFC 6749 §3.1.2.4); run the same function when registering clients.
+  Responses keep the registered query byte for byte (RFC 6749 §3.1.2),
+  and the implicit flow appends its fragment to a URI that has none.
+- **Open redirection** — RFC 9700 §4.11.2: a registered client controlling
+  its redirect URI could send users an erroneous request (an invalid scope)
+  or a `prompt=none` one, and have the authorization server redirect them
+  to its phishing page without anyone authenticating. Set
+  `AuthorizeConfig.TrustedRedirect`: for a client it does not trust, every
+  error detected before the resource owner authenticated — and a
+  `Consent.Refusal` stating the request cannot complete without a user
+  interface (`login_required`, `interaction_required`,
+  `account_selection_required`, `consent_required`) — is a bare error page,
+  never redirected. Without it, every registered client is trusted (RFC 6749
+  §4.1.2.1 redirects errors once the redirect URI is validated). Once the
+  resource owner authenticated, the code and an explicit `access_denied` are
+  redirected to every client.
+- **Authorization endpoint pages** — the `ConsentFunc` renders the login
+  and consent pages, but every response of `/authorize` carries
+  `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`
+  (added to a policy an outer handler set), `Cache-Control: no-store` and
+  `Referrer-Policy: same-origin`: the authorization server MUST prevent
+  clickjacking (RFC 6749 §10.13, RFC 9700 §4.16), its pages and redirects
+  carry codes and states, and no `Referer` leaks the request URL to another
+  origin (RFC 9700 §4.2.4). `same-origin`, not `no-referrer`: under
+  `no-referrer` browsers send `Origin: null` on the consent page's own
+  POST, which Origin-based CSRF checks then refuse. A `ConsentFunc` that
+  must let a trusted origin frame its page replaces them on
+  `w.Header()`. Browsers check framing on the final response only, so
+  `prompt=none` in an iframe still follows the redirect. The authorization
+  endpoint MUST be protected against CSRF (RFC 6749 §10.12): protect the
+  request carrying the resource owner's decision — a token bound to their
+  session, or `net/http.CrossOriginProtection` as `examples/oauth2` does —
+  not the endpoint, to which clients may POST authorization requests. A
+  redirect answering a POST is a `303` (RFC 9700 §4.12: only 303
+  unambiguously turns the POST, and the credentials it may carry, into a
+  GET), never a `307`.
+- **Failures are outages, not refusals** — a `ClientStore` that fails is
+  not an unknown client: answering `invalid_client` would tell a client its
+  credentials are wrong (and push it to rotate them). `/authorize` answers a
+  bare 500, `/token` and `/introspect` a `server_error`, `/revoke` a 503
+  `temporarily_unavailable` (RFC 7009 §2.2.1), each reported to `OnError`;
+  a store reports an unknown client with `(nil, nil)` or an error carrying
+  `invalid_client`. A token lookup that fails at `/introspect` answers
+  `{"active":false}` — a resource server fails closed (RFC 7662 §2.1) — and
+  reaches `OnError`.
+- **Request bounds** — RFC 6749 bounds no parameter, and `net/http` alone
+  reads 10 MB of form. Every endpoint bounds the query and the body it
+  parses to `ServerConfig.MaxRequestBytes` (64 KiB by default) —
+  `invalid_request`, a bare 400 at `/authorize`, before any parameter is
+  read; a declared `Content-Length` over the bound is refused before the
+  body is. The values the server keeps or echoes are bounded too: the
+  `state` echoed in every authorization response (at most 4096 bytes of
+  VSCHAR, RFC 6749 Appendix A.5 — refused without echoing it), the `nonce`
+  recorded with the code (512 bytes of UTF-8 without NUL, for every request
+  — so no store is handed a multi-megabyte value to persist and re-encode),
+  the scope (100 tokens, 4096 bytes) and the `client_id` (255 bytes: a longer
+  one is unknown, never looked up). A 4 KiB `state` of unreserved
+  characters keeps the redirect URL within the usual 8 KiB request-line
+  limits; percent-encoding triples every other VSCHAR, so a state made of
+  them reaches 12 KiB of `Location` — and an authorization server behind a
+  proxy whose response-header buffer is smaller (nginx's
+  `proxy_buffer_size` defaults to 4 KiB) needs that buffer raised. A body a
+  middleware parses before the handlers (`r.ParseForm`, `r.FormValue`) is
+  read without `MaxRequestBytes`: bound that middleware's reads too.
 - **Mix-up defense (RFC 9207)** — every authorization response, code and
   implicit, success and redirected error, carries `iss`, the issuer the
   request resolved to, and the RFC 8414 metadata sets
@@ -1356,9 +1478,26 @@ span catalog.
       `ScopeValues` — an empty list allows nothing — and watch `OnError`
       for `ErrNoGrantTypesDeclared` / `ErrNoScopesDeclared` after an
       upgrade.
+- [ ] When third parties register clients, set
+      `AuthorizeConfig.TrustedRedirect`, so that errors before
+      authentication never redirect to a client you do not trust.
+- [ ] Validate every redirect URI at registration with
+      `oauth2.ValidateRedirectURI`; register native apps with a reverse
+      domain name scheme (`com.example.app:/cb`) or a loopback IP literal
+      (`http://127.0.0.1/cb`).
+- [ ] Protect the request carrying the consent decision against CSRF (a
+      session-bound token, or `net/http.CrossOriginProtection`); replace
+      the anti-framing headers of `/authorize` only for origins you trust.
 - [ ] Register the resource servers calling `/introspect` as confidential
-      clients, and set `ServerConfig.IntrospectionPolicy` when several
-      resource servers or tenants share the authorization server.
+      clients, have them call it at the issuer of the tokens they accept,
+      and set `ServerConfig.IntrospectionPolicy` when several resource
+      servers or tenants share the authorization server.
+- [ ] Rate-limit `/token`, `/revoke` and `/introspect` per `client_id` and
+      per source address, and alert on the `invalid_client` failures
+      `OnError` reports.
+- [ ] Generate client secrets with at least 128 bits of entropy and keep
+      only a hash of them, behind a `SecretMatcher` (`DefaultClient` holds
+      them in cleartext).
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.

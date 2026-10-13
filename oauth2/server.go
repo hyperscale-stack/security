@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,8 +61,11 @@ type ServerConfig struct {
 	//
 	// The value is normalized at construction: an empty prefix defaults to
 	// "/oauth2", a missing leading slash is added, and a trailing slash is
-	// trimmed ("/" yields a root mount). The .well-known endpoints are not
-	// affected — they live at the host root per RFC 8615.
+	// trimmed ("/" yields a root mount). The .well-known documents are not
+	// affected: the metadata document lives at
+	// /.well-known/oauth-authorization-server followed by the issuer's path
+	// (RFC 8414 §3), and the jwks_uri it advertises is the issuer followed
+	// by /.well-known/jwks.json (see [Server.MetadataHandler]).
 	RoutePrefix string
 	// Now is the clock used to stamp issuance / expiry, and to compute the
 	// expires_in the /token response advertises. Defaults to time.Now
@@ -70,16 +74,29 @@ type ServerConfig struct {
 	// OnError, when set, observes every error the server turns into an
 	// RFC 6749 §5.2 response — including the cause of a server_error, which
 	// never reaches the wire — plus the errors behind an answer that cannot
-	// carry them (the storage failures of /revoke, a failed
+	// carry them (the storage failures of /revoke and /introspect, a failed
 	// [IntrospectionPolicy]). Optional; see [ErrorHook].
 	OnError ErrorHook
-	// IntrospectionPolicy, when set, decides which active tokens each
-	// confidential caller of /introspect may see — the place to enforce
-	// resource and tenant boundaries (RFC 7662 §4). A withheld token
-	// answers {"active":false}, exactly like an unknown one. Optional; nil
-	// lets any authenticated confidential client introspect any token. See
+	// IntrospectionPolicy, when set, decides which active tokens of the
+	// request's issuer each confidential caller of /introspect may see —
+	// the place to enforce resource and tenant boundaries (RFC 7662 §4). A
+	// withheld token answers {"active":false}, exactly like an unknown one.
+	// Optional; nil discloses every access token to any authenticated
+	// confidential client, and a refresh token to its own client only. See
 	// [IntrospectionPolicy].
 	IntrospectionPolicy IntrospectionPolicy
+	// MaxRequestBytes bounds every request the server parses: the query
+	// string and the body of /authorize, /token, /revoke and /introspect —
+	// net/http alone reads up to 10 MB of form. A longer request is refused
+	// with invalid_request (a bare 400 at /authorize) before any parameter
+	// is read, its declared length checked before the body is. Zero or
+	// negative selects [DefaultMaxRequestBytes] (64 KiB); raise it only for
+	// custom grants carrying large assertions. A ConsentFunc reading the
+	// body of a POST /authorize itself reads it within the same bound. A
+	// body a middleware parsed before the handler (r.ParseForm,
+	// r.FormValue) was read without it — only its declared length is
+	// checked: bound such a middleware's reads too (http.MaxBytesReader).
+	MaxRequestBytes int64
 	// Extension, when set, plugs a protocol extension — an OpenID Connect
 	// provider — into /authorize and into the authorization_code and
 	// refresh_token exchanges of /token: see [Extension]. Optional: without
@@ -97,6 +114,10 @@ type Server struct {
 	// dispatch maps Grant.Type() to the Grant instance for O(1) lookup
 	// on /token.
 	dispatch map[string]Grant
+
+	// implicit records that an AuthorizeHandler serving the implicit flow
+	// was built, for the metadata document.
+	implicit atomic.Bool
 }
 
 // NewServer validates cfg and returns a ready-to-mount [Server]. It

@@ -23,11 +23,22 @@ var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation 
 // turn. Revoking a refresh token revokes its whole family, and
 // revoking an access token revokes its family too (RFC 7009 §2.1).
 //
+// A client revokes its own tokens of that issuer only: a token issued to
+// another client, or under another issuer (OpenID Connect Core §16.15:
+// issuers are separate realms), is left untouched. RFC 7009 §2.1 has such a
+// request refused with an error; the server answers it as an invalid token
+// instead (§2.2), so that /revoke never confirms to whoever holds a token
+// that it is valid for another client. A token recorded without issuer —
+// written before tokens recorded one — is revoked by its client at any
+// issuer: revocation only takes away.
+//
 // The answer is 200 OK whether or not the token existed or belonged to the
-// caller (RFC 7009 §2.2), and 503 temporarily_unavailable when a storage
-// failure leaves the revocation unfinished (RFC 7009 §2.2.1): the token's
-// lookup failed, its family could not be revoked, or — for a token outside
-// any family — it could not be deleted. The client then retries, which
+// caller (RFC 7009 §2.2), and 503 temporarily_unavailable when a failure
+// leaves the revocation undone or unfinished (RFC 7009 §2.2.1): the client
+// could not be authenticated for another reason than a refused credential
+// (the IssuerResolver or the [ClientStore] failed), the token's lookup
+// failed, its family could not be revoked, or — for a token outside any
+// family — it could not be deleted. The client then retries, which
 // redoes the whole revocation. Each storage failure reaches the
 // [ErrorHook] once, as a server_error carrying its cause; the 503 is not
 // reported again. A 503 hints that the token exists only when the backend
@@ -49,15 +60,15 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		s.writeOAuthError(r.Context(), w, ErrInvalidRequest.WithCause(err))
+	if err := s.parseRequestForm(w, r); err != nil {
+		s.writeOAuthError(r.Context(), w, formRefusal(err))
 
 		return
 	}
 
-	client, _, _, err := s.authenticateClientAt(r.Context(), r)
+	client, issuer, _, err := s.authenticateClientAt(r.Context(), r)
 	if err != nil {
-		s.writeOAuthError(r.Context(), w, err)
+		s.refuseRevocation(r.Context(), w, err)
 
 		return
 	}
@@ -80,7 +91,7 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 
 	// RFC 7009 §2.1: the hint is optional. We try access then refresh
 	// regardless so the caller's hint is treated as advisory.
-	if !s.revoke(r.Context(), client, rawToken) {
+	if !s.revoke(r.Context(), client, issuer, rawToken) {
 		writeErrorResponse(w, errRevocationUnavailable)
 
 		return
@@ -91,45 +102,72 @@ func (s *Server) serveRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// refuseRevocation answers a revocation whose client could not be
+// authenticated: as the protocol refusal it is (invalid_client,
+// invalid_request), or — for a failure of the IssuerResolver, the
+// ClientStore or an authenticator — temporarily_unavailable (RFC 7009
+// §2.2.1: the revocation did not take place; the client must assume the
+// token still exists, and may retry), the failure reported once.
+func (s *Server) refuseRevocation(ctx context.Context, w http.ResponseWriter, err error) {
+	if code := IsCode(err); code != "" && code != CodeServerError {
+		s.writeOAuthError(ctx, w, err)
+
+		return
+	}
+
+	s.notifyError(ctx, ErrServerError.WithDescription("revoke: client authentication failed").WithCause(err))
+	writeErrorResponse(w, errRevocationUnavailable)
+}
+
 // revoke revokes rawToken when it is an access or a refresh token of
-// client, and reports whether the token can no longer be used: true when it
-// was revoked, is unknown, or belongs to another client; false when a
-// lookup or a revocation failed and the token may still be usable. Each
-// failure is reported to the [ErrorHook]; an unknown token is not.
-func (s *Server) revoke(ctx context.Context, client Client, rawToken string) bool {
+// client at issuer (ownedAt), and reports whether the token can no longer
+// be used — as far as the caller is concerned: true when it was revoked, is
+// unknown, or belongs to another client or issuer; false when a lookup or a
+// revocation failed and the token may still be usable. Each failure is
+// reported to the [ErrorHook]; an unknown token is not.
+func (s *Server) revoke(ctx context.Context, client Client, issuer, rawToken string) bool {
 	hash := HashToken(nil, rawToken)
 
 	at, err := s.cfg.Storage.LookupAccessToken(ctx, hash)
 	if err == nil {
-		return s.revokeAccess(ctx, client, at, hash)
+		return s.revokeAccess(ctx, client, issuer, at, hash)
 	}
 
-	if !s.lookupMissed(ctx, err) {
+	if !s.lookupMissed(ctx, err, "revoke: token lookup failed") {
 		return false
 	}
 
 	rt, err := s.cfg.Storage.LookupRefreshToken(ctx, hash)
 	if err != nil {
-		return s.lookupMissed(ctx, err)
+		return s.lookupMissed(ctx, err, "revoke: token lookup failed")
 	}
 
-	if rt.ClientID != client.ID() || rt.FamilyID == "" {
+	if !ownedAt(client, issuer, rt.ClientID, rt.Issuer) || rt.FamilyID == "" {
 		return true
 	}
 
 	return s.revokeFamily(ctx, rt.FamilyID)
 }
 
+// ownedAt reports whether a token issued to clientID under tokenIssuer is
+// client's at issuer: its own, and of this issuer (RFC 7009 §2.1; OpenID
+// Connect Core §16.15: a client of one realm cannot revoke another
+// realm's grants). A token recorded without issuer — written before tokens
+// recorded one — is its client's at any issuer: revocation only takes away.
+func ownedAt(client Client, issuer, clientID, tokenIssuer string) bool {
+	return clientID == client.ID() && (tokenIssuer == "" || tokenIssuer == issuer)
+}
+
 // lookupMissed reports whether a failed lookup merely missed the token:
 // invalid_grant, for a token that is unknown, expired from the store, or of
-// a revoked family. Any other failure leaves the token possibly usable and
-// is reported to the [ErrorHook].
-func (s *Server) lookupMissed(ctx context.Context, err error) bool {
+// a revoked family. Any other failure leaves the token's state unknown and
+// is reported to the [ErrorHook] as a server_error described by what.
+func (s *Server) lookupMissed(ctx context.Context, err error, what string) bool {
 	if IsCode(err) == CodeInvalidGrant {
 		return true
 	}
 
-	s.notifyError(ctx, ErrServerError.WithDescription("revoke: token lookup failed").WithCause(err))
+	s.notifyError(ctx, ErrServerError.WithDescription(what).WithCause(err))
 
 	return false
 }
@@ -144,8 +182,8 @@ func (s *Server) lookupMissed(ctx context.Context, err error) bool {
 // is revoked no token of it is usable, and deleting the access token is
 // mere cleanup: a failed delete is reported but leaves the answer
 // unchanged. A token outside any family only goes away when it is deleted.
-func (s *Server) revokeAccess(ctx context.Context, client Client, at *AccessToken, hash string) bool {
-	if at.ClientID != client.ID() {
+func (s *Server) revokeAccess(ctx context.Context, client Client, issuer string, at *AccessToken, hash string) bool {
+	if !ownedAt(client, issuer, at.ClientID, at.Issuer) {
 		return true
 	}
 

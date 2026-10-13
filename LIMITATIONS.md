@@ -11,8 +11,27 @@ future refactor phases.
 
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
+- **No throttling of client authentication** — `/token`, `/revoke` and
+  `/introspect` verify a client secret on every request without limiting
+  attempts: RFC 6749 §2.3.1 asks for brute-force protection, which a rate
+  limiter in front of the handlers provides (per `client_id` and source
+  address). Failures reach `OnError`.
+- **No hashed-secret client** — `DefaultClient` keeps its secret in
+  cleartext (compared by SHA-256 digest in constant time); keeping only a
+  hash at rest takes a `Client` implementing `SecretMatcher` over your
+  store — see [docs/security-considerations.md](docs/security-considerations.md).
+- **Another client's token is "revoked" with 200** — `/revoke` leaves a
+  token issued to another client, or under another issuer, untouched and
+  answers it as an invalid token (RFC 7009 §2.2) where RFC 7009 §2.1 refuses
+  the request with an error: a deliberate deviation, so that the answer
+  never confirms the token is valid for someone else.
+- **A failed introspection lookup answers inactive** — when the store fails
+  to look a token up, `/introspect` answers `{"active":false}` (RFC 7662
+  §2.1) and reports the failure to `OnError`: the resource server cannot
+  tell an outage from a revoked token, and refuses the request either way.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
-  none, although its RFC 8414 metadata advertises `jwks_uri`: mount the
+  none, although its RFC 8414 metadata advertises `jwks_uri` (the issuer
+  followed by `/.well-known/jwks.json`): mount the
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
   publish your own with `jwtsec.MarshalJWKS` (it refuses private and
   symmetric keys).
@@ -48,6 +67,14 @@ future refactor phases.
   PKCE verifier) can make the legitimate exchange fail with
   `invalid_grant`; it obtains nothing. A deliberate trade-off, see
   [docs/security-considerations.md](docs/security-considerations.md).
+- **Every registered client is trusted to receive error redirects** — an
+  error `/authorize` detects before the resource owner authenticated is
+  redirected to the client's registered redirect URI unless
+  `AuthorizeConfig.TrustedRedirect` says the client is not trusted (RFC
+  9700 §4.11.2); set it when clients are registered by third parties. An
+  explicit denial after authentication (`access_denied`) is redirected to
+  every client — RFC 9700 §4.11.2's second attack: a `ConsentFunc` may warn
+  the resource owner about a client it does not trust.
 - **RFC 9207 `iss` needs a resolved issuer** — every authorization response
   names its issuer, except the `server_error` redirected when the
   `IssuerResolver` itself fails: no issuer is known then, so it travels
@@ -64,17 +91,16 @@ future refactor phases.
   several issuers, a client is known at every issuer unless it implements
   `IssuerBoundClient` (`DefaultClient.IssuerValues`) or the store is scoped
   by issuer.
-- **`/introspect` returns no `iss`** — the token's issuer reaches an
+- **`/introspect` returns no `iss`** — an active token is always of the
+  issuer the request resolved to; the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
-- **The `nonce` parameter is not bounded by the core** — `/authorize` records
-  it as sent; `oidc/provider` bounds it in OpenID requests (512 bytes).
 - **`oauth2.Extension` scope** — it extends the `authorization_code` and
   `refresh_token` exchanges; the implicit flow runs its authorization hooks
   and records their context, but its fragment members are fixed (RFC 6749
   §4.2.2), and the `client_credentials` and `password` grants never call it.
-  Response modes: `query` for the code flow — the only one the metadata
-  advertises — and `fragment` only for an enabled implicit flow; `form_post`
-  is refused.
+  Response modes: `query` for the code flow, and `fragment` only for an
+  enabled implicit flow — which the metadata advertises once an
+  `AuthorizeHandler` enabling it is built; `form_post` is refused.
 
 ## OpenID Provider
 
@@ -83,8 +109,14 @@ future refactor phases.
 matrix. Not supported, and never advertised:
 
 - **Other flows and response modes** — the implicit and hybrid flows
-  (`unsupported_response_type`), `form_post`, `fragment` and JARM response
-  modes (refused by the core with a bare 400).
+  (`unsupported_response_type`, for plain OAuth 2.0 requests too:
+  `Provider.AuthorizeHandler` refuses `AuthorizeConfig.AllowImplicit`),
+  `form_post`, `fragment` and JARM response modes (refused by the core with
+  a bare 400). Nothing refuses `AllowImplicit` on a handler built from
+  `Provider.Server()`: never enable it there — the server would serve the
+  implicit flow to plain OAuth 2.0 requests and advertise it in its RFC 8414
+  metadata, which the discovery document would then contradict (RFC 9068
+  §4).
 - **Request objects and registration** — `request` and `request_uri` are
   refused (`request_not_supported`, `request_uri_not_supported`), and so is
   the `registration` parameter; clients are static (`oauth2.ClientStore`),

@@ -65,9 +65,15 @@ srv, err := oauth2.NewServer(oauth2.ServerConfig{
 The hook fires for:
 
 - every error serialized as an RFC 6749 §5.2 body (`/token`, `/revoke`,
-  `/introspect`, metadata) and every error redirected back to the client by
+  `/introspect`, metadata) — a failed client authentication as the constant
+  `invalid_client` the wire carries, the refusal it replaced ("unknown
+  client", "method not allowed for client"…) in its cause — and every error
+  redirected back to the client by
   `/authorize`, including the pre-redirect refusals answered with a bare
-  400 (unknown client, unregistered `redirect_uri`);
+  400 (unknown client, unregistered `redirect_uri`, a registered
+  `redirect_uri` `oauth2.ValidateRedirectURI` refuses — `invalid registered
+  redirect_uri`, the `ErrInvalidRedirectURI` refusal as cause — and a
+  request too large or malformed);
 - every storage failure at `/revoke`: a token lookup that failed for another
   reason than an unknown token (`revoke: token lookup failed`), and a failed
   family or access-token revocation (`revoke refresh family failed`,
@@ -84,6 +90,16 @@ The hook fires for:
   behind a bare `{"active":false}` and reports a `server_error`
   (`introspection policy failed`, the policy's error as cause). A plain
   refusal by the policy is an expected outcome and is not reported;
+- a token lookup that failed at `/introspect` — not one that missed: the
+  token answers `{"active":false}` (RFC 7662 §2.1) and the failure is
+  reported as a `server_error` (`introspect: token lookup failed`, cause
+  attached);
+- a `ClientStore` that failed — an error not carrying `invalid_client`:
+  `/authorize` answers a bare 500 (`client lookup failed`), `/token` and
+  `/introspect` a 500 `server_error`, `/revoke` a 503
+  `temporarily_unavailable` (`revoke: client authentication failed`, which
+  also covers an `IssuerResolver` failure there) — one `server_error`
+  carrying the store's error;
 - at `/authorize`, an unsupported `response_mode` (`invalid_request`, answered
   with a bare 400), a failing `IssuerResolver`, a failing `ConsentFunc`
   (`consent handler failed`, its error as cause), a `Consent.Refusal` (as
@@ -91,7 +107,9 @@ The hook fires for:
   `oauth2.Extension` hook — a protocol code as returned, anything else as a
   `server_error` (`authorization extension failed`) carrying it. An error
   whose code the endpoint cannot send reaches the hook as a `server_error`
-  whose cause is the original;
+  whose cause is the original. An error answered with a bare page because
+  `AuthorizeConfig.TrustedRedirect` does not trust the client reaches the
+  hook exactly as it would have been redirected;
 - at `/token`, an `ExtendTokenResponse` failure: its `invalid_grant` as
   returned, anything else as a `server_error` carrying it.
 

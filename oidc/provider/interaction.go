@@ -157,9 +157,9 @@ type AuthenticationEvent struct {
 
 // OfflineAccessConsent says why a requested offline_access is granted (Core
 // §11, §17.4); its zero value refuses it. It applies to every request the
-// provider serves — offline_access has one meaning at its server — but
-// one that returns no authorization code (the implicit flow), whose
-// offline_access is always ignored (§11).
+// provider serves — offline_access has one meaning at its server. A request
+// returning no authorization code would always have its offline_access
+// ignored (§11); [Provider.AuthorizeHandler] serves none.
 type OfflineAccessConsent int
 
 const (
@@ -265,7 +265,19 @@ type authResult struct {
 // one served by Server().AuthorizeHandler with another ConsentFunc is
 // refused (server_error) before that ConsentFunc runs. cfg configures the
 // endpoint as for oauth2.Server.AuthorizeHandler.
+//
+// The provider serves the authorization code flow only — RFC 9700 §2.1.2
+// deprecates the implicit grant, and the discovery document advertises
+// response_type code alone: AuthorizeHandler panics when cfg enables the
+// implicit flow (AllowImplicit), before the server records it, as the
+// server panics on its own misconfigurations. A handler built from
+// Server().AuthorizeHandler is not checked: never enable the implicit flow
+// there either (see [Provider.Server]).
 func (p *Provider) AuthorizeHandler(cfg oauth2.AuthorizeConfig) http.Handler {
+	if cfg.AllowImplicit {
+		panic("oidcprovider: AuthorizeHandler: the provider serves no implicit flow (AllowImplicit)")
+	}
+
 	h := p.server.AuthorizeHandler(cfg, p.consent)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

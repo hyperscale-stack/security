@@ -239,14 +239,16 @@ To migrate:
    and `scope` from the `/token` response, or ask a confidential backend.
 3. When several resource servers or tenants share the authorization server,
    set `ServerConfig.IntrospectionPolicy`: without one, any authenticated
-   confidential client may introspect any token. RFC 7662 §4 says protected
-   resources SHOULD be specifically authorized, and when a token can be used
-   only at certain resource servers, the authorization server MUST determine
-   whether it can be used at the one making the call. A denial answers a bare
-   `{"active":false}`, the same bytes as an unknown token; a policy error
-   fails closed the same way and reaches `OnError`, so wire both. A typical
-   policy discloses access tokens to the resource server they are meant for,
-   and refresh tokens to none:
+   confidential client may introspect any access token of the request's
+   issuer, and the refresh tokens issued to it (see
+   [below](#oauth2-introspect-and-revoke-are-bound-to-the-issuer-of-the-request)).
+   RFC 7662 §4 says protected resources SHOULD be specifically authorized,
+   and when a token can be used only at certain resource servers, the
+   authorization server MUST determine whether it can be used at the one
+   making the call. A denial answers a bare `{"active":false}`, the same
+   bytes as an unknown token; a policy error fails closed the same way and
+   reaches `OnError`, so wire both. A typical policy discloses access tokens
+   to the resource server they are meant for, and refresh tokens to none:
 
    ```go
    srv, err := oauth2.NewServer(oauth2.ServerConfig{
@@ -269,8 +271,9 @@ To migrate:
    Do not reduce the check to `caller.ID() == tok.ClientID`: the resource
    server introspecting a token is usually not the client it was issued to,
    so that rule refuses the legitimate calls without enforcing any resource
-   or tenant boundary. The policy only sees active tokens, only after the
-   caller authenticated as a confidential client, and gets the request
+   or tenant boundary. The policy only sees active tokens of the request's
+   issuer, only after the caller authenticated as a confidential client,
+   and gets the request
    context; see the `oauth2.IntrospectionPolicy` godoc for the full
    contract.
 
@@ -729,7 +732,7 @@ issuer the client does not exist:
 | Request at an issuer the client is not registered at | Before | After |
 | ---------------------------------------------------- | ------ | ----- |
 | `/authorize` | served like at its own issuer | bare `400` "unknown or invalid client", never redirected — the same bytes as for a `client_id` that exists nowhere (RFC 6749 §4.1.2.1) |
-| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client` "unknown client", whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2) |
+| `/token`, `/revoke`, `/introspect` | authenticated | `401 invalid_client`, whatever the secret — the same answer as for an unknown client (RFC 6749 §5.2); the description read "unknown client" until every failed client authentication was answered "client authentication failed" (see below) |
 | any of them | — | `OnError` gets the refusal with `oauth2.ErrClientNotAtIssuer` as its cause |
 
 The server now resolves the issuer of a request before it loads its client:
@@ -1772,9 +1775,9 @@ has one meaning at the provider's server:
 | plain OAuth 2.0, `Decision.OfflineAccess` unset | `offline_access` granted | dropped from the grant (no refresh token with `RefreshTokenScope = offline_access`) |
 | plain OAuth 2.0, only `offline_access` requested, `Decision.OfflineAccess` unset | code issued | `access_denied`, nothing issued |
 | plain OAuth 2.0, `OfflineAccessPrompted` or `OfflineAccessByPolicy` | granted | granted (`prompt=consent` is not required: no OAuth 2.0 parameter) |
-| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) |
+| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) — and `Provider.AuthorizeHandler` now serves no implicit flow ([below](#oidcprovider-providerauthorizehandler-serves-no-implicit-flow)) |
 | OpenID request | §11 rules | unchanged |
-| plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged |
+| plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged — never enable `AllowImplicit` on that handler ([below](#oidcprovider-providerauthorizehandler-serves-no-implicit-flow)) |
 
 Only the scope is gated: a plain OAuth 2.0 grant carries no provider context,
 so its refresh tokens still follow `grant.Config.RefreshTokenScope` alone.
@@ -1810,3 +1813,187 @@ separator, and the three hint lists are bounded:
 To migrate: nothing for clients sending ordinary values. A client sending
 more than 2048 bytes in one of these hints sends fewer: they never fail a
 request (OIDC Core §3.1.2.1, §15.1).
+### `oauth2`: request sizes and parameters are bounded
+
+The endpoints parsed requests of any size up to the 10 MB `net/http` form
+limit, echoed any `state` in their redirects and recorded any `nonce` with
+the code — persisted by every store and re-encoded by the Redis scripts.
+
+| | Before | After |
+| --- | --- | --- |
+| query or body over `ServerConfig.MaxRequestBytes` (default 64 KiB) | parsed (up to 10 MB of body) | `invalid_request` "request too large" — a bare 400 at `/authorize` — before anything is read |
+| `nonce` over 512 bytes, invalid UTF-8 or holding NUL | recorded with the code (OpenID requests through `oidc/provider` excepted) | redirected `invalid_request`, every request |
+| `state` over 4096 bytes or outside VSCHAR (`%x20-7E`) | echoed in every redirect | redirected `invalid_request`, without `state` |
+| `client_id` over 255 bytes | looked up | an unknown client, never looked up |
+| `code_challenge` / `code_challenge_method` of an implicit request | handed to the `ConsentFunc` | ignored |
+| `code_challenge_method` without `code_challenge` (`Profile20`) | recorded with the code | ignored |
+
+To migrate:
+
+1. Grants carrying large assertions (a custom SAML or JWT bearer grant) set
+   `ServerConfig.MaxRequestBytes` to what they need.
+2. Clients sending a non-ASCII `state`, or one over 4 KiB, encode a shorter
+   value — a random key to their own state, as RFC 6749 §10.12 suggests.
+3. Extensions relying on the core's `nonce` (`AuthorizeRequest.Nonce`,
+   `TokenIssuance.Nonce`) may drop their own bound: the core applies the one
+   `oidc/provider` applies.
+
+### `oauth2`: `/authorize` responses carry protective headers; POST redirects are 303
+
+| | Before | After |
+| --- | --- | --- |
+| headers of every `/authorize` response (pages, redirects, errors) | none | `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` (added to an existing policy), `Cache-Control: no-store`, `Referrer-Policy: same-origin` |
+| a redirect answering a POST | `302 Found` | `303 See Other` (RFC 9700 §4.12) |
+| another method than GET and POST | `405` | `405` with `Allow: GET, POST` |
+
+To migrate:
+
+1. A `ConsentFunc` whose page must be framed by a trusted origin replaces
+   `X-Frame-Options` and `Content-Security-Policy` on `w.Header()` before
+   writing it; one setting its own `Content-Security-Policy` with `Set`
+   keeps `frame-ancestors` in it.
+2. Protect the request carrying the decision against CSRF if your
+   `ConsentFunc` does not (RFC 6749 §10.12): a session-bound token, or
+   `net/http.CrossOriginProtection.Check` on that request — not on the
+   endpoint, which clients may POST authorization requests to.
+3. Clients and tests expecting `302` after a POST to `/authorize` accept
+   `303`; user agents follow both with a GET.
+
+### `oauth2`: registered redirect URIs are validated; their query is kept; loopback ports vary
+
+The authorization endpoint redirected to whatever a client registered — a
+relative URI, one with a fragment (the implicit flow then answered
+`cb#section#access_token=…`), `javascript:` — rebuilt the registered query
+(reordered, `a=1;b=2` dropped, `flag` turned into `flag=`, a registered
+`state` or `code` overwritten), and refused a loopback redirect URI whose
+port differed from the registered one, which RFC 8252 §7.3 requires.
+
+| | Before | After |
+| --- | --- | --- |
+| registered URI that `oauth2.ValidateRedirectURI` refuses: relative, with a fragment, http(s) without host (`http://:80/cb`), with userinfo or a port outside 1–65535, a scheme without "." (`myapp:`, `javascript:`, `data:`, the out-of-band `urn:ietf:wg:oauth:2.0:oob`), invalid escapes, a query naming `code`, `state`, `iss`, `error`, `error_description` or `error_uri` | redirected to | bare `400` "oauth2: invalid redirect_uri", never redirected |
+| registered query | re-encoded, sorted, `;`-separated pairs dropped | kept byte for byte, the response parameters appended |
+| `http://127.0.0.1:{port}/…` / `http://[::1]:{port}/…` requested for a registered loopback IP URI | `400` unless the port matched exactly | accepted for any port 1–65535, the rest unchanged; the code is bound to the URI requested |
+| `http://localhost:{port}/…` | exact match | exact match (no variance, RFC 8252 §8.3) |
+
+To migrate:
+
+1. Run `oauth2.ValidateRedirectURI` over every registered redirect URI —
+   and at registration from now on — and fix what it refuses.
+2. Native apps register a reverse domain name scheme
+   (`com.example.app:/oauth2redirect`, RFC 8252 §7.1) instead of `myapp:` —
+   and instead of the out-of-band `urn:ietf:wg:oauth:2.0:oob`, which RFC
+   8252 §7 does not keep — or a loopback IP literal instead of `localhost`
+   to get port variance.
+3. A registered query parameter named like a response parameter is
+   renamed: the response would carry it twice (RFC 6749 §3.1).
+4. A loopback client exchanging a code sends, at `/token`, the redirect URI
+   with the port it used at `/authorize`.
+
+### `oauth2`: failed client authentications read alike
+
+`/token`, `/revoke` and `/introspect` described each failed client
+authentication: "unknown client", "client authentication failed" (a wrong
+secret), "method not allowed for client", "none method reserved to public
+clients", "client cannot verify secret", "introspection requires
+confidential client authentication"… — telling whether a client exists, and
+its type and authentication methods.
+
+| | Before | After |
+| --- | --- | --- |
+| `error_description` of any `401 invalid_client` | the reason | `client authentication failed` |
+| the reason | in the body | in the cause of the `invalid_client` `OnError` receives: `errors.As` on its `Unwrap` finds the detailed `*oauth2.Error`; `oauth2.ErrClientNotAtIssuer` still matches with `errors.Is` |
+
+To migrate: clients and tests that branched on the `error_description` of an
+`invalid_client` use the `error` code only; diagnostics read the detail from
+`OnError`.
+
+### `oauth2`: client-store and token-lookup failures are reported as failures
+
+| | Before | After |
+| --- | --- | --- |
+| `ClientStore.LoadClient` error (other than one carrying `invalid_client`) at `/authorize` | bare `400` "unknown or invalid client" | bare `500` "oauth2: server error", `OnError` `server_error` |
+| … at `/token`, `/introspect` | `401 invalid_client` | `500 server_error`, `OnError` |
+| … at `/revoke` (and an `IssuerResolver` failure there) | `401 invalid_client` (`500` for the resolver) | `503 temporarily_unavailable` (RFC 7009 §2.2.1), `OnError` |
+| a failed token lookup at `/introspect` | `{"active":false}`, unreported | `{"active":false}`, reported to `OnError` |
+
+To migrate:
+
+1. A `ClientStore` reports an unknown client with `(nil, nil)` — or with an
+   error carrying `invalid_client` (`oauth2.ErrInvalidClient`): one returning
+   a plain "not found" error (`sql.ErrNoRows`…) now makes every unknown
+   `client_id` a 500 — map it.
+2. Custom `ClientAuthenticator`s return their store's failures as such,
+   not wrapped in `invalid_client` (the contract already said so).
+
+### `oauth2`: `/introspect` and `/revoke` are bound to the issuer of the request
+
+Codes and tokens record their issuer since #83, and the grants refuse them at
+another issuer — but `/introspect` and `/revoke` ignored it: behind an
+`IssuerResolver` serving several realms, a client registered in two of them
+could introspect or revoke the tokens of one at the other. And without an
+`IntrospectionPolicy`, any confidential client — every resource server —
+could read the claims of any refresh token, although refresh tokens are
+meant for the authorization server and their client (RFC 6749 §1.5).
+
+| | Before | After |
+| --- | --- | --- |
+| a token of another issuer at `/introspect` | active (subject to the policy) | `{"active":false}`, the policy not consulted |
+| a token of another issuer at `/revoke` | revoked when the caller was its client | left untouched; `200` all the same |
+| another client's refresh token at `/introspect`, no `IntrospectionPolicy` | active, claims disclosed | `{"active":false}` |
+| a token recorded without issuer (written before #83) | active at any issuer | `{"active":false}` at a non-empty issuer; still revoked by its client |
+| `IntrospectedToken.Issuer` seen by a policy | any issuer | always the request's issuer |
+
+To migrate:
+
+1. **Roll out with your resource servers.** Each resource server calls
+   `/introspect` — and each client `/revoke` — at the issuer the token was
+   issued under: the `Host` or path your `IssuerResolver` maps to that
+   realm. A resource server calling one URL for every realm now gets
+   `{"active":false}` for the tokens of the others, and a revocation sent
+   there silently does nothing: point them at each realm's endpoints before
+   upgrading.
+2. A resource server that must introspect other clients' refresh tokens
+   needs an `IntrospectionPolicy` allowing it: a policy replaces the default
+   rule, for access and refresh tokens alike.
+3. Tokens written before #83 carry no issuer: they introspect inactive at a
+   non-empty issuer until they expire.
+
+### `oauth2`: the RFC 8414 metadata lists what the server serves; GET and HEAD only
+
+| | Before | After |
+| --- | --- | --- |
+| a method other than GET or HEAD | `200`, the document | `405`, `Allow: GET, HEAD` |
+| `response_types_supported`, `response_modes_supported` once an `AuthorizeHandler` enabling the implicit flow is built | `["code"]`, `["query"]` | `["code","token"]`, `["query","fragment"]` |
+| `grant_types_supported` | map order, never `implicit` | sorted; `implicit` with the implicit flow |
+| `revocation_endpoint_auth_methods_supported` | absent — meaning `client_secret_basic` alone (RFC 8414 §2) | the `ServerConfig.ClientAuth` methods |
+| `introspection_endpoint_auth_methods_supported` | absent | the same but `none`; absent when nothing is left |
+
+To migrate: serve the document to GET (a Go `GET` route pattern serves HEAD
+too), and build the `AuthorizeHandler`s before serving it — the implicit
+members reflect the handlers built so far.
+
+### `oidc/provider`: `Provider.AuthorizeHandler` serves no implicit flow
+
+A `Profile20` provider could enable the legacy implicit flow for plain OAuth
+2.0 requests (`Provider.AuthorizeHandler(oauth2.AuthorizeConfig{AllowImplicit:
+true, …})`); the oauth2 RFC 8414 metadata then advertised `response_type=token`
+while the OpenID discovery document did not — two documents of one
+authorization server disagreeing, which RFC 9068 §4 forbids. RFC 9700 §2.1.2
+deprecates the implicit grant, and OpenID requests could never use it.
+
+| | Before | After |
+| --- | --- | --- |
+| `Provider.AuthorizeHandler` with `AllowImplicit` (`Profile20`) | the OAuth 2.0 implicit flow served for requests without `openid` | panics at construction: `oidcprovider: AuthorizeHandler: the provider serves no implicit flow (AllowImplicit)` |
+| `response_type=token` at `Provider.AuthorizeHandler` | `unsupported_response_type` for OpenID requests only | `unsupported_response_type` for every request |
+
+To migrate:
+
+1. Drop `AllowImplicit` and `ImplicitTokens` from the configuration of the
+   provider's `AuthorizeHandler`, and move the clients still using the
+   implicit flow to the authorization code flow with PKCE (RFC 9700
+   §2.1.2).
+2. Do not move the implicit flow to a handler built from
+   `Provider.Server().AuthorizeHandler` either: nothing refuses
+   `AllowImplicit` there, and the server would serve the flow to plain OAuth
+   2.0 requests and advertise it in its RFC 8414 metadata while the
+   discovery document does not — the disagreement RFC 9068 §4 forbids.

@@ -6,6 +6,8 @@ package oidcprovider
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -31,4 +33,54 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 		})
 		require.ErrorIs(t, err, errClientMismatch)
 	}
+}
+
+// TestProtocolGuardsBehindTheCore: the provider re-checks the response type
+// and the nonce of an OpenID request although the core refuses such requests
+// first — no OpenID request gets another response type through (its
+// AuthorizeHandler refuses AllowImplicit, and a handler built from Server()
+// is not mounted for OpenID requests), and the core bounds the nonce of every
+// request — so only a direct call reaches these guards.
+func TestProtocolGuardsBehindTheCore(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: responseTypeCode}))
+
+	err := checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: "token"})
+	require.Equal(t, oauth2.CodeUnsupportedResponseType, oauth2.IsCode(err))
+
+	err = checkProtocol(url.Values{}, &oauth2.AuthorizeRequest{ResponseType: responseTypeCode, Nonce: "a\x00b"})
+	require.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(err))
+
+	require.NoError(t, checkNonce(strings.Repeat("n", MaxNonceLength)))
+
+	for _, nonce := range []string{strings.Repeat("n", MaxNonceLength+1), "a\x00b", "\xff"} {
+		require.Equal(t, oauth2.CodeInvalidRequest, oauth2.IsCode(checkNonce(nonce)), "%q", nonce)
+	}
+}
+
+// TestOfflineAccessNeedsTheCodeFlow pins OpenID Connect Core §11: the
+// provider ignores offline_access outside the authorization code flow,
+// whatever the decision. Its AuthorizeHandler serves no implicit flow — the
+// core refuses any other response type first — and a request approved by
+// another ConsentFunc gets no provider rule, so only a direct call reaches
+// it.
+func TestOfflineAccessNeedsTheCodeFlow(t *testing.T) {
+	t.Parallel()
+
+	view := &authRequest{scopes: []string{"read", ScopeOfflineAccess}}
+
+	scope, offline, err := view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessPrompted)
+	require.NoError(t, err)
+	require.Equal(t, "read", scope)
+	require.False(t, offline)
+
+	_, _, err = view.offlineScope(ScopeOfflineAccess, OfflineAccessByPolicy)
+	require.Equal(t, oauth2.CodeAccessDenied, oauth2.IsCode(err))
+
+	view.codeFlow = true
+
+	_, offline, err = view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessByPolicy)
+	require.NoError(t, err)
+	require.True(t, offline, "kept in the code flow")
 }

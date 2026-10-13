@@ -6,6 +6,7 @@ package oauth2
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"slices"
 )
@@ -57,9 +58,13 @@ type Client interface {
 	ID() string
 	// Type reports whether the client is confidential or public.
 	Type() ClientType
-	// RedirectURIs lists the redirect URIs registered by the client.
-	// Authorization code requests MUST match one of these exactly per
-	// RFC 6749 §3.1.2.3 / OAuth 2.0 BCP §2.1.4.
+	// RedirectURIs lists the redirect URIs registered by the client — each
+	// one valid for [ValidateRedirectURI], which the authorization endpoint
+	// applies to the URI a request resolves to (an invalid one is answered
+	// with a bare 400, never redirected to). A request's redirect_uri MUST
+	// match one exactly (RFC 6749 §3.1.2.3, RFC 9700 §2.1), but for the port
+	// of a loopback IP redirect URI (http://127.0.0.1 or http://[::1], RFC
+	// 8252 §7.3), which the request may set freely.
 	RedirectURIs() []string
 	// GrantTypes lists the grant types the client may use, compared exactly
 	// with RFC 7591 §2 values — the GrantType constants
@@ -86,6 +91,15 @@ type Client interface {
 // verify the registered secret without exposing it. Implementations MUST
 // use constant-time comparison (or a hashed-secret scheme).
 //
+// Keep a hash of the secret, not the secret. A secret the server generates
+// with at least 128 bits of entropy (RFC 6749 §10.10: a guessing
+// probability of at most 2^-128, 2^-160 recommended) — 32 random bytes,
+// for instance — is safe behind a fast hash: store its SHA-256 and compare
+// the digest of the presented secret with it in constant time. A secret
+// chosen by a human needs a password hash (the password module): it is slow
+// by design, so verify a dummy hash for unknown clients too, or their
+// faster answer tells them apart.
+//
 // An empty secret is never a credential: implementations MUST NOT match
 // it — not even against a hash of the empty string — nor anything when no
 // secret is registered.
@@ -99,6 +113,13 @@ type SecretMatcher interface {
 // ClientStore loads client records by ID. Implementations are responsible
 // for caching policy; the Server invokes LoadClient once per request that
 // needs client authentication.
+//
+// LoadClient returns (nil, nil) — or an error carrying invalid_client
+// ([IsCode]) — for an unknown client, which the server answers as such. Any
+// other error is a failure of the store: /authorize answers a bare 500,
+// /token and /introspect server_error, /revoke temporarily_unavailable, and
+// the error reaches the [ErrorHook] — never invalid_client, which would tell
+// the client its credentials are wrong.
 //
 // One store serving an [IssuerResolver] with several issuers makes every
 // client known at every issuer: a deployment where each client belongs to
@@ -119,9 +140,9 @@ type ClientStore interface {
 // exist. /authorize answers it as it answers an unknown client_id — a bare
 // 400 that is never redirected (RFC 6749 §4.1.2.1: the client identifier is
 // invalid here, and so are its redirect URIs) — and /token, /revoke and
-// /introspect fail its authentication as they fail an unknown client's —
-// 401 invalid_client, "unknown client" (RFC 6749 §5.2), whatever the
-// secret presented — so another realm's clients can be neither enumerated
+// /introspect fail its authentication as they fail any other — 401
+// invalid_client, "client authentication failed" (RFC 6749 §5.2), whatever
+// the secret presented — so another realm's clients can be neither enumerated
 // nor their secrets checked. unauthorized_client is not used: it would
 // confirm an authenticated, existing client. The [ErrorHook] gets
 // [ErrClientNotAtIssuer] as the cause. A server whose IssuerResolver fails
@@ -205,17 +226,23 @@ func (c *DefaultClient) Scopes() []string { return c.ScopeValues }
 // AuthMethods implements [Client].
 func (c *DefaultClient) AuthMethods() []string { return c.AuthMethodValues }
 
-// SecretMatches implements [SecretMatcher] using constant-time comparison.
-// An empty Secret registers no secret and matches nothing, the empty string
+// SecretMatches implements [SecretMatcher]: it compares the SHA-256
+// digests of the presented and registered secrets in constant time, so the
+// time it takes tells nothing about the registered secret — its length
+// included, which comparing the secrets themselves would leak. An empty
+// Secret registers no secret and matches nothing, the empty string
 // included. The DefaultClient stores secrets in cleartext for development
 // convenience; production deployments SHOULD wrap a hashed-secret store and
-// implement SecretMatches themselves.
+// implement SecretMatches themselves (see [SecretMatcher]).
 func (c *DefaultClient) SecretMatches(secret string) bool {
 	if c.Secret == "" {
 		return false
 	}
 
-	return subtle.ConstantTimeCompare([]byte(c.Secret), []byte(secret)) == 1
+	registered := sha256.Sum256([]byte(c.Secret))
+	presented := sha256.Sum256([]byte(secret))
+
+	return subtle.ConstantTimeCompare(registered[:], presented[:]) == 1
 }
 
 // AllowsIssuer implements [IssuerBoundClient]: the issuers listed in

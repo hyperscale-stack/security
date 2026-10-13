@@ -54,7 +54,7 @@ type noMatcherClient struct {
 	methods []string
 }
 
-func (c noMatcherClient) ID() string             { return c.id }
+func (c noMatcherClient) ID() string              { return c.id }
 func (c noMatcherClient) Type() oauth2.ClientType { return c.typ }
 func (c noMatcherClient) RedirectURIs() []string  { return nil }
 func (c noMatcherClient) GrantTypes() []string    { return nil }
@@ -192,8 +192,11 @@ func TestBasicAuthenticate(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		t.Parallel()
 
-		boom := fakeStore{err: errors.New("db down")}
-		_, err := NewBasic().Authenticate(ctx, req(basicHeader("c1", "s3cr3t")), boom)
+		down := errors.New("db down")
+		_, err := NewBasic().Authenticate(ctx, req(basicHeader("c1", "s3cr3t")), fakeStore{err: down})
+		assertStoreFailure(t, err, down)
+
+		_, err = NewBasic().Authenticate(ctx, req(basicHeader("c1", "s3cr3t")), fakeStore{err: oauth2.ErrInvalidClient})
 		assertInvalidClient(t, err)
 	})
 
@@ -277,9 +280,13 @@ func TestPostAuthenticate(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		t.Parallel()
 
+		down := errors.New("db down")
 		_, err := NewPost().Authenticate(ctx,
-			postReq(url.Values{"client_id": {"c1"}, "client_secret": {"s3cr3t"}}),
-			fakeStore{err: errors.New("db down")})
+			postReq(url.Values{"client_id": {"c1"}, "client_secret": {"s3cr3t"}}), fakeStore{err: down})
+		assertStoreFailure(t, err, down)
+
+		_, err = NewPost().Authenticate(ctx,
+			postReq(url.Values{"client_id": {"c1"}, "client_secret": {"s3cr3t"}}), fakeStore{err: oauth2.ErrInvalidClient})
 		assertInvalidClient(t, err)
 	})
 
@@ -435,8 +442,11 @@ func TestNoneAuthenticate(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewNone().Authenticate(ctx, postReq(url.Values{"client_id": {"pub"}}),
-			fakeStore{err: errors.New("db down")})
+		down := errors.New("db down")
+		_, err := NewNone().Authenticate(ctx, postReq(url.Values{"client_id": {"pub"}}), fakeStore{err: down})
+		assertStoreFailure(t, err, down)
+
+		_, err = NewNone().Authenticate(ctx, postReq(url.Values{"client_id": {"pub"}}), fakeStore{err: oauth2.ErrInvalidClient})
 		assertInvalidClient(t, err)
 	})
 
@@ -462,4 +472,15 @@ func TestNoneAuthenticate(t *testing.T) {
 		_, err := NewNone().Authenticate(ctx, postReq(url.Values{"client_id": {"pub"}}), only)
 		assertInvalidClient(t, err)
 	})
+}
+
+// assertStoreFailure asserts that a client store failure is returned as the
+// failure it is — wrapping cause, never invalid_client: the server answers
+// an outage, not a wrong credential.
+func assertStoreFailure(t *testing.T, err, cause error) {
+	t.Helper()
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, cause)
+	assert.Empty(t, oauth2.IsCode(err), "not an OAuth2 error: the server answers server_error")
 }

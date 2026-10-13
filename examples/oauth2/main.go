@@ -33,6 +33,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -173,7 +174,7 @@ func buildServer() (http.Handler, error) {
 	// "/oauth2") so the metadata document advertises the right URLs.
 	mux := http.NewServeMux()
 	// /authorize answers GET (consent page) and POST (decision).
-	authorize := srv.AuthorizeHandler(oauth2.AuthorizeConfig{}, consentHandler)
+	authorize := srv.AuthorizeHandler(oauth2.AuthorizeConfig{}, consentHandler(http.NewCrossOriginProtection()))
 	mux.Handle("GET /oauth2/authorize", authorize)
 	mux.Handle("POST /oauth2/authorize", authorize)
 	mux.Handle("POST /oauth2/token", srv.TokenHandler())
@@ -190,32 +191,80 @@ func buildServer() (http.Handler, error) {
 	return mux, nil
 }
 
-// consentHandler is the /authorize consent hook. A real application
+// consentHandler returns the /authorize consent hook. A real application
 // authenticates the resource owner and renders branded UI; this demo
 // renders a bare Approve / Deny form and treats every visitor as the
 // fixed "demo-user".
-func consentHandler(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
-	if r.Method == http.MethodPost {
-		return &oauth2.Consent{
-			Approved: r.FormValue("decision") == "approve",
-			Subject:  "demo-user",
-		}, nil
+//
+// The POST carrying the decision is what an attacker would forge from
+// another site (RFC 6749 §10.12), so it alone goes through csrf, which
+// refuses cross-origin browser requests (Fetch Metadata, Origin) — not
+// the endpoint: an authorization request may itself be POSTed from the
+// client's site (RFC 6749 §3.1, OpenID Connect Core §3.1.2.1). A real
+// application binds the decision to the resource owner's session as well,
+// with a CSRF token (session.CSRFToken, see examples/oidc-provider). The
+// page needs no protective header of its own: the authorization endpoint
+// sets X-Frame-Options, CSP frame-ancestors, Cache-Control and
+// Referrer-Policy on every response.
+func consentHandler(csrf *http.CrossOriginProtection) oauth2.ConsentFunc {
+	return func(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+		if decision := r.PostFormValue("decision"); r.Method == http.MethodPost && decision != "" {
+			if refusedCrossOrigin(csrf, w, r) {
+				return nil, nil // answered
+			}
+
+			return &oauth2.Consent{Approved: decision == "approve", Subject: "demo-user"}, nil
+		}
+
+		renderConsent(w, r, ar)
+
+		return nil, nil // the consent page was rendered
+	}
+}
+
+// refusedCrossOrigin answers 403 Forbidden to a cross-origin browser
+// request and reports whether it did.
+func refusedCrossOrigin(csrf *http.CrossOriginProtection, w http.ResponseWriter, r *http.Request) bool {
+	if csrf.Check(r) == nil {
+		return false
 	}
 
+	http.Error(w, "cross-origin decision refused", http.StatusForbidden)
+
+	return true
+}
+
+// renderConsent writes the consent page of ar: it shows the request as the
+// server validated it (ar), and its form posts the decision with the
+// authorization request as received — its query string, and the
+// parameters of a POSTed body as hidden fields — for the server to
+// validate it again.
+func renderConsent(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	var fields strings.Builder
+
+	for name, values := range r.PostForm {
+		if name == "decision" {
+			continue
+		}
+
+		for _, v := range values {
+			fmt.Fprintf(&fields, "<input type=\"hidden\" name=\"%s\" value=\"%s\">\n", html.EscapeString(name), html.EscapeString(v))
+		}
+	}
 
 	//nolint:gosec // G705: every interpolated value is HTML-escaped
 	fmt.Fprintf(w, `<!doctype html><title>Authorize</title>
 <p>Client <b>%s</b> requests scope <b>%s</b>.</p>
 <form method="post" action="/oauth2/authorize?%s">
-<button name="decision" value="approve">Approve</button>
+%s<button name="decision" value="approve">Approve</button>
 <button name="decision" value="deny">Deny</button>
 </form>`,
 		html.EscapeString(ar.Client.ID()),
 		html.EscapeString(ar.Scope),
-		html.EscapeString(r.URL.RawQuery))
-
-	return nil, nil // the consent page was rendered
+		html.EscapeString(r.URL.RawQuery),
+		fields.String())
 }
 
 // showCallback stands in for the client's redirect endpoint: it just

@@ -33,7 +33,13 @@ const (
 func newAuthorizeServer(t *testing.T, profile oauth2.Profile) *oauth2.Server {
 	t.Helper()
 
-	store := memory.New()
+	return newAuthorizeServerWith(t, profile, memory.New())
+}
+
+// newAuthorizeServerWith is newAuthorizeServer over store.
+func newAuthorizeServerWith(t *testing.T, profile oauth2.Profile, store oauth2.Storage) *oauth2.Server {
+	t.Helper()
+
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		testClientID: &oauth2.DefaultClient{
 			GrantTypeValues:   allGrantTypes,

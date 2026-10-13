@@ -61,8 +61,11 @@ func TestAuthorizeRefusesMalformedScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			// 1 MiB requests: the scope bounds, not the request-size bound
+			// (64 KiB by default, which alone refuses the 40 000 tokens),
+			// answer every case.
 			ext := &fakeExtension{}
-			env := newExtensionEnv(t, ext)
+			env := newExtensionEnv(t, ext, withMaxRequestBytes(1<<20))
 
 			q := authorizeQuery()
 			q.Set("scope", tc.scope)

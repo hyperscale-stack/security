@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/token"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -271,6 +272,27 @@ func TestForeignConsentFuncNeverRunsForOpenIDRequests(t *testing.T) {
 	code := redirect(t, serve(approving, get("/oauth2/authorize?"+with(authorizeQuery(), "scope", "read").Encode()))).Get("code")
 	require.NotEmpty(t, code, "an OAuth 2.0 approval by another ConsentFunc keeps OAuth 2.0 semantics")
 	assert.Empty(t, tokens(t, e.exchange(code)).IDToken)
+}
+
+// TestAuthorizeHandlerServesNoImplicitFlow pins UD-1: the provider serves
+// the authorization code flow only — RFC 9700 §2.1.2 deprecates the
+// implicit grant — so AuthorizeHandler refuses a configuration enabling it,
+// as the server refuses its own misconfigurations, before the server
+// records the flow: the RFC 8414 metadata keeps advertising the code flow
+// only, like the discovery document (RFC 9068 §4).
+func TestAuthorizeHandlerServesNoImplicitFlow(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, withProfile(oauth2.Profile20))
+	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)}}
+
+	assert.PanicsWithValue(t, "oidcprovider: AuthorizeHandler: the provider serves no implicit flow (AllowImplicit)", func() {
+		e.op.AuthorizeHandler(cfg)
+	})
+
+	rec := serve(e.op.Server().MetadataHandler(), get("/.well-known/oauth-authorization-server"))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"response_types_supported":["code"]`)
 }
 
 // TestRequestCheck pins the freshness, subject and acr rules the provider

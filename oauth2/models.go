@@ -46,7 +46,8 @@ type AuthorizationCode struct {
 	// CodeChallengeMethod is the PKCE method ("S256" or "plain").
 	CodeChallengeMethod string
 	// Nonce echoes the OIDC nonce parameter for replay protection in id
-	// tokens. Empty for plain OAuth2 flows.
+	// tokens. Empty for plain OAuth2 flows. At most [MaxNonceLength] bytes
+	// of valid UTF-8 without NUL, which the authorization endpoint enforces.
 	Nonce string
 	// IssuedAt is the wall-clock issuance time.
 	IssuedAt time.Time

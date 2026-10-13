@@ -271,9 +271,20 @@ configurable via `ServerConfig.RoutePrefix`).
 - Access/refresh tokens and authz codes are stored **hashed** (`HashToken`).
 - Every authorization is **bound to its issuer**: every endpoint resolves it
   first (the `IssuerResolver` is the realm), codes and tokens record it, and
-  the `authorization_code` / `refresh_token` grants refuse it elsewhere. A
-  client implementing `IssuerBoundClient` (`DefaultClient.IssuerValues`) is
-  unknown at other issuers — same bytes as an unknown `client_id`.
+  the `authorization_code` / `refresh_token` grants refuse it elsewhere;
+  `/introspect` answers another issuer's token inactive and `/revoke` leaves
+  it alone. A client implementing `IssuerBoundClient`
+  (`DefaultClient.IssuerValues`) is unknown at other issuers — same bytes as
+  an unknown `client_id`.
+- **Hardened endpoints**: every request is bounded
+  (`ServerConfig.MaxRequestBytes`, 64 KiB; `state`, `nonce`, `client_id`
+  bounds); `/authorize` sets anti-framing / no-store / `Referrer-Policy:
+  same-origin` headers, answers a POST with 303, validates redirect URIs
+  (`ValidateRedirectURI`) and, with `AuthorizeConfig.TrustedRedirect`,
+  redirects no error of an untrusted client before authentication. Every
+  failed client authentication answers the same `invalid_client` ("client
+  authentication failed", detail in `OnError`); a `ClientStore` error not
+  carrying `invalid_client` is an outage (500/503), not an unknown client.
 - **Extension points** (`ServerConfig.Extension`, `oauth2.Extension`): the
   contract `oidc/provider` builds on — `ValidateAuthorizeRequest` after the
   core checks, `CompleteAuthorization` turning `Consent.ExtensionResult` into

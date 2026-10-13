@@ -213,9 +213,11 @@ The `oauth2` module is an authorization server, not just a provider:
   opt-in legacy `implicit` flow, with an application-supplied consent hook;
   every authorization response names its issuer, RFC 9207),
   `/token`, `/revoke` (RFC 7009), `/introspect` (RFC 7662, with an optional
-  `IntrospectionPolicy` deciding which tokens each caller may see),
-  `/.well-known/oauth-authorization-server` (RFC 8414). The endpoint path
-  prefix used in the metadata document is configurable via
+  `IntrospectionPolicy` deciding which tokens each caller may see) — the
+  last two bound to the issuer of the request, like the grants —
+  `/.well-known/oauth-authorization-server` (RFC 8414, listing what the
+  server serves: grants, flows, client authentication methods). The
+  endpoint path prefix used in the metadata document is configurable via
   `ServerConfig.RoutePrefix`.
 - **`Storage`** — an interface with explicit atomicity contracts: a
   single-use `ConsumeAuthorizationCode` — consumed codes are retained until
@@ -252,8 +254,9 @@ The `oauth2` module is an authorization server, not just a provider:
   travels unchanged through every refresh — the stores refuse a rotation
   that would change it.
 
-Tokens and authorization codes are **never stored in cleartext** — the
-store only ever sees a hash.
+Tokens and authorization codes are **never stored in cleartext** — every
+store, the in-memory one included, keeps their hash only, and the
+`storetest` conformance suite checks that no lookup returns a raw value.
 
 ## OpenID Provider
 

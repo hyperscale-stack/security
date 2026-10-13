@@ -231,6 +231,11 @@ func TestRevokeAccessTokenAnswersByTheTokenOutcome(t *testing.T) {
 	})
 }
 
+// TestRevokeLeavesOtherClientsTokensAlone pins a deliberate deviation from
+// RFC 7009 §2.1, which refuses the revocation of a token issued to another
+// client: the server answers it as an invalid token (§2.2) — 200, the very
+// answer of an unknown token — and leaves the token alone, so /revoke tells
+// no caller whether a token it holds is valid for another client.
 func TestRevokeLeavesOtherClientsTokensAlone(t *testing.T) {
 	t.Parallel()
 
@@ -242,15 +247,23 @@ func TestRevokeLeavesOtherClientsTokensAlone(t *testing.T) {
 	other.Access.ClientID, other.Refresh.ClientID = "someone-else", "someone-else"
 	seedPair(t, store, other)
 
+	unknown := revoke(srv, "never-issued")
+	require.Equal(t, http.StatusOK, unknown.Code)
+
 	for _, raw := range []string{other.Access.Token, other.Refresh.Token} {
 		rec := revoke(srv, raw)
 		assert.Equal(t, http.StatusOK, rec.Code, "RFC 7009 §2.2: no hint the token exists")
+		assert.Equal(t, unknown.Body.String(), rec.Body.String(), "the answer of an unknown token")
+		assert.Equal(t, unknown.Header(), rec.Header(), "the answer of an unknown token")
 	}
 
 	assert.Empty(t, sink.collected())
 
 	_, err := store.LookupAccessToken(t.Context(), other.Access.TokenHash)
 	require.NoError(t, err, "a client cannot revoke another client's token")
+
+	_, err = store.LookupRefreshToken(t.Context(), other.Refresh.TokenHash)
+	require.NoError(t, err, "nor its refresh token family")
 }
 
 func TestRevokeIsQuietForAlreadyRevokedFamilies(t *testing.T) {

@@ -91,7 +91,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   never the token value). A denial answers a bare `{"active":false}`, the
   same bytes as an unknown token; a policy error fails closed the same way
   and reaches `OnError` as a `server_error`. Optional: without a policy, any
-  authenticated confidential client may introspect any token.
+  authenticated confidential client may introspect any access token of the
+  request's issuer, and the refresh tokens issued to it.
 - **OAuth2 token-family primitives**: `oauth2.ErrTokenFamilyRevoked`
   (`invalid_grant`) refuses an operation on a revoked token family;
   `oauth2.ErrTokenFamilyRevocationFailed`, a plain sentinel that never
@@ -346,8 +347,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrInvalidRequestURI`, `ErrInvalidRequestObject`).
 - **OAuth2 grant context on codes and tokens**: `AuthorizationCode`,
   `AccessToken` and `RefreshToken` gain `Issuer` and `ExtensionData`;
-  `AuthorizeRequest.Issuer` and `IntrospectedToken.Issuer` expose the realm
-  (an `IntrospectionPolicy` can now enforce it, RFC 7662 §4).
+  `AuthorizeRequest.Issuer` and `IntrospectedToken.Issuer` expose the realm,
+  which `/introspect` and `/revoke` enforce (see Changed).
 - **OAuth2 refresh-token gate**: `grant.Config.RefreshTokenScope` makes the
   `authorization_code` and legacy `password` grants issue a refresh token
   only when the granted scope holds that scope token — e.g.
@@ -469,6 +470,22 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `security.ErrUnavailable`); a
   `jwtsec.RemoteJWKS.Fetch` span; fuzz targets for the verifier, the claims
   decoder and NumericDate. See Security and Changed.
+- **OAuth2 request bounds**: `oauth2.ServerConfig.MaxRequestBytes` (default
+  `oauth2.DefaultMaxRequestBytes`, 64 KiB) bounds the query and the body of
+  every endpoint; `oauth2.MaxNonceLength` (512), `oauth2.MaxStateLength`
+  (4096) and `oauth2.MaxClientIDLength` (255) document the bounds of the
+  values the server keeps, echoes or looks up.
+- **`oauth2.ValidateRedirectURI`** (and `oauth2.ErrInvalidRedirectURI`)
+  checks a redirect URI at registration — absolute, no fragment, a host, no
+  userinfo and a port within 1–65535 for http(s), "." in a private-use
+  scheme (RFC 8252 §8.4), no response parameter in its query; `/authorize`
+  applies it to the URI a request resolves to.
+- **`oauth2.AuthorizeConfig.TrustedRedirect`**: for a client it does not
+  trust, the errors `/authorize` detects before the resource owner
+  authenticated — and `prompt=none`-style refusals (`login_required`,
+  `interaction_required`, `account_selection_required`, `consent_required`)
+  — are answered with a bare error page instead of a redirect (RFC 9700
+  §4.11.2). Without it, every registered client is trusted, as before.
 
 ### Changed
 
@@ -761,6 +778,55 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   provider may release, and a grant records only those; the values of a
   voluntary `acr` request join `Request.ACRValues`, which now holds each
   value once. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 requests and parameters are bounded (breaking)**: a query or
+  body over `ServerConfig.MaxRequestBytes` (64 KiB by default) is refused
+  with `invalid_request` (a bare 400 at `/authorize`) before it is parsed; a
+  `nonce` over 512 bytes, not UTF-8 or holding NUL, and a `state` over 4096
+  bytes or outside VSCHAR are refused with a redirected `invalid_request` —
+  the state not echoed; a `client_id` over 255 bytes is an unknown client;
+  the PKCE parameters of an implicit request, and a `code_challenge_method`
+  without `code_challenge`, are ignored. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `/authorize` answers a POST with 303 (breaking for clients
+  asserting 302)** and lists `Allow: GET, POST` on its 405. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 registered redirect URIs are validated (breaking)**: one that
+  `oauth2.ValidateRedirectURI` refuses — relative, with a fragment, an
+  http(s) URI without host or with a port outside 1–65535, a scheme without
+  a period such as `myapp:`, `javascript:` or the out-of-band
+  `urn:ietf:wg:oauth:2.0:oob`, a query naming a response parameter — is
+  answered with a bare 400, never redirected to. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 failed client authentications read alike**: every `401
+  invalid_client` of `/token`, `/revoke` and `/introspect` carries the
+  description "client authentication failed"; the reason ("unknown client",
+  "method not allowed for client"…) moved to the cause `OnError` receives.
+  See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 client-store failures are outages (breaking for stores reporting
+  "not found" with an error)**: a `ClientStore` error not carrying
+  `invalid_client` is answered as a failure — a bare 500 at `/authorize`,
+  `server_error` at `/token` and `/introspect`, `temporarily_unavailable` at
+  `/revoke` — and reported to `OnError`, instead of an unknown client. See
+  [MIGRATION.md](MIGRATION.md).
+- **OAuth2 `/introspect` and `/revoke` are bound to the issuer of the
+  request (breaking for multi-issuer deployments)**: a token issued under
+  another issuer introspects `{"active":false}` and is not revoked; without
+  an `IntrospectionPolicy`, a refresh token is disclosed to its own client
+  only; a token recorded without issuer is inactive at a non-empty issuer.
+  Resource servers call `/introspect` at the issuer of the tokens they
+  accept. See [MIGRATION.md](MIGRATION.md).
+- **OAuth2 metadata answers GET and HEAD only (breaking for other
+  methods)**: any other method gets 405 with `Allow: GET, HEAD` (RFC 8414
+  §3.1). See [MIGRATION.md](MIGRATION.md).
+- **The OpenID Provider's authorization endpoint serves no implicit flow
+  (breaking for `Profile20` providers enabling it)**:
+  `oidcprovider.Provider.AuthorizeHandler` panics when
+  `AuthorizeConfig.AllowImplicit` is set — RFC 9700 §2.1.2 deprecates the
+  implicit grant — so the plain OAuth 2.0 `response_type=token` requests it
+  serves get `unsupported_response_type` too, and the RFC 8414 metadata and
+  the discovery document both advertise the code flow alone (RFC 9068 §4).
+  A handler built from `Provider.Server()` is not checked and must not
+  enable the implicit flow either: the metadata would then contradict the
+  discovery document. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -923,6 +989,37 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `invalid_request` or, for `client_id`, `redirect_uri` and
   `response_mode`, a bare `400`; it is now served like `nonce=n-1`. Two
   occurrences with a value are still refused.
+- OAuth2 redirects keep the query of the registered redirect URI byte for
+  byte (RFC 6749 §3.1.2: it "MUST be retained"): it was re-encoded —
+  reordered, `;`-separated pairs dropped, `flag` turned into `flag=`. The
+  implicit flow no longer appends a second fragment.
+- OAuth2 accepts any port for a registered loopback IP redirect URI
+  (`http://127.0.0.1`, `http://[::1]`), as RFC 8252 §7.3 requires for native
+  apps: the request is otherwise matched exactly, and the code bound to the
+  URI requested.
+- The OAuth2 RFC 8414 metadata lists what the server serves: the `token`
+  response type, the `fragment` response mode and the `implicit` grant type
+  once an `AuthorizeHandler` enabling the implicit flow is built, and the
+  client authentication methods of `/revoke` and `/introspect` (without
+  `none` for the latter), whose absence meant `client_secret_basic` alone
+  (RFC 8414 §2); its grant types are sorted, no longer in map order. The
+  godoc gives the `jwks_uri` and `.well-known` locations actually built.
+- The OpenID Provider discovery document agrees with the RFC 8414 metadata
+  again (RFC 9068 §4): it publishes
+  `revocation_endpoint_auth_methods_supported` — whose absence meant
+  `client_secret_basic` alone (RFC 8414 §2) — and
+  `introspection_endpoint_auth_methods_supported` (without `none`), and
+  sorts `grant_types_supported`.
+- `oauth2.DefaultClient.SecretMatches` no longer discloses the length of
+  the registered secret through its timing: `subtle.ConstantTimeCompare`
+  answers at once when the lengths differ, so it now compares the SHA-256
+  digests of the two secrets, in constant time.
+- OAuth2 storage failures stop hiding: a token lookup that failed at
+  `/introspect` answered `{"active":false}` without reaching `OnError` (it
+  still answers so — RFC 7662 §2.1 — and is now reported), and a failing
+  `ClientStore` read as an unknown client — `invalid_client`, which tells a
+  client its credentials are wrong — although the `ClientAuthenticator`
+  contract asked to return store failures as such.
 
 ### Removed
 
@@ -1456,7 +1553,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   declined offline access. `Request.OfflineAccess` is now set for every
   request; `OfflineAccessPrompted` needs no `prompt=consent` for a plain
   request, `OfflineAccessByPolicy` keeps the former behaviour, an implicit
-  request never keeps it (Core §11), and an approval left without any
+  request never keeps it (Core §11; `Provider.AuthorizeHandler` now serves
+  no implicit flow, see Changed), and an approval left without any
   scope answers `access_denied` (breaking, see
   [MIGRATION.md](MIGRATION.md)).
 - `examples/oidc-provider` grants offline access only on the end-user's
@@ -1475,3 +1573,53 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   entry for the life of the process. It compares the password of an
   unknown username with a dummy hash — the response time told whether an
   account existed — and its HTTP server sets read, write and idle timeouts.
+- The in-memory OAuth2 store (`oauth2/storage/memory`) keeps tokens hashed
+  only. It kept the raw access and refresh tokens it was handed — and
+  returned them from `LookupAccessToken` and `LookupRefreshToken` — contrary
+  to the storage contract ("MUST store hashes"); codes were already stored
+  without their raw value. The `oauth2/storetest` conformance suite now
+  checks that no lookup returns a raw token and that a store leaves the
+  caller's pair untouched: a custom store keeping raw tokens fails it.
+- OAuth2 requests can no longer make the server parse, echo or persist
+  megabytes. Every endpoint read up to 10 MB of form; `/authorize` echoed any
+  `state` in its redirects and recorded any `nonce` with the code — persisted
+  by every store, re-encoded by the Redis consume script (tens of
+  milliseconds of a blocked server per redemption, about 100 such codes
+  filling 1 GB of a `noeviction` Redis, whose writes — revocations included
+  — then fail). `oidc/provider` bounded the nonce of OpenID requests only.
+  Requests are now bounded to 64 KiB, and the state and the nonce of every
+  authorization request to 4096 and 512 bytes.
+- OAuth2 `/authorize` responses can no longer be framed, cached or leak
+  their URL in `Referer`. The endpoint set no header while the
+  `ConsentFunc` rendered the login and consent pages behind it, and the
+  canonical example approved any POST carrying `decision=approve` — a
+  cross-site form could approve on the user's behalf. Every response now
+  carries `X-Frame-Options: DENY`, `Content-Security-Policy:
+  frame-ancestors 'none'`, `Cache-Control: no-store` and `Referrer-Policy:
+  same-origin` (RFC 6749 §10.13, RFC 9700 §4.16, §4.2.4); the `ConsentFunc`
+  godoc states the CSRF contract (RFC 6749 §10.12), and `examples/oauth2`
+  refuses a cross-origin decision. A redirect answering a POST is a 303
+  (RFC 9700 §4.12).
+- OAuth2 no longer redirects to registered redirect URIs that cannot be
+  safe ones: a relative URI, one with a fragment, a `javascript:` or `data:`
+  URI, or a query naming a response parameter (which then traveled twice)
+  were used as registered.
+- OAuth2 `/authorize` can stop redirecting to clients it does not trust
+  before the resource owner authenticated (RFC 9700 §4.11.2: the
+  authorization server "MUST always authenticate the user first"). Any
+  registered client could send users an erroneous or `prompt=none` request
+  and have the server redirect them — without any authentication — to its
+  redirect URI: `AuthorizeConfig.TrustedRedirect` answers such requests of
+  untrusted clients with a bare error page.
+- OAuth2 client authentication no longer enumerates clients: the
+  `invalid_client` descriptions told an unknown client ("unknown client")
+  from a known one with a wrong secret, and disclosed a client's type and
+  methods ("none method reserved to public clients", "method not allowed
+  for client"). Every failed client authentication now reads "client
+  authentication failed" (RFC 6749 §5.2); the detail goes to `OnError`.
+- OAuth2 realms no longer leak through `/introspect` and `/revoke`: behind
+  an `IssuerResolver` serving several issuers, a client registered in two
+  realms could introspect — and revoke — the tokens of one at the other,
+  while the grants refused them there (OIDC Core §16.15). And without an
+  `IntrospectionPolicy`, any confidential client — every resource server —
+  could read the claims of any client's refresh token (RFC 6749 §1.5).

@@ -15,10 +15,14 @@ import (
 
 // issuerClients is the [ClientStore] a request sees at its issuer: a
 // client bound to other issuers ([IssuerBoundClient]) does not exist
-// there. One instance serves one request.
+// there, and neither does an identifier longer than [MaxClientIDLength],
+// which is never looked up. One instance serves one request.
 type issuerClients struct {
 	store  ClientStore
 	issuer string
+	// anyIssuer reports that the issuer is unknown — the IssuerResolver
+	// failed — so the binding cannot be checked: the request fails anyway.
+	anyIssuer bool
 	// hidden records that a client bound to other issuers was hidden: the
 	// cause of the refusal that follows.
 	hidden bool
@@ -26,8 +30,12 @@ type issuerClients struct {
 
 // LoadClient implements [ClientStore].
 func (c *issuerClients) LoadClient(ctx context.Context, id string) (Client, error) {
+	if len(id) > MaxClientIDLength {
+		return nil, nil
+	}
+
 	client, err := c.store.LoadClient(ctx, id)
-	if err != nil || client == nil {
+	if err != nil || client == nil || c.anyIssuer {
 		return client, err //nolint:wrapcheck // the store's own answer, unchanged
 	}
 
@@ -54,6 +62,7 @@ func (c *issuerClients) explain(oe *Error) *Error {
 // authenticateClientAt resolves the issuer of r, then authenticates its
 // client at that issuer — a client bound to other issuers is unknown there
 // — and returns the client, the issuer and the audience the resolver gave.
+// Every failed authentication reads the same (clientAuthFailed).
 func (s *Server) authenticateClientAt(ctx context.Context, r *http.Request) (Client, string, string, error) {
 	issuer, audience, err := s.resolveIssuer(ctx, r)
 	if err != nil {
@@ -62,10 +71,25 @@ func (s *Server) authenticateClientAt(ctx context.Context, r *http.Request) (Cli
 
 	client, err := s.authenticateClient(ctx, r, issuer)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", clientAuthFailed(err)
 	}
 
 	return client, issuer, audience, nil
+}
+
+// clientAuthFailed answers every failed client authentication alike — 401
+// invalid_client, "client authentication failed" — whatever made it fail:
+// an unknown client, a client of another issuer, a wrong secret, a method
+// the client may not use, a malformed credential (RFC 6749 §5.2). Telling
+// them apart on the wire would confirm a client exists and disclose its type
+// and methods; the refusal it replaces stays in the cause, for the
+// [ErrorHook] only. Any other error passes through unchanged.
+func clientAuthFailed(err error) error {
+	if IsCode(err) != CodeInvalidClient {
+		return err
+	}
+
+	return ErrInvalidClient.WithCause(err)
 }
 
 // authenticateClient runs the configured client-authentication methods in

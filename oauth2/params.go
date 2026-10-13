@@ -11,6 +11,8 @@ const (
 	paramRedirectURI  = "redirect_uri"
 	paramResponseMode = "response_mode"
 	paramScope        = "scope"
+	paramState        = "state"
+	paramCode         = "code"
 )
 
 // The request parameters each endpoint reads itself (RFC 6749 §3.1, §3.2):
@@ -26,7 +28,7 @@ var (
 	// order, so a request repeating one of them is refused with a bare 400
 	// whatever else it repeats.
 	authorizeParameters = []string{
-		paramClientID, paramRedirectURI, paramResponseMode, "response_type", paramScope, "state",
+		paramClientID, paramRedirectURI, paramResponseMode, "response_type", paramScope, paramState,
 		"code_challenge", "code_challenge_method", "nonce",
 	}
 	// unredirectableParameters, repeated, leave the client, the redirection
@@ -36,7 +38,7 @@ var (
 	// tokenParameters are the parameters of an access-token request (RFC
 	// 6749 §2.3.1, §4.1.3, §4.3.2, §4.4.2, §6; RFC 7636 §4.5).
 	tokenParameters = []string{
-		"grant_type", "code", paramRedirectURI, "code_verifier", "refresh_token",
+		"grant_type", paramCode, paramRedirectURI, "code_verifier", "refresh_token",
 		paramScope, "username", "password", paramClientID, paramClientSecret,
 	}
 	// clientAuthParameters are the client credentials a request body may

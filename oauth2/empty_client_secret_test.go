@@ -19,8 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// missingCredentials is the error_description client_secret_basic and
-// client_secret_post answer a missing client_id or an empty secret with.
+// missingCredentials is the detail the ErrorHook gets when
+// client_secret_basic or client_secret_post refuses a missing client_id or
+// an empty secret: on the wire, every failed client authentication reads
+// "client authentication failed".
 const missingCredentials = "missing client_id or client_secret"
 
 // emptySecretNow is the instant newEmptySecretServer's clock is pinned to.
@@ -126,7 +128,7 @@ func TestEmptyBasicPasswordRefusedAtEveryEndpoint(t *testing.T) {
 			ref := serve(h, basicForm(path, ep.form("ghost"), "ghost", ""))
 			require.Equal(t, http.StatusUnauthorized, ref.Code)
 			assert.Equal(t, `Basic realm="oauth2"`, ref.Header().Get("WWW-Authenticate"))
-			assert.JSONEq(t, `{"error":"invalid_client","error_description":"`+missingCredentials+`"}`, ref.Body.String())
+			assert.JSONEq(t, `{"error":"invalid_client","error_description":"client authentication failed"}`, ref.Body.String())
 
 			desc, _ := decodeBody(t, ref)["error_description"].(string)
 			assert.Regexp(t, descriptionCharset, desc)

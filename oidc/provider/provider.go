@@ -238,6 +238,13 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 // authorization endpoint is served by [Provider.AuthorizeHandler], never by
 // Server().AuthorizeHandler — the provider refuses OpenID requests that do
 // not come through it.
+//
+// A handler built from Server().AuthorizeHandler — for plain OAuth 2.0
+// requests approved by another ConsentFunc — MUST NOT enable
+// AuthorizeConfig.AllowImplicit: nothing refuses it there, the server would
+// serve the implicit flow to those requests, and its RFC 8414 metadata would
+// advertise a flow the discovery document does not — the two publications
+// would disagree (RFC 9068 §4). RFC 9700 §2.1.2 deprecates the flow.
 func (p *Provider) Server() *oauth2.Server { return p.server }
 
 // Paths are the request paths, for one issuer, at which the application
