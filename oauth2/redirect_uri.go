@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -33,8 +34,9 @@ var reservedRedirectParameters = []string{paramCode, paramState, "iss", "error",
 //     §4.3) made of RFC 3986 characters, its percent-encodings valid;
 //   - no fragment, not even an empty one (RFC 6749 §3.1.2: "MUST NOT include
 //     a fragment component");
-//   - for http and https, a host and no userinfo — TLS is not required
-//     (RFC 6749 §3.1.2.1 SHOULD; http://localhost serves development);
+//   - for http and https, a host, no userinfo and, when present, a port
+//     within 1–65535 — TLS is not required (RFC 6749 §3.1.2.1 SHOULD;
+//     http://localhost serves development);
 //   - for any other scheme — the private-use scheme of a native app — a
 //     scheme holding a "." (RFC 8252 §7.1: a reverse domain name; §8.4:
 //     "any private-use URI scheme that doesn't contain a period character
@@ -94,12 +96,18 @@ func redirectURIParts(u *url.URL) string {
 	case "":
 		return "not an absolute URI"
 	case "http", "https":
-		if u.Host == "" {
+		// Hostname, not Host: "http://:80/cb" has an authority, no host
+		// (RFC 9110 §4.2.1: such a URI MUST be rejected as invalid).
+		if u.Hostname() == "" {
 			return "no host"
 		}
 
 		if u.User != nil {
 			return "userinfo"
+		}
+
+		if port := u.Port(); port != "" && !inPortRange(port) {
+			return "a port outside 1-65535"
 		}
 	default:
 		if !strings.Contains(u.Scheme, ".") {
@@ -116,6 +124,14 @@ func redirectURIParts(u *url.URL) string {
 	}
 
 	return ""
+}
+
+// inPortRange reports whether the decimal port is a TCP port a URI may name:
+// 1 to 65535 (0 is reserved, RFC 6335 §6).
+func inPortRange(port string) bool {
+	n, err := strconv.Atoi(port)
+
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // isURIChar reports whether c may appear, unencoded, in an RFC 3986 URI:

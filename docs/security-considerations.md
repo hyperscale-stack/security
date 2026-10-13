@@ -406,9 +406,10 @@ keys by `kid` against a JWKS provider (static or remote).
   apps listen on an ephemeral port — and the code is bound to the URI
   requested. `http://localhost` gets no such variance (RFC 8252 §8.3
   recommends the IP literal). The registered URI a request resolves to must
-  pass `oauth2.ValidateRedirectURI` — absolute, no fragment, a host and no
-  userinfo for http(s), a private-use scheme holding a "." (RFC 8252 §8.4,
-  which also rules out `javascript:` and `data:`), a query naming no
+  pass `oauth2.ValidateRedirectURI` — absolute, no fragment, a host, no
+  userinfo and a port within 1–65535 for http(s), a private-use scheme
+  holding a "." (RFC 8252 §8.4, which also rules out `javascript:`, `data:`
+  and `urn:ietf:wg:oauth:2.0:oob`), a query naming no
   response parameter — or the request gets a bare 400, never a redirect
   (RFC 6749 §3.1.2.4); run the same function when registering clients.
   Responses keep the registered query byte for byte (RFC 6749 §3.1.2),

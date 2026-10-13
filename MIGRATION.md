@@ -1870,7 +1870,7 @@ port differed from the registered one, which RFC 8252 §7.3 requires.
 
 | | Before | After |
 | --- | --- | --- |
-| registered URI that `oauth2.ValidateRedirectURI` refuses: relative, with a fragment, http(s) without host or with userinfo, a private-use scheme without "." (`myapp:`, `javascript:`, `data:`), invalid escapes, a query naming `code`, `state`, `iss`, `error`, `error_description` or `error_uri` | redirected to | bare `400` "oauth2: invalid redirect_uri", never redirected |
+| registered URI that `oauth2.ValidateRedirectURI` refuses: relative, with a fragment, http(s) without host (`http://:80/cb`), with userinfo or a port outside 1–65535, a scheme without "." (`myapp:`, `javascript:`, `data:`, the out-of-band `urn:ietf:wg:oauth:2.0:oob`), invalid escapes, a query naming `code`, `state`, `iss`, `error`, `error_description` or `error_uri` | redirected to | bare `400` "oauth2: invalid redirect_uri", never redirected |
 | registered query | re-encoded, sorted, `;`-separated pairs dropped | kept byte for byte, the response parameters appended |
 | `http://127.0.0.1:{port}/…` / `http://[::1]:{port}/…` requested for a registered loopback IP URI | `400` unless the port matched exactly | accepted for any port 1–65535, the rest unchanged; the code is bound to the URI requested |
 | `http://localhost:{port}/…` | exact match | exact match (no variance, RFC 8252 §8.3) |
@@ -1880,8 +1880,10 @@ To migrate:
 1. Run `oauth2.ValidateRedirectURI` over every registered redirect URI —
    and at registration from now on — and fix what it refuses.
 2. Native apps register a reverse domain name scheme
-   (`com.example.app:/oauth2redirect`, RFC 8252 §7.1) instead of `myapp:`,
-   or a loopback IP literal instead of `localhost` to get port variance.
+   (`com.example.app:/oauth2redirect`, RFC 8252 §7.1) instead of `myapp:` —
+   and instead of the out-of-band `urn:ietf:wg:oauth:2.0:oob`, which RFC
+   8252 §7 does not keep — or a loopback IP literal instead of `localhost`
+   to get port variance.
 3. A registered query parameter named like a response parameter is
    renamed: the response would carry it twice (RFC 6749 §3.1).
 4. A loopback client exchanging a code sends, at `/token`, the redirect URI

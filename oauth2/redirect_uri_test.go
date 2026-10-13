@@ -34,6 +34,9 @@ func TestValidateRedirectURI(t *testing.T) {
 		"https://app.example/cb?State=x",
 		"https://app.example/cb?",
 		"https://app.example:8443/cb",
+		"https://app.example:1/cb",
+		"https://app.example:65535/cb",
+		"https://app.example:/cb",
 		"http://localhost:1337/callback",
 		"http://127.0.0.1:51004/cb",
 		"http://[::1]/cb",
@@ -54,6 +57,7 @@ func TestValidateRedirectURI(t *testing.T) {
 		relative = "not an absolute URI"
 		period   = "without a period"
 		host     = "no host"
+		port     = "a port outside 1-65535"
 		userinfo = "userinfo"
 		query    = "authorization response parameter"
 	)
@@ -74,6 +78,14 @@ func TestValidateRedirectURI(t *testing.T) {
 		{"urn:ietf:wg:oauth:2.0:oob", period},
 		{"http:/cb", host},
 		{"https://", host},
+		{"http://:80/cb", host},
+		{"https://:443/cb", host},
+		{"http://:/cb", host},
+		{"http://[]/cb", "invalid host"},
+		{"http://app.example:0/cb", port},
+		{"http://app.example:65536/cb", port},
+		{"http://app.example:99999/cb", port},
+		{"http://app.example:99999999999999999999/cb", port},
 		{"https://user@app.example/cb", userinfo},
 		{"https://user:pass@app.example/cb", userinfo},
 		{"https://app.example/a b", chars},
@@ -140,7 +152,7 @@ func TestAuthorizeRefusesAnInvalidRegisteredRedirectURI(t *testing.T) {
 
 	for _, uri := range []string{
 		"https://app.example/cb#section", "/relative/cb", "javascript:alert(1)", "myapp://cb",
-		"https://app.example/cb?state=fixed&code=static",
+		"https://app.example/cb?state=fixed&code=static", "http://:80/cb", "https://app.example:99999/cb",
 	} {
 		for _, named := range []bool{true, false} {
 			t.Run(uri, func(t *testing.T) {

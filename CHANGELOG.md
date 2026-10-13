@@ -476,10 +476,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (4096) and `oauth2.MaxClientIDLength` (255) document the bounds of the
   values the server keeps, echoes or looks up.
 - **`oauth2.ValidateRedirectURI`** (and `oauth2.ErrInvalidRedirectURI`)
-  checks a redirect URI at registration — absolute, no fragment, host and no
-  userinfo for http(s), "." in a private-use scheme (RFC 8252 §8.4), no
-  response parameter in its query; `/authorize` applies it to the URI a
-  request resolves to.
+  checks a redirect URI at registration — absolute, no fragment, a host, no
+  userinfo and a port within 1–65535 for http(s), "." in a private-use
+  scheme (RFC 8252 §8.4), no response parameter in its query; `/authorize`
+  applies it to the URI a request resolves to.
 - **`oauth2.AuthorizeConfig.TrustedRedirect`**: for a client it does not
   trust, the errors `/authorize` detects before the resource owner
   authenticated — and `prompt=none`-style refusals (`login_required`,
@@ -790,10 +790,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   asserting 302)** and lists `Allow: GET, POST` on its 405. See
   [MIGRATION.md](MIGRATION.md).
 - **OAuth2 registered redirect URIs are validated (breaking)**: one that
-  `oauth2.ValidateRedirectURI` refuses — relative, with a fragment, a
-  private-use scheme without a period such as `myapp:` or `javascript:`, a
-  query naming a response parameter — is answered with a bare 400, never
-  redirected to. See [MIGRATION.md](MIGRATION.md).
+  `oauth2.ValidateRedirectURI` refuses — relative, with a fragment, an
+  http(s) URI without host or with a port outside 1–65535, a scheme without
+  a period such as `myapp:`, `javascript:` or the out-of-band
+  `urn:ietf:wg:oauth:2.0:oob`, a query naming a response parameter — is
+  answered with a bare 400, never redirected to. See
+  [MIGRATION.md](MIGRATION.md).
 - **OAuth2 failed client authentications read alike**: every `401
   invalid_client` of `/token`, `/revoke` and `/introspect` carries the
   description "client authentication failed"; the reason ("unknown client",
