@@ -11,8 +11,11 @@ on:
 permissions:
   contents: read
 
+# A pull request keeps only its latest run. Every commit pushed to master gets
+# its own group, so that a run waiting behind another is never cancelled and
+# every master commit keeps a result.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -31,8 +34,8 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: "**/go.sum"
 
-      # golangci-lint, govulncheck and mockery, each built from its pinned
-      # module under tools/ and verified by that module's go.sum.
+      # golangci-lint, govulncheck, goveralls and mockery, each built from its
+      # pinned module under tools/ and verified by that module's go.sum.
       - name: Install the pinned tools
         run: make tools
 
@@ -52,37 +55,10 @@ jobs:
       - name: Lint all modules
         run: make lint
 
-      - name: Keep the coverage profile
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage
-          path: build/coverage.out
-          if-no-files-found: error
-          retention-days: 7
-
-  # The Coveralls uploader is third-party code that downloads its reporter
-  # binary at run time: it runs in a job of its own, away from the Go caches
-  # the build job saves, and a Coveralls outage never fails the build.
-  coverage:
-    name: Coverage (Coveralls)
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Fetch the coverage profile
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: coverage
-          path: build
-
-      - name: Upload to Coveralls
-        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
-        with:
-          file: build/coverage.out
-          format: golang
-          coverage-reporter-version: v0.6.22
-          fail-on-error: false
+      # goveralls, built from tools/goveralls, authenticates with the
+      # read-only workflow token; a Coveralls outage never fails the build.
+      - name: Upload the coverage to Coveralls
+        continue-on-error: true
+        env:
+          COVERALLS_TOKEN: ${{ github.token }}
+        run: make coveralls

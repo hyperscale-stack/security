@@ -14,8 +14,10 @@ on:
 permissions:
   contents: read
 
+# A pull request keeps only its latest run; every other run (master pushes,
+# the weekly scan) gets its own group and is never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

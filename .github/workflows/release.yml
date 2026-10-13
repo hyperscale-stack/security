@@ -77,8 +77,14 @@ jobs:
       - name: Lint all modules
         run: make lint
 
-      - name: Scan every module (govulncheck)
-        run: make vuln
+      # The released module's own code, outside the workspace: an advisory
+      # in another module or only reachable from tests does not block this
+      # release. The full scan (every module, tests included) is the
+      # govulncheck workflow, green on the release commit (docs/releasing.md).
+      - name: Scan the released module (govulncheck)
+        env:
+          DIR: ${{ steps.tag.outputs.dir }}
+        run: cd "$DIR" && GOWORK=off "$GITHUB_WORKSPACE/build/bin/govulncheck" ./...
 
   publish:
     name: Publish ${{ github.ref_name }}

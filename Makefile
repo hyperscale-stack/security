@@ -10,7 +10,7 @@ MODULES := $(shell find . -name go.mod -not -path '*/vendor/*' -not -path '*/nod
 # Development tools: one module per tool under tools/<name>, outside the
 # workspace so that their dependencies never reach a library go.mod, each
 # pinned and checksum-verified by its own go.mod and go.sum.
-TOOLS := golangci-lint govulncheck mockery
+TOOLS := golangci-lint govulncheck goveralls mockery
 
 .PHONY: all
 all: test
@@ -76,6 +76,13 @@ test: _build generate
 	@echo 'mode: atomic' > $(BUILD_DIR)/coverage.out
 	@cat $(BUILD_DIR)/coverage.body >> $(BUILD_DIR)/coverage.out
 	@rm -f $(BUILD_DIR)/*.cover $(BUILD_DIR)/coverage.body
+
+# Sends build/coverage.out to Coveralls with goveralls (tools/goveralls). CI
+# passes the workflow token as COVERALLS_TOKEN (goveralls' GitHub Actions
+# setup).
+.PHONY: coveralls
+coveralls: $(BIN_DIR)/goveralls
+	@$(BIN_DIR)/goveralls -coverprofile=$(BUILD_DIR)/coverage.out -service=github
 
 .PHONY: coverage
 coverage: $(BUILD_DIR)/coverage.out
