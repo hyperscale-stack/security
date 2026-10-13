@@ -18,7 +18,8 @@ import (
 
 // ErrBadFormat is returned by the [Extractor] when the Authorization header
 // carries a Basic scheme but the credentials are malformed (not base64,
-// missing colon, control characters, not UTF-8, too long, ...), and by the
+// missing colon, control, format or separator characters, not UTF-8, too
+// long, ...), and by the
 // [Authenticator] for a user-id or password it refuses before any lookup.
 // It is wrapped around [security.ErrInvalidCredentials] so error mappers
 // route it to 401 — and to prevent oracle attacks that distinguish
@@ -45,8 +46,14 @@ const (
 // It is strict: the credentials must use the base64 alphabet with canonical
 // padding (RFC 4648 §4, §3.5), the user-id and password must be valid UTF-8
 // without any control character (RFC 7617 §2 "MUST NOT contain any control
-// characters"; C1 controls included, RFC 8264 §9.12), and the decoded
-// user-pass is at most 3072 bytes. Malformed credentials are refused before
+// characters"; C1 controls included, RFC 8264 §9.12), format character
+// (Unicode Cf: zero-width joiner and space, soft hyphen, bidirectional
+// overrides, byte order mark, tags) or line or paragraph separator (Zl, Zp)
+// — after RFC 8264's FreeformClass, the base of the OpaqueString and
+// UsernameCasePreserved profiles of RFC 8265 that RFC 7617 §2.1 points to
+// — and the decoded user-pass is at most 3072 bytes.
+// Accented letters, emoji without a joiner and other ordinary non-ASCII
+// characters are accepted. Malformed credentials are refused before
 // they reach any [UserLoader] — they are never logged nor looked up. An
 // empty user-id or password is syntactically valid and let through (custom
 // authenticators accept API keys sent as `-u :KEY`); the [Authenticator]
@@ -112,19 +119,32 @@ func decodeCredentials(payload string) (string, string, error) {
 }
 
 // checkUserPass applies the rules the [Extractor] and the [Authenticator]
-// share: UTF-8 without any control character (RFC 7617 §2, RFC 8264 §9.12)
-// and a bounded length. The reason never quotes the input.
+// share: UTF-8 without any disallowed character and a bounded length. The
+// reason never quotes the input.
 func checkUserPass(username, password string) error {
 	switch {
 	case len(username)+1+len(password) > maxUserPassLength:
 		return malformed("credentials longer than 3072 bytes")
 	case !utf8.ValidString(username) || !utf8.ValidString(password):
 		return malformed("credentials are not UTF-8")
-	case strings.IndexFunc(username, unicode.IsControl) >= 0 || strings.IndexFunc(password, unicode.IsControl) >= 0:
-		return malformed("control character in the credentials")
+	case strings.IndexFunc(username, disallowed) >= 0 || strings.IndexFunc(password, disallowed) >= 0:
+		return malformed("disallowed character in the credentials")
 	}
 
 	return nil
+}
+
+// disallowed reports whether r may not appear in a user-id or a password: a
+// control character (C0, DEL, C1: RFC 7617 §2, RFC 8264 §9.12), a format
+// character (Cf) or a line or paragraph separator (Zl, Zp). RFC 8264's
+// FreeformClass disallows the separators and the default-ignorable code
+// points (§9.13), and admits the zero-width joiner and non-joiner only after
+// a virama (CONTEXTJ): every format character is refused here, those two
+// included. They are invisible or reorder the text around them — a user-id
+// that displays as another one would reach logs and lookups — and are
+// refused alike, with one error.
+func disallowed(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // malformed wraps ErrBadFormat and security.ErrInvalidCredentials.

@@ -793,8 +793,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   [MIGRATION.md](MIGRATION.md).
 - `basic` parses credentials strictly (RFC 7617 §2): base64 alphabet with
   canonical padding, user-id and password in UTF-8 without any control
-  character, at most 3072 bytes, several spaces allowed after the scheme,
-  and `Basic` without credentials is malformed (it used to be ignored).
+  character, format character (Unicode Cf: zero-width joiner, soft hyphen,
+  bidirectional overrides, byte order mark…) or line or paragraph separator
+  (after RFC 8264's FreeformClass, the base of RFC 8265's OpaqueString), at
+  most 3072 bytes, several spaces allowed after the scheme, and `Basic`
+  without credentials is malformed (it used to be ignored). **Breaking:** an
+  account whose password contains such a character can no longer sign in
+  with Basic — reset its password.
   `basic.Authenticator` applies the same checks — a form login building the
   value with `basic.New` included — and also refuses an empty user-id
   (`ErrBadFormat`, 401) before any lookup; the `Extractor` still lets an
@@ -1741,11 +1746,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a flood of Basic attempts can no longer exhaust memory (19 MiB per
   default Argon2id verification).
 - The Basic extractor forwarded control characters (NUL, CR LF, ANSI escape
-  sequences) and invalid UTF-8 in the user-id to the `UserLoader` — a log
-  injection vector into the application's lookups and logs — and its
-  lenient base64 decoding skipped CR LF inside the credentials. Malformed
-  credentials are now refused before any lookup, by the extractor and by
-  the `Authenticator` alike.
+  sequences), invisible format characters (zero-width joiner and space,
+  right-to-left override) and invalid UTF-8 in the user-id to the
+  `UserLoader` — a log injection and spoofing vector into the application's
+  lookups and logs — and its lenient base64 decoding skipped CR LF inside
+  the credentials. Malformed credentials are now refused before any lookup,
+  by the extractor and by the `Authenticator` alike.
 - `session.NewCodec` accepted an empty or low-entropy key and derived the
   AES key with a bare SHA-256: an unset environment variable let anyone mint
   a cookie for any subject, and a passphrase key could be brute-forced

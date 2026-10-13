@@ -72,12 +72,19 @@ What remains measurable, and how to close it:
 - Under overload an attempt that gets no verification slot answers 503
   (`ErrUnavailable`) whatever the account, so overload reveals nothing.
 
-Malformed credentials — control characters, invalid UTF-8, more than 3072
+Malformed credentials — control characters, format characters (Unicode Cf:
+zero-width joiner and space, soft hyphen, bidirectional overrides, byte
+order mark), line and paragraph separators, invalid UTF-8, more than 3072
 bytes, an empty user-id — are refused before the loader runs, without a
-verification: a property of the input, not of an account. The extractor and
-the `Authenticator` apply the same rules, so a form login that builds the
-value with `basic.New` is checked too, and a control character never reaches
-the application's lookups and logs (log injection).
+verification and with one error: a property of the input, not of an
+account. The extractor and the `Authenticator` apply the same rules, so a
+form login that builds the value with `basic.New` is checked too, and such
+a character never reaches the application's lookups and logs (log
+injection, a user-id that displays as another one). RFC 8264's
+FreeformClass, the base of RFC 8265's OpaqueString profile for passwords,
+disallows them too (but for the zero-width joiner and non-joiner after a
+virama, which this library refuses as well): refuse them when a password is
+set, or the account cannot sign in with Basic (reset its password).
 
 ### Online guessing and hashing cost
 

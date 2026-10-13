@@ -9,11 +9,11 @@
 // validate the username/password pair against a backing store.
 //
 // The Extractor parses RFC 7617 credentials strictly (canonical base64, UTF-8
-// without control characters, bounded length). The Authenticator checks the
-// same rules — form logins can build the value with New — then spends exactly
-// one password verification on every attempt, unknown accounts included, so
-// that the response time reveals nothing; at most runtime.GOMAXPROCS(0)
-// verifications run at once.
+// without control, format or separator characters, bounded length). The
+// Authenticator checks the same rules — form logins can build the value with
+// New — then spends exactly one password verification on every attempt,
+// unknown accounts included, so that the response time reveals nothing; at
+// most runtime.GOMAXPROCS(0) verifications run at once.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

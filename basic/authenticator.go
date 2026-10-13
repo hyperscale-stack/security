@@ -37,10 +37,10 @@ type AuthorityResolver func(PasswordUser) []string
 // [password.Hasher], checks the account's lifecycle flags, then returns the
 // authenticated [Authentication].
 //
-// Credentials that are malformed — control characters, invalid UTF-8, more
-// than 3072 bytes, an empty user-id — are refused with [ErrBadFormat]
-// before any lookup: a form login building the [Authentication] with [New]
-// gets the same checks as the [Extractor].
+// Credentials that are malformed — control, format (Cf) or separator (Zl,
+// Zp) characters, invalid UTF-8, more than 3072 bytes, an empty user-id —
+// are refused with [ErrBadFormat] before any lookup: a form login building
+// the [Authentication] with [New] gets the same checks as the [Extractor].
 //
 // Every attempt with well-formed credentials runs exactly one password
 // verification, whatever the account: an unknown user, a loader failure or

@@ -476,6 +476,11 @@ PKCE. Not supported, and refused where a provider could select them:
 - **UTF-8 only** — Basic credentials must be UTF-8 (the challenge advertises
   `charset="UTF-8"`, RFC 7617 §2.1); clients sending ISO-8859-1 non-ASCII
   credentials are refused. User-ids and passwords are not normalized.
+- **Format and separator characters refused** — a password containing a
+  Unicode format character (an emoji sequence joined with U+200D, a soft
+  hyphen, a byte order mark) or a line or paragraph separator no longer
+  signs in with Basic: reset it, and refuse these characters when passwords
+  are set (RFC 8265 OpaqueString).
 
 ## Passwords
 

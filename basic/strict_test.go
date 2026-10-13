@@ -54,6 +54,11 @@ func TestExtractorRefusesMalformedCredentials(t *testing.T) {
 		"missing colon":                    basicHeader("alicepassword"),
 	}
 
+	for name, r := range invisibleOrSeparator {
+		cases[name+" in the user-id"] = basicHeader("ali" + r + "ce:pw")
+		cases[name+" in the password"] = basicHeader("alice:p" + r + "w")
+	}
+
 	for name, header := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -71,6 +76,48 @@ func TestExtractorRefusesMalformedCredentials(t *testing.T) {
 	}
 }
 
+// invisibleOrSeparator lists format characters (Unicode Cf) and line and
+// paragraph separators (Zl, Zp): RFC 8264's FreeformClass — the base of the
+// OpaqueString and UsernameCasePreserved profiles RFC 7617 §2.1 points to —
+// disallows them. They are invisible or reorder the text around them, so a
+// user-id that displays as another one would reach logs and lookups.
+var invisibleOrSeparator = map[string]string{
+	"ZERO WIDTH JOINER U+200D":        "\u200d",
+	"ZERO WIDTH SPACE U+200B":         "\u200b",
+	"BYTE ORDER MARK U+FEFF":          "\ufeff",
+	"SOFT HYPHEN U+00AD":              "\u00ad",
+	"RIGHT-TO-LEFT OVERRIDE U+202E":   "\u202e",
+	"LEFT-TO-RIGHT ISOLATE U+2066":    "\u2066",
+	"TAG LATIN CAPITAL LETTER A":      "\U000E0041",
+	"LINE SEPARATOR U+2028 (Zl)":      "\u2028",
+	"PARAGRAPH SEPARATOR U+2029 (Zp)": "\u2029",
+}
+
+// Decision on review nit 6: a format character or a separator is refused
+// like a control character — the same error, so the refusals cannot be
+// told apart, even in the server's logs.
+func TestExtractorRefusesInvisibleCharactersLikeControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	extract := func(userPass string) error {
+		c := newCarrier()
+		c.Set("Authorization", basicHeader(userPass))
+
+		_, err := basic.NewExtractor().Extract(context.Background(), c)
+
+		return err
+	}
+
+	control := extract("al\x00ice:pw")
+	require.Error(t, control)
+
+	for name, r := range invisibleOrSeparator {
+		err := extract("al" + r + "ice:pw")
+		require.Error(t, err, name)
+		assert.Equal(t, control.Error(), err.Error(), name)
+	}
+}
+
 func TestExtractorAcceptsRFC7617Credentials(t *testing.T) {
 	t.Parallel()
 
@@ -85,6 +132,10 @@ func TestExtractorAcceptsRFC7617Credentials(t *testing.T) {
 		{"several spaces after the scheme", "Basic    " + base64.StdEncoding.EncodeToString([]byte("bob:pw")), "bob", "pw"},
 		{"scheme in another case", "bASIC " + base64.StdEncoding.EncodeToString([]byte("bob:pw")), "bob", "pw"},
 		{"3072-byte user-pass", basicHeader("u:" + strings.Repeat("p", 3070)), "u", strings.Repeat("p", 3070)},
+		{"accented password", basicHeader("zoë:pässwörd"), "zoë", "pässwörd"},
+		{"emoji without a joiner", basicHeader("alice:🔑🚀 ok"), "alice", "🔑🚀 ok"},
+		{"emoji with a variation selector (Mn)", basicHeader("alice:I \u2764\ufe0f Go"), "alice", "I \u2764\ufe0f Go"},
+		{"CJK and no-break space (Zs)", basicHeader("用户:密码\u00a0一"), "用户", "密码\u00a0一"},
 	}
 
 	for _, c := range cases {
@@ -131,7 +182,7 @@ func TestExtractorLeavesOtherSchemes(t *testing.T) {
 func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 	t.Parallel()
 
-	for name, in := range map[string]basic.Authentication{
+	cases := map[string]basic.Authentication{
 		"NUL in the user-id":         basic.New("al\x00ice", "pw"),
 		"CR LF in the user-id":       basic.New("a\r\nb", "pw"),
 		"invalid UTF-8 user-id":      basic.New("\xff", "pw"),
@@ -140,7 +191,14 @@ func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 		"empty user-id":              basic.New("", "pw"),
 		"user-pass over 3072 bytes":  basic.New("alice", strings.Repeat("p", 3067)),
 		"user-pass over 3072 (user)": basic.New(strings.Repeat("u", 3072), ""),
-	} {
+	}
+
+	for name, r := range invisibleOrSeparator {
+		cases[name+" in the user-id"] = basic.New("ali"+r+"ce", "pw")
+		cases[name+" in the password"] = basic.New("alice", "p"+r+"w")
+	}
+
+	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -155,6 +213,24 @@ func TestAuthenticatorRefusesMalformedCredentialsBeforeTheLoader(t *testing.T) {
 			assert.False(t, out.IsAuthenticated())
 			assert.Empty(t, h.calls(), "nor does the hasher")
 		})
+	}
+}
+
+// Ordinary non-ASCII credentials still sign in through the Authenticator
+// (form logins): accented letters, emoji without a joiner, a variation
+// selector, CJK, a no-break space.
+func TestAuthenticatorAcceptsNonASCIICredentials(t *testing.T) {
+	t.Parallel()
+
+	for _, pw := range []string{"pässwörd", "🔑🚀 ok", "I \u2764\ufe0f Go", "密码\u00a0一"} {
+		l := basic.NewMockUserLoader(t)
+		l.EXPECT().LoadByUsername(mock.Anything, "zoë").Return(mockUser(t, account{subject: "zoë", hash: "h"}), nil).Once()
+		h := &recordingHasher{always: true}
+
+		out, err := basic.NewAuthenticator(l, h).Authenticate(context.Background(), basic.New("zoë", pw))
+
+		require.NoError(t, err, pw)
+		assert.True(t, out.IsAuthenticated(), pw)
 	}
 }
 
@@ -200,8 +276,8 @@ func TestAuthenticationNameIsTheSubjectOnceAuthenticated(t *testing.T) {
 
 // FuzzExtractor: whatever the header, the extractor never returns both a
 // value and an error, never an authenticated value, and only accepts Basic
-// credentials whose user-id and password are UTF-8 without control
-// characters.
+// credentials whose user-id and password are UTF-8 without control, format
+// or separator characters (Cc, Cf, Zl, Zp).
 func FuzzExtractor(f *testing.F) {
 	f.Add("Basic YWxpY2U6c2VjcmV0")
 	f.Add("basic Og==")
@@ -209,6 +285,7 @@ func FuzzExtractor(f *testing.F) {
 	f.Add("Basic YR==")
 	f.Add("Bearer abc")
 	f.Add(basicHeader("al\x00ice:pw"))
+	f.Add(basicHeader("ali\u200dce:p\u2028w"))
 
 	e := basic.NewExtractor()
 
@@ -239,7 +316,9 @@ func FuzzExtractor(f *testing.F) {
 		}
 
 		for _, s := range []string{ba.Username(), ba.Password()} {
-			if !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+			if !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool {
+				return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+			}) >= 0 {
 				t.Fatalf("accepted %q from %q", s, header)
 			}
 		}

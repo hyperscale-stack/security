@@ -2097,8 +2097,9 @@ To migrate:
 
 ### `basic`: credentials are parsed strictly; `Name()` is the authenticated subject
 
-The Basic extractor forwarded control characters and invalid UTF-8 to the
-`UserLoader` (log injection), skipped CR LF inside the base64 credentials,
+The Basic extractor forwarded control characters, invisible format
+characters and invalid UTF-8 to the `UserLoader` (log injection, a user-id
+that displays as another one), skipped CR LF inside the base64 credentials,
 and `Authentication.Name()` returned the user-id as typed — `ALICE` for the
 subject `alice`, or a password typed in the username field — although
 `Name` must be safe to log.
@@ -2106,6 +2107,7 @@ subject `alice`, or a password typed in the username field — although
 | Request / value | Before | After |
 | --- | --- | --- |
 | Control character (C0, DEL, C1) in the user-id or password | forwarded to the loader | 401, `ErrBadFormat`, the loader is not called |
+| Format character (Unicode Cf: U+200D zero-width joiner, U+200B, U+00AD soft hyphen, U+202E and the other bidirectional controls, U+FEFF, tags) or line/paragraph separator (U+2028, U+2029) in the user-id or password | forwarded | 401, `ErrBadFormat`, the same error as a control character |
 | Invalid UTF-8 (e.g. ISO-8859-1 credentials) | forwarded | 401 (the Basic challenge advertises `charset="UTF-8"`) |
 | CR LF or spaces inside the base64, unpadded or non-canonical base64 | decoded | 401 |
 | user-pass longer than 3072 bytes | forwarded | 401 |
@@ -2117,11 +2119,19 @@ subject `alice`, or a password typed in the username field — although
 
 To migrate:
 
-1. Clients must send UTF-8 credentials (RFC 7617 §2.1) without control
-   characters.
-2. Read the typed user-id with `Username()`, the authenticated identity with
+1. Clients must send UTF-8 credentials (RFC 7617 §2.1) without control,
+   format or separator characters. Accented letters, emoji without a
+   joiner, variation selectors and no-break spaces are still accepted.
+2. **An account whose password contains a format or separator character —
+   an emoji sequence joined with U+200D, a soft hyphen pasted from a
+   document, a byte order mark — can no longer sign in with Basic** (form
+   logins through `basic.Authenticator` included): reset its password. When
+   a password is set, refuse these characters (RFC 8265's OpaqueString
+   disallows them, but for the zero-width joiners after a virama), so that
+   no new account gets locked out.
+3. Read the typed user-id with `Username()`, the authenticated identity with
    `Name()` or `Principal().Subject()`; log `Name()`, never `Username()`.
-3. A custom authenticator consuming `basic.Authentication` with an empty
+4. A custom authenticator consuming `basic.Authentication` with an empty
    user-id (API keys) keeps working: only `basic.Authenticator` refuses it.
 
 ### `session`: strong keys, cookies bound to their name and purpose, an enforced absolute lifetime
