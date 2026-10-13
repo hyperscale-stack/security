@@ -2185,7 +2185,7 @@ that browsers silently refused.
 | `SameSite=None` without `Secure` | emitted, dropped by browsers | `NewManager` panics |
 | `WithTTL(d ≤ 0)`, `WithIdleTimeout(d < 0)`, nil codec | accepted | `NewManager` panics |
 | Cookie name + value over 4096 bytes | emitted, dropped by browsers | `ErrCookieTooLarge`, nothing written |
-| Several cookies of the session's name | the first one | the only valid session; none when they hold two or more different valid sessions |
+| Several cookies of the session's name | the first one | the only valid one; none when two or more open as valid sessions, copies of one session included |
 
 To migrate:
 
@@ -2202,6 +2202,14 @@ To migrate:
    documentation and the session-web example (sign-in form protected
    through a session opened for the form, `net/http`'s
    `CrossOriginProtection` in front of the handlers).
+5. After changing `WithDomain` or `WithPath` while the cookie keeps its
+   name (an explicit name, or `__Secure-session` from one `Domain` or
+   `Path` to another), browsers keep the cookie of the earlier `Domain` or
+   `Path` next to the new one: two valid sessions, so no session, until the
+   old cookie expires. Clear each old variant once, at sign-in for
+   instance, with a `Set-Cookie` of the same name, the old `Domain` and
+   `Path` and `Max-Age=0` — in Go, `http.Cookie{Name: name, Domain:
+   oldDomain, Path: oldPath, MaxAge: -1, Secure: true}`.
 
 ### `session`, `basic`, `bearer`: credentials stay out of `fmt`, `slog` and JSON; the bearer token is dropped once verified
 

@@ -298,9 +298,13 @@ func (m *Manager) Login(ctx context.Context, c security.Carrier, principal secur
 // deadline — the earlier of its ExpiresAt and CreatedAt + the Manager's TTL
 // — or its idle timeout. A validator ([WithValidator]) then decides; an
 // error wrapping [security.ErrUnavailable] means the session could not be
-// checked: answer 503, do not sign the user out. On success Get refreshes
-// LastAccessed in memory but does NOT rewrite the cookie — call
-// [Manager.Touch] when sliding expiry is desired.
+// checked: answer 503, do not sign the user out. When several cookies of
+// the session's name open as valid sessions — copies of one session
+// included — the request is ambiguous and Get returns [ErrNoSession]: after
+// changing [WithDomain] or [WithPath] while the cookie keeps its name,
+// clear each cookie of the earlier Domain or Path once with Max-Age=0. On
+// success Get refreshes LastAccessed in memory but does NOT rewrite the
+// cookie — call [Manager.Touch] when sliding expiry is desired.
 func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "session.Manager.Get")
 	defer span.End()
@@ -323,11 +327,13 @@ func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error)
 
 // pick returns the one valid session among the cookies of the session's
 // name. Several cookies of one name come from a cookie tossed by a sibling
-// host or a more specific path, or from a stale configuration: when they
-// hold different valid sessions the request is ambiguous and has none — a
-// tossed cookie can deny a session, never swap it. Copies of the same
-// session (same ID), cookies that do not open and expired ones do not make
-// it ambiguous. An unavailable validator ends the search.
+// host or a more specific path, or from a stale configuration: when more
+// than one is a valid session the request is ambiguous and has none — a
+// tossed cookie can deny a session, never swap it. Copies of one session
+// count as several: they can differ (a copy planted before a sign-in
+// without Rotate), and nothing tells which one the browser meant. Cookies
+// that do not open or are expired do not count. An unavailable validator
+// ends the search.
 func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, error) {
 	if len(found) == 0 {
 		return nil, ErrNoSession
@@ -346,9 +352,9 @@ func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, err
 		s, err := m.load(ctx, cookie.Value)
 
 		switch {
-		case err == nil && chosen != nil && s.ID != chosen.ID:
+		case err == nil && chosen != nil:
 			return nil, fmt.Errorf("%w: several valid session cookies", ErrNoSession)
-		case err == nil && chosen == nil:
+		case err == nil:
 			chosen = s
 		case errors.Is(err, security.ErrUnavailable):
 			return nil, err

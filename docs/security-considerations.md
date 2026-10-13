@@ -1182,11 +1182,17 @@ session store to compromise or scale.
   matched case-insensitively, like browsers do), `SameSite=None` without
   `Secure`.
 - **Shadowing cookies** — when a request carries several cookies of the
-  session's name and they hold more than one valid session, it has no
+  session's name and more than one opens as a valid session, it has no
   session: a tossed cookie can deny a session (until it expires), never
-  swap it. Expired or undecodable ones do not count, nor do copies of the
-  same session. With the default `__Host-` name no other host can toss one
-  at all.
+  swap it. Copies of one session count as several — they can differ, as a
+  copy planted before a sign-in without `Rotate` does — while expired or
+  undecodable ones do not count. With the default `__Host-` name no other
+  host can toss one at all. Stale duplicates have the same effect: after
+  changing `WithDomain` or `WithPath` while the cookie keeps its name,
+  browsers keep the cookie of the earlier `Domain` or `Path` next to the
+  new one, so clear each old variant once with `Max-Age=0` — a
+  `Set-Cookie` of the same name with the old `Domain` and `Path` (in Go,
+  `http.Cookie{…, MaxAge: -1}`).
 - **Cookie only** — the `Manager` reads the session from the request's
   `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
   the URL nor from a header named like the cookie: a link carrying a session

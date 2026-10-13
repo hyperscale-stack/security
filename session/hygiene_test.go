@@ -232,12 +232,21 @@ func TestManagerRefusesAmbiguousSessionCookies(t *testing.T) {
 	_, err = request(victim, attacker)
 	require.ErrorIs(t, err, session.ErrNoSession, "in either order")
 
+	// Decision Q1, literal rule: copies of one session are ambiguous too.
+	// They need not be equal — a copy planted before a sign-in without
+	// Rotate carries the attacker's values under the victim's ID — and the
+	// Manager cannot tell which one the browser meant.
+	_, err = request(victim, victim)
+	require.ErrorIs(t, err, session.ErrNoSession, "two copies of one session: ambiguous")
+
+	_, err = request(victim, resealed(t, mgr, victim))
+	require.ErrorIs(t, err, session.ErrNoSession, "the same ID with other values: ambiguous")
+
 	for name, values := range map[string][]string{
-		"the same session twice": {victim, victim},
-		"garbage first":          {"garbage", victim},
-		"garbage last":           {victim, "garbage"},
-		"expired first":          {stale, victim},
-		"another key's first":    {v2Cookie(t, randomKey(t), 2, 2, name, "", samplePayload(t, now)), victim},
+		"garbage first":       {"garbage", victim},
+		"garbage last":        {victim, "garbage"},
+		"expired first":       {stale, victim},
+		"another key's first": {v2Cookie(t, randomKey(t), 2, 2, name, "", samplePayload(t, now)), victim},
 	} {
 		s, err := request(values...)
 		require.NoError(t, err, name)
@@ -252,6 +261,28 @@ func TestManagerRefusesAmbiguousSessionCookies(t *testing.T) {
 
 	_, err = request("garbage", "garbage", "garbage", "garbage", victim)
 	require.ErrorIs(t, err, session.ErrNoSession, "more than four cookies of one name are not inspected")
+}
+
+// resealed returns a cookie of the session sealed in value — same ID — with
+// another value written into it.
+func resealed(t *testing.T, mgr *session.Manager, value string) string {
+	t.Helper()
+
+	in := newCarrier()
+	in.cookies[mgr.CookieName()] = value
+
+	s, err := mgr.Get(context.Background(), in)
+	require.NoError(t, err)
+
+	s.Values["role"] = "admin"
+
+	out := newCarrier()
+	require.NoError(t, mgr.Touch(context.Background(), out, s))
+
+	copied := out.replay().cookies[mgr.CookieName()]
+	require.NotEqual(t, value, copied)
+
+	return copied
 }
 
 // Audit §9 surviving mutant: the deletion cookie's Max-Age was never
