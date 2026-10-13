@@ -134,9 +134,18 @@ storage layer, so apply the same redaction rules you apply to your logs.
 
 | Span                                   | When                                   | Attributes                                                                       | Error status                                              |
 | --------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `security.Engine.Process`               | `Engine.Process` — extract + authenticate | `security.extractors.count` (int), `security.authenticated` (bool)                | `ErrNoExtractor`, extractor error, or manager error        |
-| `security.Manager.Authenticate`         | `Manager.Authenticate` — chain authenticators | `security.authenticators.count` (int), `security.authenticated` (bool, on success), `security.authenticator.name` (string, on success); event `authenticator.try` per candidate | `ErrUnsupportedCredential`, `ErrAuthenticatorRefused`      |
-| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string) | `ErrAccessDenied` when the final decision is not Grant     |
+| `security.Engine.Process`               | `Engine.Process` — extract + authenticate | `security.extractors.count` (int), `security.authenticated` (bool); `error.type` (string, on failure) | `ErrNoExtractor`, extractor error, or manager error        |
+| `security.Manager.Authenticate`         | `Manager.Authenticate` — chain authenticators | `security.authenticators.count` (int), `security.authenticated` (bool, on success), `security.authenticator.name` (string, on success); event `authenticator.try` per candidate; `error.type` (string, on failure) | `ErrUnsupportedCredential`, `ErrAuthenticatorRefused`      |
+| `security.AccessDecisionManager.Decide` | `AccessDecisionManager.Decide`          | `security.strategy` (string), `security.attributes` (string, joined), `security.decision` (string); `security.attributes.unsupported` (int, when an attribute is supported by no voter); `error.type` (string, on denial) | `ErrAccessDenied` when the final decision is not Grant     |
+
+A failing core span records **the class of its error, never the error
+text**: the status description and the OpenTelemetry `error.type` attribute
+are `security.ErrorClass(err)` — `invalid_credentials`, `token_expired`,
+`unavailable`, `access_denied`, … or `_OTHER` for an error that wraps no
+security sentinel — and no `exception` event is added. The error text can
+hold user input (a username, a password typed in the username field) and
+the wrapped errors of your stores; it reaches only the caller, which may log
+it server-side. `error.type` is not set on success.
 
 `security.principal.subject` is a **reserved** attribute key. It is not
 emitted by default — subject identifiers are PII and high-cardinality. Wire
@@ -146,11 +155,18 @@ it yourself only behind a deliberate, low-cardinality (hashed) opt-in.
 
 | Span                | When                          | Attributes                                                          | Error status            |
 | ------------------- | ----------------------------- | -------------------------------------------------------------------- | ----------------------- |
-| `httpsec.Middleware` | Per request through `Middleware` | `http.method` (string), `http.route` (string), `security.handled` (bool) | inherited from the core |
+| `httpsec.Middleware` | Per request through `Middleware` | `http.request.method` (string), `http.route` (string, when known), `security.handled` (bool) | inherited from the core |
 
 `httpsec.Middleware` is the parent span of the core `security.Engine.*`
 spans for that request. `httpsec.Authorize` does **not** open its own span —
 it delegates to `security.AccessDecisionManager.Decide`.
+
+Both HTTP attributes follow the OpenTelemetry semantic conventions and carry
+no client-chosen value: `http.request.method` is one of the RFC 9110 / RFC
+5789 methods, matched exactly, or `_OTHER` (the original method is left to
+the server span of `otelhttp`); `http.route` is the path template of the
+`ServeMux` pattern that routed the request (`/items/{id}`) — set only when
+the middleware runs inside a route, never the raw path.
 
 ### gRPC — `github.com/hyperscale-stack/security/grpc`
 
@@ -160,7 +176,9 @@ it delegates to `security.AccessDecisionManager.Decide`.
 | `grpcsec.Authorize`    | `UnaryAuthorize` / `StreamAuthorize`            | none directly — delegates to `security.AccessDecisionManager.Decide` | inherited from the core |
 
 `grpcsec` deliberately does **not** open an `rpc` span — that belongs to
-`otelgrpc`, which you compose alongside these interceptors.
+`otelgrpc`, which you compose alongside these interceptors. `rpc.method` is
+the full method gRPC routed the call to; behind a `grpc.UnknownServiceHandler`
+it is the name the client sent.
 
 ### ConnectRPC — `github.com/hyperscale-stack/security/connectrpc`
 
@@ -222,7 +240,9 @@ serving cached metadata opens no span: only downloads do.
 
 No span attribute ever carries a secret: cleartext passwords, access or
 refresh tokens, authorization codes, client secrets, raw session IDs, or
-SAML assertions, NameIDs, RelayState handles and binding cookies.
+SAML assertions, NameIDs, RelayState handles and binding cookies. The core,
+`session` and `samlsp` spans never record an error message either: only its
+class.
 Where correlation is genuinely needed, the value is hashed first
 (`session.id_hash`). When you add your own instrumentation around this
 library, keep the same rule.

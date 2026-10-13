@@ -10,28 +10,39 @@ import (
 )
 
 // mapCarrier is a minimal security.Carrier for the session tests. It models
-// a browser cookie jar: cookies set via Add("Set-Cookie", …) on one
-// "response" are parsed and replayed as readable cookie values on the next
-// "request" via replay().
+// a browser: request header fields (Get/Values) and request cookies
+// (CookiesNamed, the accessor the Manager reads its cookie through) are
+// separate, and cookies set via Add("Set-Cookie", …) on one "response" are
+// replayed as request cookies on the next "request" via replay().
 type mapCarrier struct {
-	// cookies are the request-side cookies the Manager reads via Get(name).
+	// headers are the request header fields.
+	headers map[string]string
+	// cookies are the request cookies.
 	cookies map[string]string
 	// setCookies are the Set-Cookie headers the Manager staged via Add.
 	setCookies []string
 }
 
 func newCarrier() *mapCarrier {
-	return &mapCarrier{cookies: map[string]string{}}
+	return &mapCarrier{headers: map[string]string{}, cookies: map[string]string{}}
 }
 
 func (c *mapCarrier) Get(key string) string {
-	// The session Manager only ever reads cookies by name.
-	return c.cookies[key]
+	return c.headers[key]
 }
 
 func (c *mapCarrier) Values(key string) []string {
-	if v, ok := c.cookies[key]; ok {
+	if v, ok := c.headers[key]; ok {
 		return []string{v}
+	}
+
+	return nil
+}
+
+// CookiesNamed implements session.CookieReader.
+func (c *mapCarrier) CookiesNamed(name string) []*http.Cookie {
+	if v, ok := c.cookies[name]; ok {
+		return []*http.Cookie{{Name: name, Value: v}}
 	}
 
 	return nil

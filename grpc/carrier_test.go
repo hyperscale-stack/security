@@ -26,6 +26,7 @@ func TestCarrierReads(t *testing.T) {
 	assert.Equal(t, "Bearer one", c.Get("Authorization"))
 	assert.Equal(t, []string{"Bearer one", "Bearer two"}, c.Values("Authorization"))
 	assert.Empty(t, c.Values("x-absent"))
+	assert.Empty(t, c.Get("x-absent"))
 }
 
 func TestCarrierWritesResponseMetadata(t *testing.T) {

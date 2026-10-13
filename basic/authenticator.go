@@ -15,7 +15,10 @@ import (
 // AuthorityResolver maps a [PasswordUser] to the authorities (roles, scopes,
 // claims) attached to the resulting [security.Authentication]. The default
 // resolver returns nil; applications that ship role-based authorization
-// provide one that reads the authorities from the user record.
+// provide one that reads the authorities from the user record. Name roles
+// [security.RolePrefix] + role ("ROLE_ADMIN") and scopes one
+// [security.ScopePrefix] + scope authority each ("scope:read"): that is
+// what voter.HasRole and voter.HasScope match.
 type AuthorityResolver func(PasswordUser) []string
 
 // Authenticator implements [security.Authenticator] for the HTTP Basic
@@ -24,7 +27,10 @@ type AuthorityResolver func(PasswordUser) []string
 // authenticated [Authentication].
 //
 // Errors are always wrapped in [security.ErrInvalidCredentials] to avoid
-// account-enumeration via response-time / response-code analysis. Detailed
+// account-enumeration via response-time / response-code analysis — but a
+// [UserLoader] error wrapping [security.ErrUnavailable] keeps it, and
+// [security.ErrorClass] ranks the outage first: a user store that is down
+// is answered 503 / Unavailable for every username, not refused. Detailed
 // causes remain reachable through errors.As / errors.Is for server-side
 // telemetry only — do NOT mirror them in the client response.
 type Authenticator struct {
@@ -79,8 +85,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 	if err != nil {
 		// Loader-level errors (db down, unknown user, ...) collapse to a
 		// single ErrInvalidCredentials at the client boundary. The original
-		// error stays in the chain for observability.
-		return auth, fmt.Errorf("basic: load user %q: %w (%w)", in.Username(), err, security.ErrInvalidCredentials)
+		// error stays in the chain for observability; the typed username
+		// does not (it can be a password typed in the wrong field).
+		return auth, fmt.Errorf("basic: load user: %w (%w)", err, security.ErrInvalidCredentials)
 	}
 
 	if user == nil {

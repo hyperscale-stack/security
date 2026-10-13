@@ -32,8 +32,6 @@ func dialBufconn(
 ) healthpb.HealthClient {
 	t.Helper()
 
-	lis := bufconn.Listen(1 << 20)
-
 	var serverOpts []grpc.ServerOption
 	if unary != nil {
 		serverOpts = append(serverOpts, grpc.UnaryInterceptor(unary))
@@ -42,6 +40,15 @@ func dialBufconn(
 	if stream != nil {
 		serverOpts = append(serverOpts, grpc.StreamInterceptor(stream))
 	}
+
+	return dialWithOptions(t, serverOpts...)
+}
+
+// dialWithOptions is dialBufconn for a server built from server options.
+func dialWithOptions(t *testing.T, serverOpts ...grpc.ServerOption) healthpb.HealthClient {
+	t.Helper()
+
+	lis := bufconn.Listen(1 << 20)
 
 	srv := grpc.NewServer(serverOpts...)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
@@ -93,7 +100,11 @@ func (a fakeAuth) Name() string                  { return a.pr.Subject() }
 type tokenExtractor struct{}
 
 func (tokenExtractor) Extract(_ context.Context, c security.Carrier) (security.Authentication, error) {
-	v := c.Get("authorization")
+	v, err := security.SingleValue(c, "authorization")
+	if err != nil {
+		return nil, err //nolint:wrapcheck // test double
+	}
+
 	if v == "" {
 		return nil, nil
 	}

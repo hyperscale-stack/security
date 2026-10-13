@@ -47,6 +47,13 @@ func TestWithAuthenticationNilClearsTheSlot(t *testing.T) {
 
 	assert.False(t, ok)
 	assert.Equal(t, security.Anonymous(), got)
+
+	// A typed nil reads back as absent too: callers never get a value that
+	// panics on its first method call.
+	got, ok = security.FromContext(security.WithAuthentication(context.Background(), typedNilAuth))
+
+	assert.False(t, ok)
+	assert.Equal(t, security.Anonymous(), got)
 }
 
 func TestWithAuthenticationOverwrites(t *testing.T) {

@@ -8,21 +8,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"go.opentelemetry.io/otel/codes"
 )
 
 // Manager orchestrates a chain of [Authenticator]s with first-success-wins
 // semantics:
 //
 //   - Authenticators are consulted in registration order.
-//   - The first authenticator whose Supports() returns true is invoked.
-//   - On success, the resulting Authentication is returned immediately;
-//     subsequent authenticators are NOT consulted.
-//   - On error, the next supporting authenticator is tried; if every one
-//     fails, the joined error is wrapped in [ErrAuthenticatorRefused].
-//   - If no authenticator supports the credential, [ErrUnsupportedCredential]
-//     is returned. The [Engine] then surfaces it as a 400 in the HTTP adapter.
+//   - Each authenticator whose Supports() returns true is invoked.
+//   - On success — an authenticated value and no error — the result is
+//     returned immediately; subsequent authenticators are NOT consulted.
+//   - An error whose [ErrorClass] is [ErrorClassUnsupportedCredential] — it
+//     wraps [ErrUnsupportedCredential] and no higher-ranked sentinel — is a
+//     runtime bail-out: the authenticator abstains, as if Supports had
+//     returned false.
+//   - Any other error, and a success without an authenticated value (nil,
+//     a typed nil or an unauthenticated value: a contract violation), is a
+//     refusal: the next supporting authenticator is tried. If every one refuses, the refusals are joined and wrapped in
+//     [ErrAuthenticatorRefused].
+//   - If no authenticator supports the credential (or all bail out),
+//     [ErrUnsupportedCredential] is returned: the transports answer it like
+//     a request without credentials (HTTP 401 without error code).
+//
+// On failure the returned Authentication is [Anonymous]: the presented
+// credentials never flow back to the caller.
 //
 // Manager is safe for concurrent use.
 type Manager interface {
@@ -31,8 +39,15 @@ type Manager interface {
 
 // NewManager returns a [Manager] consulting the given authenticators in
 // order. Passing zero authenticators is allowed; the returned manager will
-// always return [ErrUnsupportedCredential].
+// always return [ErrUnsupportedCredential]. NewManager panics if one of the
+// authenticators is nil.
 func NewManager(authenticators ...Authenticator) Manager {
+	for i, a := range authenticators {
+		if a == nil {
+			panic(fmt.Sprintf("security: NewManager: nil Authenticator at index %d", i))
+		}
+	}
+
 	cp := make([]Authenticator, len(authenticators))
 	copy(cp, authenticators)
 
@@ -50,21 +65,21 @@ func (m *manager) Authenticate(ctx context.Context, auth Authentication) (Authen
 
 	span.SetAttributes(AttrAuthenticatorsCount.Int(len(m.authenticators)))
 
-	var (
-		anySupported bool
-		errs         []error
-	)
+	var refusals []error
 
 	for _, a := range m.authenticators {
 		if !a.Supports(auth) {
 			continue
 		}
 
-		anySupported = true
 		name := authenticatorName(a)
 		span.AddEvent("authenticator.try", trAttrName(name))
 
 		result, err := a.Authenticate(ctx, auth)
+		if err == nil {
+			err = requireAuthenticated(result, "authenticator "+name)
+		}
+
 		if err == nil {
 			span.SetAttributes(
 				AttrAuthenticated.Bool(true),
@@ -74,23 +89,25 @@ func (m *manager) Authenticate(ctx context.Context, auth Authentication) (Authen
 			return result, nil
 		}
 
-		errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		if ErrorClass(err) == ErrorClassUnsupportedCredential {
+			// Runtime bail-out: the authenticator abstains. An error that
+			// also wraps a verdict or an outage is that verdict or outage.
+			continue
+		}
+
+		refusals = append(refusals, fmt.Errorf("%s: %w", name, err))
 	}
 
-	if !anySupported {
-		err := ErrUnsupportedCredential
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+	if len(refusals) == 0 {
+		recordFailure(span, ErrUnsupportedCredential)
 
-		return auth, err
+		return Anonymous(), ErrUnsupportedCredential
 	}
 
-	joined := errors.Join(errs...)
-	err := fmt.Errorf("%w: %w", ErrAuthenticatorRefused, joined)
-	span.SetStatus(codes.Error, ErrAuthenticatorRefused.Error())
-	span.RecordError(err)
+	err := fmt.Errorf("%w: %w", ErrAuthenticatorRefused, errors.Join(refusals...))
+	recordFailure(span, err)
 
-	return auth, err
+	return Anonymous(), err
 }
 
 // authenticatorName returns the [NamedAuthenticator] name if implemented, or

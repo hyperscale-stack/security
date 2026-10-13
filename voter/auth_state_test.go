@@ -17,40 +17,22 @@ func TestAuthenticatedGrantsLoggedIn(t *testing.T) {
 	t.Parallel()
 
 	v := voter.Authenticated()
-	assert.Equal(t, security.DecisionGrant,
-		v.Vote(context.Background(), newAuth("a"), nil))
-	assert.Equal(t, security.DecisionDeny,
-		v.Vote(context.Background(), newAnonymous(), nil))
+	attrs := []security.Attribute{security.IsAuthenticated}
+
+	assert.Equal(t, security.DecisionGrant, v.Vote(context.Background(), newAuth("a"), attrs))
+	assert.Equal(t, security.DecisionDeny, v.Vote(context.Background(), newAnonymous(), attrs))
+	assert.Equal(t, security.DecisionAbstain, v.Vote(context.Background(), newAuth("a"), nil),
+		"without its attribute the voter has no opinion")
 }
 
 func TestAnonymousGrantsLoggedOut(t *testing.T) {
 	t.Parallel()
 
 	v := voter.Anonymous()
-	assert.Equal(t, security.DecisionGrant,
-		v.Vote(context.Background(), newAnonymous(), nil))
-	assert.Equal(t, security.DecisionDeny,
-		v.Vote(context.Background(), newAuth("a"), nil))
-}
+	attrs := []security.Attribute{security.IsAnonymous}
 
-func TestFullyAuthenticatedCurrentlyTracksAuthenticated(t *testing.T) {
-	t.Parallel()
-
-	v := voter.FullyAuthenticated()
-	assert.Equal(t, security.DecisionGrant,
-		v.Vote(context.Background(), newAuth("a"), nil))
-	assert.Equal(t, security.DecisionDeny,
-		v.Vote(context.Background(), newAnonymous(), nil))
-}
-
-func TestAuthStateVotersSupportEverything(t *testing.T) {
-	t.Parallel()
-
-	// auth-state voters do not consume attribute-specific information;
-	// they observe the Authentication itself, so Supports must return true
-	// regardless of attribute family (the ADM will still call Vote).
-	for _, v := range []security.Voter{voter.Authenticated(), voter.Anonymous(), voter.FullyAuthenticated()} {
-		assert.True(t, v.Supports(security.Role("X")))
-		assert.True(t, v.Supports(security.Scope("y")))
-	}
+	assert.Equal(t, security.DecisionGrant, v.Vote(context.Background(), newAnonymous(), attrs))
+	assert.Equal(t, security.DecisionDeny, v.Vote(context.Background(), newAuth("a"), attrs))
+	assert.Equal(t, security.DecisionAbstain, v.Vote(context.Background(), newAnonymous(), nil),
+		"without its attribute the voter has no opinion")
 }

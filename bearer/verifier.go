@@ -18,9 +18,19 @@ import (
 //   - introspection-backed verifiers calling RFC 7662 endpoints
 //   - custom verifiers calling an internal auth service
 //
-// Errors MUST wrap one of [security.ErrTokenExpired], [security.ErrTokenNotFound]
-// or [security.ErrInvalidCredentials] so the default HTTP / gRPC error mappers
-// translate them to the right status / code.
+// On success Verify returns an authenticated value whose authorities name
+// roles as [security.RolePrefix] + role ("ROLE_ADMIN") and scopes as one
+// [security.ScopePrefix] + scope authority each ("scope:read") — what
+// voter.HasRole and voter.HasScope match. On failure its error MUST wrap a
+// security sentinel, which tells the transports how to answer:
+//
+//   - a refused token wraps [security.ErrTokenExpired],
+//     [security.ErrTokenNotFound] or [security.ErrInvalidCredentials]
+//     (401, invalid_token);
+//   - a token that could not be checked — key set, introspection endpoint
+//     or auth service temporarily down — wraps [security.ErrUnavailable]
+//     (503 / Unavailable, retryable), never a credential sentinel;
+//   - an error wrapping no sentinel is an internal error (500 / Internal).
 type TokenVerifier interface {
 	Verify(ctx context.Context, token string) (security.Authentication, error)
 }

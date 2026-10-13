@@ -221,7 +221,7 @@ func TestWrapStreamingClientIsPassThrough(t *testing.T) {
 func TestInterceptorCustomErrorMapper(t *testing.T) {
 	t.Parallel()
 
-	mapper := &recordingMapper{ErrorMapper: connectrpcsec.DefaultErrorMapper()}
+	mapper := &recordingMapper{ErrorMapper: connectrpcsec.DefaultErrorMapper("", "")}
 	spy := &recordingUnary{}
 	wrapped := connectrpcsec.NewAuthenticationInterceptor(
 		newEngine(),

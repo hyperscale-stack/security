@@ -1,8 +1,8 @@
 # Known limitations
 
-The library covers HTTP and gRPC transports, HTTP Basic / Bearer schemes,
-password hashing, JWT, OAuth2 (issuer + resource server), OpenID Connect
-(provider and relying party), a SAML 2.0 Service Provider, production
+The library covers HTTP, gRPC and ConnectRPC transports, HTTP Basic / Bearer
+schemes, password hashing, JWT, OAuth2 (issuer + resource server), OpenID
+Connect (provider and relying party), a SAML 2.0 Service Provider, production
 storage backends, and stateless cookie sessions. This document tracks what is
 **not** yet covered. Remaining items are tracked as GitHub issues rather than
 future refactor phases.
@@ -342,8 +342,20 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## Transports
 
-- Only `net/http` and gRPC adapters are shipped. Other transports can be
-  added downstream by implementing `security.Carrier`.
+- Only the `net/http` (`httpsec`), gRPC (`grpcsec`) and ConnectRPC
+  (`connectrpcsec`) adapters are shipped. Other transports can be added
+  downstream by implementing `security.Carrier` (header fields only — never
+  the URL or cookies) and mapping errors with `security.ErrorClass`.
+- **One challenge scheme per middleware** — the default error mappers
+  advertise the one scheme configured with `WithChallengeScheme`, even when
+  the engine accepts several (Basic and Bearer): RFC 9110 §11.6.1 allows a
+  401 to list several challenges, but a client is only told about that
+  scheme. Use one middleware per scheme, or a custom `ErrorMapper` that
+  writes every challenge.
+- **Basic credentials are not NFC-normalized yet** — a Basic challenge
+  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 also says the server
+  expects the user-id and password in Unicode Normalization Form C; `basic`
+  checks them as received.
 
 ## Sessions
 
@@ -351,13 +363,19 @@ PKCE. Not supported, and refused where a provider could select them:
   cookie, there is no server-side session store. This covers the common
   case without server state, but a session cannot be revoked server-side
   before its cookie expires. A server-side store (Redis/SQL) is not shipped.
+- The session cookie is read through `httpsec.Carrier` (its
+  `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
+  no cookies: a cookie session does not authenticate gRPC or ConnectRPC
+  calls (Connect-Web clients included).
 
 ## Logging
 
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
   keys, signers and key sets, `session.Codec`…) print redacted with every
-  `fmt` verb and in `slog` output, but fmt prints some values without
+  `fmt` verb and in `slog` output — as do the `grpcsec` and
+  `connectrpcsec` carriers, which print metadata key counts only — but fmt
+  prints some values without
   calling any of their methods: `%p` of a value that is not a pointer, a
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.

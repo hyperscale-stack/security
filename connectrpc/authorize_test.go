@@ -70,12 +70,13 @@ func TestUnaryAuthorizeDeniesAnonymous(t *testing.T) {
 	t.Parallel()
 
 	spy := &recordingUnary{}
-	// No authentication in the context: the voter denies the anonymous caller.
+	// No authentication in the context: the voter denies the anonymous
+	// caller, which is asked to authenticate.
 	wrapped := connectrpcsec.NewAuthorizationInterceptor(adminADM(), adminAttrs).WrapUnary(spy.fn)
 
 	_, err := wrapped(context.Background(), unaryReq("letmein"))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 	assert.False(t, spy.called)
 }
 

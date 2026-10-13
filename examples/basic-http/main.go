@@ -63,11 +63,13 @@ type loader struct{ users map[string]user }
 
 // LoadByUsername implements [basic.UserLoader]. An unknown user yields an
 // error wrapping [security.ErrInvalidCredentials] so the response is
-// indistinguishable from a wrong password (anti-enumeration).
+// indistinguishable from a wrong password (anti-enumeration). The error does
+// not echo the typed username: it may be a password typed in the wrong
+// field.
 func (l loader) LoadByUsername(_ context.Context, username string) (basic.PasswordUser, error) {
 	u, ok := l.users[username]
 	if !ok {
-		return nil, fmt.Errorf("unknown user %q: %w", username, security.ErrInvalidCredentials)
+		return nil, fmt.Errorf("unknown user: %w", security.ErrInvalidCredentials)
 	}
 
 	return u, nil
@@ -90,9 +92,11 @@ func newServer() (http.Handler, error) {
 		return nil, fmt.Errorf("hash root: %w", err)
 	}
 
+	// Roles are carried as ROLE_<name> authorities (security.RolePrefix):
+	// that is what voter.HasRole matches.
 	store := loader{users: map[string]user{
-		"alice": {subject: "alice", hash: aliceHash, roles: []string{"USER"}},        //nolint:goconst // example code, readability over deduplication
-		"root":  {subject: "root", hash: rootHash, roles: []string{"USER", "ADMIN"}}, //nolint:goconst // example code, readability over deduplication
+		"alice": {subject: "alice", hash: aliceHash, roles: []string{"ROLE_USER"}},             //nolint:goconst // example code, readability over deduplication
+		"root":  {subject: "root", hash: rootHash, roles: []string{"ROLE_USER", "ROLE_ADMIN"}}, //nolint:goconst // example code, readability over deduplication
 	}}
 
 	authenticator := basic.NewAuthenticator(store, hasher,

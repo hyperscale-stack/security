@@ -45,7 +45,11 @@ type PasswordUser interface {
 //
 // On unknown user, implementations SHOULD return an error wrapping
 // [security.ErrInvalidCredentials] to prevent account enumeration via
-// response-time / response-code differences.
+// response-time / response-code differences. A store that is temporarily
+// unavailable SHOULD be reported with an error wrapping
+// [security.ErrUnavailable]: the [Authenticator] then answers 503 /
+// Unavailable (retryable) instead of refusing the credentials. Any other
+// error is a refusal ([security.ErrInvalidCredentials], 401).
 type UserLoader interface {
 	LoadByUsername(ctx context.Context, username string) (PasswordUser, error)
 }

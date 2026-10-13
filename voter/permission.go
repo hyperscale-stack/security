@@ -11,7 +11,9 @@ import (
 )
 
 // HasPermission returns a [security.Voter] that evaluates every
-// [security.PermissionAttribute] passed to it via its embedded predicate.
+// [security.PermissionAttribute] passed to it via its embedded predicate:
+// the attribute carries its own requirement, so the voter supports every
+// permission attribute and abstains on the other families.
 //
 // Vote semantics:
 //   - Unauthenticated => Deny.

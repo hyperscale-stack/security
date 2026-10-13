@@ -33,9 +33,10 @@ const (
 	// authenticated. Value: bool.
 	AttrAuthenticated = attribute.Key("security.authenticated")
 
-	// AttrPrincipalSubject is the principal subject. Emission is gated by the
-	// subject-redaction policy (see SetSubjectAttributeMode) to avoid leaking
-	// personal data into trace backends; the default is a hashed prefix.
+	// AttrPrincipalSubject is a reserved key for the principal subject. The
+	// library never emits it: subject identifiers are personal data and
+	// high-cardinality. Set it yourself only behind a deliberate,
+	// low-cardinality (hashed) opt-in.
 	AttrPrincipalSubject = attribute.Key("security.principal.subject")
 
 	// AttrExtractorsCount counts the extractors tried by an Engine call.
@@ -61,4 +62,14 @@ const (
 	// AttrAttributes is the joined String() form of the Attributes considered
 	// for an authorization decision. Value: string.
 	AttrAttributes = attribute.Key("security.attributes")
+
+	// AttrErrorType is the OpenTelemetry error.type attribute: the
+	// [ErrorClass] of the error a span failed with, never its text. Set on
+	// failure only. Value: string.
+	AttrErrorType = attribute.Key("error.type")
+
+	// AttrAttributesUnsupported counts the attributes of a refused decision
+	// that no voter supports (the decision is denied when it is not zero).
+	// Set only when not zero. Value: int.
+	AttrAttributesUnsupported = attribute.Key("security.attributes.unsupported")
 )

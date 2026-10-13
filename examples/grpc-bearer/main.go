@@ -4,9 +4,10 @@
 
 // Command grpc-bearer is a runnable gRPC Bearer-token demo.
 //
-// It exposes the standard gRPC health service behind two interceptors: one
-// authenticates every RPC against a JWT, the other authorizes it against an
-// OAuth2 scope. The process also mints a demo token at start-up.
+// It exposes the standard gRPC health service behind two interceptor chains
+// — unary and streaming: one authenticates every RPC against a JWT, the
+// other authorizes it against an OAuth2 scope. The process also mints a
+// demo token at start-up.
 //
 // Run:
 //
@@ -29,6 +30,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -84,12 +86,13 @@ func newServer() (*grpc.Server, minter, error) {
 
 	adm := security.NewAffirmativeDecisionManager(voter.HasScope(scope))
 
-	srv := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(
-			grpcsec.UnaryServerInterceptor(engine),
-			grpcsec.UnaryAuthorize(adm, []security.Attribute{security.Scope(scope)}),
-		),
-	)
+	// ServerOptions and AuthorizeServerOptions install the unary AND the
+	// stream interceptors: chaining only unary ones would leave the
+	// streaming Health.Watch RPC unauthenticated.
+	srv := grpc.NewServer(slices.Concat(
+		grpcsec.ServerOptions(engine),
+		grpcsec.AuthorizeServerOptions(adm, []security.Attribute{security.Scope(scope)}),
+	)...)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 
 	mint := func(grant string) (string, error) {

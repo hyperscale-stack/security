@@ -24,9 +24,10 @@ const tracerName = "github.com/hyperscale-stack/security/session"
 // session cookie (or one that fails to decode).
 var ErrNoSession = errors.New("session: no session on request")
 
-// Manager owns the session lifecycle on top of a cookie. It reads and
-// writes the cookie through a [security.Carrier], so it works behind the
-// HTTP adapter (httpsec) without importing it.
+// Manager owns the session lifecycle on top of a cookie. It writes the
+// cookie through a [security.Carrier] and reads it through the carrier's
+// [CookieReader] accessor, so it works behind the HTTP adapter (httpsec)
+// without importing it.
 //
 // Cookie security defaults are conservative: Secure, HttpOnly, SameSite=Lax.
 type Manager struct {
@@ -138,21 +139,28 @@ func (m *Manager) Login(ctx context.Context, c security.Carrier, principal secur
 	return s, nil
 }
 
-// Get decodes and validates the session carried by the request. It returns
-// [ErrNoSession] when the cookie is absent / undecodable and a wrapped
-// expiry error when the session is past its absolute or idle deadline.
-// On success it refreshes LastAccessed but does NOT rewrite the cookie —
-// call [Manager.Touch] when sliding expiry is desired.
+// Get decodes and validates the session carried by the request's cookie,
+// read through the carrier's [CookieReader] accessor — never from a header
+// field or the URL. It returns [ErrNoSession] when the cookie is absent /
+// undecodable or the carrier exposes no cookies, and a wrapped expiry error
+// when the session is past its absolute or idle deadline. On success it
+// refreshes LastAccessed but does NOT rewrite the cookie — call
+// [Manager.Touch] when sliding expiry is desired.
 func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "session.Manager.Get")
 	defer span.End()
 
-	raw := c.Get(m.cookieName)
-	if raw == "" {
+	cookies, ok := c.(CookieReader)
+	if !ok {
+		return nil, fmt.Errorf("%w: the carrier exposes no cookies", ErrNoSession)
+	}
+
+	found := cookies.CookiesNamed(m.cookieName)
+	if len(found) == 0 || found[0].Value == "" {
 		return nil, ErrNoSession
 	}
 
-	s, err := m.codec.Decode(raw)
+	s, err := m.codec.Decode(found[0].Value)
 	if err != nil {
 		return nil, ErrNoSession
 	}

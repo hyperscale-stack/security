@@ -1260,3 +1260,275 @@ To migrate:
    key last on every instance; once all of them run with it, move it first;
    remove the old key once `TransactionTTL` (10 minutes by default) has
    elapsed.
+
+### core: failures return the anonymous authentication; contract violations fail closed
+
+After a failed authentication, `Engine.Process` stored the extracted
+`Authentication` — a cleartext password, a bearer token — in the request
+context and returned it, and `Manager.Authenticate` returned it too. A
+component breaking its contract made the request path panic: an
+authenticator returning `(nil, nil)` or a typed nil (`var out *T; return
+out, nil`), a nil `Attribute`, a nil `Authentication` passed to `Decide`. And an authenticator bailing out at
+runtime with `ErrUnsupportedCredential` — the documented way to do so — had
+its error joined with the other authenticators' refusals, so a wrong password
+could be answered as an unsupported credential.
+
+| Situation | Before | After |
+| --- | --- | --- |
+| `Engine.Process` / `Manager.Authenticate` fail | return (and store) the extracted value | return (and store) `security.Anonymous()` |
+| An authenticator returns `(nil, nil)` or a typed nil | panic | refusal; the next authenticator is tried |
+| An authenticator returns an unauthenticated value and no error | success | refusal (contract violation) |
+| A custom `Manager` returns no authenticated value (nil, typed nil) and no error | panic / success | `Process` fails |
+| An extractor returns a typed nil and no error | handed to the authenticators (panic) | no credential: the next extractor runs |
+| An authenticator returns an error wrapping `ErrUnsupportedCredential` only | joined into `ErrAuthenticatorRefused` | abstention; `ErrUnsupportedCredential` when every supporting authenticator bails out |
+| … wrapping `ErrUnsupportedCredential` and a verdict (`ErrInvalidCredentials`, `ErrUnavailable`, `ErrInvalidRequest`, …) | joined | that verdict (`security.ErrorClass` order) |
+| `Decide` with a nil or typed nil `Attribute` | panic | `ErrAccessDenied` |
+| `Decide` with a nil or typed nil `Authentication` | panic | evaluated as `security.Anonymous()` |
+| `FromContext` after `WithAuthentication(ctx, typedNil)` | the typed nil | `security.Anonymous()`, `false` |
+| A voter returns an undefined `Decision` | ignored (abstention) | counted as `DecisionDeny` |
+| `NewEngine(nil, …)`, a nil extractor, authenticator or voter | panic on the first request | panic at construction |
+
+To migrate:
+
+1. Do not read the presented credentials from the value `Engine.Process`
+   returns on failure: it is `security.Anonymous()`. Per-username throttling
+   or lockout belongs in an `Authenticator` wrapper, which sees the
+   credentials before they are checked.
+2. Make every `Authenticator` (and `bearer.TokenVerifier`) return an
+   authenticated value on success, and an error wrapping a security sentinel
+   otherwise.
+3. Pass non-nil managers, extractors, authenticators, voters and attributes.
+4. Make the `Authorities` method of your own `Authentication` types return a
+   copy (`slices.Clone`): `basic`, `bearer` and `session` now do, so a caller
+   can no longer rewrite the authorities of an authenticated value.
+
+### `voter`: voters compare attribute values; dedicated authentication-state attributes
+
+The attributes passed to `AccessDecisionManager.Decide` (and to
+`httpsec.Authorize`, `grpcsec.UnaryAuthorize`, …) only selected *which*
+voters ran: a role voter checked the role it was built with whatever role
+the route asked for, and `voter.Authenticated()` / `voter.Anonymous()` voted
+on every attribute. A decision manager shared by several routes therefore
+granted an ADMIN route to a USER, `Authenticated()` next to a role voter
+granted any route to any logged-in principal, `HasAnyRole("ADMIN",
+"MANAGER")` granted a MANAGER on `Role("ADMIN")`, and `voter.Not()` turned
+the refusal of an anonymous caller into a grant. The voters now follow
+Spring Security's semantics: the attributes a route lists are its policy,
+and each voter votes only on the attributes whose family **and** value it
+supports.
+
+| Policy | Before | After |
+| --- | --- | --- |
+| ADM `{HasRole("USER"), HasRole("ADMIN")}`, USER on `[Role("ADMIN")]` | granted | denied |
+| ADM `{HasRole("USER")}` on `[Role("ADMIN")]` | role USER checked | denied (no voter supports `Role("ADMIN")`) |
+| `HasAnyRole("ADMIN", "MANAGER")`, MANAGER on `[Role("ADMIN")]` | granted | denied; granted on `[Role("ADMIN"), Role("MANAGER")]` |
+| ADM `{Authenticated(), HasRole("ADMIN")}`, USER on `[Role("ADMIN")]` | granted | denied |
+| ADM `{Authenticated()}` on `[Role("X")]` | any logged-in principal | denied — list `security.IsAuthenticated` |
+| ADM `{Anonymous()}` on `[Role("X")]` | any anonymous caller | denied — list `security.IsAnonymous` |
+| `Not(HasRole("BANNED"))`, anonymous on `[Role("BANNED")]` | granted | denied |
+| `And(HasRole("USER"), Not(HasRole("BANNED")))` on `[Role("USER")]` | banned users granted | denied for everyone — list `[Role("USER"), Role("BANNED")]` |
+| Unanimous / consensus with an attribute no voter supports | ignored | denied |
+| Unanimous with `WithAbstainFallback(DecisionGrant)`, no attribute or no voter | granted, anonymous callers included | denied |
+| `voter.FullyAuthenticated()` | same as `Authenticated()` | removed |
+
+To migrate:
+
+1. Make every route's attributes name exactly what its voters check, and
+   give the decision manager a voter for every attribute: `Authorize(adm,
+   security.Role("ADMIN"))` with `voter.HasRole("ADMIN")` in `adm`. An
+   attribute that no voter supports now denies the request, and so does a
+   route without attributes, whatever the strategy, tie-break or
+   `WithAbstainFallback` (which only decides for custom voters that support
+   an attribute and abstain).
+2. Require a logged-in or a logged-out caller with an attribute:
+   `voter.Authenticated()` with `security.IsAuthenticated`,
+   `voter.Anonymous()` with `security.IsAnonymous`.
+   `voter.FullyAuthenticated()` is gone: use `voter.Authenticated()`.
+3. With `HasAnyRole` / `HasAnyScope` / `HasAnyAuthority`, list every name the
+   route accepts among its attributes.
+4. With `voter.And`, list one attribute per inner requirement: every inner
+   voter must grant. `And(HasRole("USER"), Not(HasRole("BANNED")))` needs
+   `[Role("USER"), Role("BANNED")]`. A `Role("X")` attribute is decided by
+   every voter supporting it, negated ones included: a decision manager
+   holding `Not(HasRole("X"))` grants `[Role("X")]` routes to principals
+   *without* X. Keep such a policy in its own decision manager.
+5. Do not rely on `voter.Not` to admit anonymous callers:
+   `Not(Authenticated())` never grants them — use `voter.Anonymous()` with
+   `security.IsAnonymous`.
+6. Custom voters: `Supports` must check the attribute's value, not only its
+   type, and `Vote` must consider only the attributes it supports (the
+   decision manager now passes it only those) and abstain without them.
+
+### `voter`: roles and scopes live in their own authority namespaces
+
+`voter.HasRole("admin")` accepted the authority `admin` as well as
+`ROLE_admin`, and `voter.HasScope("admin")` accepted `admin`, `scope:admin`
+and any `scope:…` authority holding `admin` among space-separated words: one
+bare `admin` authority — a scope a client obtained, a fine-grained
+permission — satisfied the role, the scope and the authority checks at once,
+and one authority string could carry many scopes. `HasRole("")` matched
+`ROLE_`.
+
+| Authority held | Check | Before | After |
+| --- | --- | --- | --- |
+| `ROLE_admin` | `HasRole("admin")` | granted | granted |
+| `admin` | `HasRole("admin")` | granted | denied |
+| `scope:admin` | `HasScope("admin")` | granted | granted |
+| `admin` | `HasScope("admin")` | granted | denied |
+| `scope:read billing:admin` | `HasScope("billing:admin")` | granted | denied |
+| `admin` | `HasAuthority("admin")` | granted | granted (unchanged) |
+| — | `HasRole("")`, `HasRole("ROLE_X")`, `HasScope("a b")`, `HasScope("scope:x")`, `HasAnyRole()` | constructed | panic at construction |
+
+To migrate:
+
+1. Emit roles as `security.RolePrefix + name` (`ROLE_ADMIN`) from your
+   `basic.WithAuthorityResolver` and `session.PrincipalLoader`
+   implementations — `examples/basic-http` shows it.
+2. Emit one `security.ScopePrefix + scope` authority per scope
+   (`scope:read:mail`): `jwtsec.DefaultAuthorityResolver` already does; split
+   a space-separated `scope` claim before prefixing it.
+3. Keep `HasAuthority` for verbatim, unprefixed authorities.
+4. Pass the bare name to `HasRole`/`security.Role` (`"ADMIN"`, not
+   `"ROLE_ADMIN"`), and valid RFC 6749 §3.3 scope-tokens to
+   `HasScope`/`security.Scope`.
+
+### `http`, `session`: credentials from header fields only, the session from its cookie only
+
+`httpsec.Carrier.Get` and `Values` fell back to a cookie, then to the query
+string, named like the key. The Basic and Bearer extractors read
+`Get("Authorization")`, so credentials were accepted from `?Authorization=…`
+and from a cookie named `Authorization`; and `session.Manager` read
+`Get(cookieName)`, so a session was accepted from `?session=…` and from a
+`Session` request header, which even took precedence over the real cookie.
+Credentials in URLs leak through access logs, `Referer` and history (RFC
+6750 §5.3), and a link or a cross-site form carrying an attacker's session
+value logged the victim into the attacker's account.
+
+| Request | Before | After |
+| --- | --- | --- |
+| `Authorization` header (Basic, Bearer) | authenticated | unchanged |
+| `?Authorization=Basic …` / `?Authorization=Bearer …` | authenticated | no credential (401 without anonymous fallback) |
+| Cookie `Authorization="Bearer …"` | authenticated | no credential |
+| Session cookie | session | unchanged |
+| `?session=<value>` or `Session: <value>` header, no cookie | session | no session |
+| Session cookie and a `Session` header | the header's session | the cookie's session |
+| `session.Manager` used with a carrier without `CookiesNamed` | the carrier's `Get(cookieName)` | no session (`ErrNoSession`) |
+
+To migrate:
+
+1. Send credentials in the `Authorization` header and the session in its
+   cookie; nothing else is read.
+2. A custom `security.Carrier` used with `session.Manager` must implement
+   `session.CookieReader` (`CookiesNamed(name string) []*http.Cookie`, as
+   `httpsec.Carrier` does); its `Get`/`Values` must read header fields only.
+
+### `http`: challenges and status codes follow RFC 6750, RFC 7617 and RFC 9110
+
+The default HTTP error mapping answered a Basic-only server with a bare
+`Bearer` challenge, sent no realm (RFC 7617 §2 requires one; RFC 6750 §3
+requires an auth-param after `Bearer`), rendered the realm with Go escapes,
+sent `invalid_token` only for expired or unknown tokens (RFC 9068 §4: for
+every failed check), never sent `insufficient_scope`, answered `400` when a
+wrong password was joined with another authenticator's bail-out, `403` to an
+anonymous caller refused by `Authorize` (with a hard-coded bare `Bearer`),
+and `401` to an infrastructure failure. The mapping now comes from
+`security.ErrorClass`:
+
+| Situation | Before | After |
+| --- | --- | --- |
+| No credentials | `401 Bearer` | `401 Bearer realm="api"` |
+| No credentials, `WithChallengeScheme("Basic")` | `401 Basic` | `401 Basic realm="api", charset="UTF-8"` |
+| Bad bearer token (signature, audience, malformed…) | `401 Bearer` | `401 Bearer realm="api", error="invalid_token", …` |
+| Bad credentials, no bearer token sent | `401 Bearer` | `401 Bearer realm="api"` (no RFC 6750 code) |
+| Unsupported credential (no authenticator supports it) | `400`, no challenge | `401` with challenge, no error code |
+| Wrong password next to an authenticator bailing out | `400`, no challenge | `401` with challenge |
+| Authenticated principal refused by `Authorize` | `403 Bearer` | `403 S realm=R` (`error="insufficient_scope"` for a bearer request) |
+| Unauthenticated principal refused by `Authorize` | `403 Bearer` | `401` with the `Middleware`'s challenge |
+| Repeated `Authorization` field | first value used | `400` with the challenge for a Bearer resource (`invalid_request` for a bearer request) |
+| `ErrUnavailable` (store, key set down) | `401` | `503` (with a bare challenge for a Bearer resource) |
+| Error wrapping no sentinel, `ErrNoExtractor`, a custom `Engine` returning no context or a typed nil | `401` / panic | `500` (with a bare challenge for a Bearer resource) |
+| Realm with a control or non-ASCII character | Go-escaped | `Middleware` / `DefaultErrorMapper` panic |
+| `Middleware(nil)` | panic on the first request | panic at construction |
+| `Authorize(adm, …, nil)` (a nil or typed nil attribute) | panic on every request | panic at construction |
+| Reusing the attribute slice passed to `Authorize` | rewrote the route's policy | no effect (copied) |
+
+To migrate:
+
+1. Set `WithChallengeScheme("Basic")` on a Basic-only middleware, and
+   `WithRealm` if `api` does not suit; use printable ASCII in the realm.
+2. Make clients treat `401` as "send (other) credentials", including after an
+   `Authorize` refusal of an anonymous request, and `503` as "retry later".
+3. Authenticators: wrap `security.ErrUnavailable` for a dependency that is
+   temporarily down, a credential sentinel for a refusal; an error wrapping
+   no sentinel is now an internal error (500).
+4. Custom `ErrorMapper`s: classify with `security.ErrorClass` and handle the
+   new classes (`invalid_request`, `unavailable`,
+   `authentication_required`).
+5. Dashboards: the `httpsec.Middleware` span records `http.request.method`
+   (instead of `http.method`) and `http.route` only as a route template.
+
+### `grpc`: status codes and messages, staged headers, server options
+
+The gRPC error mapping told the client why authentication failed
+(`token expired`, `token not found`), answered an infrastructure failure
+`Unauthenticated`, an unsupported credential `InvalidArgument` and an
+anonymous caller refused by `UnaryAuthorize` `PermissionDenied`; the
+metadata an extractor staged on the carrier was never sent; and the
+documented wiring (`grpc.ChainUnaryInterceptor` only) left streaming RPCs
+unauthenticated.
+
+| Situation | Before | After |
+| --- | --- | --- |
+| Credential failure | `Unauthenticated` + reason (`token expired`…) | `Unauthenticated`, `unauthenticated` |
+| Unsupported credential | `InvalidArgument` | `Unauthenticated` |
+| Anonymous caller refused by `UnaryAuthorize` / `StreamAuthorize` | `PermissionDenied` | `Unauthenticated` |
+| Repeated `authorization` metadata | first value used | `InvalidArgument` |
+| `ErrUnavailable` | `Unauthenticated` | `Unavailable` (retryable) |
+| Error wrapping no sentinel, `ErrNoExtractor` | `Unauthenticated` | `Internal` |
+| Metadata staged on the `Carrier` | dropped | sent as the response header |
+| `UnaryAuthorize` without `WithErrorMapper` | `DefaultErrorMapper()` | the authentication interceptor's mapper |
+| A nil engine (`UnaryServerInterceptor(nil)`, `ServerOptions(nil)`, …) | server crash on the first RPC | panic at construction |
+| A custom `Engine` returning no context or a typed nil | server crash | `Internal` |
+| A nil or typed nil attribute given to `UnaryAuthorize` / `StreamAuthorize` / `AuthorizeServerOptions` | panic on every RPC: the server crashes | panic at construction |
+| Reusing the attribute slice passed to them | rewrote the RPC's policy | no effect (copied) |
+
+To migrate:
+
+1. Install the stream interceptors next to the unary ones — simplest:
+   `grpc.NewServer(slices.Concat(grpcsec.ServerOptions(engine),
+   grpcsec.AuthorizeServerOptions(adm, attrs))...)`.
+2. Branch on the status code, never on the message.
+3. Authenticators: wrap `security.ErrUnavailable` only for a transient
+   dependency failure (clients retry `Unavailable`), a credential sentinel
+   for a refusal.
+
+### `connectrpc`: challenges on 401, generic codes and messages
+
+A ConnectRPC unary call refused with `Unauthenticated` is an HTTP 401, which
+MUST carry a `WWW-Authenticate` challenge (RFC 9110 §11.6.1); none was sent.
+The Connect error messages also told the client why authentication failed,
+and infrastructure failures read as `Unauthenticated`. The default mapper now
+takes the challenge configuration and answers like the gRPC one:
+
+| Situation | Before | After |
+| --- | --- | --- |
+| `DefaultErrorMapper()` | no argument | `DefaultErrorMapper(scheme, realm string)` (`""` → `Bearer`, `DefaultRealm`) |
+| Unauthenticated / PermissionDenied | no `WWW-Authenticate` | challenge in the error metadata (HTTP headers for unary calls) |
+| Credential failure | reason in the message | `unauthenticated` |
+| Unsupported credential | `InvalidArgument` | `Unauthenticated` |
+| Anonymous caller refused by the authorization interceptor | `PermissionDenied` | `Unauthenticated` |
+| Repeated `Authorization` field | first value used | `InvalidArgument` |
+| `ErrUnavailable` / error wrapping no sentinel | `Unauthenticated` | `Unavailable` / `Internal` |
+| `InvalidArgument`, `Unavailable`, `Internal` of a Bearer resource | no `WWW-Authenticate` | `Bearer realm=R` (RFC 6750 §3; `invalid_request` for a bearer request) |
+| Headers staged on the `Carrier`, refused call | dropped | in the error metadata |
+| `NewAuthenticationInterceptor(nil)` | panic on the first RPC | panic at construction |
+| A custom `Engine` returning no context or a typed nil | panic | `Internal` |
+| A nil or typed nil attribute given to `NewAuthorizationInterceptor` | panic on every RPC | panic at construction; the attributes are copied |
+
+To migrate:
+
+1. Replace `connectrpcsec.DefaultErrorMapper()` by
+   `connectrpcsec.DefaultErrorMapper("Bearer", connectrpcsec.DefaultRealm)`
+   (or your scheme and realm), or configure the interceptors with
+   `connectrpcsec.WithChallengeScheme` / `connectrpcsec.WithRealm`.
+2. Branch on the code, never on the message.

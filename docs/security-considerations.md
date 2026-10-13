@@ -869,6 +869,10 @@ session store to compromise or scale.
 - **Cookie attributes** — defaults are conservative: `Secure=true`,
   `HttpOnly=true`, `SameSite=Lax`. Disable `Secure` only for local plain-HTTP
   development.
+- **Cookie only** — the `Manager` reads the session from the request's
+  `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
+  the URL nor from a header named like the cookie: a link carrying a session
+  value cannot log a browser into another account.
 - **Session fixation** — `Manager.Rotate` mints a fresh session ID; call it
   immediately after a privilege change (login). The ID never appears raw in
   a span — only a SHA-256 fingerprint.
@@ -1091,16 +1095,116 @@ refused: when tenants supply URLs ("test this connection"), log the error
 and show them a generic message, or the error text becomes an oracle on
 the internal network.
 
+## Credentials in header fields only
+
+`httpsec.Carrier.Get`/`Values` (and the gRPC and ConnectRPC carriers) read
+header fields only: the Basic and Bearer extractors accept credentials from
+the `Authorization` field alone, never from the URL query string (RFC 6750
+§5.3: tokens in URLs leak through logs, `Referer` and browser history) nor
+from a cookie named like the field (an ambient credential a cross-site
+request would carry).
+
+## Extractor order
+
+The `Engine` tries its extractors in order and the first one that finds a
+credential wins (as in Spring Security's filter chain): a deliberate design,
+not a fallback between schemes. Put the header-based extractors (bearer,
+basic) before the session extractor: a browser attaches cookies to
+cross-site requests by itself — `SameSite=Lax` still sends them on
+top-level GET navigations — but never an `Authorization` header, so an
+engine that accepts a cookie session authenticates requests an attacker's
+page can trigger. Protect every state-changing endpoint reached with a
+cookie session against CSRF, and prefer one engine per audience (browser
+pages, APIs) so that an API never authenticates an ambient cookie.
+
+## Authorization
+
+Authorization follows Spring Security's voter model, and fails closed:
+
+- **The attributes are the policy.** Each voter votes only on the
+  attributes whose family and value it supports: `HasRole("ADMIN")` votes
+  on `security.Role("ADMIN")` and abstains on `security.Role("USER")`, so a
+  decision manager shared by several routes grants each route only what it
+  asks for. `voter.Authenticated()` and `voter.Anonymous()` vote only on
+  `security.IsAuthenticated` / `security.IsAnonymous`: list the state you
+  require among the route's attributes.
+- **Separate namespaces.** A role is the authority `ROLE_<name>`
+  (`security.RolePrefix`), a scope the authority `scope:<name>`
+  (`security.ScopePrefix`, one scope per authority), anything else a plain
+  authority matched verbatim by `HasAuthority`: a scope a client obtained
+  can never pass for a role.
+- **No requirement is ignored.** A decision is denied when one of its
+  attributes is supported by no voter of the decision manager, when there
+  is no attribute, and when there is no voter — whatever the strategy, the
+  tie-break and the abstain fallback: `WithAbstainFallback` only decides
+  for custom voters that support an attribute and abstain.
+- **Composites.** `voter.And` grants only when every inner voter grants — an
+  inner voter whose attribute the route does not list makes it deny, so list
+  one attribute per inner requirement. `voter.Not` never turns the refusal
+  of an unauthenticated principal into a grant: `Not(HasRole("BANNED"))`
+  admits authenticated principals without the role, not anonymous callers.
+  A `Role("X")` attribute is decided by every voter that supports it,
+  negated ones included: a decision manager holding `Not(HasRole("X"))`
+  grants a `[Role("X")]` route to the authenticated principals *without*
+  X, and next to a positive `HasRole("X")` voter the affirmative strategy
+  grants it to those *with* X too. Keep a negated policy in its own
+  decision manager, used only by the routes it was written for.
+- **Strategies.** Affirmative grants on one satisfied attribute (OR);
+  unanimous requires every voting voter to grant (AND across voters), but a
+  multi-name voter such as `HasAnyRole` grants when the principal holds any
+  of the requested names — use one voter per role, or `voter.And`, for an
+  AND of roles.
+
 ## Transport error mapping
 
-Error mappers return terse, code-first responses. HTTP emits a status code
-plus a `WWW-Authenticate` challenge; gRPC emits a `codes.Code`. Clients are
-expected to branch on the code, not parse the message — the message never
-leaks why authentication failed.
+Error mappers return terse, code-first responses, classified once by
+`security.ErrorClass` — joined errors included — so a refusal by one
+authenticator is never masked by another one's lack of support, and an
+outage never reads as a verdict on the credentials:
+
+| Class | HTTP | `WWW-Authenticate` (scheme S, realm R) | gRPC / ConnectRPC |
+| --- | --- | --- | --- |
+| `invalid_request` (e.g. repeated `Authorization`) | 400 | Bearer: `Bearer realm=R`; + bearer token sent: `error="invalid_request"` | `InvalidArgument` |
+| `unavailable` (`ErrUnavailable`) | 503 | Bearer: `Bearer realm=R` | `Unavailable` |
+| `token_expired`, `token_not_found`, `client_secret_mismatch`, `invalid_credentials` | 401 | `S realm=R`; Bearer + bearer token sent: `error="invalid_token"` (RFC 9068 §4) | `Unauthenticated` |
+| `authentication_required`, `unsupported_credential` | 401 | `S realm=R` — no error code (RFC 6750 §3.1) | `Unauthenticated` |
+| `insufficient_scope`, `access_denied` | 403 | `S realm=R`; Bearer + bearer token sent: `error="insufficient_scope"` | `PermissionDenied` |
+| `no_extractor`, `_OTHER` (no sentinel: a broken contract) | 500 | Bearer: `Bearer realm=R` | `Internal` |
+
+A ConnectRPC error travels over HTTP with the status of the HTTP column, and
+the `connectrpcsec` default mapper puts the same `WWW-Authenticate`
+challenge in its metadata — sent as response headers on unary calls — so
+every Connect 401 carries one.
+
+Every 401 carries a challenge with a realm (`api` by default; RFC 9110
+§11.6.1, RFC 7617 §2, RFC 6750 §3), a Basic one also `charset="UTF-8"`
+(RFC 7617 §2.1), and the realm is sent as an RFC 9110 quoted-string — a
+realm a quoted-string cannot carry is refused at startup. A Bearer resource
+challenges every refusal, 400 and 5xx included: RFC 6750 §3 requires the
+challenge whenever the request carried no access token that enables
+access. An unauthenticated
+principal refused by `httpsec.Authorize` is asked to authenticate (401), an
+authenticated one refused (403) (RFC 9110 §15.5.2, §15.5.4); `Authorize`
+answers with the challenge of the `Middleware` in front of it. The RFC 6750
+error codes are sent only when the request carried a bearer token. The
+`error_description` is a fixed string per code: the response never says why
+authentication failed. Clients are expected to branch on the status and the
+code, not parse the message. The gRPC messages are one fixed string per
+code (`unauthenticated`, `permission denied`, …). gRPC clients commonly
+retry `Unavailable`: wrap `security.ErrUnavailable` only for a transient
+dependency failure.
+
+Install the gRPC interceptors for both RPC kinds — `grpcsec.ServerOptions`
+and `grpcsec.AuthorizeServerOptions` return the unary and stream chains
+together: chaining only unary interceptors leaves every streaming RPC (the
+health service's `Watch`, server reflection, your own streams)
+unauthenticated.
 
 ## Observability
 
-No secret is ever placed on a span attribute or log line. See
+No secret is ever placed on a span attribute or log line, and the core
+spans record the class of an error (`security.ErrorClass`), never its text,
+which can hold user input such as a typed username. See
 [observability.md](observability.md) for the secrets policy and the full
 span catalog.
 
@@ -1225,6 +1329,18 @@ span catalog.
       Referrer-Policy header changed first); otherwise keep `TransactionTTL`
       short and never log full IdP redirect URLs.
 - [ ] Install an OpenTelemetry `TracerProvider` to collect the spans.
+- [ ] Give every route the attributes its voters check, and a voter for each
+      attribute (an unsupported one denies); require a logged-in caller
+      with `security.IsAuthenticated`, and store roles as `ROLE_<name>`
+      and scopes as one `scope:<name>` authority each.
+- [ ] Set the challenge scheme of each HTTP / ConnectRPC adapter to the
+      scheme its extractors accept, with a printable-ASCII realm.
+- [ ] On gRPC, install the authentication and authorization interceptors
+      for both RPC kinds (`grpcsec.ServerOptions`,
+      `grpcsec.AuthorizeServerOptions`).
+- [ ] In your authenticators, wrap `security.ErrUnavailable` for a
+      dependency that is temporarily down, a credential sentinel for a
+      refusal — never a plain error.
 - [ ] Keep the zero `outbound.Policy` in production; exempt only the exact
       subnets of on-premises identity providers in `AllowedPrefixes`, and
       restrict hosts and ports in `CheckURL` when tenants configure URLs.

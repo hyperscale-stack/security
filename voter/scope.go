@@ -5,81 +5,52 @@
 package voter
 
 import (
-	"context"
 	"slices"
-	"strings"
 
 	"github.com/hyperscale-stack/security"
 )
 
-// HasScope returns a [security.Voter] that grants when the authenticated
-// principal carries the given OAuth2 scope. Scope matching is exact and
-// supports two storage conventions on [security.Authentication.Authorities]:
+// HasScope returns a [security.Voter] bound to one OAuth2 scope: it votes on
+// the [security.ScopeAttribute] naming that scope and abstains on every other
+// attribute. It grants when the authenticated principal carries the
+// authority security.ScopePrefix + scope ("scope:read:mail" — one scope per
+// authority, as jwtsec.DefaultAuthorityResolver emits) and denies otherwise;
+// unauthenticated requests always vote Deny. A bare "read:mail" authority is
+// not a scope, and "scope:a b" is the single scope "a b".
 //
-//   - bare scope name ("read:mail")
-//   - "scope:" prefix ("scope:read:mail")
-//
-// Unauthenticated requests always vote Deny; non-scope attributes Abstain.
+// HasScope panics if scope is not an RFC 6749 §3.3 scope-token (empty, with
+// a space, a double quote, a backslash or a non-ASCII character) or already
+// starts with "scope:" — such a scope could never match.
 func HasScope(scope string) security.Voter {
-	return scopeVoter{wanted: []string{scope}, anyOf: false}
+	return newScopeVoter("HasScope", scope)
 }
 
-// HasAnyScope grants when the principal carries at least one of the listed
-// scopes. Same comparison rules as [HasScope].
+// HasAnyScope returns a [security.Voter] bound to several scopes: it grants
+// when the principal carries at least one of the scopes the route requests.
+// Same comparison rules as [HasScope]; it panics without a scope or on a
+// scope HasScope refuses.
 func HasAnyScope(scopes ...string) security.Voter {
-	return scopeVoter{wanted: scopes, anyOf: true}
+	return newScopeVoter("HasAnyScope", scopes...)
 }
 
-type scopeVoter struct {
-	wanted []string
-	anyOf  bool
-}
-
-func (v scopeVoter) Supports(a security.Attribute) bool {
-	_, ok := a.(security.ScopeAttribute)
-
-	return ok
-}
-
-func (v scopeVoter) Vote(_ context.Context, auth security.Authentication, _ []security.Attribute) security.Decision {
-	if !auth.IsAuthenticated() {
-		return security.DecisionDeny
+func newScopeVoter(constructor string, scopes ...string) security.Voter {
+	return nameVoter{
+		names:  mustNames(constructor, "scope", scopes, checkScope),
+		nameOf: scopeName,
+		holds:  hasScope,
 	}
-
-	for _, want := range v.wanted {
-		if hasScope(auth.Authorities(), want) {
-			return security.DecisionGrant
-		}
-
-		if !v.anyOf {
-			break
-		}
-	}
-
-	return security.DecisionDeny
 }
 
+// scopeName returns the name of a scope attribute.
+func scopeName(a security.Attribute) (string, bool) {
+	s, ok := a.(security.ScopeAttribute)
+
+	return s.Name(), ok
+}
+
+// hasScope reports whether authorities contains the scope authority.
 func hasScope(authorities []string, scope string) bool {
-	if slices.Contains(authorities, scope) {
-		return true
-	}
-
-	prefixed := "scope:" + scope
-
-	for _, a := range authorities {
-		if a == prefixed {
-			return true
-		}
-		// Also accept the OAuth2 "scope" claim packaged as a
-		// space-separated string in a single authority.
-		if strings.HasPrefix(a, "scope:") {
-			for _, s := range strings.Split(a[len("scope:"):], " ") {
-				if s == scope {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
+	return slices.Contains(authorities, scopePrefix+scope)
 }
+
+const scopePrefix = security.ScopePrefix

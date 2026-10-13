@@ -32,17 +32,22 @@ func TestHasAuthoritySupportsOnlyAuthorityAttribute(t *testing.T) {
 
 	v := voter.HasAuthority("x")
 	assert.True(t, v.Supports(security.Authority("x")))
+	assert.False(t, v.Supports(security.Authority("y")), "only the authority it is bound to")
 	assert.False(t, v.Supports(security.Role("ADMIN")))
 }
 
-func TestHasAnyAuthorityMatchesOne(t *testing.T) {
+func TestHasAnyAuthorityMatchesOneRequestedAuthority(t *testing.T) {
 	t.Parallel()
 
 	v := voter.HasAnyAuthority("alpha", "beta")
-	attrs := []security.Attribute{security.Authority("alpha")}
 
 	assert.Equal(t, security.DecisionGrant,
-		v.Vote(context.Background(), newAuth("a", "beta"), attrs))
+		v.Vote(context.Background(), newAuth("a", "beta"), []security.Attribute{security.Authority("alpha"), security.Authority("beta")}))
 	assert.Equal(t, security.DecisionDeny,
-		v.Vote(context.Background(), newAuth("a", "gamma"), attrs))
+		v.Vote(context.Background(), newAuth("a", "beta"), []security.Attribute{security.Authority("alpha")}),
+		"beta is held but not requested")
+	assert.Equal(t, security.DecisionDeny,
+		v.Vote(context.Background(), newAuth("a", "gamma"), []security.Attribute{security.Authority("alpha")}))
+	assert.Equal(t, security.DecisionAbstain,
+		v.Vote(context.Background(), newAuth("a", "gamma"), []security.Attribute{security.Authority("gamma")}))
 }

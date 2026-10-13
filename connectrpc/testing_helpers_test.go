@@ -57,7 +57,11 @@ func (a fakeAuth) Name() string                  { return a.pr.Subject() }
 type tokenExtractor struct{}
 
 func (tokenExtractor) Extract(_ context.Context, c security.Carrier) (security.Authentication, error) {
-	v := c.Get("authorization")
+	v, err := security.SingleValue(c, "authorization")
+	if err != nil {
+		return nil, err //nolint:wrapcheck // test double
+	}
+
 	if v == "" {
 		return nil, nil
 	}

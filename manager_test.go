@@ -22,7 +22,7 @@ func TestManagerReturnsUnsupportedWhenNoAuthenticator(t *testing.T) {
 	got, err := m.Authenticate(context.Background(), auth)
 
 	assert.ErrorIs(t, err, security.ErrUnsupportedCredential)
-	assert.Equal(t, Authentication(auth), got, "input MUST flow through on failure")
+	assert.Equal(t, security.Anonymous(), got, "a failure returns Anonymous, never the presented credentials")
 }
 
 func TestManagerReturnsUnsupportedWhenNoAuthenticatorSupports(t *testing.T) {

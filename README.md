@@ -79,7 +79,8 @@ func main() {
 		w.Write([]byte("hello " + auth.Name()))
 	})
 
-	http.ListenAndServe(":8080", httpsec.Middleware(engine)(mux))
+	// The challenge advertises the scheme the extractors accept (RFC 7617).
+	http.ListenAndServe(":8080", httpsec.Middleware(engine, httpsec.WithChallengeScheme("Basic"))(mux))
 }
 ```
 

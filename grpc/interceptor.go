@@ -17,9 +17,15 @@ import (
 
 const tracerName = "github.com/hyperscale-stack/security/grpc"
 
+// errEngineContract reports a custom [security.Engine] that returned no
+// context or no authentication (nil or a typed nil) without an error: an
+// internal error.
+var errEngineContract = errors.New("grpcsec: the engine returned no context or authentication")
+
 // authenticate runs the engine against the RPC metadata and returns the
-// enriched context. It is shared by the unary and stream interceptors.
-func authenticate(ctx context.Context, engine security.Engine, cfg *config, method string) (context.Context, error) {
+// enriched context with the carrier, whose staged writes the caller sends.
+// It is shared by the unary and stream interceptors.
+func authenticate(ctx context.Context, engine security.Engine, cfg *config, method string) (context.Context, *Carrier, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "grpcsec.Authenticate")
 	defer span.End()
 
@@ -28,35 +34,43 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 	carrier := NewCarrier(ctx)
 
 	newCtx, auth, err := engine.Process(ctx, carrier)
-	if err != nil {
-		// "no extractor configured" is tolerated only when the caller
-		// opted into anonymous fallback; every other error is fatal.
-		tolerated := cfg.anonymousFallback && errors.Is(err, security.ErrNoExtractor)
-		if !tolerated {
-			return ctx, fmt.Errorf("grpcsec: authenticate: %w", err)
-		}
-	}
 
-	if !auth.IsAuthenticated() && !cfg.anonymousFallback {
-		return ctx, security.ErrInvalidCredentials
+	// "no extractor configured" is tolerated only when the caller opted into
+	// anonymous fallback; every other error is fatal.
+	tolerated := cfg.anonymousFallback && errors.Is(err, security.ErrNoExtractor)
+
+	switch {
+	case err != nil && !tolerated:
+		return ctx, carrier, fmt.Errorf("grpcsec: authenticate: %w", err)
+	case newCtx == nil || isNil(auth):
+		return ctx, carrier, errEngineContract
+	case !auth.IsAuthenticated() && !cfg.anonymousFallback:
+		return ctx, carrier, security.ErrAuthenticationRequired
 	}
 
 	span.SetAttributes(attribute.Bool("security.authenticated", auth.IsAuthenticated()))
 
-	return newCtx, nil
+	return newCtx, carrier, nil
 }
 
 // UnaryServerInterceptor authenticates every unary RPC. On success the
 // handler runs with the request context enriched via
 // [security.WithAuthentication]; on failure the configured [ErrorMapper]
 // turns the security error into a gRPC status error and the handler is
-// not invoked.
+// not invoked. The metadata the extractors stage on the [Carrier] is sent
+// as the response header, refused calls included.
+//
+// Install [StreamServerInterceptor] too — or use [ServerOptions]: this
+// interceptor leaves streaming RPCs unauthenticated.
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside
-// this interceptor.
+// this interceptor. It panics if engine is nil.
 func UnaryServerInterceptor(engine security.Engine, opts ...Option) grpc.UnaryServerInterceptor {
+	mustEngine(engine)
+
 	cfg := buildConfig(opts...)
+	mapper := cfg.ownMapper()
 
 	return func(
 		ctx context.Context,
@@ -64,20 +78,31 @@ func UnaryServerInterceptor(engine security.Engine, opts ...Option) grpc.UnarySe
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (any, error) {
-		newCtx, err := authenticate(ctx, engine, cfg, info.FullMethod)
-		if err != nil {
-			return nil, cfg.errorMapper.Map(ctx, err)
+		newCtx, carrier, err := authenticate(ctx, engine, cfg, info.FullMethod)
+
+		if md := carrier.ResponseMetadata(); md.Len() > 0 {
+			// Sent with the response, or before the status of a refused
+			// call. SetHeader only fails outside a gRPC server.
+			_ = grpc.SetHeader(ctx, md)
 		}
 
-		return handler(newCtx, req)
+		if err != nil {
+			return nil, mapper.Map(ctx, err)
+		}
+
+		return handler(withErrorMapper(newCtx, mapper), req)
 	}
 }
 
 // StreamServerInterceptor is the streaming counterpart of
 // [UnaryServerInterceptor]. The wrapped stream exposes the enriched
-// context through ServerStream.Context().
+// context through ServerStream.Context(), and the staged metadata is sent
+// as the stream's header. It panics if engine is nil.
 func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.StreamServerInterceptor {
+	mustEngine(engine)
+
 	cfg := buildConfig(opts...)
+	mapper := cfg.ownMapper()
 
 	return func(
 		srv any,
@@ -85,12 +110,27 @@ func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.Stream
 		info *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
 	) error {
-		newCtx, err := authenticate(ss.Context(), engine, cfg, info.FullMethod)
-		if err != nil {
-			return cfg.errorMapper.Map(ss.Context(), err)
+		newCtx, carrier, err := authenticate(ss.Context(), engine, cfg, info.FullMethod)
+
+		if md := carrier.ResponseMetadata(); md.Len() > 0 {
+			// Sent before the first message, or before the status of a
+			// refused stream.
+			_ = ss.SetHeader(md)
 		}
 
-		return handler(srv, &wrappedStream{ServerStream: ss, ctx: newCtx})
+		if err != nil {
+			return mapper.Map(ss.Context(), err)
+		}
+
+		return handler(srv, &wrappedStream{ServerStream: ss, ctx: withErrorMapper(newCtx, mapper)})
+	}
+}
+
+// mustEngine refuses a nil engine at construction: grpc-go recovers no
+// panic, so it would otherwise crash the server on the first RPC.
+func mustEngine(engine security.Engine) {
+	if engine == nil {
+		panic("grpcsec: nil Engine")
 	}
 }
 

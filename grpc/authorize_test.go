@@ -74,8 +74,8 @@ func TestUnaryAuthorizeDeniesAnonymous(t *testing.T) {
 
 	adm := security.NewAffirmativeDecisionManager(voter.HasRole("ADMIN"))
 
-	// No authentication interceptor in front: the request is anonymous,
-	// the role voter denies.
+	// No authentication interceptor in front: the request is anonymous, the
+	// role voter denies, and the caller is asked to authenticate.
 	client := dialBufconn(t,
 		grpcsec.UnaryAuthorize(adm, []security.Attribute{security.Role("ADMIN")}),
 		nil,
@@ -83,7 +83,7 @@ func TestUnaryAuthorizeDeniesAnonymous(t *testing.T) {
 
 	_, err := client.Check(context.Background(), &healthpb.HealthCheckRequest{})
 	require.Error(t, err)
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
 func TestStreamAuthorizeGrantsAndDenies(t *testing.T) {

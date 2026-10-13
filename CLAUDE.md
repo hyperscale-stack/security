@@ -189,7 +189,10 @@ Carrier ──> Extractor ──> Authentication ──> Manager/Authenticator �
 ```
 
 - **`Carrier`** — abstracts a transport message (HTTP request, gRPC metadata)
-  with `http.Header`-like Get/Set/Add/Values. Adapters wrap it.
+  with `http.Header`-like Get/Set/Add/Values. Adapters wrap it. Get/Values
+  read header fields only — never the query string or cookies; the session
+  module reads its cookie through `httpsec.Carrier.CookiesNamed`
+  (`session.CookieReader`).
 - **`Extractor`** — pulls raw credentials from a `Carrier` into an
   *unauthenticated* `Authentication`. Returns `(nil, nil)` when its scheme is
   absent (engine tries the next); `(nil, err)` when present-but-malformed.
@@ -207,10 +210,18 @@ Carrier ──> Extractor ──> Authentication ──> Manager/Authenticator �
   the Manager, returns a context enriched via `WithAuthentication`.
 - **Authorization** — `Voter` returns `Decision` (Grant/Deny/Abstain) over a
   set of `Attribute`s; `AccessDecisionManager` combines votes with an
-  `affirmative` / `consensus` / `unanimous` strategy (mirrors Spring
-  Security). Stock voters live in `voter/` (`HasRole`, `HasAnyRole`,
-  `HasScope`, `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,
-  `FullyAuthenticated`); compose them with `And`/`Or`/`Not`.
+  `affirmative` / `consensus` / `unanimous` strategy (named after Spring
+  Security's). The attributes a route lists are the policy: each voter votes
+  only on the attributes it supports — family AND value (`HasRole("ADMIN")`
+  abstains on `Role("USER")`) — and the ADM denies when an attribute is
+  supported by no voter. Roles are matched only as `ROLE_<name>` authorities
+  and scopes only as one `scope:<name>` authority each
+  (`security.RolePrefix` / `security.ScopePrefix`). Stock voters live in `voter/` (`HasRole`,
+  `HasAnyRole`, `HasScope`, `HasAnyScope`, `HasAuthority`,
+  `HasAnyAuthority`, `HasPermission`, and `Authenticated` / `Anonymous`,
+  which vote only on `security.IsAuthenticated` / `security.IsAnonymous`);
+  compose them with `And` (strict) / `Or` / `Not` (never grants an
+  unauthenticated principal).
 
 Conventions baked into the core:
 - **Fail closed by default.** No credentials → `Anonymous()`; voters deny
@@ -218,7 +229,11 @@ Conventions baked into the core:
   `WithAnonymousFallback` is set.
 - **Errors are sentinels** (`errors.go`) implementing the unexported
   `SecurityError` marker. Always wrap with `fmt.Errorf("...: %w", ErrXxx)`;
-  callers match with `errors.Is`/`errors.As`, never string matching.
+  callers match with `errors.Is`/`errors.As`, never string matching. The
+  transports answer from `security.ErrorClass(err)` (one precedence for
+  joined errors): a credential verdict is 401, `ErrUnavailable` 503, an
+  access denial 403 (401 for an unauthenticated principal), and an error
+  wrapping no sentinel 500 — never a verdict on the credentials.
 - **Context first.** `context.Context` is the first argument of every
   runtime operation (`Extract`, `Authenticate`, `Hasher.Hash`/`Verify`,
   `TokenVerifier.Verify`). It also carries the `Authentication` under an

@@ -25,8 +25,16 @@ import (
 //	}
 type PrincipalLoader interface {
 	// Load resolves the principal and its authorities from the session
-	// values. Returning an error fails authentication; the error SHOULD
-	// wrap security.ErrInvalidCredentials so the error mappers route it.
+	// values. Name roles security.RolePrefix + role ("ROLE_ADMIN") and
+	// scopes one security.ScopePrefix + scope authority each
+	// ("scope:read"): that is what voter.HasRole and voter.HasScope match.
+	//
+	// Returning an error fails authentication, and its sentinel tells the
+	// transports how to answer: wrap security.ErrInvalidCredentials for a
+	// session that must be refused (unknown or disabled user: 401),
+	// security.ErrUnavailable for a user store that is temporarily down
+	// (503 / Unavailable, retryable); an error wrapping no sentinel is an
+	// internal error (500 / Internal).
 	Load(ctx context.Context, values map[string]any) (security.Principal, []string, error)
 }
 

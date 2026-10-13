@@ -17,21 +17,26 @@ type config struct {
 type Option func(*config)
 
 // WithErrorMapper overrides the [ErrorMapper] used to translate security
-// errors into HTTP responses. The default mapper produces RFC 7235-compliant
-// 401/403/400 responses with a configurable challenge scheme.
+// errors into HTTP responses (and by [Authorize] behind this middleware).
+// The default mapper is [DefaultErrorMapper] built from
+// [WithChallengeScheme] and [WithRealm].
 func WithErrorMapper(m ErrorMapper) Option {
 	return func(c *config) { c.errorMapper = m }
 }
 
-// WithRealm sets the "realm" parameter of WWW-Authenticate challenges sent by
-// the default [ErrorMapper]. RFC 7235 §2.2 allows realm to be any quoted
-// string; consumers MUST NOT rely on its value for authorisation decisions.
+// WithRealm sets the "realm" parameter of the WWW-Authenticate challenges
+// sent by the default [ErrorMapper]. Default: [DefaultRealm]. The realm is a
+// protection-space label (RFC 9110 §11.5) sent as a quoted-string: visible
+// ASCII, spaces and tabs only — anything else makes [Middleware] panic.
+// Consumers MUST NOT rely on its value for authorisation decisions.
 func WithRealm(realm string) Option {
 	return func(c *config) { c.realm = realm }
 }
 
-// WithChallengeScheme overrides the authentication scheme advertised by the
-// default [ErrorMapper] (e.g. "Bearer", "Basic"). Default: "Bearer".
+// WithChallengeScheme sets the authentication scheme advertised by the
+// default [ErrorMapper] — the scheme your extractors accept: "Bearer"
+// (default) or "Basic". A Basic challenge carries charset="UTF-8"
+// (RFC 7617 §2.1); only a Bearer challenge carries RFC 6750 error codes.
 func WithChallengeScheme(scheme string) Option {
 	return func(c *config) { c.challengeScheme = scheme }
 }

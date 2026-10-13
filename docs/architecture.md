@@ -118,9 +118,11 @@ Carrier ──▶ Extractor ──▶ Authentication (pending)
 ```
 
 - **`Carrier`** abstracts a transport message — read credentials, write
-  challenges. `httpsec.Carrier` wraps `*http.Request`/`http.ResponseWriter`;
-  `grpcsec.Carrier` wraps `metadata.MD`; `connectrpcsec.Carrier` wraps
-  `http.Header`.
+  challenges. Reads cover the header fields only, never the URL or cookies.
+  `httpsec.Carrier` wraps `*http.Request`/`http.ResponseWriter` and adds the
+  explicit `CookiesNamed` accessor the session module reads its cookie
+  through; `grpcsec.Carrier` wraps `metadata.MD`; `connectrpcsec.Carrier`
+  wraps `http.Header`.
 - **`Extractor`** pulls raw, unauthenticated credentials from a `Carrier`.
   Returns `(nil, nil)` when its scheme is absent.
 - **`Authenticator`** validates a pending `Authentication` and returns an
@@ -145,17 +147,27 @@ AccessDecisionManager  ──▶  Voter₁ ─┐
    nil | ErrAccessDenied
 ```
 
-- **`Attribute`** is an opaque authorization predicate handle: `Role`,
-  `Scope`, `Authority`, `Permission`.
-- **`Voter`** inspects an `Authentication` against attributes and returns
-  `Grant`, `Deny`, or `Abstain`. Voters are pure and concurrency-safe.
+- **`Attribute`** names one requirement of the resource: `Role`, `Scope`,
+  `Authority`, `Permission`, or an authentication state
+  (`security.IsAuthenticated`, `security.IsAnonymous`). The attributes a
+  route lists are its policy.
+- **`Voter`** votes on the attributes it supports — their family **and**
+  their value (Spring Security's `RoleVoter` semantics): `HasRole("ADMIN")`
+  votes on `Role("ADMIN")` and abstains on `Role("USER")`, so one decision
+  manager can serve several routes. It returns `Grant`, `Deny`, or
+  `Abstain` (none of its attributes is listed). Voters are pure and
+  concurrency-safe.
 - **`AccessDecisionManager`** aggregates voter decisions under a strategy:
   Affirmative (one grant wins), Consensus (majority), Unanimous (one deny
-  refuses).
+  refuses; an AND across voters). It denies a decision when one of the
+  attributes is supported by no voter, and hands each voter only the
+  attributes it supports.
 
 The `voter/` sub-package ships the standard catalog: `HasRole`,
-`HasAnyRole`, `HasScope`, `HasAuthority`, `HasPermission`, `Authenticated`,
-`Anonymous`, `FullyAuthenticated`, plus `And`/`Or`/`Not` combinators.
+`HasAnyRole`, `HasScope`, `HasAnyScope`, `HasAuthority`, `HasAnyAuthority`,
+`HasPermission`, `Authenticated` and `Anonymous` (which vote only on the
+state attributes), plus the `And` (strict: every inner voter must grant),
+`Or` and `Not` (never grants an unauthenticated principal) combinators.
 
 ## Transport adapters
 
@@ -163,15 +175,19 @@ Adapters are deliberately thin — they translate between a transport message
 and a `Carrier`, then map security errors to transport responses.
 
 - **`httpsec`** — `Middleware` runs the `Engine` and enriches the request
-  context; `Authorize` runs an `AccessDecisionManager`. `ErrorMapper`
-  turns sentinels into HTTP status codes + `WWW-Authenticate`.
+  context; `Authorize` runs an `AccessDecisionManager` and answers with the
+  middleware's error mapper. `ErrorMapper` turns `security.ErrorClass` into
+  HTTP status codes + RFC 6750 / RFC 7617 `WWW-Authenticate` challenges.
 - **`grpcsec`** — `UnaryServerInterceptor` / `StreamServerInterceptor`
   authenticate every RPC; `UnaryAuthorize` / `StreamAuthorize` enforce an
-  ADM. `ErrorMapper` turns sentinels into `codes.Code`.
+  ADM; `ServerOptions` / `AuthorizeServerOptions` install the unary and the
+  stream chains together. `ErrorMapper` turns `security.ErrorClass` into
+  `codes.Code` with one generic message per code.
 - **`connectrpcsec`** — `NewAuthenticationInterceptor` authenticates every
   RPC; `NewAuthorizationInterceptor` enforces an ADM. Both return a
   `connect.Interceptor` covering unary and streaming. `ErrorMapper` turns
-  sentinels into `connect.Code`.
+  `security.ErrorClass` into `connect.Code` with the `WWW-Authenticate`
+  challenge in the error's metadata.
 
 ## OAuth2
 

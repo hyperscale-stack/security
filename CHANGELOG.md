@@ -23,8 +23,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **Authorization**: `Voter`/`Decision`/`Attribute`, an
   `AccessDecisionManager` with Affirmative/Consensus/Unanimous strategies,
   and a `voter/` catalog (`HasRole`, `HasAnyRole`, `HasScope`,
-  `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,
-  `FullyAuthenticated`, `And`/`Or`/`Not`).
+  `HasAnyScope`, `HasAuthority`, `HasAnyAuthority`, `HasPermission`,
+  `Authenticated`, `Anonymous`, `And`/`Or`/`Not`).
 - **HTTP adapter** (`httpsec`): `Middleware`, `Authorize`, a request/response
   `Carrier`, and a configurable `ErrorMapper`.
 - **gRPC adapter** (`grpcsec`): unary and stream server interceptors,
@@ -432,6 +432,33 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   no refresh token outlives the deadline and a later refresh is
   `invalid_grant`. `RefreshTTL` keeps its inactivity semantics (RFC 9700
   §4.14.2).
+- Core sentinels `security.ErrAuthenticationRequired` (no credential the
+  server could validate, or an unauthenticated principal refused by an
+  access decision), `security.ErrInvalidRequest` (a malformed authentication
+  request, such as a repeated `Authorization` field) and
+  `security.ErrUnavailable` (the credentials could not be checked because a
+  dependency — key set, user store, introspection endpoint — is temporarily
+  unavailable; not a verdict on the credentials).
+- `security.ErrorClass(err)` and the `security.ErrorClass*` constants: one
+  classification of security errors — joined errors included — shared by
+  the core spans (`error.type`) and the default HTTP, gRPC and ConnectRPC
+  error mappers; custom error mappers should use it too.
+- `security.StateAttribute` with `security.IsAuthenticated` and
+  `security.IsAnonymous`: the attributes `voter.Authenticated()` and
+  `voter.Anonymous()` vote on.
+- `security.RolePrefix` (`ROLE_`) and `security.ScopePrefix` (`scope:`): the
+  authority namespaces the voter package matches roles and scopes in.
+- `httpsec.Carrier.CookiesNamed` and `session.CookieReader`: the explicit
+  accessor the session `Manager` reads its cookie through.
+- `security.SingleValue(carrier, key)`: the value of a singleton header
+  field, refusing a repeated one with `ErrInvalidRequest`; the Basic and
+  Bearer extractors read `Authorization` through it. `httpsec.DefaultRealm`
+  (`api`).
+- `grpcsec.ServerOptions` and `grpcsec.AuthorizeServerOptions`: the
+  authentication and authorization interceptors for unary AND streaming
+  RPCs, as `grpc.ServerOption` values.
+- `connectrpcsec.WithChallengeScheme`, `connectrpcsec.WithRealm` and
+  `connectrpcsec.DefaultRealm`: the challenge of the Connect error mapping.
 
 ### Changed
 
@@ -598,6 +625,87 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and SQL schemas)**: every store persists it (`store/sql`: a
   `family_issued_at BIGINT NOT NULL DEFAULT 0` column existing databases add
   with the `ALTER TABLE` of [MIGRATION.md](MIGRATION.md)).
+- `Engine.Process` and `Manager.Authenticate` return `security.Anonymous()`
+  on every failure, and the Engine stores the anonymous authentication in
+  the returned context: the extracted credentials never flow back to the
+  caller. The `Manager` treats an authenticator error wrapping
+  `ErrUnsupportedCredential` — and no higher-ranked sentinel — as an
+  abstention (the documented runtime bail-out) rather than a refusal joined
+  with the others, and a "success" without an authenticated value as a
+  refusal. A typed nil (an interface holding a nil pointer) counts as nil
+  wherever the core checks a contract. `NewEngine`, `NewManager`
+  and the three `AccessDecisionManager` constructors panic on a nil
+  dependency. See [MIGRATION.md](MIGRATION.md).
+- Failing core spans (`security.Engine.Process`,
+  `security.Manager.Authenticate`, `security.AccessDecisionManager.Decide`)
+  record the class of their error as status description and `error.type`
+  attribute, and no longer add an `exception` event.
+- Voters follow Spring Security's semantics: each votes only on the
+  attributes whose family and value it supports (`HasRole("ADMIN")` abstains
+  on `Role("USER")`), `HasAny*` grants for the requested names only,
+  `Authenticated()`/`Anonymous()` vote only on `security.IsAuthenticated` /
+  `security.IsAnonymous`, `voter.And` is strict (an inner abstention denies
+  when the composite votes), `voter.Not` never grants an unauthenticated
+  principal, and the decision managers deny an attribute that no voter
+  supports — and a decision without attributes or voters whatever the
+  tie-break and abstain fallback — and pass each voter only the attributes
+  it supports. `And`, `Or`
+  and `Not` panic on a nil or missing voter. See
+  [MIGRATION.md](MIGRATION.md).
+- Roles and scopes live in their own authority namespaces: `voter.HasRole`
+  matches only `ROLE_<name>` and `voter.HasScope` only one `scope:<name>`
+  per authority. A bare `admin` authority no longer satisfies
+  `HasRole("admin")` and `HasScope("admin")`, and `scope:a b` is no longer
+  split into two scopes. The voter constructors panic on a name they could
+  never match: none, an empty one, a role starting with `ROLE_`, a scope
+  that is not an RFC 6749 §3.3 scope-token or starts with `scope:`. See
+  [MIGRATION.md](MIGRATION.md).
+- `httpsec.Carrier.Get` and `Values` read the request's header fields only;
+  they no longer fall back to a cookie or to the query string named like
+  the key. `session.Manager` reads its cookie through the carrier's
+  `CookiesNamed` accessor (`session.CookieReader`) and finds no session with
+  a carrier that lacks it. See [MIGRATION.md](MIGRATION.md).
+- The HTTP error mapping follows RFC 6750, RFC 7617 and RFC 9110: every
+  challenge carries a realm (`httpsec.DefaultRealm` unless `WithRealm`), a
+  Basic one `charset="UTF-8"`, the realm is an RFC 9110 quoted-string
+  (`Middleware` and `DefaultErrorMapper` panic on a realm one cannot carry or
+  a scheme that is not a token); `invalid_token` answers every failed check
+  of a bearer token and `insufficient_scope` every 403 of a request made
+  with one, and no RFC 6750 code is sent for other requests; an unsupported
+  credential is 401 without error code (was 400), an unauthenticated
+  principal refused by `Authorize` 401 (was 403), a repeated `Authorization`
+  field 400, an `ErrUnavailable` 503, and an error wrapping no sentinel 500
+  (was 401); a Bearer resource challenges every refusal, 400 and 5xx
+  included (RFC 6750 §3). `Authorize` answers with the challenge of the
+  `Middleware` in front of it instead of a hard-coded bare `Bearer`, copies
+  its attributes and panics on a nil one; `Middleware` panics on a nil
+  engine. See
+  [MIGRATION.md](MIGRATION.md).
+- The `httpsec.Middleware` span records `http.request.method` (`_OTHER`
+  for a method outside RFC 9110 / RFC 5789) instead of `http.method`, and
+  `http.route` only as the `ServeMux` pattern's path template.
+- The gRPC error mapping answers from `security.ErrorClass` with one
+  generic message per code: an unsupported credential is `Unauthenticated`
+  (was `InvalidArgument`), an anonymous principal refused by
+  `UnaryAuthorize`/`StreamAuthorize` `Unauthenticated` (was
+  `PermissionDenied`), a repeated `authorization` value `InvalidArgument`,
+  an `ErrUnavailable` `Unavailable`, and an error wrapping no sentinel
+  `Internal` (was `Unauthenticated`). The authorization interceptors use the
+  authentication interceptor's error mapper unless given their own, copy
+  their attributes and panic on a nil one; the authentication interceptors
+  and `ServerOptions` panic on a nil engine.
+- `connectrpcsec.DefaultErrorMapper()` becomes
+  `DefaultErrorMapper(scheme, realm string)` and answers from
+  `security.ErrorClass` like the gRPC mapper (generic messages,
+  `Unauthenticated` for an unsupported credential and for an anonymous
+  principal refused by the authorization interceptor, `InvalidArgument` for
+  a repeated `Authorization` field, `Unavailable` for `ErrUnavailable`,
+  `Internal` for an error wrapping no sentinel), with the RFC 6750 / RFC
+  7617 `WWW-Authenticate` challenge in the error's metadata — on every
+  refusal of a Bearer resource. The authorization interceptor uses the
+  authentication interceptor's error mapper unless given its own, copies
+  its attributes and panics on a nil one; `NewAuthenticationInterceptor`
+  panics on a nil engine.
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -710,6 +818,30 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `application/x-www-form-urlencoded` body and does not check the content
   type; client grant types are compared exactly, not case-insensitively; and
   `Profile20BCP` refuses the legacy `password` grant as well as `implicit`.
+- Contract violations no longer panic the request path: an authenticator or
+  a custom `Manager` returning no authenticated value without an error, a
+  nil `Attribute`, a nil `Authentication` passed to `Decide`, and a voter
+  returning an undefined `Decision` now fail closed (an error, a denial, the
+  anonymous authentication, a deny vote) — typed nils included. An
+  extractor's typed nil is "no credential".
+- A custom `Engine` returning a typed nil `Authentication` made
+  `httpsec.Middleware` panic; it is now answered 500, like a nil one.
+- `grpcsec` sends the metadata staged on its `Carrier` as the response
+  header, refused RPCs included, as its documentation said; it was dropped.
+  A custom `Engine` returning no authentication — nil or a typed nil — no
+  longer panics the interceptors, which crashed the server: grpc-go
+  recovers no panic.
+- A ConnectRPC unary call refused with `Unauthenticated` (HTTP 401) carried
+  no `WWW-Authenticate` field (RFC 9110 §11.6.1); it now carries the
+  challenge. Headers staged on the `connectrpcsec.Carrier` reach the client
+  on a refused call and on a handler error too, and a custom `Engine`
+  returning no authentication — nil or a typed nil — no longer panics the
+  interceptors.
+- Documentation drift: `AttrPrincipalSubject` no longer references a
+  non-existent `SetSubjectAttributeMode`, the HTTP middleware no longer
+  promises a route override it could not offer, and `LIMITATIONS.md` lists
+  the ConnectRPC adapter. `docs/security-considerations.md` documents the
+  extractor order (first extractor wins) and its CSRF implication.
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -736,6 +868,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - The legacy v0 packages: `authentication/`, `authentication/credential/`,
   `authentication/provider/{dao,oauth2}/`, `authorization/`, and the
   in-tree `password` package.
+- `voter.FullyAuthenticated()`: it behaved exactly like
+  `voter.Authenticated()` — no remember-me or authentication-strength concept
+  exists to tell them apart — while promising a stronger check.
 
 ### Security
 
@@ -1132,3 +1267,56 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `client_id=B` in its body was served as A. Both, and several
   `Authorization` fields, are now `invalid_request` (RFC 6749 §5.2) at
   `/token`, `/revoke` and `/introspect`.
+- After a failed authentication the `Engine` stored the extracted
+  `Authentication` — a cleartext password, a bearer token — in the request
+  context; it now stores the anonymous authentication.
+- The core spans carried the full error chain of the authenticators —
+  including the username typed at a Basic prompt (a password typed in the
+  username field) and wrapped store errors — as status description and
+  exception event; they now carry the error class only, and
+  `basic.Authenticator` no longer puts the typed username in its errors.
+- `Authorities()` of the `basic`, `bearer` and `session` authentications
+  returned their internal slice: a caller could rewrite the authorities of
+  an authenticated value (`ROLE_USER` → `ROLE_ADMIN`). They now return a
+  copy, and the `security.Authentication` contract requires it.
+- The stock voters ignored the value of the attribute they were asked to
+  check, and `voter.Authenticated()` / `voter.Anonymous()` voted on every
+  attribute: a decision manager shared by several routes granted an ADMIN
+  route to a USER, and `Authenticated()` next to a role voter granted any
+  route to any logged-in principal. Voters now compare attribute values,
+  and the authentication-state voters need their own attributes.
+- `voter.Not()` turned the refusal of an unauthenticated principal into a
+  grant (`Not(HasRole("BANNED"))` admitted anonymous callers); it no longer
+  does.
+- `NewUnanimousDecisionManager` with `WithAbstainFallback(DecisionGrant)`
+  granted a decision without attributes — a route whose attribute lookup
+  returned nothing — and any decision of a manager without voters, to anyone,
+  anonymous callers included. Such decisions are now denied whatever the
+  strategy, tie-break and fallback.
+- `httpsec.Carrier` answered `Get`/`Values` from a cookie or from the query
+  string when the header was absent: Basic and Bearer credentials were
+  accepted from `?Authorization=…` and from a cookie named `Authorization`
+  (leaking through logs, `Referer` and history), and a session from
+  `?session=…` or from a `Session` request header — which even took
+  precedence over the victim's cookie — so a link or a cross-site form
+  logged the victim into the attacker's session. Credentials are now read
+  from header fields only, and the session from its cookie only.
+- The `httpsec.Middleware` span recorded the raw request path as
+  `http.route` — reset tokens and e-mail addresses in paths reached the
+  trace backend — and the raw method; they are now a route template (or
+  absent) and a known method (or `_OTHER`).
+- A request with several `Authorization` fields was authenticated with the
+  first one; it is now refused (400), whatever the transport.
+- The gRPC error messages told the client why authentication failed
+  (`token expired`, `token not found`); they are now one fixed string per
+  code. `grpcsec.Carrier` printed its incoming metadata — the bearer token
+  in `authorization` — with `%v`; it now prints and logs key counts only,
+  whatever the verb.
+- `connectrpcsec.Carrier` printed its incoming headers — the bearer token
+  in `Authorization` — with `%v`, and the Connect error messages told the
+  client why authentication failed; the carrier now prints and logs key
+  counts only, and the messages are one fixed string per code.
+- The `grpc-bearer` example and the `grpcsec` godoc example installed only
+  unary interceptors: the streaming `Health.Watch` RPC was served to callers
+  without any token. Both now install the unary and stream chains through
+  `grpcsec.ServerOptions` / `grpcsec.AuthorizeServerOptions`.
