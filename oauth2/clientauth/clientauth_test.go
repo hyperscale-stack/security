@@ -54,7 +54,7 @@ type noMatcherClient struct {
 	methods []string
 }
 
-func (c noMatcherClient) ID() string             { return c.id }
+func (c noMatcherClient) ID() string              { return c.id }
 func (c noMatcherClient) Type() oauth2.ClientType { return c.typ }
 func (c noMatcherClient) RedirectURIs() []string  { return nil }
 func (c noMatcherClient) GrantTypes() []string    { return nil }

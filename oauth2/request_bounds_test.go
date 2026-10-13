@@ -22,6 +22,7 @@ import (
 	"github.com/hyperscale-stack/security/oauth2/storage/memory"
 	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,29 +30,18 @@ import (
 const authorizePath = "/oauth2/authorize"
 
 // boundsEnv is a Profile20 server — the implicit flow is enabled — whose
-// requests are bounded to MaxRequestBytes, over a counting store and a
-// counting client store, reporting to sink. It serves the confidential
+// requests are bounded to MaxRequestBytes, over a counting store, reporting
+// to sink. Its ClientStore, lookups, is a mock recording the lookups and
+// answering them from the registry clients, which serves the confidential
 // client "machine" (secret "machine-secret") declaring the
 // authorization_code, implicit, client_credentials and refresh_token grants
 // and the scopes read and write.
 type boundsEnv struct {
 	srv     *oauth2.Server
 	store   *writeCountingStore
-	clients *countingClients
+	clients *staticClientStore
+	lookups *oauth2.MockClientStore
 	sink    *errorSink
-}
-
-// countingClients is a ClientStore counting its lookups.
-type countingClients struct {
-	staticClientStore
-
-	loads atomic.Int32
-}
-
-func (c *countingClients) LoadClient(ctx context.Context, id string) (oauth2.Client, error) {
-	c.loads.Add(1)
-
-	return c.staticClientStore.LoadClient(ctx, id)
 }
 
 // newBoundsEnv builds a boundsEnv bounding requests to maxBytes, behind
@@ -64,12 +54,14 @@ func newBoundsEnv(t *testing.T, maxBytes int64, resolver oauth2.IssuerResolver, 
 	}
 
 	env := &boundsEnv{store: &writeCountingStore{Store: memory.New()}, sink: &errorSink{}}
-	env.clients = &countingClients{staticClientStore: staticClientStore{clients: map[string]oauth2.Client{
+	env.clients = &staticClientStore{clients: map[string]oauth2.Client{
 		"machine": confidentialClient([]string{
 			oauth2.GrantTypeAuthorizationCode, oauth2.GrantTypeImplicit,
 			oauth2.GrantTypeClientCredentials, oauth2.GrantTypeRefreshToken,
 		}, []string{"read", "write"}),
-	}}}
+	}}
+	env.lookups = oauth2.NewMockClientStore(t)
+	env.lookups.EXPECT().LoadClient(mock.Anything, mock.Anything).RunAndReturn(env.clients.LoadClient).Maybe()
 
 	gcfg := grant.Config{
 		Storage:       env.store,
@@ -83,7 +75,7 @@ func newBoundsEnv(t *testing.T, maxBytes int64, resolver oauth2.IssuerResolver, 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
 		Profile:        oauth2.Profile20,
 		Storage:        env.store,
-		ClientStore:    env.clients,
+		ClientStore:    env.lookups,
 		IssuerResolver: resolver,
 		Grants: []oauth2.Grant{
 			grant.NewAuthorizationCode(gcfg), grant.NewRefreshToken(gcfg), grant.NewClientCredentials(gcfg),
@@ -222,7 +214,7 @@ func requireTooLarge(t *testing.T, env *boundsEnv, path string, rec *httptest.Re
 		assert.JSONEq(t, `{"error":"invalid_request","error_description":"request too large"}`, rec.Body.String())
 	}
 
-	assert.Zero(t, env.clients.loads.Load(), "no client looked up")
+	env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 	assert.Zero(t, env.store.writes.Load(), "nothing written")
 
 	var oe *oauth2.Error
@@ -572,7 +564,7 @@ func TestOverlongClientIDIsUnknown(t *testing.T) {
 			rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+q.Encode(), nil))
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
 			assert.Equal(t, "oauth2: unknown or invalid client\n", rec.Body.String())
-			assert.Zero(t, env.clients.loads.Load(), "never looked up")
+			env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 		})
 	}
 
@@ -585,7 +577,7 @@ func TestOverlongClientIDIsUnknown(t *testing.T) {
 
 		rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+q.Encode(), nil))
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Equal(t, int32(1), env.clients.loads.Load(), "looked up")
+		env.lookups.AssertNumberOfCalls(t, "LoadClient", 1)
 	})
 
 	methods := map[string]func() *http.Request{
@@ -613,7 +605,7 @@ func TestOverlongClientIDIsUnknown(t *testing.T) {
 
 			rec := serve(env.srv.IntrospectHandler(), req())
 			assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
-			assert.Zero(t, env.clients.loads.Load(), "never looked up")
+			env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -634,7 +626,7 @@ func TestFailingResolverChecksNoIssuerBinding(t *testing.T) {
 	params := redirectParams(t, rec, false)
 	assert.Equal(t, oauth2.CodeServerError, params.Get("error"))
 	assert.NotContains(t, params, "iss", "no issuer is known")
-	assert.Equal(t, int32(1), env.clients.loads.Load())
+	env.lookups.AssertNumberOfCalls(t, "LoadClient", 1)
 }
 
 // TestMalformedFormIsRefused: a body that is no valid form encoding is
@@ -658,7 +650,7 @@ func TestMalformedFormIsRefused(t *testing.T) {
 				assert.JSONEq(t, `{"error":"invalid_request","error_description":"the request is malformed"}`, rec.Body.String())
 			}
 
-			assert.Zero(t, env.clients.loads.Load())
+			env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 			assert.Equal(t, []string{oauth2.CodeInvalidRequest}, env.sink.codes())
 		})
 	}

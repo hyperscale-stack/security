@@ -15,22 +15,22 @@ import (
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 // errClientStoreDown is the failure of a client store backend.
 var errClientStoreDown = errors.New("client store: connection refused")
 
-// failingClients is a ClientStore whose backend fails — or, with answer
-// set, that reports an unknown client with it.
-type failingClients struct{ answer error }
+// clientsAnswering is a ClientStore answering every lookup with err — a
+// failing backend, or an unknown client reported with an error.
+func clientsAnswering(t *testing.T, err error) *oauth2.MockClientStore {
+	t.Helper()
 
-func (f failingClients) LoadClient(context.Context, string) (oauth2.Client, error) {
-	if f.answer != nil {
-		return nil, f.answer
-	}
+	clients := oauth2.NewMockClientStore(t)
+	clients.EXPECT().LoadClient(mock.Anything, mock.Anything).Return(nil, err)
 
-	return nil, errClientStoreDown
+	return clients
 }
 
 // failingClientsEnv is a boundsEnv whose ClientStore is store.
@@ -73,7 +73,7 @@ func TestClientStoreFailureIsAServerError(t *testing.T) {
 	t.Run("authorize", func(t *testing.T) {
 		t.Parallel()
 
-		env := failingClientsEnv(t, failingClients{}, nil)
+		env := failingClientsEnv(t, clientsAnswering(t, errClientStoreDown), nil)
 		rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+boundsQuery().Encode(), nil))
 
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -119,7 +119,7 @@ func TestClientStoreFailureIsAServerError(t *testing.T) {
 			t.Run(ep.path+"/"+method, func(t *testing.T) {
 				t.Parallel()
 
-				env := failingClientsEnv(t, failingClients{}, nil)
+				env := failingClientsEnv(t, clientsAnswering(t, errClientStoreDown), nil)
 				form := url.Values{}
 				for k, v := range ep.form {
 					form[k] = v
@@ -140,7 +140,7 @@ func TestClientStoreFailureIsAServerError(t *testing.T) {
 func TestClientStoreInvalidClientMeansUnknown(t *testing.T) {
 	t.Parallel()
 
-	env := failingClientsEnv(t, failingClients{answer: oauth2.ErrInvalidClient}, nil)
+	env := failingClientsEnv(t, clientsAnswering(t, oauth2.ErrInvalidClient), nil)
 
 	rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+boundsQuery().Encode(), nil))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)

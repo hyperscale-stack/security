@@ -17,16 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// unmatchableClient is a client that cannot verify a secret: it implements
-// oauth2.Client but not oauth2.SecretMatcher.
-type unmatchableClient struct{ id string }
+// unmatchableClient is a confidential client that cannot verify a secret:
+// the generated Client mock implements oauth2.Client, not
+// oauth2.SecretMatcher.
+func unmatchableClient(t *testing.T) *oauth2.MockClient {
+	t.Helper()
 
-func (c unmatchableClient) ID() string            { return c.id }
-func (unmatchableClient) Type() oauth2.ClientType { return oauth2.ClientConfidential }
-func (unmatchableClient) RedirectURIs() []string  { return nil }
-func (unmatchableClient) GrantTypes() []string    { return []string{oauth2.GrantTypeClientCredentials} }
-func (unmatchableClient) Scopes() []string        { return []string{"read"} }
-func (unmatchableClient) AuthMethods() []string   { return nil }
+	client := oauth2.NewMockClient(t)
+	client.EXPECT().ID().Return("unmatchable").Maybe()
+	client.EXPECT().Type().Return(oauth2.ClientConfidential).Maybe()
+	client.EXPECT().RedirectURIs().Return(nil).Maybe()
+	client.EXPECT().GrantTypes().Return([]string{oauth2.GrantTypeClientCredentials}).Maybe()
+	client.EXPECT().Scopes().Return([]string{"read"}).Maybe()
+	client.EXPECT().AuthMethods().Return(nil).Maybe()
+
+	return client
+}
 
 // clientAuthFailures are client authentications every endpoint refuses,
 // each with the detail of its refusal.
@@ -104,7 +110,7 @@ func failuresEnv(t *testing.T) *boundsEnv {
 	elsewhere.IDValue, elsewhere.Secret, elsewhere.IssuerValues = "elsewhere", "elsewhere-secret", []string{"https://other.example"}
 	env.clients.clients["elsewhere"] = elsewhere
 
-	env.clients.clients["unmatchable"] = unmatchableClient{id: "unmatchable"}
+	env.clients.clients["unmatchable"] = unmatchableClient(t)
 
 	return env
 }
