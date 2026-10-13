@@ -200,7 +200,8 @@ to `otelconnect`, which you compose alongside these interceptors.
 | `jwtsec.RemoteJWKS.Fetch` | a fetch of the remote JWK Set — a new root span (the fetch outlives the request that started it) linked to the caller's span | `jwt.jwks.url` (string, without userinfo, query or fragment), `jwt.jwks.keys` (int, kept), `jwt.jwks.ignored` (int, unusable keys skipped) | `fetch` |
 
 Values taken from a token (`jwt.kid`, `jwt.alg` of a refused token,
-`jwt.iss`) and the parser messages that recorded errors quote are clipped
+`jwt.iss`) and the third-party messages that recorded errors quote — a
+parser's, or a transport's quoting what the JWK Set host sent — are clipped
 to 128 bytes; the errors `KeySet` returns name the remote JWK Set's URL once,
 without userinfo or query (the `jwtsec.RemoteJWKS.Fetch` span carries it in
 `jwt.jwks.url`).

@@ -448,6 +448,11 @@ func (r *remoteJWKS) fetch(parent context.Context, call *jwksFetch) {
 
 	keys, ignored, err := r.download(ctx)
 	if err != nil {
+		// Clipped once: the error is kept and reported on every failing
+		// verification, and a transport's may quote what the JWK Set host
+		// sent (net/http quotes a malformed status line whole).
+		err = clipError(err)
+
 		span.SetStatus(codes.Error, "fetch")
 		span.RecordError(err)
 	} else {

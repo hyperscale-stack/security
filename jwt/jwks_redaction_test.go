@@ -5,8 +5,10 @@
 package jwtsec_test
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
+	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +116,6 @@ func TestRemoteJWKSErrorsDoNotLeakTheURL(t *testing.T) {
 // measures the allocations of the process.
 func TestRemoteJWKSBoundsDocumentErrors(t *testing.T) {
 	huge := "1" + strings.Repeat("0", 1_000_000)
-	tok := tokenFor(t, mustKey(t), "k")
 
 	for name, doc := range map[string]string{
 		"beside the keys": `{"keys":[],"x":` + huge + `}`,
@@ -121,35 +123,102 @@ func TestRemoteJWKSBoundsDocumentErrors(t *testing.T) {
 		"as a key":        `{"keys":[` + huge + `]}`,
 	} {
 		e := newJWKSEndpoint(t, []byte(doc))
-		v := jwtsec.NewVerifier(e.provider(t, newTestClock()))
-
-		var verifyErr error
-
-		spans := record(func() { _, verifyErr = v.Verify(context.Background(), tok, nil) })
-
-		require.Error(t, verifyErr, name)
-		assert.Less(t, len(verifyErr.Error()), 400, name)
-
-		fetches := named(spans, "jwtsec.RemoteJWKS.Fetch")
-		require.Len(t, fetches, 1, name)
-
-		for _, recorded := range fetches[0].errs {
-			assert.Less(t, len(recorded), 400, name)
-		}
-
-		const calls = 20
-
-		var before, after runtime.MemStats
-
-		runtime.ReadMemStats(&before)
-
-		for range calls {
-			_, _ = v.Verify(context.Background(), tok, nil)
-		}
-
-		runtime.ReadMemStats(&after)
-		assert.Less(t, (after.TotalAlloc-before.TotalAlloc)/calls, uint64(64<<10), "%s: bytes allocated per verification", name)
+		boundedFailures(t, name, e.provider(t, newTestClock()))
 	}
+}
+
+// TestRemoteJWKSBoundsTransportErrors pins re-review R1: the errors of the
+// transport are kept and reported again on every verification, and
+// net/http quotes a malformed status line whole in them — up to its
+// response-header limit (64 KiB through outbound, 10 MB through a plain
+// http.Client). Not parallel: it installs the recording tracer provider
+// and measures the allocations of the process.
+func TestRemoteJWKSBoundsTransportErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		statusLine int
+		option     jwtsec.RemoteOption
+	}{
+		"outbound client, 60 KiB status line": {60 << 10, jwtsec.WithOutboundPolicy(outbound.Policy{
+			AllowHTTP: true, AllowedPrefixes: outbound.LoopbackPrefixes(),
+		})},
+		"opt-out client, 2 MiB status line": {2 << 20, jwtsec.WithHTTPClient(&http.Client{})},
+	} {
+		p, err := jwtsec.NewRemoteJWKS(malformedStatusServer(t, tc.statusLine), tc.option)
+		require.NoError(t, err, name)
+
+		jwtsec.SetRemoteJWKSClock(p, newTestClock().Now)
+		t.Cleanup(func() { waitIdle(t, p) })
+
+		boundedFailures(t, name, p)
+	}
+}
+
+// malformedStatusServer returns the URL of a plain-http server on the
+// loopback interface that answers every request with a status line of n
+// bytes, which net/http refuses quoting it.
+func malformedStatusServer(t *testing.T, n int) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	answer := []byte("HTTP/1.1 " + strings.Repeat("A", n) + "\r\n\r\n")
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+
+			go func() {
+				defer func() { _ = conn.Close() }()
+
+				_, _ = bufio.NewReader(conn).ReadString('\n') // the request line
+				_, _ = conn.Write(answer)
+			}()
+		}
+	}()
+
+	return "http://" + ln.Addr().String() + "/jwks"
+}
+
+// boundedFailures asserts that a verification failing on p's key set
+// yields a short error and short span events, and allocates little on
+// every later call — when the failure is reported from the kept state.
+func boundedFailures(t *testing.T, name string, p jwtsec.JWKSProvider) {
+	t.Helper()
+
+	v := jwtsec.NewVerifier(p)
+	tok := tokenFor(t, mustKey(t), "k")
+
+	var verifyErr error
+
+	spans := record(func() { _, verifyErr = v.Verify(context.Background(), tok, nil) })
+
+	require.Error(t, verifyErr, name)
+	assert.Less(t, len(verifyErr.Error()), 400, name)
+
+	fetches := named(spans, "jwtsec.RemoteJWKS.Fetch")
+	require.Len(t, fetches, 1, name)
+
+	for _, recorded := range fetches[0].errs {
+		assert.Less(t, len(recorded), 400, name)
+	}
+
+	const calls = 20
+
+	var before, after runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	for range calls {
+		_, _ = v.Verify(context.Background(), tok, nil)
+	}
+
+	runtime.ReadMemStats(&after)
+	assert.Less(t, (after.TotalAlloc-before.TotalAlloc)/calls, uint64(64<<10), "%s: bytes allocated per verification", name)
 }
 
 // mustKey returns a fresh ES256 signing key.
