@@ -515,8 +515,9 @@ PKCE. Not supported, and refused where a provider could select them:
 
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
-  keys, signers and key sets, `session.Codec`…) print redacted with every
-  `fmt` verb and in `slog` output — as do the `grpcsec` and
+  keys, signers and key sets, `session.Codec` and `session.Session`, the
+  `basic`, `bearer` and `session` authentications…) print redacted with
+  every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without
   calling any of their methods: `%p` of a value that is not a pointer, a
@@ -525,18 +526,17 @@ PKCE. Not supported, and refused where a provider could select them:
   Log these types directly or through exported fields, with `%v`.
 - **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
   only: a value nested in another one (a struct field, a map) is encoded
-  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`
-  encode without their secrets, but `oidcclient.Identity` and `Tokens`
-  encode their tokens — deliberately, so that applications can persist them
-  — and `UserInfo` its claims: log these as attributes of their own. Other
-  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
-  every exported field, an `AuthRequest`'s binding secret included.
-- **Credentials and tokens in flight are not redacted yet** — `basic` and
-  `bearer` authentications print the password (before authentication) and
-  the bearer token they carry, and the `oauth2` records
-  (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the `GrantResponse`
-  holding them) the raw code and tokens they carry during issuance: never
-  log them.
+  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`,
+  and `session.Session`, encode without their secrets, but
+  `oidcclient.Identity` and `Tokens` encode their tokens — deliberately, so
+  that applications can persist them — and `UserInfo` its claims: log these
+  as attributes of their own. Other reflection-based encoders
+  (`encoding/gob`, `encoding/xml`, YAML) write every exported field, an
+  `AuthRequest`'s binding secret included.
+- **Credentials and tokens in flight are not redacted yet** — the `oauth2`
+  records (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the
+  `GrantResponse` holding them) print the raw code and tokens they carry
+  during issuance: never log them.
 
 ## Tooling
 

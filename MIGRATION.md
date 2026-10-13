@@ -2201,3 +2201,23 @@ To migrate:
    documentation and the session-web example (sign-in form protected
    through a session opened for the form, `net/http`'s
    `CrossOriginProtection` in front of the handlers).
+
+### `session`, `basic`, `bearer`: credentials stay out of `fmt`, `slog` and JSON; the bearer token is dropped once verified
+
+| | Before | After |
+| --- | --- | --- |
+| `fmt` / `slog` of a `session.Session` | every field, CSRF token and raw ID included | `session.Session{ID: <fingerprint>, Values: [keys], CSRFToken: REDACTED, …}` with every verb |
+| `json.Marshal` of a `session.Session` | every field | `{"IDHash", "Values": [keys], "CSRFToken": "REDACTED", "CreatedAt", "LastAccessed", "ExpiresAt"}` |
+| `fmt` of a `basic.Authentication` | typed user-id, password, user record | name (subject, or `basic`), state, authorities |
+| `fmt` of a `bearer.Authentication` | the token | name, state, authorities; `Token: REDACTED` |
+| `bearer.Authentication` after `WithAuthenticated` | keeps the token (`Token()`) | `Token()` is `""` |
+| Value returned by a failed `bearer.Authenticator.Authenticate` | its input (the token) | `security.Anonymous()` |
+
+To migrate:
+
+1. Code that persisted a `session.Session` with `encoding/json` must use a
+   type of its own (the session lives sealed in its cookie anyway).
+2. Code that read `Token()` from an authenticated `bearer.Authentication` to
+   relay the token must read the request's `Authorization` field. A custom
+   `TokenVerifier` should build its result with
+   `bearer.New(token).WithAuthenticated(...)`, which drops the token.

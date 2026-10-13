@@ -129,7 +129,10 @@ func TestNewManagerRefusesInvalidCookieConfiguration(t *testing.T) {
 func TestManagerRefusesOversizedCookies(t *testing.T) {
 	t.Parallel()
 
-	mgr := newManager(t)
+	// A fixed clock: the cookie size depends on the timestamps it carries,
+	// whose RFC 3339 length varies with the clock (trailing zeros).
+	now := epoch
+	mgr := clockedManager(t, &now)
 
 	s, err := mgr.Login(context.Background(), newCarrier(), principal{sub: "alice"})
 	require.NoError(t, err)

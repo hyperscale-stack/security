@@ -501,6 +501,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and `Session.GetInt64`.
 - `session.ErrCookieTooLarge`: a session cookie that would exceed 4096
   bytes is refused instead of being silently dropped by the browser.
+- `String`, `Format` and `LogValue` on `session.Session` (and a redacting
+  `MarshalJSON`), `session.Authentication`, `basic.Authentication` and
+  `bearer.Authentication`.
 
 ### Changed
 
@@ -820,6 +823,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   without `Secure`, a TTL that is not positive, a negative idle timeout. A
   request carrying more than one valid session cookie of the session's name
   has no session. See [MIGRATION.md](MIGRATION.md).
+- `bearer.Authentication.WithAuthenticated` drops the token: `Token()` is
+  `""` once authenticated (read the request's `Authorization` field to relay
+  a token), and a failed `bearer.Authenticator.Authenticate` returns
+  `security.Anonymous()`. `json.Marshal` of a `session.Session` writes its
+  ID fingerprint, the keys of its values and its times, never the CSRF
+  token, the ID or the values. See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1755,3 +1764,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   default name is now `__Host-session`, the configuration is checked at
   construction, a request with two valid session cookies has none, and an
   oversized cookie is an error.
+- Credentials printed and serialized: the exported fields of a
+  `session.Session` revealed its CSRF token (and its raw ID) through `%+v`
+  and `encoding/json` — `slog`'s JSON handler included; `basic` and `bearer`
+  authentications printed the password, the bearer token and, once
+  authenticated, the application's user record (password hash included);
+  and a verified `bearer.Authentication` kept its token for the rest of the
+  request. They now print, log and encode without secrets, and the bearer
+  token is dropped once verified.
