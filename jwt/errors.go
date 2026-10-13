@@ -80,9 +80,10 @@ var (
 	// could be obtained: a remote JWK Set never fetched, or older than
 	// [MaxKeySetStaleness] while refreshes fail, a [JWKSProvider] failing,
 	// the caller's context ending while it waits for a fetch. An
-	// infrastructure failure, not a credential one: it wraps no credential
-	// sentinel, so transports do not answer it as an invalid token.
-	ErrKeySetUnavailable = errors.New("jwt: key set unavailable")
+	// infrastructure failure, not a credential one: it wraps
+	// [security.ErrUnavailable] and no credential sentinel, so transports
+	// answer it with 503 / Unavailable, never as an invalid token.
+	ErrKeySetUnavailable = newJWTError("key set unavailable", security.ErrUnavailable)
 )
 
 // newJWTError builds a sentinel that wraps a core security sentinel via

@@ -1655,7 +1655,7 @@ stale set forever, never refreshed on an unknown `kid`, and trusted every key.
 | refresh | under a lock; on every call while failing; stale set used forever; none on an unknown `kid` | one fetch at a time in the background after the TTL; at most every 10 s; back-off up to 5 min; set unused after 24 h; one refresh on an unknown `kid` |
 | keys | all kept; one unsupported key failed the set | validated one by one, unusable ones ignored; RSA without `alg`: RS256 if allowed, else the verifier's only RSA algorithm |
 | `WithCacheTTL(0)` | fetched on every call | panics: the TTL is in (0, 24 h] |
-| an outage seen by `Verify` | a plain error (401) | `ErrKeySetUnavailable`, which wraps no credential sentinel |
+| an outage seen by `Verify` | a plain error (401) | `ErrKeySetUnavailable`, wrapping `security.ErrUnavailable` and no credential sentinel: 503 / Unavailable at the transports |
 
 To migrate:
 
@@ -1664,7 +1664,8 @@ To migrate:
    `jwtsec.WithOutboundPolicy(outbound.Policy{AllowedPrefixes: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}})`
    (and `RootCAs` for a private CA); in tests against `httptest`, use
    `outbound.Policy{AllowHTTP: true, AllowedPrefixes: outbound.LoopbackPrefixes()}`.
-3. Map `jwtsec.ErrKeySetUnavailable` to 503 if your transport does not.
+3. In a custom error mapper, answer `security.ErrUnavailable`
+   (`security.ErrorClass`: `unavailable`) with 503: a key set outage wraps it.
 4. If your JWK Set URL redirects to another origin (a CDN, another host),
    configure the final URL.
 

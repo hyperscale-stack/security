@@ -44,7 +44,8 @@
 //     once per MinKeySetRefreshInterval, one fetch shared by all callers,
 //     never under a lock — stops using a set older than MaxKeySetStaleness,
 //     ignores unusable keys one by one, and reports an outage as
-//     ErrKeySetUnavailable, never as an invalid token.
+//     ErrKeySetUnavailable — a security.ErrUnavailable, which the
+//     transports answer with 503 / Unavailable — never as an invalid token.
 //   - MarshalJWKS publishes a JWK Set of public signature keys and refuses
 //     private or symmetric material; PublicKey.Validate and
 //     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,

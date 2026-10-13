@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/hyperscale-stack/security"
+	"github.com/hyperscale-stack/security/bearer"
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,6 +88,28 @@ func TestBearerVerifierPropagatesVerifierError(t *testing.T) {
 
 	_, err := jwtsec.BearerVerifier(verifier, nil).Verify(context.Background(), accessToken(t, priv))
 	assert.ErrorIs(t, err, jwtsec.ErrInvalidSignature)
+}
+
+// TestBearerVerifierReportsKeySetOutagesAsUnavailable pins audit JWT-I6 at
+// the bearer authenticator: a key set outage reaches it as
+// security.ErrUnavailable, which the transports answer with 503 /
+// Unavailable — never as an invalid token (401).
+func TestBearerVerifierReportsKeySetOutagesAsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	priv, _ := genECDSA(t)
+
+	provider := jwtsec.NewMockJWKSProvider(t)
+	provider.EXPECT().KeySet(mock.Anything).Return(nil, errors.New("key store down")).Once()
+
+	v := jwtsec.NewVerifier(provider,
+		jwtsec.WithIssuer(rsIssuer), jwtsec.WithAudience(rsAudience), jwtsec.WithType(jwtsec.TypeAccessToken))
+
+	_, err := bearer.NewAuthenticator(jwtsec.BearerVerifier(v, nil)).
+		Authenticate(context.Background(), bearer.New(accessToken(t, priv)))
+	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
+	require.ErrorIs(t, err, security.ErrUnavailable)
+	assert.Equal(t, security.ErrorClassUnavailable, security.ErrorClass(err))
 }
 
 // TestBearerVerifierRefusesAnUnsafeVerifier pins decision 9 and RFC 9068

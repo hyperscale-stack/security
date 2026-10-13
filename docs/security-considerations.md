@@ -109,8 +109,9 @@ keys by `kid` against a JWKS provider (static or remote).
   than `sig`, `key_ops` without `verify`, unknown `kty` or curve, RSA outside
   2048–8192 bits, an `alg` the key cannot verify); a valid set without
   usable keys replaces the previous one. An outage is
-  `ErrKeySetUnavailable`, never an invalid token. The provider prints and
-  reports its URL without userinfo or query.
+  `ErrKeySetUnavailable`, which wraps `security.ErrUnavailable` (503 /
+  Unavailable), never an invalid token. The provider prints and reports its
+  URL without userinfo or query.
 - **Signing keys** — `NewSigner` and `NewOAuth2AccessTokenSigner` return an
   error for a key unfit for its algorithm (RSA under 2048 bits, another
   curve, a public key, an HMAC secret shorter than its hash); KMS and HSM

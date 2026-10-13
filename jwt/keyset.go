@@ -73,7 +73,8 @@ type KeySet interface {
 // The KeySet contract gives implementations leeway to refresh in the
 // background without coordinating with callers. A [Verifier] reports any
 // KeySet error — or a nil KeySet — as [ErrKeySetUnavailable], an
-// infrastructure failure, never as an invalid token.
+// infrastructure failure (it wraps security.ErrUnavailable: 503 /
+// Unavailable at the transports), never as an invalid token.
 type JWKSProvider interface {
 	KeySet(ctx context.Context) (KeySet, error)
 }

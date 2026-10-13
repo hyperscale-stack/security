@@ -186,14 +186,21 @@ func ecKey(t *testing.T, kid string) (jwtsec.PrivateKey, jwtsec.PublicKey) {
 	return priv, pub
 }
 
-// notCredentialFailure asserts that err is not classified as a credential
-// failure by the transports: an outage must never become a 401.
-func notCredentialFailure(t *testing.T, err error) {
+// outage asserts that err reports a key set outage (audit JWT-I6):
+// ErrKeySetUnavailable, wrapping security.ErrUnavailable — which the
+// transports answer with 503 / Unavailable — and no credential sentinel:
+// an outage must never become a 401.
+func outage(t *testing.T, err error) {
 	t.Helper()
+
+	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
+	require.ErrorIs(t, err, security.ErrUnavailable)
+	require.Equal(t, security.ErrorClassUnavailable, security.ErrorClass(err))
 
 	for _, s := range []error{
 		security.ErrInvalidCredentials, security.ErrTokenExpired, security.ErrTokenNotFound,
 		security.ErrClientSecretMismatch, security.ErrUnsupportedCredential,
+		security.ErrAuthenticationRequired, security.ErrInvalidRequest,
 	} {
 		require.NotErrorIs(t, err, s)
 	}
@@ -215,7 +222,7 @@ func TestRemoteJWKSDefaultPolicyRefusesInternalDestinations(t *testing.T) {
 	_, err = p.KeySet(context.Background())
 	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
 	require.ErrorIs(t, err, outbound.ErrDestinationNotAllowed)
-	notCredentialFailure(t, err)
+	outage(t, err)
 
 	// http needs an explicit policy; loopback stays refused without an
 	// exemption.
@@ -614,7 +621,7 @@ func TestRemoteJWKSWaitHonoursTheCallerContext(t *testing.T) {
 
 	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	notCredentialFailure(t, err)
+	outage(t, err)
 	assert.Equal(t, 1, strings.Count(err.Error(), e.srv.URL+"/jwks"), "the URL is named once: %v", err)
 	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.False(t, jwtsec.RemoteJWKSIdle(p), "the fetch goes on")
@@ -749,7 +756,7 @@ func TestRemoteJWKSStopsServingAStaleSet(t *testing.T) {
 
 	_, err = v.Verify(context.Background(), tok, nil)
 	require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable)
-	notCredentialFailure(t, err)
+	outage(t, err)
 }
 
 // TestVerifierRefreshesOnUnknownKid pins decision 8 and OpenID Connect
@@ -917,7 +924,7 @@ func TestRemoteJWKSRefusesMalformedDocuments(t *testing.T) {
 			cold := e.provider(t, clock)
 			_, err := cold.KeySet(context.Background())
 			require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, "no previous set")
-			notCredentialFailure(t, err)
+			outage(t, err)
 
 			e.set(good, http.StatusOK)
 			warm := e.provider(t, clock)
@@ -933,8 +940,8 @@ func TestRemoteJWKSRefusesMalformedDocuments(t *testing.T) {
 }
 
 // TestVerifierMapsKeySetFailuresToErrKeySetUnavailable pins audit JWT-I6:
-// a key set outage is ErrKeySetUnavailable — never a credential failure
-// the transports would answer with 401.
+// a key set outage is ErrKeySetUnavailable, a security.ErrUnavailable —
+// never a credential failure the transports would answer with 401.
 func TestVerifierMapsKeySetFailuresToErrKeySetUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -950,7 +957,7 @@ func TestVerifierMapsKeySetFailuresToErrKeySetUnavailable(t *testing.T) {
 
 		_, err := jwtsec.NewVerifier(provider).Verify(context.Background(), tok, nil)
 		require.ErrorIs(t, err, jwtsec.ErrKeySetUnavailable, name)
-		notCredentialFailure(t, err)
+		outage(t, err)
 	}
 }
 

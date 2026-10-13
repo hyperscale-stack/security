@@ -465,7 +465,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `WithOutboundPolicy` (the SSRF policy of `NewRemoteJWKS`), the refresh
   policy constants `DefaultCacheTTL`, `MinKeySetRefreshInterval`,
   `MaxKeySetStaleness`; `BearerOption` and `WithAccessTokenType`;
-  `ErrInvalidClaims`, `ErrUnsignableClaims`, `ErrKeySetUnavailable`; a
+  `ErrInvalidClaims`, `ErrUnsignableClaims`, `ErrKeySetUnavailable` (wraps
+  `security.ErrUnavailable`); a
   `jwtsec.RemoteJWKS.Fetch` span; fuzz targets for the verifier, the claims
   decoder and NumericDate. See Security and Changed.
 
@@ -1381,7 +1382,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the JWK Set URL's origin — one fetch at a time, refreshed in the
   background and on unknown `kid`s (rate-limited, backed off), dropped
   after 24 h without a successful fetch, and validated key by key; an
-  outage is `ErrKeySetUnavailable`, never an invalid token.
+  outage is `ErrKeySetUnavailable`, a `security.ErrUnavailable` the
+  transports answer with 503 / Unavailable, never an invalid token (401).
 - **JWT resource servers** (`jwtsec.BearerVerifier`) accepted any `typ`,
   `iss` and `aud` — an ID Token or another API's access token was accepted
   — and an empty `sub`: RFC 9068 §4 checks are now required.
