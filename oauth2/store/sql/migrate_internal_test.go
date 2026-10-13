@@ -5,12 +5,14 @@
 package sqlstore
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -136,6 +138,33 @@ func TestMigrateRollsBackAFailedSchema(t *testing.T) {
 	require.ErrorContains(t, err, "sqlstore: migrate: ")
 	require.ErrorContains(t, err, "already an index named "+last)
 	assert.Equal(t, []string{"blocker"}, tables(t, db))
+}
+
+// TestMigrateReleasesAFailedTransaction: a Migrate that fails under a
+// context that never ends — the usual call at boot — still ends its
+// transaction and gives its connection back. Left open, the transaction
+// would keep the connection checked out (on PostgreSQL, "idle in
+// transaction (aborted)") for the life of the pool, one more at every
+// retry. On a one-connection pool, the next Migrate, once the cause is
+// gone, goes through.
+func TestMigrateReleasesAFailedTransaction(t *testing.T) {
+	t.Parallel()
+
+	store, db := lockingStore(t, `CREATE TABLE migration_lock_probe (taken INTEGER)`)
+	db.SetMaxOpenConns(1)
+
+	last := schemaTables[len(schemaTables)-1]
+	execAll(t, db, `CREATE TABLE blocker (x INTEGER)`, `CREATE INDEX `+last+` ON blocker (x)`)
+
+	require.Error(t, store.Migrate(context.Background()))
+	require.Zero(t, db.Stats().InUse, "the failed Migrate gave its connection back")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	_, err := db.ExecContext(ctx, `DROP INDEX `+last)
+	require.NoError(t, err)
+	require.NoError(t, store.Migrate(ctx))
 }
 
 // TestMigrateReportsAFailedCommit: a COMMIT that fails — here on a deferred

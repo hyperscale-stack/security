@@ -277,6 +277,26 @@ func migrateTogether(t *testing.T, b backend) {
 	}
 }
 
+// migrateWithin runs the Migrate of s under ctx, and fails t unless it
+// returns within limit: a Migrate that ignores its context, waiting for a
+// lock it never gets, fails the test instead of hanging it.
+func migrateWithin(t *testing.T, ctx context.Context, limit time.Duration, s sqlStore, db *sql.DB) error {
+	t.Helper()
+
+	done := make(chan error, 1)
+
+	go func() { done <- s.migrate(ctx, db, enginePostgres) }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(limit):
+		t.Fatalf("%s: Migrate still running after %s: it ignores its context", s.name, limit)
+
+		return nil
+	}
+}
+
 // holdLock takes the PostgreSQL advisory lock key in a transaction of
 // db, which the caller ends.
 func holdLock(t *testing.T, db *sql.DB, key string) *sql.Tx {
@@ -309,7 +329,7 @@ func TestMigrateWaitsForItsLock(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 
-			require.ErrorIs(t, s.migrate(ctx, db, enginePostgres), context.DeadlineExceeded)
+			require.ErrorIs(t, migrateWithin(t, ctx, 10*time.Second, s, db), context.DeadlineExceeded)
 			requireTables(t, db, enginePostgres, s, false)
 
 			// Bounded: a store sharing the held lock would wait for good.
@@ -317,7 +337,7 @@ func TestMigrateWaitsForItsLock(t *testing.T) {
 			defer cancelOther()
 
 			other := sqlStores[(i+1)%len(sqlStores)]
-			require.NoError(t, other.migrate(otherCtx, db, enginePostgres), "%s's lock is not %s's", other.name, s.name)
+			require.NoError(t, migrateWithin(t, otherCtx, 15*time.Second, other, db), "%s's lock is not %s's", other.name, s.name)
 			requireTables(t, db, enginePostgres, other, true)
 
 			require.NoError(t, holder.Commit())
@@ -332,20 +352,41 @@ func TestMigrateWaitsForItsLock(t *testing.T) {
 // exists, so the table's row type cannot be created (a composite type
 // would not do: it is a relation, which IF NOT EXISTS skips) — and checks
 // that Migrate, which runs in one transaction there, leaves none of the
-// store's tables behind.
+// store's tables behind. Run under a context that never ends, the usual
+// call at boot, the failed Migrate also ends its transaction: its
+// connection goes back to the pool — not left "idle in transaction
+// (aborted)" — and, on a one-connection pool, the next Migrate goes
+// through once the cause is gone.
 func TestMigrateFailureCreatesNothing(t *testing.T) {
 	postgres.server(t)
 
 	for _, s := range sqlStores {
 		t.Run(s.name, func(t *testing.T) {
 			driver, dsn := postgres.namespace(t)
-			db := open(t, driver, dsn, 2)
+			admin := open(t, driver, dsn, 1)
+			db := open(t, driver, dsn, 1)
 
-			_, err := db.ExecContext(t.Context(), "CREATE TYPE "+s.tables[len(s.tables)-1]+" AS ENUM ('taken')")
+			blocker := s.tables[len(s.tables)-1]
+			_, err := admin.ExecContext(t.Context(), "CREATE TYPE "+blocker+" AS ENUM ('taken')")
 			require.NoError(t, err)
 
-			require.Error(t, s.migrate(t.Context(), db, enginePostgres))
-			requireTables(t, db, enginePostgres, s, false)
+			require.Error(t, s.migrate(context.Background(), db, enginePostgres))
+			requireTables(t, admin, enginePostgres, s, false)
+			require.Zero(t, db.Stats().InUse, "the failed Migrate gave its connection back")
+
+			var aborted int
+			require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND state = 'idle in transaction (aborted)'`).Scan(&aborted))
+			require.Zero(t, aborted, "backends left idle in transaction (aborted)")
+
+			_, err = admin.ExecContext(t.Context(), "DROP TYPE "+blocker)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			require.NoError(t, migrateWithin(t, ctx, 15*time.Second, s, db), "the next Migrate on the same pool")
+			requireTables(t, admin, enginePostgres, s, true)
 		})
 	}
 }
