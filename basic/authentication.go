@@ -23,14 +23,18 @@ type Authentication struct {
 }
 
 // New constructs an unauthenticated Authentication from a username/password
-// pair. Reserved for [Extractor] implementations; application code should
-// build authentications via the Engine pipeline instead.
+// pair: the [Extractor] builds it from an Authorization header, and a form
+// login (or an OAuth2 password grant) may build it from its own fields and
+// hand it to the [Authenticator], which checks the pair again before any
+// lookup.
 func New(username, password string) Authentication {
 	return Authentication{username: username, password: password}
 }
 
-// Username returns the username extracted from the request. It MAY differ
-// from the resolved [PasswordUser]'s subject (e.g. login by email).
+// Username returns the user-id as typed by the client. It MAY differ from
+// the resolved [PasswordUser]'s subject (e.g. login by email) and may even
+// be a password typed in the wrong field: log [Authentication.Name], never
+// Username.
 func (a Authentication) Username() string { return a.username }
 
 // Password returns the cleartext password. Once an [Authenticator] has
@@ -84,9 +88,20 @@ func (a Authentication) Authorities() []string { return slices.Clone(a.authoriti
 // IsAuthenticated implements [security.Authentication].
 func (a Authentication) IsAuthenticated() bool { return a.authed }
 
-// Name implements [security.Authentication]. Returns the username, which is
-// the user-facing identifier for HTTP Basic flows.
-func (a Authentication) Name() string { return a.username }
+// Name implements [security.Authentication]. Returns the authenticated
+// user's subject, or "basic" before authentication: the typed user-id is
+// not safe to log (see [Authentication.Username]).
+func (a Authentication) Name() string {
+	if a.user != nil {
+		return a.user.Subject()
+	}
+
+	return schemeLabel
+}
+
+// schemeLabel names the scheme in Name before authentication, like the
+// bearer and session schemes do.
+const schemeLabel = "basic"
 
 // User returns the resolved [PasswordUser], or nil when the value is still
 // pre-authentication.

@@ -2093,3 +2093,32 @@ To migrate:
 4. A loader should return `(nil, nil)` or an error wrapping
    `security.ErrInvalidCredentials` for an unknown user, and an error
    wrapping `security.ErrUnavailable` when its store is down.
+
+### `basic`: credentials are parsed strictly; `Name()` is the authenticated subject
+
+The Basic extractor forwarded control characters and invalid UTF-8 to the
+`UserLoader` (log injection), skipped CR LF inside the base64 credentials,
+and `Authentication.Name()` returned the user-id as typed — `ALICE` for the
+subject `alice`, or a password typed in the username field — although
+`Name` must be safe to log.
+
+| Request / value | Before | After |
+| --- | --- | --- |
+| Control character (C0, DEL, C1) in the user-id or password | forwarded to the loader | 401, `ErrBadFormat`, the loader is not called |
+| Invalid UTF-8 (e.g. ISO-8859-1 credentials) | forwarded | 401 (the Basic challenge advertises `charset="UTF-8"`) |
+| CR LF or spaces inside the base64, unpadded or non-canonical base64 | decoded | 401 |
+| user-pass longer than 3072 bytes | forwarded | 401 |
+| `Authorization: Basic` without credentials | ignored (next extractor) | 401 |
+| `Basic` followed by several spaces | 401 | accepted (RFC 9110 §11.4 `1*SP`) |
+| Empty user-id (`-u :KEY`) | forwarded | `Extractor`: accepted; `basic.Authenticator`: 401 before any lookup |
+| `basic.New(...)` from a form login, malformed | looked up | refused by the `Authenticator` like a malformed header |
+| `Authentication.Name()` | typed user-id | before authentication `"basic"`, after it the user's subject |
+
+To migrate:
+
+1. Clients must send UTF-8 credentials (RFC 7617 §2.1) without control
+   characters.
+2. Read the typed user-id with `Username()`, the authenticated identity with
+   `Name()` or `Principal().Subject()`; log `Name()`, never `Username()`.
+3. A custom authenticator consuming `basic.Authentication` with an empty
+   user-id (API keys) keeps working: only `basic.Authenticator` refuses it.

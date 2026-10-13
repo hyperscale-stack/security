@@ -72,6 +72,13 @@ What remains measurable, and how to close it:
 - Under overload an attempt that gets no verification slot answers 503
   (`ErrUnavailable`) whatever the account, so overload reveals nothing.
 
+Malformed credentials — control characters, invalid UTF-8, more than 3072
+bytes, an empty user-id — are refused before the loader runs, without a
+verification: a property of the input, not of an account. The extractor and
+the `Authenticator` apply the same rules, so a form login that builds the
+value with `basic.New` is checked too, and a control character never reaches
+the application's lookups and logs (log injection).
+
 ### Online guessing and hashing cost
 
 Basic authentication runs a full password verification on every request,

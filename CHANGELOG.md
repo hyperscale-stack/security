@@ -783,6 +783,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   its context ends fails with `ErrUnavailable`, 503), and a failed
   `Authenticate` returns `security.Anonymous()` instead of its input. See
   [MIGRATION.md](MIGRATION.md).
+- `basic` parses credentials strictly (RFC 7617 §2): base64 alphabet with
+  canonical padding, user-id and password in UTF-8 without any control
+  character, at most 3072 bytes, several spaces allowed after the scheme,
+  and `Basic` without credentials is malformed (it used to be ignored).
+  `basic.Authenticator` applies the same checks — a form login building the
+  value with `basic.New` included — and also refuses an empty user-id
+  (`ErrBadFormat`, 401) before any lookup; the `Extractor` still lets an
+  empty user-id through for custom authenticators (`-u :KEY`).
+  `Authentication.Name()` returns the authenticated user's subject, and
+  `"basic"` before authentication (it returned the typed user-id). See
+  [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1681,3 +1692,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   concurrent verifications is capped by default (`runtime.GOMAXPROCS(0)`):
   a flood of Basic attempts can no longer exhaust memory (19 MiB per
   default Argon2id verification).
+- The Basic extractor forwarded control characters (NUL, CR LF, ANSI escape
+  sequences) and invalid UTF-8 in the user-id to the `UserLoader` — a log
+  injection vector into the application's lookups and logs — and its
+  lenient base64 decoding skipped CR LF inside the credentials. Malformed
+  credentials are now refused before any lookup, by the extractor and by
+  the `Authenticator` alike.

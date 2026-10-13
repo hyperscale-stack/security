@@ -37,11 +37,16 @@ type AuthorityResolver func(PasswordUser) []string
 // [password.Hasher], checks the account's lifecycle flags, then returns the
 // authenticated [Authentication].
 //
-// Every attempt runs exactly one password verification, whatever the
-// account: an unknown user, a loader failure or an account without a
-// password hash is verified against a dummy hash the hasher made at
-// construction, and the lifecycle flags (disabled, locked, expired) are
-// read only after the verification. The response time therefore does not
+// Credentials that are malformed — control characters, invalid UTF-8, more
+// than 3072 bytes, an empty user-id — are refused with [ErrBadFormat]
+// before any lookup: a form login building the [Authentication] with [New]
+// gets the same checks as the [Extractor].
+//
+// Every attempt with well-formed credentials runs exactly one password
+// verification, whatever the account: an unknown user, a loader failure or
+// an account without a password hash is verified against a dummy hash the
+// hasher made at construction, and the lifecycle flags (disabled, locked,
+// expired) are read only after the verification. The response time therefore does not
 // tell which accounts exist or are locked (CWE-208), and every refusal
 // wraps [security.ErrInvalidCredentials] — the detailed cause stays in the
 // error chain for server-side telemetry only: do NOT mirror it in the
@@ -137,7 +142,7 @@ func WithMaxConcurrentVerifications(n int) Option {
 
 // AuthenticatorName implements [security.NamedAuthenticator] so the core
 // Manager can attribute spans to "basic".
-func (a *Authenticator) AuthenticatorName() string { return "basic" }
+func (a *Authenticator) AuthenticatorName() string { return schemeLabel }
 
 // Supports reports whether auth is a [basic.Authentication]. Returns false
 // for everything else, which lets the [security.Manager] delegate to the
@@ -154,6 +159,17 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 	in, ok := auth.(Authentication)
 	if !ok {
 		return security.Anonymous(), security.ErrUnsupportedCredential
+	}
+
+	// The Extractor's rules again — a form login builds the Authentication
+	// from its own fields — plus a non-empty user-id (RFC 8265 §3.1): a
+	// property of the input, refused before any lookup or verification.
+	if err := checkUserPass(in.Username(), in.Password()); err != nil {
+		return security.Anonymous(), err
+	}
+
+	if in.Username() == "" {
+		return security.Anonymous(), malformed("empty user-id")
 	}
 
 	user, loadErr := a.loader.LoadByUsername(ctx, in.Username())

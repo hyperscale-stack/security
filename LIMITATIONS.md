@@ -473,6 +473,9 @@ PKCE. Not supported, and refused where a provider could select them:
   another time until it is re-hashed (`PasswordRehasher`), and the
   `UserLoader`'s own latency (a cache hit for a known user) is outside the
   library's control.
+- **UTF-8 only** — Basic credentials must be UTF-8 (the challenge advertises
+  `charset="UTF-8"`, RFC 7617 §2.1); clients sending ISO-8859-1 non-ASCII
+  credentials are refused. User-ids and passwords are not normalized.
 
 ## Passwords
 
