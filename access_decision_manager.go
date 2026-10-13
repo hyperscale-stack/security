@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // AccessDecisionManager combines the verdicts of multiple [Voter]s into a
@@ -22,15 +24,17 @@ import (
 //     [WithTieBreak](DecisionGrant) to flip the policy.
 //   - Unanimous   — every voter that does not abstain MUST grant. A single
 //     deny refuses; if every voter abstains, the result depends on
-//     [WithAbstainFallback]. Unlike Spring's UnanimousBased, the voters see
+//     [WithAbstainFallback] (a voter abstains when it supports none of the
+//     attributes, or — a custom voter — when it supports one and abstains). Unlike Spring's UnanimousBased, the voters see
 //     all their attributes at once: it is an AND across voters, while a
 //     multi-name voter (voter.HasAnyRole) grants when the principal holds
 //     any of the requested names — express an AND of roles with one voter
 //     per role, or with voter.And.
 //
-// Whatever the strategy, a decision is denied when one of its attributes is
-// supported by no voter (a requirement nobody checks is never ignored), and
-// when there is no attribute or no voter at all.
+// Whatever the strategy, the tie-break and the abstain fallback, a decision
+// is denied when one of its attributes is supported by no voter (a
+// requirement nobody checks is never ignored), and when there is no
+// attribute or no voter at all.
 //
 // Implementations are safe for concurrent use.
 type AccessDecisionManager interface {
@@ -54,7 +58,10 @@ func WithTieBreak(d Decision) admOption { //nolint:revive // exported via constr
 }
 
 // WithAbstainFallback controls the verdict when every unanimous voter
-// abstains. Default: DecisionDeny.
+// abstains. Default: DecisionDeny. It never applies to a decision without
+// attributes or without voters, which is denied; the stock voters never
+// abstain on an attribute they support, so it only matters for custom
+// voters that do.
 func WithAbstainFallback(d Decision) admOption { //nolint:revive // exported via constructors
 	return func(c *admConfig) { c.abstainFallback = d }
 }
@@ -114,7 +121,8 @@ type accessDecisionManager struct {
 // Contract violations fail closed: a nil auth is treated as [Anonymous], a
 // nil attribute denies the request before any voter runs, and a voter
 // returning a value other than [DecisionGrant] or [DecisionAbstain] is
-// counted as [DecisionDeny].
+// counted as [DecisionDeny]. A typed nil (an interface holding a nil
+// pointer) counts as nil.
 func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication, attrs []Attribute) error {
 	ctx, span := tracer().Start(ctx, "security.AccessDecisionManager.Decide")
 	defer span.End()
@@ -124,19 +132,11 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 		AttrAttributes.String(joinAttributes(attrs)),
 	)
 
-	if auth == nil {
+	if isNil(auth) {
 		auth = Anonymous()
 	}
 
-	final := DecisionDeny
-
-	if !containsNil(attrs) {
-		if unsupported := m.unsupported(attrs); unsupported > 0 {
-			span.SetAttributes(AttrAttributesUnsupported.Int(unsupported))
-		} else {
-			final = m.decide(m.votes(ctx, auth, attrs))
-		}
-	}
+	final := m.decision(ctx, span, auth, attrs)
 
 	span.SetAttributes(AttrDecision.String(final.String()))
 
@@ -147,6 +147,23 @@ func (m *accessDecisionManager) Decide(ctx context.Context, auth Authentication,
 	recordFailure(span, ErrAccessDenied)
 
 	return ErrAccessDenied
+}
+
+// decision runs the strategy, or denies before it — whatever the tie-break
+// and the abstain fallback — without attributes, on a nil attribute and on
+// an attribute no voter supports (every attribute, without voters).
+func (m *accessDecisionManager) decision(ctx context.Context, span trace.Span, auth Authentication, attrs []Attribute) Decision {
+	if len(attrs) == 0 || containsNil(attrs) {
+		return DecisionDeny
+	}
+
+	if unsupported := m.unsupported(attrs); unsupported > 0 {
+		span.SetAttributes(AttrAttributesUnsupported.Int(unsupported))
+
+		return DecisionDeny
+	}
+
+	return m.decide(m.votes(ctx, auth, attrs))
 }
 
 // unsupported counts the attributes that no voter supports.
@@ -273,15 +290,9 @@ func unanimous(allAbstainFallback Decision) func([]Decision) Decision {
 	}
 }
 
-// containsNil reports whether attrs holds a nil Attribute.
+// containsNil reports whether attrs holds a nil (or typed nil) Attribute.
 func containsNil(attrs []Attribute) bool {
-	for _, a := range attrs {
-		if a == nil {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(attrs, func(a Attribute) bool { return isNil(a) })
 }
 
 // supportedBy returns the attributes v supports, in order.
@@ -304,7 +315,7 @@ func joinAttributes(attrs []Attribute) string {
 
 	parts := make([]string, len(attrs))
 	for i, a := range attrs {
-		if a == nil {
+		if isNil(a) {
 			parts[i] = "<nil>"
 
 			continue

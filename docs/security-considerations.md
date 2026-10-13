@@ -1135,15 +1135,20 @@ Authorization follows Spring Security's voter model, and fails closed:
   can never pass for a role.
 - **No requirement is ignored.** A decision is denied when one of its
   attributes is supported by no voter of the decision manager, when there
-  is no attribute, and when there is no voter.
+  is no attribute, and when there is no voter — whatever the strategy, the
+  tie-break and the abstain fallback: `WithAbstainFallback` only decides
+  for custom voters that support an attribute and abstain.
 - **Composites.** `voter.And` grants only when every inner voter grants — an
   inner voter whose attribute the route does not list makes it deny, so list
   one attribute per inner requirement. `voter.Not` never turns the refusal
   of an unauthenticated principal into a grant: `Not(HasRole("BANNED"))`
   admits authenticated principals without the role, not anonymous callers.
-  Do not share a decision manager holding a `Not(HasRole("X"))` policy with
-  a positive `HasRole("X")` voter: under the affirmative strategy the
-  positive voter would grant `Role("X")` routes.
+  A `Role("X")` attribute is decided by every voter that supports it,
+  negated ones included: a decision manager holding `Not(HasRole("X"))`
+  grants a `[Role("X")]` route to the authenticated principals *without*
+  X, and next to a positive `HasRole("X")` voter the affirmative strategy
+  grants it to those *with* X too. Keep a negated policy in its own
+  decision manager, used only by the routes it was written for.
 - **Strategies.** Affirmative grants on one satisfied attribute (OR);
   unanimous requires every voting voter to grant (AND across voters), but a
   multi-name voter such as `HasAnyRole` grants when the principal holds any

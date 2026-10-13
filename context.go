@@ -15,19 +15,19 @@ type authCtxKey struct{}
 // calls overwrite the previous value; this is the expected behavior when an
 // authenticator promotes an unauthenticated value to an authenticated one.
 //
-// Passing a nil Authentication clears the slot — useful for "logout"
-// middlewares.
+// Passing a nil Authentication — or a typed nil, an interface holding a nil
+// pointer — clears the slot: useful for "logout" middlewares.
 func WithAuthentication(ctx context.Context, auth Authentication) context.Context {
 	return context.WithValue(ctx, authCtxKey{}, auth)
 }
 
 // FromContext returns the [Authentication] stored in ctx and a boolean
-// indicating whether one was present. When the slot is empty, it returns
-// the anonymous authentication (see [Anonymous]) so callers can rely on a
-// non-nil value without a nil check.
+// indicating whether one was present. When the slot is empty (or holds a
+// typed nil), it returns the anonymous authentication (see [Anonymous]) so
+// callers can rely on a usable value without a nil check.
 func FromContext(ctx context.Context) (Authentication, bool) {
 	v, ok := ctx.Value(authCtxKey{}).(Authentication)
-	if !ok || v == nil {
+	if !ok || isNil(v) {
 		return Anonymous(), false
 	}
 

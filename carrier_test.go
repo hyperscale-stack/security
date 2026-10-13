@@ -39,4 +39,10 @@ func TestSingleValue(t *testing.T) {
 	require.ErrorIs(t, err, security.ErrInvalidRequest)
 	assert.Empty(t, v)
 	assert.Equal(t, `security: header field "Authorization" occurs 2 times: security: invalid authentication request`, err.Error())
+
+	// Identical repetitions are no less a repeated singleton field.
+	c.Set("Authorization", "Bearer one")
+	c.Add("Authorization", "Bearer one")
+	_, err = security.SingleValue(c, "Authorization")
+	require.ErrorIs(t, err, security.ErrInvalidRequest)
 }

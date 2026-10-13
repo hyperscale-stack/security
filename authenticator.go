@@ -28,10 +28,12 @@ import "context"
 //     not be checked, they are not refused;
 //   - [ErrUnsupportedCredential] is the canonical way to bail out at runtime
 //     when Supports returned true but the value was nonetheless out of
-//     scope: the [Manager] counts it as an abstention.
+//     scope: the [Manager] counts it as an abstention — unless the error
+//     also wraps one of the sentinels above, which then prevails.
 //
 // An error wrapping no sentinel, or a "success" without an authenticated
-// value, is a contract violation the transports answer as an internal error.
+// value (nil, a typed nil or an unauthenticated value), is a contract
+// violation the transports answer as an internal error.
 //
 // Implementations MUST be safe for concurrent use.
 type Authenticator interface {

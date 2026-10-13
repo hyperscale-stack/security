@@ -14,7 +14,8 @@ import "context"
 //
 //   - Return (nil, nil) when no credentials of the supported scheme are
 //     present. The Engine treats this as "this extractor does not apply"
-//     and consults the next one.
+//     and consults the next one; a typed nil (an interface holding a nil
+//     pointer) counts as nil.
 //   - Return (nil, err) wrapping a security sentinel when credentials were
 //     present but malformed (e.g. invalid base64 in Basic). The Engine
 //     surfaces err to the caller and stops; downstream authenticators are

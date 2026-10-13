@@ -108,6 +108,39 @@ func TestEveryStrategyDeniesByDefault(t *testing.T) {
 	}
 }
 
+// Review finding 1 (user decision): no attribute or no voter denies whatever
+// the strategy, tie-break and abstain fallback; the fallback only decides
+// for voters that support an attribute and abstain.
+func TestDecideDeniesWithoutAttributesOrVotersWhateverTheFallback(t *testing.T) {
+	t.Parallel()
+
+	abstain := &scriptedVoter{prefix: "scope:", vote: security.DecisionAbstain}
+	grant := &scriptedVoter{prefix: "scope:", vote: security.DecisionGrant}
+
+	for name, adm := range map[string]security.AccessDecisionManager{
+		"unanimous, fallback grant": security.NewUnanimousDecisionManager([]security.Voter{abstain},
+			security.WithAbstainFallback(security.DecisionGrant)),
+		"unanimous, fallback grant, granting voter": security.NewUnanimousDecisionManager([]security.Voter{grant},
+			security.WithAbstainFallback(security.DecisionGrant)),
+		"unanimous, fallback grant, no voters": security.NewUnanimousDecisionManager(nil,
+			security.WithAbstainFallback(security.DecisionGrant)),
+		"consensus, tie-break grant, no voters": security.NewConsensusDecisionManager(nil,
+			security.WithTieBreak(security.DecisionGrant)),
+		"affirmative, granting voter": security.NewAffirmativeDecisionManager(grant),
+	} {
+		for attrsName, attrs := range map[string][]security.Attribute{"nil attrs": nil, "empty attrs": {}} {
+			for _, auth := range []security.Authentication{security.Anonymous(), newFakeAuth("alice").withAuthenticated()} {
+				err := adm.Decide(context.Background(), auth, attrs)
+				assert.ErrorIs(t, err, security.ErrAccessDenied, "%s, %s, authenticated=%v", name, attrsName, auth.IsAuthenticated())
+			}
+		}
+	}
+
+	noVoters := security.NewUnanimousDecisionManager(nil, security.WithAbstainFallback(security.DecisionGrant))
+	assert.ErrorIs(t, noVoters.Decide(context.Background(), newFakeAuth("alice").withAuthenticated(),
+		[]security.Attribute{stringAttr("scope:read")}), security.ErrAccessDenied)
+}
+
 func TestConsensusDeniesOnAMajorityOfDenies(t *testing.T) {
 	t.Parallel()
 

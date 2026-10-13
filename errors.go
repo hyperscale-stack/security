@@ -46,7 +46,8 @@ var (
 	// validate: it maps to HTTP 401 with a challenge that carries no error
 	// code (RFC 6750 §3.1, RFC 9110 §15.5.2) and to gRPC/Connect
 	// Unauthenticated. An [Authenticator] returning it from Authenticate
-	// bails out: the [Manager] counts that as an abstention, not a refusal.
+	// bails out: the [Manager] counts that as an abstention, not a refusal —
+	// unless the error also wraps a higher-ranked sentinel ([ErrorClass]).
 	ErrUnsupportedCredential = newSentinel("security: unsupported credential type")
 
 	// ErrNoExtractor indicates that the [Engine] was configured without any

@@ -17,11 +17,13 @@ import (
 //   - Each authenticator whose Supports() returns true is invoked.
 //   - On success — an authenticated value and no error — the result is
 //     returned immediately; subsequent authenticators are NOT consulted.
-//   - An error wrapping [ErrUnsupportedCredential] is a runtime bail-out:
-//     the authenticator abstains, as if Supports had returned false.
-//   - Any other error, and a success without an authenticated value (a
-//     contract violation), is a refusal: the next supporting authenticator
-//     is tried. If every one refuses, the refusals are joined and wrapped in
+//   - An error whose [ErrorClass] is [ErrorClassUnsupportedCredential] — it
+//     wraps [ErrUnsupportedCredential] and no higher-ranked sentinel — is a
+//     runtime bail-out: the authenticator abstains, as if Supports had
+//     returned false.
+//   - Any other error, and a success without an authenticated value (nil,
+//     a typed nil or an unauthenticated value: a contract violation), is a
+//     refusal: the next supporting authenticator is tried. If every one refuses, the refusals are joined and wrapped in
 //     [ErrAuthenticatorRefused].
 //   - If no authenticator supports the credential (or all bail out),
 //     [ErrUnsupportedCredential] is returned: the transports answer it like
@@ -87,8 +89,9 @@ func (m *manager) Authenticate(ctx context.Context, auth Authentication) (Authen
 			return result, nil
 		}
 
-		if errors.Is(err, ErrUnsupportedCredential) {
-			// Runtime bail-out: the authenticator abstains.
+		if ErrorClass(err) == ErrorClassUnsupportedCredential {
+			// Runtime bail-out: the authenticator abstains. An error that
+			// also wraps a verdict or an outage is that verdict or outage.
 			continue
 		}
 

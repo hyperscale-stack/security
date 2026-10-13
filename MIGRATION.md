@@ -1267,8 +1267,8 @@ After a failed authentication, `Engine.Process` stored the extracted
 `Authentication` — a cleartext password, a bearer token — in the request
 context and returned it, and `Manager.Authenticate` returned it too. A
 component breaking its contract made the request path panic: an
-authenticator returning `(nil, nil)`, a nil `Attribute`, a nil
-`Authentication` passed to `Decide`. And an authenticator bailing out at
+authenticator returning `(nil, nil)` or a typed nil (`var out *T; return
+out, nil`), a nil `Attribute`, a nil `Authentication` passed to `Decide`. And an authenticator bailing out at
 runtime with `ErrUnsupportedCredential` — the documented way to do so — had
 its error joined with the other authenticators' refusals, so a wrong password
 could be answered as an unsupported credential.
@@ -1276,12 +1276,15 @@ could be answered as an unsupported credential.
 | Situation | Before | After |
 | --- | --- | --- |
 | `Engine.Process` / `Manager.Authenticate` fail | return (and store) the extracted value | return (and store) `security.Anonymous()` |
-| An authenticator returns `(nil, nil)` | panic | refusal; the next authenticator is tried |
+| An authenticator returns `(nil, nil)` or a typed nil | panic | refusal; the next authenticator is tried |
 | An authenticator returns an unauthenticated value and no error | success | refusal (contract violation) |
-| A custom `Manager` returns no authenticated value and no error | panic / success | `Process` fails |
-| An authenticator returns an error wrapping `ErrUnsupportedCredential` | joined into `ErrAuthenticatorRefused` | abstention; `ErrUnsupportedCredential` when every supporting authenticator bails out |
-| `Decide` with a nil `Attribute` | panic | `ErrAccessDenied` |
-| `Decide` with a nil `Authentication` | panic | evaluated as `security.Anonymous()` |
+| A custom `Manager` returns no authenticated value (nil, typed nil) and no error | panic / success | `Process` fails |
+| An extractor returns a typed nil and no error | handed to the authenticators (panic) | no credential: the next extractor runs |
+| An authenticator returns an error wrapping `ErrUnsupportedCredential` only | joined into `ErrAuthenticatorRefused` | abstention; `ErrUnsupportedCredential` when every supporting authenticator bails out |
+| … wrapping `ErrUnsupportedCredential` and a verdict (`ErrInvalidCredentials`, `ErrUnavailable`, `ErrInvalidRequest`, …) | joined | that verdict (`security.ErrorClass` order) |
+| `Decide` with a nil or typed nil `Attribute` | panic | `ErrAccessDenied` |
+| `Decide` with a nil or typed nil `Authentication` | panic | evaluated as `security.Anonymous()` |
+| `FromContext` after `WithAuthentication(ctx, typedNil)` | the typed nil | `security.Anonymous()`, `false` |
 | A voter returns an undefined `Decision` | ignored (abstention) | counted as `DecisionDeny` |
 | `NewEngine(nil, …)`, a nil extractor, authenticator or voter | panic on the first request | panic at construction |
 
@@ -1325,6 +1328,7 @@ supports.
 | `Not(HasRole("BANNED"))`, anonymous on `[Role("BANNED")]` | granted | denied |
 | `And(HasRole("USER"), Not(HasRole("BANNED")))` on `[Role("USER")]` | banned users granted | denied for everyone — list `[Role("USER"), Role("BANNED")]` |
 | Unanimous / consensus with an attribute no voter supports | ignored | denied |
+| Unanimous with `WithAbstainFallback(DecisionGrant)`, no attribute or no voter | granted, anonymous callers included | denied |
 | `voter.FullyAuthenticated()` | same as `Authenticated()` | removed |
 
 To migrate:
@@ -1332,7 +1336,10 @@ To migrate:
 1. Make every route's attributes name exactly what its voters check, and
    give the decision manager a voter for every attribute: `Authorize(adm,
    security.Role("ADMIN"))` with `voter.HasRole("ADMIN")` in `adm`. An
-   attribute that no voter supports now denies the request.
+   attribute that no voter supports now denies the request, and so does a
+   route without attributes, whatever the strategy, tie-break or
+   `WithAbstainFallback` (which only decides for custom voters that support
+   an attribute and abstain).
 2. Require a logged-in or a logged-out caller with an attribute:
    `voter.Authenticated()` with `security.IsAuthenticated`,
    `voter.Anonymous()` with `security.IsAnonymous`.
@@ -1341,8 +1348,10 @@ To migrate:
    route accepts among its attributes.
 4. With `voter.And`, list one attribute per inner requirement: every inner
    voter must grant. `And(HasRole("USER"), Not(HasRole("BANNED")))` needs
-   `[Role("USER"), Role("BANNED")]`; do not share a decision manager holding
-   such a `Not(HasRole("X"))` policy with a positive `HasRole("X")` voter.
+   `[Role("USER"), Role("BANNED")]`. A `Role("X")` attribute is decided by
+   every voter supporting it, negated ones included: a decision manager
+   holding `Not(HasRole("X"))` grants `[Role("X")]` routes to principals
+   *without* X. Keep such a policy in its own decision manager.
 5. Do not rely on `voter.Not` to admit anonymous callers:
    `Not(Authenticated())` never grants them — use `voter.Anonymous()` with
    `security.IsAnonymous`.

@@ -25,7 +25,8 @@ var errContractViolation = errors.New("security: contract violation")
 // Engine is safe for concurrent use.
 type Engine interface {
 	// Process runs extractors in order and consults the manager on the first
-	// non-empty result. The returned context always carries an
+	// non-empty result — a typed nil (an interface holding a nil pointer)
+	// counts as empty. The returned context always carries an
 	// Authentication: the authenticated one on success, the anonymous one
 	// when nothing was extracted and on every failure — the extracted
 	// credentials never leave the Engine. On failure the error says why.
@@ -98,7 +99,7 @@ func (e *engine) Process(ctx context.Context, c Carrier) (context.Context, Authe
 			return ctx, Anonymous(), err
 		}
 
-		if auth != nil {
+		if !isNil(auth) {
 			extracted = auth
 
 			break
@@ -137,9 +138,10 @@ func (e *engine) Process(ctx context.Context, c Carrier) (context.Context, Authe
 }
 
 // requireAuthenticated reports a contract violation when a component that
-// returned no error produced no authenticated value.
+// returned no error produced no authenticated value: nil, a typed nil or an
+// unauthenticated value.
 func requireAuthenticated(auth Authentication, component string) error {
-	if auth == nil || !auth.IsAuthenticated() {
+	if isNil(auth) || !auth.IsAuthenticated() {
 		return fmt.Errorf("%w: %s returned no authenticated value", errContractViolation, component)
 	}
 

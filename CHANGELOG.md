@@ -629,9 +629,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   on every failure, and the Engine stores the anonymous authentication in
   the returned context: the extracted credentials never flow back to the
   caller. The `Manager` treats an authenticator error wrapping
-  `ErrUnsupportedCredential` as an abstention (the documented runtime
-  bail-out) rather than a refusal joined with the others, and a "success"
-  without an authenticated value as a refusal. `NewEngine`, `NewManager`
+  `ErrUnsupportedCredential` — and no higher-ranked sentinel — as an
+  abstention (the documented runtime bail-out) rather than a refusal joined
+  with the others, and a "success" without an authenticated value as a
+  refusal. A typed nil (an interface holding a nil pointer) counts as nil
+  wherever the core checks a contract. `NewEngine`, `NewManager`
   and the three `AccessDecisionManager` constructors panic on a nil
   dependency. See [MIGRATION.md](MIGRATION.md).
 - Failing core spans (`security.Engine.Process`,
@@ -645,7 +647,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `security.IsAnonymous`, `voter.And` is strict (an inner abstention denies
   when the composite votes), `voter.Not` never grants an unauthenticated
   principal, and the decision managers deny an attribute that no voter
-  supports and pass each voter only the attributes it supports. `And`, `Or`
+  supports — and a decision without attributes or voters whatever the
+  tie-break and abstain fallback — and pass each voter only the attributes
+  it supports. `And`, `Or`
   and `Not` panic on a nil or missing voter. See
   [MIGRATION.md](MIGRATION.md).
 - Roles and scopes live in their own authority namespaces: `voter.HasRole`
@@ -811,7 +815,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   a custom `Manager` returning no authenticated value without an error, a
   nil `Attribute`, a nil `Authentication` passed to `Decide`, and a voter
   returning an undefined `Decision` now fail closed (an error, a denial, the
-  anonymous authentication, a deny vote).
+  anonymous authentication, a deny vote) — typed nils included. An
+  extractor's typed nil is "no credential".
 - `grpcsec` sends the metadata staged on its `Carrier` as the response
   header, refused RPCs included, as its documentation said; it was dropped.
   A custom `Engine` returning no authentication no longer panics the
@@ -1272,6 +1277,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `voter.Not()` turned the refusal of an unauthenticated principal into a
   grant (`Not(HasRole("BANNED"))` admitted anonymous callers); it no longer
   does.
+- `NewUnanimousDecisionManager` with `WithAbstainFallback(DecisionGrant)`
+  granted a decision without attributes — a route whose attribute lookup
+  returned nothing — and any decision of a manager without voters, to anyone,
+  anonymous callers included. Such decisions are now denied whatever the
+  strategy, tie-break and fallback.
 - `httpsec.Carrier` answered `Get`/`Values` from a cookie or from the query
   string when the header was absent: Basic and Bearer credentials were
   accepted from `?Authorization=…` and from a cookie named `Authorization`

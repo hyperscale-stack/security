@@ -38,6 +38,27 @@ func (v constDecisionVoter) Vote(context.Context, security.Authentication, []sec
 	return v.d
 }
 
+// derefAuth reads a field in every method: a typed nil — (*derefAuth)(nil),
+// the classic `var out *T; return out, nil` — satisfies Authentication but
+// panics on its first method call.
+type derefAuth struct{ name string }
+
+func (a *derefAuth) Principal() security.Principal { return fakePrincipal{subject: a.name} }
+func (a *derefAuth) Credentials() any              { return a.name }
+func (a *derefAuth) Authorities() []string         { return []string{a.name} }
+func (a *derefAuth) IsAuthenticated() bool         { return a.name != "" }
+func (a *derefAuth) Name() string                  { return a.name }
+
+// derefAttr is the Attribute counterpart of derefAuth.
+type derefAttr struct{ name string }
+
+func (a *derefAttr) String() string { return a.name }
+
+var (
+	typedNilAuth security.Authentication = (*derefAuth)(nil)
+	typedNilAttr security.Attribute      = (*derefAttr)(nil)
+)
+
 // scriptedManager is a custom Manager returning a fixed result.
 type scriptedManager struct {
 	result security.Authentication
@@ -108,6 +129,7 @@ func TestEngineFailsClosedWhenAnAuthenticatorReturnsNoAuthenticatedValue(t *test
 
 	cases := map[string]security.Authentication{
 		"nil result":             nil,
+		"typed nil result":       typedNilAuth,
 		"unauthenticated result": newFakeAuth("alice").withCredentials("pw"),
 	}
 
@@ -150,6 +172,7 @@ func TestEngineFailsClosedWhenTheManagerReturnsNoAuthenticatedValue(t *testing.T
 
 	cases := map[string]security.Authentication{
 		"nil result":             nil,
+		"typed nil result":       typedNilAuth,
 		"unauthenticated result": newFakeAuth("alice").withCredentials("pw"),
 	}
 
@@ -265,6 +288,24 @@ func TestManagerTreatsARuntimeBailOutAsAnAbstention(t *testing.T) {
 		assert.NotErrorIs(t, err, security.ErrAuthenticatorRefused)
 	})
 
+	// Review nit 6: a bail-out that also wraps a higher-ranked sentinel is
+	// that verdict, not an abstention (security.ErrorClass order).
+	t.Run("bail-out wrapping a verdict", func(t *testing.T) {
+		t.Parallel()
+
+		for _, verdict := range []error{security.ErrInvalidRequest, security.ErrUnavailable, security.ErrInvalidCredentials} {
+			m := security.NewManager(&scriptedAuthenticator{
+				name: "joined",
+				err:  fmt.Errorf("%w: %w", security.ErrUnsupportedCredential, verdict),
+			})
+
+			_, err := m.Authenticate(context.Background(), newFakeAuth("alice"))
+
+			require.ErrorIs(t, err, security.ErrAuthenticatorRefused, verdict.Error())
+			assert.Equal(t, security.ErrorClass(verdict), security.ErrorClass(err), verdict.Error())
+		}
+	})
+
 	t.Run("bail-out then success", func(t *testing.T) {
 		t.Parallel()
 
@@ -283,6 +324,7 @@ func TestManagerTreatsAMissingOrUnauthenticatedResultAsARefusal(t *testing.T) {
 
 	for name, result := range map[string]security.Authentication{
 		"nil result":             nil,
+		"typed nil result":       typedNilAuth,
 		"unauthenticated result": newFakeAuth("alice"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -290,7 +332,11 @@ func TestManagerTreatsAMissingOrUnauthenticatedResultAsARefusal(t *testing.T) {
 
 			violator := &scriptedAuthenticator{name: "violator", result: result}
 
-			_, err := security.NewManager(violator).Authenticate(context.Background(), newFakeAuth("alice"))
+			var err error
+
+			require.NotPanics(t, func() {
+				_, err = security.NewManager(violator).Authenticate(context.Background(), newFakeAuth("alice"))
+			})
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, security.ErrAuthenticatorRefused)
@@ -316,9 +362,12 @@ func TestDecideDeniesANilAttribute(t *testing.T) {
 	admin := newFakeAuth("root", "ROLE_ADMIN").withAuthenticated()
 
 	for name, attrs := range map[string][]security.Attribute{
-		"only nil":         {nil},
-		"nil after valid":  {stringAttr("role:ADMIN"), nil},
-		"nil before valid": {nil, stringAttr("role:ADMIN")},
+		"only nil":               {nil},
+		"nil after valid":        {stringAttr("role:ADMIN"), nil},
+		"nil before valid":       {nil, stringAttr("role:ADMIN")},
+		"only typed nil":         {typedNilAttr},
+		"typed nil after valid":  {stringAttr("role:ADMIN"), typedNilAttr},
+		"typed nil before valid": {typedNilAttr, stringAttr("role:ADMIN")},
 	} {
 		var err error
 
@@ -332,12 +381,93 @@ func TestDecideTreatsANilAuthenticationAsAnonymous(t *testing.T) {
 
 	adm := security.NewAffirmativeDecisionManager(authReadingVoter{})
 
-	var err error
+	for name, auth := range map[string]security.Authentication{"nil": nil, "typed nil": typedNilAuth} {
+		var err error
 
-	require.NotPanics(t, func() {
-		err = adm.Decide(context.Background(), nil, []security.Attribute{stringAttr("x")})
+		require.NotPanics(t, func() {
+			err = adm.Decide(context.Background(), auth, []security.Attribute{stringAttr("x")})
+		}, name)
+		assert.ErrorIs(t, err, security.ErrAccessDenied, name)
+	}
+}
+
+// A typed nil extracted value is the extractor's "nothing found" written
+// with a nil pointer: the Engine goes on with the next extractor and never
+// hands it to the Manager.
+func TestEngineTreatsATypedNilExtractionAsNoCredential(t *testing.T) {
+	t.Parallel()
+
+	authenticator := &scriptedAuthenticator{name: "any", result: newFakeAuth("mallory").withAuthenticated()}
+	next := &countingExtractor{}
+	engine := security.NewEngine(security.NewManager(authenticator), scriptedExtractor{auth: typedNilAuth}, next)
+
+	var (
+		ctx  context.Context
+		auth security.Authentication
+		err  error
+	)
+
+	require.NotPanics(t, func() { ctx, auth, err = engine.Process(context.Background(), newMapCarrier()) })
+
+	require.NoError(t, err)
+	assert.Equal(t, security.Anonymous(), auth)
+	assert.Equal(t, 1, next.calls, "the next extractor is consulted")
+	assert.Zero(t, authenticator.calls(), "nothing was extracted")
+
+	stored, _ := security.FromContext(ctx)
+	assert.Equal(t, security.Anonymous(), stored)
+}
+
+// Mutant R71: an extractor returning a value AND an error must not see
+// that value stored in the context.
+func TestEngineExtractorFailureLeavesNoCredentials(t *testing.T) {
+	t.Parallel()
+
+	engine := security.NewEngine(security.NewManager(), scriptedExtractor{
+		auth: newFakeAuth("alice").withCredentials("S3cr3t!"),
+		err:  fmt.Errorf("malformed: %w", security.ErrInvalidRequest),
 	})
-	assert.ErrorIs(t, err, security.ErrAccessDenied)
+
+	ctx, got, err := engine.Process(context.Background(), newMapCarrier())
+
+	require.ErrorIs(t, err, security.ErrInvalidRequest)
+	assert.Equal(t, security.Anonymous(), got)
+
+	stored, _ := security.FromContext(ctx)
+	assert.Equal(t, security.Anonymous(), stored)
+}
+
+// Mutants R18-R20: the constructors copy the slices they are given, so the
+// caller reusing its slice cannot rewire a running Engine, Manager or
+// decision manager.
+func TestConstructorsCopyTheirSlices(t *testing.T) {
+	t.Parallel()
+
+	alice := newFakeAuth("alice").withAuthenticated()
+
+	extractors := []security.Extractor{scriptedExtractor{auth: newFakeAuth("alice")}}
+	authenticators := []security.Authenticator{&scriptedAuthenticator{name: "ok", result: alice}}
+	engine := security.NewEngine(security.NewManager(authenticators...), extractors...)
+
+	extractors[0] = scriptedExtractor{err: security.ErrInvalidRequest}
+	authenticators[0] = &scriptedAuthenticator{name: "ko", err: security.ErrInvalidCredentials}
+
+	_, got, err := engine.Process(context.Background(), newMapCarrier())
+	require.NoError(t, err)
+	assert.Equal(t, security.Authentication(alice), got)
+
+	voters := []security.Voter{constDecisionVoter{d: security.DecisionGrant}}
+	adms := map[string]security.AccessDecisionManager{
+		"affirmative": security.NewAffirmativeDecisionManager(voters...),
+		"consensus":   security.NewConsensusDecisionManager(voters),
+		"unanimous":   security.NewUnanimousDecisionManager(voters),
+	}
+
+	voters[0] = constDecisionVoter{d: security.DecisionDeny}
+
+	for name, adm := range adms {
+		assert.NoError(t, adm.Decide(context.Background(), alice, []security.Attribute{stringAttr("x")}), name)
+	}
 }
 
 func TestDecideCountsAnUndefinedDecisionAsDeny(t *testing.T) {
