@@ -100,8 +100,10 @@ persisted; keep it `actionlint`- and `zizmor`-clean):
   against PostgreSQL 16, MySQL 8.0/8.4, MariaDB 11.4 and Redis 7.4 service
   containers (digests of the compose files, loopback only, no credentials).
   A real-backend test skips while its variable is unset, and that run fails
-  on any skip: a new real-backend test follows that rule, and its variable
-  is added to `scripts/test-backends.sh` and to the job;
+  on any skip: a new real-backend test follows that rule, its variable is
+  added to `scripts/test-backends.sh` and to the job, and a package outside
+  the suites the script lists gets a `suite` line there (otherwise it never
+  runs in CI and the job stays green);
 - `govulncheck.yml` runs `make vuln` (every module, tests included) on every
   change and weekly;
 - `release.yml`, on a `v*` or `**/v*` tag: a read-only `verify` job
