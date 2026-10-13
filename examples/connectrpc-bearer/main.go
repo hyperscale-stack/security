@@ -6,16 +6,18 @@
 //
 // It exposes the gRPC-style health service behind two ConnectRPC interceptors:
 // one authenticates every RPC against a JWT, the other authorizes it against
-// an OAuth2 scope. The process also mints a demo token at start-up.
+// an OAuth2 scope. The process also mints a demo token — valid 15 minutes —
+// at start-up, writes it to a file only the current user can read, logs the
+// file's path (never the token) and removes the file when it stops.
 //
 // Run:
 //
 //	go run ./connectrpc-bearer
 //
-// The server logs a ready-to-use token. Probe it with curl over the Connect
-// protocol:
+// Probe it with curl over the Connect protocol, reading the token from the
+// file the server logged:
 //
-//	curl -H "Authorization: Bearer <TOKEN>" \
+//	curl -H "Authorization: Bearer $(cat /path/from/the/log)" \
 //	     -H "Content-Type: application/json" \
 //	     -d '{}' http://localhost:9091/grpc.health.v1.Health/Check
 //
@@ -28,10 +30,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
@@ -52,6 +58,10 @@ const (
 	scope    = "health:read"
 	addr     = ":9091"
 )
+
+// tokenLifetime is the lifetime of the demo tokens: short, a leaked one
+// expires soon.
+const tokenLifetime = 15 * time.Minute
 
 // minter signs a demo JWT carrying the requested scope.
 type minter func(scope string) (string, error)
@@ -113,7 +123,7 @@ func newServer() (http.Handler, minter, error) {
 			Audience:  audience,
 			ClientID:  clientID,
 			IssuedAt:  now,
-			ExpiresAt: now.Add(time.Hour),
+			ExpiresAt: now.Add(tokenLifetime),
 			Scope:     grant,
 		})
 		if err != nil {
@@ -124,6 +134,42 @@ func newServer() (http.Handler, minter, error) {
 	}
 
 	return mux, mint, nil
+}
+
+// writeDemoToken writes token to a new file in dir (the system's temporary
+// directory when dir is "") that only the current user can read, and
+// returns its path: the demo never prints a credential to its logs.
+func writeDemoToken(dir, token string) (string, error) {
+	f, err := os.CreateTemp(dir, "connectrpc-bearer-*.token") // mode 0600
+	if err != nil {
+		return "", fmt.Errorf("create token file: %w", err)
+	}
+
+	if _, err := f.WriteString(token); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+
+		return "", fmt.Errorf("write token file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close token file: %w", err)
+	}
+
+	return f.Name(), nil
+}
+
+// newHTTPServer bounds the time a client may take at every stage, so that
+// slow clients cannot hold connections open.
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 }
 
 func main() {
@@ -137,19 +183,39 @@ func main() {
 		log.Fatalf("connectrpc-bearer: %v", err)
 	}
 
+	path, err := writeDemoToken("", token)
+	if err != nil {
+		log.Fatalf("connectrpc-bearer: %v", err)
+	}
+
+	defer func() { _ = os.Remove(path) }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var lc net.ListenConfig
 
-	lis, err := lc.Listen(context.Background(), "tcp", addr) //nolint:gosec // G102: demo server, binding to all interfaces is intentional
+	lis, err := lc.Listen(ctx, "tcp", addr) //nolint:gosec // G102: demo server, binding to all interfaces is intentional
 	if err != nil {
-		log.Fatalf("connectrpc-bearer: listen: %v", err)
+		log.Printf("connectrpc-bearer: listen: %v", err)
+
+		return
 	}
 
-	srv := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newHTTPServer(handler)
 
-	log.Printf("connectrpc-bearer: listening on %s", addr)
-	log.Printf("connectrpc-bearer: demo token: %s", token)
-	log.Fatal(srv.Serve(lis))
+	go func() {
+		<-ctx.Done()
+
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = srv.Shutdown(shutdown)
+	}()
+
+	log.Printf("connectrpc-bearer: listening on %s; demo token (valid %s) in %s", addr, tokenLifetime, path)
+
+	if err := srv.Serve(lis); !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("connectrpc-bearer: %v", err)
+	}
 }

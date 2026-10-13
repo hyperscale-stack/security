@@ -144,7 +144,7 @@ scenario "BR1 cross-site POST to the ACS carries the binding cookie" {
           path           = "/"
           sec_fetch_site = "cross-site"
           cookies = {
-            session             = true
+            "__Host-session"    = true
             "__Host-acs-lax"    = true
             "__Host-acs-strict" = not_exists()
           }

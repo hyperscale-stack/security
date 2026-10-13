@@ -43,13 +43,26 @@ type PasswordUser interface {
 // in the application layer; this module ships no implementation to keep
 // itself storage-agnostic.
 //
-// On unknown user, implementations SHOULD return an error wrapping
-// [security.ErrInvalidCredentials] to prevent account enumeration via
-// response-time / response-code differences. A store that is temporarily
-// unavailable SHOULD be reported with an error wrapping
-// [security.ErrUnavailable]: the [Authenticator] then answers 503 /
-// Unavailable (retryable) instead of refusing the credentials. Any other
-// error is a refusal ([security.ErrInvalidCredentials], 401).
+// For an unknown user, return (nil, nil) or an error wrapping
+// [security.ErrInvalidCredentials]: the [Authenticator] then verifies the
+// password against its dummy hash, so the response does not reveal whether
+// the account exists. A store that is temporarily unavailable SHOULD be
+// reported with an error wrapping [security.ErrUnavailable]: the
+// [Authenticator] then answers 503 / Unavailable (retryable) instead of
+// refusing the credentials. Any other error is a refusal
+// ([security.ErrInvalidCredentials], 401).
 type UserLoader interface {
 	LoadByUsername(ctx context.Context, username string) (PasswordUser, error)
+}
+
+// PasswordRehasher is implemented by a [UserLoader] that can store a new
+// password hash for a user. After a successful authentication whose stored
+// hash NeedsRehash — the hasher's parameters were raised, or the hash was
+// imported with other parameters — the [Authenticator] hashes the password
+// again and calls UpdatePasswordHash with the new hash. Keeping every
+// stored hash at the hasher's current parameters keeps the response time of
+// known accounts equal to the dummy verification of unknown ones. An error
+// is ignored: the authentication succeeds and the next login retries.
+type PasswordRehasher interface {
+	UpdatePasswordHash(ctx context.Context, user PasswordUser, hash string) error
 }

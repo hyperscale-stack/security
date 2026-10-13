@@ -462,12 +462,57 @@ PKCE. Not supported, and refused where a provider could select them:
   expects the user-id and password in Unicode Normalization Form C; `basic`
   checks them as received.
 
+## HTTP Basic
+
+- **No rate limiter or account lockout is shipped** — NIST SP 800-63B-4
+  §3.2.2 requires verifiers to limit failed attempts: do it at the edge or
+  in an `Authenticator` wrapper. The `Authenticator` only caps the number
+  of concurrent verifications (`runtime.GOMAXPROCS(0)` by default).
+- **Timing equalization residuals** — every attempt costs one verification,
+  but a stored hash made with other parameters than the hasher's costs
+  another time until it is re-hashed (`PasswordRehasher`), and the
+  `UserLoader`'s own latency (a cache hit for a known user) is outside the
+  library's control.
+- **UTF-8 only** — Basic credentials must be UTF-8 (the challenge advertises
+  `charset="UTF-8"`, RFC 7617 §2.1); clients sending ISO-8859-1 non-ASCII
+  credentials are refused. User-ids and passwords are not normalized.
+- **Format and separator characters refused** — a password containing a
+  Unicode format character (an emoji sequence joined with U+200D, a soft
+  hyphen, a byte order mark) or a line or paragraph separator no longer
+  signs in with Basic: reset it, and refuse these characters when passwords
+  are set (RFC 8265 OpaqueString). The same goes for a user-id — a Persian
+  or Indic name written with U+200C or U+200D, for instance: rename the
+  account or give it an alias without them.
+
+## Passwords
+
+- **No Unicode normalization** — the hashers hash a password's bytes as
+  given, so a password typed in NFD on one device and NFC on another does
+  not verify. NIST SP 800-63B-4 §3.1.1.2 says verifiers SHOULD apply NFC:
+  wrap the hasher in the decorator shown in the `password` package
+  documentation (it needs `golang.org/x/text`, which the module does not
+  depend on).
+- **bcrypt: 72 bytes** — longer passwords are refused (`ErrPasswordTooLong`),
+  which caps passwords of multi-byte characters below the 64 characters
+  SP 800-63B-4 asks verifiers to permit. Hashes imported from an
+  implementation that truncated silently need the migration wrapper of
+  MIGRATION.md. Prefer Argon2id.
+
 ## Sessions
 
 - The session module is stateless: the whole session lives in an encrypted
-  cookie, there is no server-side session store. This covers the common
-  case without server state, but a session cannot be revoked server-side
-  before its cookie expires. A server-side store (Redis/SQL) is not shipped.
+  cookie, there is no server-side session store. A session can be revoked
+  before its cookie expires only through `session.WithValidator` checking a
+  store of the application's (no Redis/SQL store is shipped); otherwise a
+  copy of the cookie stays valid until its deadline, `Logout` deleting the
+  browser's copy only.
+- With a cookie name that is not `__Host-` (a `Domain`, another `Path`,
+  plain HTTP), a sibling host can plant a cookie of the session's name: the
+  request then carries two valid sessions and has none until that cookie
+  expires (denial, never a swap). The default `__Host-session` prevents it.
+- One active session key seals at most 2^32 cookies (random GCM nonces,
+  NIST SP 800-38D §8.3): the library does not count seals across
+  instances — rotate the key by volume.
 - The session cookie is read through `httpsec.Carrier` (its
   `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
   no cookies: a cookie session does not authenticate gRPC or ConnectRPC
@@ -477,8 +522,9 @@ PKCE. Not supported, and refused where a provider could select them:
 
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
-  keys, signers and key sets, `session.Codec`…) print redacted with every
-  `fmt` verb and in `slog` output — as do the `grpcsec` and
+  keys, signers and key sets, `session.Codec` and `session.Session`, the
+  `basic`, `bearer` and `session` authentications…) print redacted with
+  every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without
   calling any of their methods: `%p` of a value that is not a pointer, a
@@ -487,18 +533,17 @@ PKCE. Not supported, and refused where a provider could select them:
   Log these types directly or through exported fields, with `%v`.
 - **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
   only: a value nested in another one (a struct field, a map) is encoded
-  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`
-  encode without their secrets, but `oidcclient.Identity` and `Tokens`
-  encode their tokens — deliberately, so that applications can persist them
-  — and `UserInfo` its claims: log these as attributes of their own. Other
-  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
-  every exported field, an `AuthRequest`'s binding secret included.
-- **Credentials and tokens in flight are not redacted yet** — `basic` and
-  `bearer` authentications print the password (before authentication) and
-  the bearer token they carry, and the `oauth2` records
-  (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the `GrantResponse`
-  holding them) the raw code and tokens they carry during issuance: never
-  log them.
+  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`,
+  and `session.Session`, encode without their secrets, but
+  `oidcclient.Identity` and `Tokens` encode their tokens — deliberately, so
+  that applications can persist them — and `UserInfo` its claims: log these
+  as attributes of their own. Other reflection-based encoders
+  (`encoding/gob`, `encoding/xml`, YAML) write every exported field, an
+  `AuthRequest`'s binding secret included.
+- **Credentials and tokens in flight are not redacted yet** — the `oauth2`
+  records (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the
+  `GrantResponse` holding them) print the raw code and tokens they carry
+  during issuance: never log them.
 
 ## Tooling
 

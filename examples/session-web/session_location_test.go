@@ -6,7 +6,6 @@ package main
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -20,23 +19,20 @@ import (
 func TestSessionWebReadsTheSessionFromItsCookieOnly(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newServer()
+	b := newBrowser(t)
+	require.Equal(t, http.StatusSeeOther, b.signIn("alice", "alice-secret", b.loginToken(), nil))
+
+	srvURL, err := url.Parse(b.srv.URL)
 	require.NoError(t, err)
 
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	client := srv.Client()
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
-	resp, err := client.PostForm(srv.URL+"/login", url.Values{"username": {"alice"}, "password": {"alice-secret"}})
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
-
-	cookies := resp.Cookies()
+	cookies := b.client.Jar.Cookies(srvURL)
 	require.Len(t, cookies, 1)
 	cookie := cookies[0]
+
+	srv := b.srv
+	// A client without the browser's cookie jar (srv.Client() would return
+	// the same client).
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	inQuery, err := http.NewRequest(http.MethodGet, srv.URL+"/?"+cookie.Name+"="+url.QueryEscape(cookie.Value), nil)
 	require.NoError(t, err)

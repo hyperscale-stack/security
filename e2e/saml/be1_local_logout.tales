@@ -97,7 +97,7 @@ scenario "BE1 local logout is not Single Logout" {
         credential_posts = 1
         logout = {
           set_cookies = {
-            session = {
+            "__Host-session" = {
               cleared = true
             }
           }

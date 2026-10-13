@@ -1997,3 +1997,255 @@ To migrate:
    `AllowImplicit` there, and the server would serve the flow to plain OAuth
    2.0 requests and advertise it in its RFC 8414 metadata while the
    discovery document does not — the disagreement RFC 9068 §4 forbids.
+
+### `password`: stored hashes are bounded; truncated and empty passwords are refused
+
+The hashers trusted the parameters encoded in a stored hash. Whoever could
+write or import a hash controlled the cost of every verification against it
+— up to a panic inside `golang.org/x/crypto`, a 4 TiB allocation or days of
+CPU — and could plant an argon2id hash with a 1-byte tag that accepted about
+one random password in 256. bcrypt `Verify` also accepted any password whose
+first 72 bytes matched, and empty passwords hashed and verified. `Verify` now
+checks the stored hash before any hashing:
+
+| | Before | After |
+| --- | --- | --- |
+| argon2id `t=0`, `p=0`, `m < 8p`, missing or repeated parameter, unknown parameter, empty tag | panic or accepted | `ErrMalformedHash` (RFC 9106 §3.1) |
+| argon2id salt or tag outside 16–64 bytes | accepted | `ErrMalformedHash` (library policy) |
+| argon2id `m`, `t`, `p` above the limits (256 MiB, 10, 16 by default) | honored | `ErrCostLimitExceeded`, before any hashing |
+| bcrypt stored cost above the limit (14 by default) | honored up to 31 | `ErrCostLimitExceeded`, before any hashing |
+| bcrypt password longer than 72 bytes | `Hash`: error; `Verify`: first 72 bytes compared | `ErrPasswordTooLong` from both |
+| empty password | hashed and verified | `Hash`: `ErrEmptyPassword`; `Verify`: `(false, nil)` |
+| `NewBCryptHasher(cost)` outside 4–31 | clamped silently | panic |
+| `NewArgon2idHasher` with `m < 8p`, key or salt length outside 16–64 bytes | accepted | panic |
+| `NeedsRehash` | memory, passes, lanes, key length | also the salt length, and `true` for every hash `Verify` refuses |
+
+The limits are inclusive and never refuse the hasher's own parameters. They
+accept the hashes of every mainstream implementation's default profile
+(OWASP, RFC 9106 §4's second option, libsodium interactive and moderate,
+PHP, Spring Security, Keycloak).
+
+To migrate:
+
+1. Hashes made with 1 GiB or more of memory (RFC 9106 §4's first option,
+   libsodium's sensitive profile) or with a bcrypt cost above 14: raise the
+   limits — `password.WithArgon2idLimits(password.Argon2idLimits{MaxMemoryKiB:
+   2 << 20})`, `password.WithBCryptMaxCost(15)` — or configure the hasher
+   with those parameters. Watch for `ErrCostLimitExceeded` after the upgrade.
+2. bcrypt hashes imported from an implementation that silently truncated
+   passwords to 72 bytes — older `golang.org/x/crypto` releases (this
+   library's legacy v0 packages used one), PHP's `password_hash`, Node's
+   `bcrypt` — no longer verify a password longer than 72 bytes. If such
+   accounts exist, wrap the hasher for them and move them to Argon2id at
+   their next login:
+   ```go
+   type truncating struct{ password.Hasher }
+
+   func (t truncating) Verify(ctx context.Context, hash, pw string) (bool, error) {
+       if len(pw) > 72 {
+           pw = pw[:72] // what the truncating system hashed
+       }
+       return t.Hasher.Verify(ctx, hash, pw)
+   }
+   ```
+   then, on success, hash the full password with an `Argon2idHasher` and
+   store it.
+3. Accounts with an empty password can no longer sign in: reset them.
+4. Static configuration errors now panic at start-up: pass a bcrypt cost in
+   4–31 (0 selects 10; costs below 10 are for tests) and argon2id parameters
+   within the documented bounds.
+5. Unicode: the hashers still hash bytes as given. To apply NFC (NIST
+   SP 800-63B-4 §3.1.1.2), use the decorator of the `password` package
+   documentation at enrollment and at login.
+
+### `basic`: every attempt costs one verification; concurrent verifications are capped
+
+`basic.Authenticator` returned before verifying the password for unknown,
+disabled, locked and expired accounts, so the response time revealed which
+accounts exist. Every attempt now runs exactly one password verification —
+against the user's hash, or against a dummy hash the hasher made at
+construction — and the account state is read after it. Because any username
+now costs a full hash, the concurrent verifications are capped by default.
+
+| | Before | After |
+| --- | --- | --- |
+| Unknown user, loader failure, account without a password hash | refused at once | verified against the dummy hash, then refused |
+| Disabled, locked, expired account | refused before the password check | password verified, then refused |
+| `NewAuthenticator(nil, …)`, `NewAuthenticator(…, nil)` | panic on the first request | panic at construction |
+| `NewAuthenticator` | free | hashes one random password (the dummy) — panics if the hasher cannot hash |
+| Concurrent verifications | unbounded | `runtime.GOMAXPROCS(0)` by default; `WithMaxConcurrentVerifications(n)`, `UnlimitedVerifications` |
+| No slot before the request context ends; a verification ended by the context | `ErrInvalidCredentials` (401) | `ErrUnavailable` (503) |
+| Value returned by a failed `Authenticate` | its input (password included) | `security.Anonymous()` |
+| Stored hash that `NeedsRehash` | left as is | re-hashed after a successful login when the loader implements `PasswordRehasher` |
+
+To migrate:
+
+1. Build the `Authenticator` once at start-up: each construction hashes a
+   password.
+2. Configure the hasher with the parameters of your stored hashes, and
+   implement `PasswordRehasher` on your loader so that hashes made with
+   other parameters (older settings, imports) are upgraded: the timing
+   equalization holds for hashes at the hasher's current parameters.
+3. Bound the request time (`http.TimeoutHandler`, a deadline middleware):
+   an attempt waits for a verification slot until its context ends, and
+   `net/http` request contexts have no deadline. Keep the default cap for
+   bcrypt and Argon2id; pass `UnlimitedVerifications` only for a hasher that
+   is not CPU-bound.
+4. A loader should return `(nil, nil)` or an error wrapping
+   `security.ErrInvalidCredentials` for an unknown user, and an error
+   wrapping `security.ErrUnavailable` when its store is down.
+
+### `basic`: credentials are parsed strictly; `Name()` is the authenticated subject
+
+The Basic extractor forwarded control characters, invisible format
+characters and invalid UTF-8 to the `UserLoader` (log injection, a user-id
+that displays as another one), skipped CR LF inside the base64 credentials,
+and `Authentication.Name()` returned the user-id as typed — `ALICE` for the
+subject `alice`, or a password typed in the username field — although
+`Name` must be safe to log.
+
+| Request / value | Before | After |
+| --- | --- | --- |
+| Control character (C0, DEL, C1) in the user-id or password | forwarded to the loader | 401, `ErrBadFormat`, the loader is not called |
+| Format character (Unicode Cf: U+200D zero-width joiner, U+200B, U+00AD soft hyphen, U+202E and the other bidirectional controls, U+FEFF, tags) or line/paragraph separator (U+2028, U+2029) in the user-id or password | forwarded | 401, `ErrBadFormat`, the same error as a control character |
+| Invalid UTF-8 (e.g. ISO-8859-1 credentials) | forwarded | 401 (the Basic challenge advertises `charset="UTF-8"`) |
+| CR LF or spaces inside the base64, unpadded or non-canonical base64 | decoded | 401 |
+| user-pass longer than 3072 bytes | forwarded | 401 |
+| `Authorization: Basic` without credentials | ignored (next extractor) | 401 |
+| `Basic` followed by several spaces | 401 | accepted (RFC 9110 §11.4 `1*SP`) |
+| Empty user-id (`-u :KEY`) | forwarded | `Extractor`: accepted; `basic.Authenticator`: 401 before any lookup |
+| `basic.New(...)` from a form login, malformed | looked up | refused by the `Authenticator` like a malformed header |
+| `Authentication.Name()` | typed user-id | before authentication `"basic"`, after it the user's subject |
+
+To migrate:
+
+1. Clients must send UTF-8 credentials (RFC 7617 §2.1) without control,
+   format or separator characters. Accented letters, emoji without a
+   joiner, variation selectors and no-break spaces are still accepted.
+2. **An account whose password contains a format or separator character —
+   an emoji sequence joined with U+200D, a soft hyphen pasted from a
+   document, a byte order mark — can no longer sign in with Basic** (form
+   logins through `basic.Authenticator` included): reset its password. When
+   a password is set, refuse these characters (RFC 8265's OpaqueString
+   disallows them, but for the zero-width joiners after a virama), so that
+   no new account gets locked out. **The same holds for a user-id** — a
+   Persian or Indic name written with ZERO WIDTH NON-JOINER U+200C or
+   ZERO WIDTH JOINER U+200D, for instance: rename the account or give it an
+   alias without these characters, and refuse them when a user-id is
+   chosen.
+3. Read the typed user-id with `Username()`, the authenticated identity with
+   `Name()` or `Principal().Subject()`; log `Name()`, never `Username()`.
+4. A custom authenticator consuming `basic.Authentication` with an empty
+   user-id (API keys) keeps working: only `basic.Authenticator` refuses it.
+
+### `session`: strong keys, cookies bound to their name and purpose, an enforced absolute lifetime
+
+`session.NewCodec` accepted any key — an empty one let anyone forge a
+session — and cookies were not bound to their name or purpose. `Rotate`
+extended a session's lifetime indefinitely, a TTL lowered after issuance did
+not apply, and numbers in `Values` lost precision. The cookie format changes
+(format 2), so **every existing session cookie is refused once: users sign
+in again** after the upgrade.
+
+| | Before | After |
+| --- | --- | --- |
+| `NewCodec` keys | any length, empty included | at least 32 random bytes each (`MinKeySize`); shorter keys and single-byte buffers → `ErrInvalidKeys` |
+| AES key | SHA-256(key) | HKDF-SHA256(key, label) |
+| Cookie value | `base64url(nonce ‖ ciphertext)` | `base64url(0x02 ‖ nonce ‖ ciphertext)`, AEAD-bound to version, cookie name and purpose (see the `Codec` documentation) |
+| Cookies issued before the upgrade | — | refused (`ErrNoSession` wrapping `ErrDecode`) |
+| `Codec.Encode` / `Codec.Decode` | exported | removed: only the `Manager` seals and opens cookies |
+| Same keys, another cookie name or `WithPurpose` | cookie accepted | refused |
+| Session deadline | the `ExpiresAt` in the cookie | the earlier of it and `CreatedAt + TTL` of the reading `Manager`, which `Get` reports in `ExpiresAt` |
+| `Rotate` | `ExpiresAt` = now + TTL | creation time and deadline kept; new ID and CSRF token |
+| `Touch` on a session at or past its deadline / on nil | cookie written (Max-Age 1) / panic | `ErrTokenExpired` / `ErrNoSession`, nothing written |
+| Numbers in `Values` after a round trip | `float64` (precision lost above 2^53) | `json.Number` (`Session.GetInt64`) |
+| Server-side revocation | impossible | `WithValidator` |
+
+To migrate:
+
+1. Generate each session key from a cryptographic source — `openssl rand
+   -base64 32`, decoded — and load it from your secret store; never a
+   passphrase. To rotate later, put the new key first and keep the previous
+   one until the longest TTL has elapsed.
+2. Deploy all instances at once, or accept that users are signed out while
+   old and new instances run side by side: an instance on the previous code
+   cannot read the new cookies, and the other way round.
+3. Several applications or paths sharing keys and a cookie name: give each
+   its own `WithPurpose`.
+4. Call `Login` at sign-in (new session, new lifetime); `Rotate` within a
+   session (step-up) keeps the deadline. Expect `Touch` to fail with
+   `ErrTokenExpired` at the end of a session's life, and not to write.
+5. Search your code for type assertions on session values: `.(float64)` on a
+   decoded number now fails — and fails open if the code treats an
+   unreadable value as absent. Read integers with `s.GetInt64(key)` and
+   treat a present but unreadable value as a refusal.
+6. To revoke sessions server-side, register `session.WithValidator` (a
+   deny-list written at logout, or a per-user "valid since" time); wrap
+   `security.ErrUnavailable` when its store is down (503, nobody is signed
+   out).
+
+### `session`: the cookie is `__Host-session` by default and its configuration is checked
+
+The session cookie had no prefix, so a sibling host could plant a cookie of
+the same name that shadowed the user's own; misconfigurations (a `__Host-`
+name with a `Domain`, an invalid name, an oversized cookie) produced cookies
+that browsers silently refused.
+
+| | Before | After |
+| --- | --- | --- |
+| Default cookie name | `session` | `__Host-session`; `__Secure-session` with a `Domain` or a `Path` other than `/`; `session` with `WithSecure(false)` |
+| Invalid cookie name, relative or invalid path, invalid domain | empty or truncated `Set-Cookie`, `Login` succeeds | `NewManager` panics |
+| `__Host-` name with `Domain`, another `Path` or without `Secure`; `__Secure-` name without `Secure` (any case) | emitted, refused by browsers | `NewManager` panics |
+| `SameSite=None` without `Secure` | emitted, dropped by browsers | `NewManager` panics |
+| `WithTTL(d ≤ 0)`, `WithIdleTimeout(d < 0)`, nil codec | accepted | `NewManager` panics |
+| Cookie name + value over 4096 bytes | emitted, dropped by browsers | `ErrCookieTooLarge`, nothing written |
+| Several cookies of the session's name | the first one | the only valid one; none when two or more open as valid sessions, copies of one session included |
+
+To migrate:
+
+1. Nothing to do for the default configuration: the new name takes effect
+   with the cookie format change (users sign in again anyway). Update
+   whatever reads the cookie by name (tests, proxies, monitoring) to
+   `__Host-session`.
+2. Sharing a session across subdomains (`WithDomain`) or under a path now
+   gets `__Secure-session`; plain-HTTP development (`WithSecure(false)`)
+   gets `session`. An explicit name keeps working if its prefix rules hold.
+3. Keep `Values` small: a write that would exceed 4096 bytes now returns
+   `ErrCookieTooLarge`.
+4. Enforce CSRF on every state-changing request — see the `VerifyCSRF`
+   documentation and the session-web example (`net/http`'s
+   `CrossOriginProtection` in front of the handlers). Protect the sign-in
+   form with the token of a session opened for it on a dedicated `Manager`
+   (its own cookie name and purpose, e.g. `__Host-signin`), never on the
+   one behind the Engine: there, the `PrincipalLoader` would refuse the
+   subject-less session on every request (401). A `PrincipalLoader` must
+   refuse a session without a subject, never map it to a principal.
+5. After changing `WithDomain` or `WithPath` while the cookie keeps its
+   name (an explicit name, or `__Secure-session` from one `Domain` or
+   `Path` to another), browsers keep the cookie of the earlier `Domain` or
+   `Path` next to the new one: two valid sessions, so no session, until the
+   old cookie expires. Clear each old variant once, at sign-in for
+   instance, with a `Set-Cookie` of the same name, the old `Domain` and
+   `Path` and `Max-Age=0` — in Go, `http.Cookie{Name: name, Domain:
+   oldDomain, Path: oldPath, MaxAge: -1, Secure: true}`.
+
+### `session`, `basic`, `bearer`: credentials stay out of `fmt`, `slog` and JSON; the bearer token is dropped once verified
+
+| | Before | After |
+| --- | --- | --- |
+| `fmt` / `slog` of a `session.Session` | every field, CSRF token and raw ID included | `session.Session{ID: <fingerprint>, Values: [keys], CSRFToken: REDACTED, …}` with every verb |
+| `json.Marshal` of a `session.Session` | every field | `{"IDHash", "Values": [keys], "CSRFToken": "REDACTED", "CreatedAt", "LastAccessed", "ExpiresAt"}` |
+| `fmt` of a `basic.Authentication` | typed user-id, password, user record | name (subject, or `basic`), state, authorities |
+| `fmt` of a `bearer.Authentication` | the token | name, state, authorities; `Token: REDACTED` |
+| `bearer.Authentication` after `WithAuthenticated` | keeps the token (`Token()`) | `Token()` is `""` |
+| Value returned by a failed `bearer.Authenticator.Authenticate` | its input (the token) | `security.Anonymous()` |
+| Value returned by a failed `session.Authenticator.Authenticate` | its input (the decoded session) | `security.Anonymous()` |
+
+To migrate:
+
+1. Code that persisted a `session.Session` with `encoding/json` must use a
+   type of its own (the session lives sealed in its cookie anyway).
+2. Code that read `Token()` from an authenticated `bearer.Authentication` to
+   relay the token must read the request's `Authorization` field. A custom
+   `TokenVerifier` should build its result with
+   `bearer.New(token).WithAuthenticated(...)`, which drops the token.

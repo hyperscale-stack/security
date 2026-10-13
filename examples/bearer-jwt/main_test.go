@@ -5,10 +5,10 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,23 +17,16 @@ import (
 func TestBearerJWTExample(t *testing.T) {
 	t.Parallel()
 
-	handler, err := newServer()
+	handler, mint, err := newServer()
 	require.NoError(t, err)
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	// Mint a token via the public /token endpoint.
-	resp, err := srv.Client().Post(srv.URL+"/token", "", nil)
+	// Mint a token the way the demo does at start-up.
+	token, err := mint("resource:read", time.Now())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var minted struct {
-		AccessToken string `json:"access_token"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&minted))
-	require.NotEmpty(t, minted.AccessToken)
+	require.NotEmpty(t, token)
 
 	get := func(t *testing.T, path, token string) int {
 		t.Helper()
@@ -54,12 +47,12 @@ func TestBearerJWTExample(t *testing.T) {
 
 	t.Run("valid token reaches the protected route", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, http.StatusOK, get(t, "/", minted.AccessToken))
+		assert.Equal(t, http.StatusOK, get(t, "/", token))
 	})
 
 	t.Run("valid token carries the resource:read scope", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, http.StatusOK, get(t, "/reports", minted.AccessToken))
+		assert.Equal(t, http.StatusOK, get(t, "/reports", token))
 	})
 
 	t.Run("missing token is rejected", func(t *testing.T) {

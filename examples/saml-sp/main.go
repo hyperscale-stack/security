@@ -346,15 +346,18 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 }
 
 // samlSessionEnded honors the IdP's SessionNotOnOrAfter (Core §2.7.2): the
-// local session must not outlive it.
+// local session must not outlive it. Session numbers come back from the
+// cookie as json.Number (GetInt64 reads them); a value that is present but
+// unreadable ends the session — failing open would keep a session the IdP
+// has closed.
 func (a *app) samlSessionEnded(s *session.Session) bool {
-	end, ok := s.Values["saml_session_end"].(int64)
-	if !ok {
-		f, isFloat := s.Values["saml_session_end"].(float64) // JSON round trip
-		end, ok = int64(f), isFloat
+	if _, present := s.Values["saml_session_end"]; !present {
+		return false
 	}
 
-	return ok && !a.now().Before(time.Unix(end, 0))
+	end, ok := s.GetInt64("saml_session_end")
+
+	return !ok || !a.now().Before(time.Unix(end, 0))
 }
 
 // logout ends the local session after checking the CSRF token.

@@ -7,6 +7,8 @@ package session
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -26,16 +28,20 @@ type Session struct {
 	// Keep it small: the whole map is JSON-encoded into the cookie, and
 	// browsers cap a cookie at ~4 KiB.
 	Values map[string]any
-	// CSRFToken is a random token minted with the session. It is never
-	// exposed to JavaScript (the cookie is HttpOnly); the application
-	// echoes it into forms / a meta tag and the csrf helpers verify it.
+	// CSRFToken is a random token minted with the session and sealed in
+	// its (HttpOnly) cookie. The application renders it into forms or a
+	// meta tag — where a page script, an XSS, can read it — and
+	// [VerifyCSRF] checks the value the browser echoes back.
 	CSRFToken string
 	// CreatedAt is the session creation time.
 	CreatedAt time.Time
-	// LastAccessed is refreshed on every successful load; idle-timeout
-	// enforcement keys off it.
+	// LastAccessed is the time the cookie was last written (Login, Touch,
+	// Rotate): the idle timeout keys off that written value. Get updates
+	// it in memory only.
 	LastAccessed time.Time
-	// ExpiresAt is the absolute expiry time.
+	// ExpiresAt is the absolute expiry time. Get reports the deadline the
+	// Manager enforces: the earlier of the cookie's ExpiresAt and
+	// CreatedAt + the Manager's TTL.
 	ExpiresAt time.Time
 }
 
@@ -62,7 +68,9 @@ func newSession(now time.Time, ttl time.Duration) (*Session, error) {
 	}, nil
 }
 
-// IsExpired reports whether the session has passed its absolute expiry.
+// IsExpired reports whether the session has passed the ExpiresAt it
+// carries. The [Manager] also enforces CreatedAt + its TTL, whichever comes
+// first: rely on [Manager.Get], not on IsExpired alone.
 func (s *Session) IsExpired(now time.Time) bool {
 	return now.After(s.ExpiresAt)
 }
@@ -84,6 +92,44 @@ func (s *Session) GetString(key string) string {
 	v, _ := s.Values[key].(string)
 
 	return v
+}
+
+// GetInt64 returns the integer stored under key and whether there is one
+// that fits an int64: an int of any size set in this request, or the
+// json.Number it becomes once the cookie round-trips (numbers decode as
+// json.Number, so 64-bit IDs keep their precision — never assert float64 on
+// a decoded value). A float, a string or an out-of-range number reports
+// false: treat a value that is present but unreadable as a refusal, not as
+// absent.
+func (s *Session) GetInt64(key string) (int64, bool) {
+	switch v := s.Values[key].(type) {
+	case json.Number:
+		n, err := v.Int64()
+
+		return n, err == nil
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint:
+		return int64(v), v <= math.MaxInt64 //nolint:gosec // G115: checked
+	case uint64:
+		return int64(v), v <= math.MaxInt64 //nolint:gosec // G115: checked
+	}
+
+	return 0, false
 }
 
 // randomToken returns n cryptographically-random bytes, base64url-encoded

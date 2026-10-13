@@ -7,26 +7,106 @@ ships, the attacks it defends against, and the choices left to the operator.
 
 Two `password.Hasher` implementations are shipped:
 
-- **bcrypt** — `NewBCryptHasher(cost)`. Constant-time comparison is provided
-  by `golang.org/x/crypto/bcrypt`.
 - **Argon2id** — `NewArgon2idHasher(params)`. The default profile
-  (`DefaultArgon2idParams`) follows RFC 9106 §4 / OWASP 2024: memory 19 MiB,
-  time 2, parallelism 1, 32-byte key, 16-byte salt.
+  (`DefaultArgon2idParams`) is the minimum of the OWASP Password Storage
+  Cheat Sheet: memory 19 MiB, time 2, parallelism 1, 32-byte key, 16-byte
+  salt. RFC 9106 §4 recommends stronger options (2 GiB, t=1, p=4; or 64 MiB,
+  t=3, p=4 when memory is scarce): raise the parameters towards them when the
+  hardware allows.
+- **bcrypt** — `NewBCryptHasher(cost)`, default cost 10 (`bcrypt.DefaultCost`,
+  the OWASP minimum; lower costs are for tests). bcrypt processes at most 72
+  bytes: a longer password is refused by `Hash` and `Verify`
+  (`ErrPasswordTooLong`) rather than verified on its first 72 bytes — NIST
+  SP 800-63B-4 §3.1.1.2 requires the entire password to be verified. That
+  caps passwords of multi-byte characters below the 64 characters
+  SP 800-63B-4 asks verifiers to permit: prefer Argon2id.
+
+**Stored hashes are untrusted input.** `Verify` decodes the parameters of the
+stored hash and checks them before any hashing: argon2id version 19, each of
+`m`, `t`, `p` exactly once, `t ≥ 1`, `p ≥ 1`, `m ≥ 8p` (RFC 9106 §3.1), salt
+and tag of 16 to 64 bytes (library policy: RFC 9106 sets no salt minimum,
+§4 calls 128-bit salts and tags sufficient) → `ErrMalformedHash`; a cost
+above the hasher's limits → `ErrCostLimitExceeded` (argon2id: 256 MiB, 10
+passes and 16 lanes by default, `WithArgon2idLimits`; bcrypt: cost 14,
+`WithBCryptMaxCost`; both inclusive and raised to the hasher's own
+parameters). A hash imported from an untrusted source or written by an
+attacker can neither crash the process, exhaust its memory or CPU, nor
+accept random passwords. Empty passwords are never hashed nor accepted
+(RFC 8265 §4.1).
 
 `NeedsRehash` lets a login flow transparently upgrade a stored hash when the
 operator raises the cost factor. Call it after a successful `Verify` and
 re-hash if it returns true.
 
-A plain mismatch returns `(false, nil)` — only malformed input or context
-cancellation produces an error. Never store or log the cleartext password.
+A plain mismatch returns `(false, nil)` — only malformed or out-of-bounds
+input, a password too long for the algorithm or context cancellation
+produces an error. Never store or log the cleartext password.
+
+**Unicode.** The hashers hash the password's bytes as given, so they verify
+the hashes of systems that never normalized. NIST SP 800-63B-4 §3.1.1.2 says
+verifiers SHOULD apply NFC to Unicode passwords (RFC 8265 §4.2 too): wrap
+the hasher in the decorator of the `password` package documentation, at
+enrollment and at login.
 
 ## Account enumeration
 
-`basic.Authenticator` collapses every failure — unknown user, loader error,
-disabled/locked/expired account, password mismatch — into a single
-`security.ErrInvalidCredentials` at the client boundary. The detailed cause
-stays in the wrapped error chain for server-side telemetry only. Do not
-mirror the detailed cause in the HTTP/gRPC response.
+`basic.Authenticator` answers every refused attempt — unknown user, loader
+error, account without a password, disabled/locked/expired account, password
+mismatch — with `security.ErrInvalidCredentials` at the client boundary, and
+spends the same work on each: exactly one password verification, against
+the user's hash or against a dummy hash the configured hasher made at
+construction; the account state is read only after the verification. The
+detailed cause stays in the wrapped error chain for server-side telemetry
+only. Do not mirror it in the HTTP/gRPC response.
+
+What remains measurable, and how to close it:
+
+- **Stored hashes at other parameters** cost another time than the dummy:
+  configure the hasher with the parameters of your stored hashes and
+  implement `basic.PasswordRehasher` on your loader, which re-hashes a
+  stored hash that `NeedsRehash` after a successful login.
+- **The loader's own latency** (a cache hit for known users, a slower miss)
+  is the application's: make unknown and known lookups cost the same.
+- A stored hash `Verify` refuses (malformed, above the limits) fails without
+  hashing — an operator data problem, not reachable by a client.
+- Under overload an attempt that gets no verification slot answers 503
+  (`ErrUnavailable`) whatever the account, so overload reveals nothing.
+
+Malformed credentials — control characters, format characters (Unicode Cf:
+zero-width joiner and space, soft hyphen, bidirectional overrides, byte
+order mark), line and paragraph separators, invalid UTF-8, more than 3072
+bytes, an empty user-id — are refused before the loader runs, without a
+verification and with one error: a property of the input, not of an
+account. The extractor and the `Authenticator` apply the same rules, so a
+form login that builds the value with `basic.New` is checked too, and such
+a character never reaches the application's lookups and logs (log
+injection, a user-id that displays as another one). RFC 8264's
+FreeformClass, the base of RFC 8265's OpaqueString profile for passwords,
+disallows them too (but for the zero-width joiner and non-joiner after a
+virama, which this library refuses as well): refuse them when a password or
+a user-id is chosen, or the account cannot sign in with Basic (reset the
+password; rename the account or give it an alias — a Persian or Indic name
+written with U+200C or U+200D, for instance).
+
+### Online guessing and hashing cost
+
+Basic authentication runs a full password verification on every request,
+and since any username now costs one, a flood of attempts costs the server
+CPU and memory (19 MiB per default Argon2id verification). The
+`Authenticator` therefore runs at most `runtime.GOMAXPROCS(0)` verifications
+at once by default (`WithMaxConcurrentVerifications`); further attempts wait
+for a slot until their request context ends, then answer 503. Hashing is
+CPU-bound: more parallel verifications than cores add latency and memory,
+not throughput. Bound the request time (`http.TimeoutHandler`): `net/http`
+request contexts carry no deadline.
+
+The library ships no rate limiter: limit failed attempts per account and per
+client at the edge or in an `Authenticator` wrapper (NIST SP 800-63B-4
+§3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts), and prefer
+exchanging Basic credentials once for a session or a token over sending them
+on every request. Form logins and the OAuth2 `password` grant's
+`ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the same
+protections.
 
 ## JWT
 
@@ -1072,24 +1152,95 @@ session store to compromise or scale.
 
 - **Confidentiality + integrity** — the cookie payload is sealed with
   AES-256-GCM (AEAD): tampering fails decryption, it is not merely detected.
+- **Keys** — `NewCodec` requires keys of at least 32 bytes from a
+  cryptographic source (`openssl rand -base64 32`, `crypto/rand`) and
+  refuses shorter keys and buffers that were never filled; it cannot tell a
+  random key from a 32-character passphrase, so never use one. Each key is
+  expanded with HKDF-SHA256 under a label of its own (RFC 5869), so a secret
+  reused elsewhere never yields the same AES key.
+- **Binding** — the AEAD associated data binds every cookie to the format
+  version, the cookie name and an optional purpose (`WithPurpose`): a cookie
+  minted for another cookie name, application or path that shares the keys
+  never opens (NIST SP 800-38D).
 - **Key rotation** — the `Codec` accepts an ordered key list. New cookies
   are sealed with the first key; decryption is attempted against every key,
-  so a key can be retired gracefully.
+  so a key can be retired gracefully, and `Touch`/`Rotate` re-seal a cookie
+  with the active key.
+- **Absolute lifetime** — a session expires at the earlier of the
+  `ExpiresAt` its cookie carries and `CreatedAt + TTL` of the reading
+  `Manager`: lowering the TTL applies to issued cookies at once, raising it
+  extends none, and neither `Rotate` nor `Touch` ever extends a session.
+  The idle timeout slides only when `Touch` rewrites the cookie.
+- **Revocation** — the cookie is stateless, so `Logout` only deletes the
+  browser's copy. To revoke server-side — a stolen copy after logout, every
+  session of a user after a password change — register `WithValidator`
+  against a store of yours (a deny-list of session-ID fingerprints kept until
+  the session's deadline, or a "valid since" time per user); cache its
+  lookups. A validator error wrapping `security.ErrUnavailable` answers 503,
+  so an outage of that store never signs everyone out.
 - **Cookie attributes** — defaults are conservative: `Secure=true`,
-  `HttpOnly=true`, `SameSite=Lax`. Disable `Secure` only for local plain-HTTP
-  development.
+  `HttpOnly=true`, `SameSite=Lax`, and the name `__Host-session`: a
+  `__Host-` cookie is Secure, has `Path=/` and no `Domain`, so a sibling
+  host cannot plant a cookie that shadows it (cookie tossing,
+  draft-ietf-httpbis-rfc6265bis §4.1.3.2). When the configuration cannot
+  satisfy that prefix the default name falls back to `__Secure-session`
+  (a `Domain` or another `Path`) or `session` (`WithSecure(false)`, local
+  plain-HTTP development only). `NewManager` refuses at start-up a
+  configuration browsers would refuse: an invalid name, path or domain, a
+  `__Host-`/`__Secure-` name whose rules the attributes break (prefixes
+  matched case-insensitively, like browsers do), `SameSite=None` without
+  `Secure`.
+- **Shadowing cookies** — when a request carries several cookies of the
+  session's name and more than one opens as a valid session, it has no
+  session: a tossed cookie can deny a session (until it expires), never
+  swap it. Copies of one session count as several — they can differ, as a
+  copy planted before a sign-in without `Rotate` does — while expired or
+  undecodable ones do not count. With the default `__Host-` name no other
+  host can toss one at all. Stale duplicates have the same effect: after
+  changing `WithDomain` or `WithPath` while the cookie keeps its name,
+  browsers keep the cookie of the earlier `Domain` or `Path` next to the
+  new one, so clear each old variant once with `Max-Age=0` — a
+  `Set-Cookie` of the same name with the old `Domain` and `Path` (in Go,
+  `http.Cookie{…, MaxAge: -1}`).
 - **Cookie only** — the `Manager` reads the session from the request's
   `Cookie` header field, through `httpsec.Carrier.CookiesNamed`, never from
   the URL nor from a header named like the cookie: a link carrying a session
   value cannot log a browser into another account.
-- **Session fixation** — `Manager.Rotate` mints a fresh session ID; call it
-  immediately after a privilege change (login). The ID never appears raw in
-  a span — only a SHA-256 fingerprint.
+- **Session fixation** — call `Manager.Login` at sign-in: it mints a fresh
+  session (new ID, new CSRF token, new lifetime) and replaces the previous
+  one. `Manager.Rotate` mints a new ID and CSRF token within the same
+  session — after a step-up — and keeps its creation time and deadline. The
+  ID never appears raw in a span — only a SHA-256 fingerprint.
+- **Values** — numbers come back as `json.Number` (read integers with
+  `Session.GetInt64`): a 64-bit ID never loses precision through a float64.
+  Treat a value that is present but unreadable as a refusal, not as absent.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
-  compares tokens in constant time. The session cookie being `HttpOnly`
-  keeps the token out of reach of XSS.
-- **Size** — the whole session is JSON-encoded into the cookie; browsers
-  cap a cookie near 4 KiB. Keep `Values` small.
+  compares tokens in constant time, but it is a check, not a policy: call
+  `VerifyCSRF` on every state-changing request a cookie session
+  authenticates, never change state on GET, and put `net/http`'s
+  `CrossOriginProtection` (Sec-Fetch-Site and Origin checks) in front of the
+  handlers. `SameSite=Lax` does not stop same-site requests from a sibling
+  subdomain. The cookie is `HttpOnly`, but the token is rendered into the
+  page: an XSS reads it — no CSRF defense survives XSS.
+- **Sign-in form** — protect it too, against login CSRF, with the token of a
+  session opened for the form (`Login` with a nil principal) on a
+  **dedicated `Manager`**: its own cookie name and purpose, a short TTL
+  (`WithCookieName("__Host-signin")`, `WithPurpose("sign-in form")`,
+  `WithTTL(15*time.Minute)`), read by no `Extractor`. On the `Manager`
+  behind the Engine, the Engine would extract that subject-less session on
+  every request and the `PrincipalLoader` refuse it: every page, the
+  sign-in form included, would answer 401. Do not work around that by
+  mapping a session without a subject to a principal — anonymous or guest:
+  the `Authenticator` would return an **authenticated** value, which
+  `voter.Authenticated` grants. The session-web example shows the pattern.
+- **Size** — the whole session is JSON-encoded into the cookie, and browsers
+  ignore a cookie whose name and value exceed 4096 bytes (rfc6265bis §5.6):
+  `Login`, `Touch` and `Rotate` refuse it with `ErrCookieTooLarge` instead
+  of losing the session silently. Keep `Values` small.
+- **Key usage** — nonces are random (96 bits), and NIST SP 800-38D §8.3
+  limits one key to 2^32 seals: every `Login`, `Touch` and `Rotate` is one.
+  Rotate the active key well before that volume (about 50 days at 1 000
+  cookie writes per second), and do not `Touch` on every request.
 
 ## OpenID Connect client
 
@@ -1458,7 +1609,14 @@ span catalog.
 
 - [ ] Build with Go 1.27.2 or later, the latest patch release, and run
       `govulncheck` on your application.
-- [ ] Pick a password hasher and review its cost against current hardware.
+- [ ] Pick a password hasher and review its cost against current hardware;
+      raise its limits (`WithArgon2idLimits`, `WithBCryptMaxCost`) before
+      importing hashes costlier than the defaults.
+- [ ] HTTP Basic: build each `basic.Authenticator` once, configure its hasher
+      with the parameters of the stored hashes (and implement
+      `basic.PasswordRehasher`), bound the request time
+      (`http.TimeoutHandler`), and rate-limit failed attempts per account
+      and per client in front of it.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
@@ -1535,8 +1693,13 @@ span catalog.
       `Config.ClaimsSupported`, and the claim names end-users choose kept
       apart from them.
 - [ ] Serve over HTTPS so `Secure` cookies and bearer tokens are protected.
-- [ ] Supply at least two session keys so rotation is possible without
-      invalidating live sessions.
+- [ ] Generate session keys of 32 bytes or more from a cryptographic source
+      and keep them in a secret store; keep the previous key after the new
+      one while you rotate, so rotation does not sign everyone out; rotate
+      the active key before it seals 2^32 cookies.
+- [ ] Sessions: keep the default `__Host-session` cookie name; call
+      `VerifyCSRF` on every state-changing request (sign-in form included)
+      behind `net/http`'s `CrossOriginProtection`.
 - [ ] SAML: import IdP metadata through a trusted channel, or fetch it from
       the IdP's https metadata URL with a `MetadataSource` pinned to its
       entity ID; never take a metadata URL from a request. Widen the

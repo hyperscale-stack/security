@@ -15,11 +15,11 @@ import (
 // fakeUser is a minimal basic.PasswordUser for the authentication tests.
 type fakeUser struct{ sub string }
 
-func (u fakeUser) Subject() string           { return u.sub }
-func (u fakeUser) GetPasswordHash() string   { return "" }
-func (u fakeUser) IsEnabled() bool           { return true }
-func (u fakeUser) IsLocked() bool            { return false }
-func (u fakeUser) IsExpired() bool           { return false }
+func (u fakeUser) Subject() string            { return u.sub }
+func (u fakeUser) GetPasswordHash() string    { return "" }
+func (u fakeUser) IsEnabled() bool            { return true }
+func (u fakeUser) IsLocked() bool             { return false }
+func (u fakeUser) IsExpired() bool            { return false }
 func (u fakeUser) IsCredentialsExpired() bool { return false }
 
 func TestAuthenticationPreAuth(t *testing.T) {
@@ -29,7 +29,7 @@ func TestAuthenticationPreAuth(t *testing.T) {
 
 	assert.Equal(t, "alice", auth.Username())
 	assert.Equal(t, "s3cr3t", auth.Password())
-	assert.Equal(t, "alice", auth.Name())
+	assert.Equal(t, "basic", auth.Name(), "before authentication Name is the scheme label")
 	assert.False(t, auth.IsAuthenticated())
 	assert.Nil(t, auth.Authorities())
 	assert.Nil(t, auth.User())

@@ -28,15 +28,16 @@ func New(token string) Authentication {
 	return Authentication{token: token}
 }
 
-// Token returns the raw bearer token. Once a [TokenVerifier] has produced an
-// authenticated value, the token can be redacted by calling
-// [Authentication.WithAuthenticated] with a verifier that builds a fresh
-// value from scratch.
+// Token returns the raw bearer token of an unauthenticated value — the one
+// the [Extractor] read — and "" once it is authenticated:
+// [Authentication.WithAuthenticated] drops it. To relay the token to another
+// service, read the request's Authorization field instead.
 func (a Authentication) Token() string { return a.token }
 
 // WithAuthenticated returns a new Authentication marked as validated, with
-// the provided principal, authorities and display name. The token is
-// preserved so adapters that issue refresh challenges can still inspect it.
+// the provided principal, authorities and display name. It drops the token:
+// a verified value never carries the credential it was verified from, so it
+// can flow through the request context, logs and panics without it.
 func (a Authentication) WithAuthenticated(p security.Principal, authorities []string, name string) Authentication {
 	cp := authorities
 	if authorities != nil {
@@ -49,7 +50,6 @@ func (a Authentication) WithAuthenticated(p security.Principal, authorities []st
 	}
 
 	return Authentication{
-		token:       a.token,
 		principal:   p,
 		authorities: cp,
 		authed:      true,
@@ -67,8 +67,7 @@ func (a Authentication) Principal() security.Principal {
 }
 
 // Credentials implements [security.Authentication]. Returns the token before
-// authentication, nil after (the verifier is expected to redact via a fresh
-// WithAuthenticated call).
+// authentication, nil after (WithAuthenticated drops it).
 func (a Authentication) Credentials() any {
 	if a.authed {
 		return nil

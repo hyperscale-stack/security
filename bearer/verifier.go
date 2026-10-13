@@ -31,6 +31,9 @@ import (
 //     or auth service temporarily down — wraps [security.ErrUnavailable]
 //     (503 / Unavailable, retryable), never a credential sentinel;
 //   - an error wrapping no sentinel is an internal error (500 / Internal).
+//
+// The returned Authentication MUST NOT keep the raw token: build it with
+// bearer.New(token).WithAuthenticated(...), which drops it.
 type TokenVerifier interface {
 	Verify(ctx context.Context, token string) (security.Authentication, error)
 }

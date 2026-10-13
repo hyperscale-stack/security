@@ -42,20 +42,21 @@ func (a *Authenticator) Supports(auth security.Authentication) bool {
 // Authenticate implements [security.Authenticator]. The returned
 // authentication is whatever the verifier produced; on verifier error the
 // error is propagated as-is (the verifier is expected to wrap one of the
-// security sentinels for the error mapper to route).
+// security sentinels for the error mapper to route). On failure it returns
+// [security.Anonymous]: the token never flows back to the caller.
 func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authentication) (security.Authentication, error) {
 	in, ok := auth.(Authentication)
 	if !ok {
-		return auth, security.ErrUnsupportedCredential
+		return security.Anonymous(), security.ErrUnsupportedCredential
 	}
 
 	out, err := a.verifier.Verify(ctx, in.Token())
 	if err != nil {
-		return auth, fmt.Errorf("bearer: verify token: %w", err)
+		return security.Anonymous(), fmt.Errorf("bearer: verify token: %w", err)
 	}
 
 	if out == nil {
-		return auth, fmt.Errorf("bearer: verifier returned nil authentication: %w", security.ErrInvalidCredentials)
+		return security.Anonymous(), fmt.Errorf("bearer: verifier returned nil authentication: %w", security.ErrInvalidCredentials)
 	}
 
 	return out, nil

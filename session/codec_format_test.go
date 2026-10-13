@@ -5,7 +5,8 @@
 package session_test
 
 import (
-	"bytes"
+	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -29,10 +30,15 @@ import (
 func TestCodecRedactsItsKeys(t *testing.T) {
 	t.Parallel()
 
-	key := bytes.Repeat([]byte{0x5a}, 32)
-	derived := sha256.Sum256(key) // the AES-256 key of the active key
+	key, previous := make([]byte, 32), make([]byte, 32)
+	_, _ = rand.Read(key)
+	_, _ = rand.Read(previous)
 
-	codec, err := session.NewCodec(key, []byte("previous-key"))
+	// The AES-256 key of the active key (cookie format v2).
+	derived, err := hkdf.Key(sha256.New, key, nil, "github.com/hyperscale-stack/security/session v2 AES-256-GCM", 32)
+	require.NoError(t, err)
+
+	codec, err := session.NewCodec(key, previous)
 	require.NoError(t, err)
 
 	// The first word of the key schedule, as fmt prints it on either byte order.

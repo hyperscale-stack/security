@@ -6,6 +6,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/hyperscale-stack/security"
 )
@@ -22,15 +24,22 @@ type Extractor struct {
 func NewExtractor(mgr *Manager) Extractor { return Extractor{mgr: mgr} }
 
 // Extract implements [security.Extractor]. Returns (nil, nil) when the
-// request carries no decodable session cookie, so the engine moves on to
-// the next extractor / anonymous flow.
+// request carries no usable session cookie — absent, undecodable, expired or
+// refused by the Manager's validator — so the engine moves on to the next
+// extractor / anonymous flow. A session that could not be checked (an error
+// wrapping [security.ErrUnavailable] from the validator) is an error: the
+// transports answer 503 rather than treating the user as signed out.
 func (e Extractor) Extract(ctx context.Context, c security.Carrier) (security.Authentication, error) {
 	s, err := e.mgr.Get(ctx, c)
-	if err != nil {
+
+	switch {
+	case err == nil:
+		return newPending(s), nil
+	case errors.Is(err, security.ErrUnavailable):
+		return nil, fmt.Errorf("session: %w", err)
+	default:
 		// ErrNoSession and expiry both mean "no usable session here" —
 		// the engine treats a nil result as "extractor did not apply".
 		return nil, nil //nolint:nilerr // absent/expired session is not an extraction error
 	}
-
-	return newPending(s), nil
 }

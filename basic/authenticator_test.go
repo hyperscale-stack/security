@@ -19,12 +19,12 @@ import (
 // stubUser is a [basic.PasswordUser] driven by per-field flags so individual
 // tests can dial in the exact lifecycle scenario they need.
 type stubUser struct {
-	subject              string
-	passwordHash         string
-	enabled              bool
-	locked               bool
-	expired              bool
-	credentialsExpired   bool
+	subject            string
+	passwordHash       string
+	enabled            bool
+	locked             bool
+	expired            bool
+	credentialsExpired bool
 }
 
 func (u *stubUser) Subject() string            { return u.subject }
@@ -184,6 +184,6 @@ func TestAuthenticatorRejectsForeignAuthentication(t *testing.T) {
 func TestAuthenticatorName(t *testing.T) {
 	t.Parallel()
 
-	a := basic.NewAuthenticator(nil, nil)
+	a := basic.NewAuthenticator(basic.NewMockUserLoader(t), newHasher(t))
 	assert.Equal(t, "basic", a.AuthenticatorName())
 }

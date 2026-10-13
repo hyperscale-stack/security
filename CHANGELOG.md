@@ -486,6 +486,24 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `interaction_required`, `account_selection_required`, `consent_required`)
   — are answered with a bare error page instead of a redirect (RFC 9700
   §4.11.2). Without it, every registered client is trusted, as before.
+- `password`: limits on the cost of stored hashes — `Argon2idLimits`,
+  `DefaultArgon2idLimits` (256 MiB, 10 passes, 16 lanes),
+  `WithArgon2idLimits`, `Argon2idHasher.Limits`; `WithBCryptMaxCost`,
+  `DefaultBCryptMaxCost` (14), `BCryptHasher.MaxCost` — and the sentinels
+  `ErrCostLimitExceeded`, `ErrPasswordTooLong` and `ErrEmptyPassword`.
+- `basic.WithMaxConcurrentVerifications(n)` and `basic.UnlimitedVerifications`:
+  the cap on concurrent password verifications (`runtime.GOMAXPROCS(0)` by
+  default), and `basic.PasswordRehasher`, an optional `UserLoader`
+  capability through which the `Authenticator` upgrades a stored hash that
+  `NeedsRehash` after a successful authentication.
+- `session`: `MinKeySize`, `MaxCookieSize`, `WithPurpose` (binds the cookies
+  of a Manager to a purpose), `WithValidator` (server-side revocation hook)
+  and `Session.GetInt64`.
+- `session.ErrCookieTooLarge`: a session cookie that would exceed 4096
+  bytes is refused instead of being silently dropped by the browser.
+- `String`, `Format` and `LogValue` on `session.Session` (and a redacting
+  `MarshalJSON`), `session.Authentication`, `basic.Authentication` and
+  `bearer.Authentication`.
 
 ### Changed
 
@@ -755,6 +773,70 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     unless `WithOutboundPolicy` allows them, and follows redirects within
     the JWK Set URL's origin only; RFC 9068 access tokens need a non-empty
     audience from the `IssuerResolver`.
+- `password`: `NewArgon2idHasher` panics on a memory cost below 8×lanes or a
+  key or salt length outside 16–64 bytes, and `NewBCryptHasher` on a cost
+  outside 4–31 (it used to clamp it silently); both take options
+  (`WithArgon2idLimits`, `WithBCryptMaxCost`). `Verify` refuses, before any
+  hashing, a stored hash outside the bounds (`ErrMalformedHash`) or above the
+  limits (`ErrCostLimitExceeded`); bcrypt refuses passwords longer than 72
+  bytes (`ErrPasswordTooLong`) instead of verifying their first 72 bytes;
+  `Hash` refuses an empty password (`ErrEmptyPassword`) and `Verify` never
+  accepts one; `NeedsRehash` also flags a shorter salt and every hash
+  `Verify` refuses. See [MIGRATION.md](MIGRATION.md).
+- `basic.NewAuthenticator` panics on a nil loader or hasher and hashes a
+  random password once (the dummy hash unknown accounts are verified
+  against): build the `Authenticator` once, not per request. Every attempt
+  runs exactly one password verification, at most `GOMAXPROCS`
+  verifications run at once by default (an attempt that gets no slot before
+  its context ends fails with `ErrUnavailable`, 503), and a failed
+  `Authenticate` returns `security.Anonymous()` instead of its input. See
+  [MIGRATION.md](MIGRATION.md).
+- `basic` parses credentials strictly (RFC 7617 §2): base64 alphabet with
+  canonical padding, user-id and password in UTF-8 without any control
+  character, format character (Unicode Cf: zero-width joiner, soft hyphen,
+  bidirectional overrides, byte order mark…) or line or paragraph separator
+  (after RFC 8264's FreeformClass, the base of RFC 8265's OpaqueString), at
+  most 3072 bytes, several spaces allowed after the scheme, and `Basic`
+  without credentials is malformed (it used to be ignored). **Breaking:** an
+  account whose password or user-id contains such a character can no longer
+  sign in with Basic — reset the password; rename the account or give it an
+  alias (a Persian or Indic name written with U+200C or U+200D, for
+  instance).
+  `basic.Authenticator` applies the same checks — a form login building the
+  value with `basic.New` included — and also refuses an empty user-id
+  (`ErrBadFormat`, 401) before any lookup; the `Extractor` still lets an
+  empty user-id through for custom authenticators (`-u :KEY`).
+  `Authentication.Name()` returns the authenticated user's subject, and
+  `"basic"` before authentication (it returned the typed user-id). See
+  [MIGRATION.md](MIGRATION.md).
+- `session` cookie format v2 (breaking: **every existing session cookie is
+  invalidated once** — users sign in again): keys of at least 32 random
+  bytes (`NewCodec` refuses shorter keys and single-byte buffers), expanded
+  with HKDF-SHA256; AES-256-GCM associated data binding the cookie to the
+  format version, its name and the Manager's purpose; `Codec.Encode` and
+  `Codec.Decode` are no longer exported (only the `Manager` seals and opens
+  cookies). A session expires at the earlier of its `ExpiresAt` and
+  `CreatedAt + TTL` of the reading Manager; `Rotate` keeps the creation time
+  and deadline; `Touch` refuses a nil session (`ErrNoSession`) and a session
+  past its deadline (`ErrTokenExpired`). Numbers in `Values` decode as
+  `json.Number`. The session `Extractor` reports a validator error wrapping
+  `security.ErrUnavailable` instead of finding no session. See
+  [MIGRATION.md](MIGRATION.md).
+- The session cookie is named `__Host-session` by default (`__Secure-session`
+  with a `Domain` or another `Path`, `session` with `WithSecure(false)`), and
+  `session.NewManager` panics on a configuration browsers would refuse or
+  that cannot work: a nil codec, an invalid cookie name, path or domain, a
+  `__Host-`/`__Secure-` name whose rules the attributes break, `SameSite=None`
+  without `Secure`, a TTL that is not positive, a negative idle timeout. A
+  request carrying more than one valid session cookie of the session's name
+  has no session. See [MIGRATION.md](MIGRATION.md).
+- `bearer.Authentication.WithAuthenticated` drops the token: `Token()` is
+  `""` once authenticated (read the request's `Authorization` field to relay
+  a token), and a failed `bearer.Authenticator.Authenticate` or
+  `session.Authenticator.Authenticate` returns `security.Anonymous()`.
+  `json.Marshal` of a `session.Session` writes its ID fingerprint, the keys
+  of its values and its times, never the CSRF token, the ID or the values.
+  See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -956,6 +1038,23 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and deduplicated fetches, and `docs/security-considerations.md` said JWK
   Sets were fetched through `outbound`: none of it held (see Security).
 - `now == exp` was accepted by the JWT verifier (RFC 7519 §4.1.4).
+- `password` documentation: the default bcrypt cost is 10
+  (`bcrypt.DefaultCost`), not 12; `DefaultArgon2idParams` is the OWASP
+  Password Storage Cheat Sheet minimum, not RFC 9106 §4's recommendation;
+  `ErrMismatch` is never returned by the shipped hashers (a mismatch is
+  `(false, nil)`).
+- `session` documentation: the store is AES-256-GCM (an AEAD), not "AES-GCM
+  with HMAC"; the CSRF token is rendered into pages, so `HttpOnly` does not
+  keep it out of reach of an XSS; `VerifyCSRF` must be called on every
+  state-changing request (sign-in included) — guidance added, with the
+  2^32-seal limit of a session key.
+- The `basic-http` example answered with a `Bearer` challenge although it
+  accepts Basic credentials only; it now challenges with
+  `Basic realm="basic-http", charset="UTF-8"`. The HTTP servers of the
+  `basic-http`, `bearer-jwt`, `connectrpc-bearer` and `session-web` examples
+  and of the README quick start set read, write and idle timeouts (they had
+  none, or a header timeout only, and slow clients could hold connections
+  open).
 
 - The SAML Redis store answered `ErrTransactionExists` only when a second
   save differed from the stored transaction: an identical one succeeded. It
@@ -1623,3 +1722,83 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   while the grants refused them there (OIDC Core §16.15). And without an
   `IntrospectionPolicy`, any confidential client — every resource server —
   could read the claims of any client's refresh token (RFC 6749 §1.5).
+- `password` hashers trusted the parameters of the stored hash: an argon2id
+  hash with `t=0`, `p=0`, a missing parameter or an empty tag panicked
+  inside `golang.org/x/crypto` (fatal in a gRPC server without a recovery
+  interceptor), `m=4294967295` made a single verification try to allocate
+  4 TiB, a 1-byte tag accepted about one random password in 256, and a
+  stored bcrypt cost of 31 asked for days of CPU. Whoever can write or
+  import a hash — a migration, a compromised store — controlled that cost.
+  `Verify` now checks the stored hash before any hashing: RFC 9106 §3.1
+  ranges, each parameter exactly once, salt and tag of 16–64 bytes, and
+  operator limits on the cost.
+- bcrypt `Verify` accepted any password whose first 72 bytes matched,
+  contrary to NIST SP 800-63B-4 §3.1.1.2 ("SHALL verify the entire submitted
+  password"), while `Hash` refused such passwords; it now refuses them.
+  Empty passwords are no longer hashed nor accepted (RFC 8265 §4.1).
+- `basic.Authenticator` answered unknown, disabled, locked and expired
+  accounts before verifying the password — about 250× faster than a known
+  account with a wrong password at bcrypt cost 10 — so the response time
+  told which accounts exist, contrary to its documentation. Every attempt
+  now costs one password verification: unknown accounts, loader failures
+  and accounts without a password are verified against a dummy hash made by
+  the configured hasher, and the account state is read after the
+  verification. Since any username now costs a full hash, the number of
+  concurrent verifications is capped by default (`runtime.GOMAXPROCS(0)`):
+  a flood of Basic attempts can no longer exhaust memory (19 MiB per
+  default Argon2id verification).
+- The Basic extractor forwarded control characters (NUL, CR LF, ANSI escape
+  sequences), invisible format characters (zero-width joiner and space,
+  right-to-left override) and invalid UTF-8 in the user-id to the
+  `UserLoader` — a log injection and spoofing vector into the application's
+  lookups and logs — and its lenient base64 decoding skipped CR LF inside
+  the credentials. Malformed credentials are now refused before any lookup,
+  by the extractor and by the `Authenticator` alike.
+- `session.NewCodec` accepted an empty or low-entropy key and derived the
+  AES key with a bare SHA-256: an unset environment variable let anyone mint
+  a cookie for any subject, and a passphrase key could be brute-forced
+  offline from one cookie. Keys must now be at least 32 random bytes.
+- Session cookies carried no AEAD associated data: a cookie minted by one
+  manager (`shop_session`) opened under another cookie name
+  (`admin_session`) or for another purpose sharing the keys. Cookies are now
+  bound to the format version, their name and an optional purpose.
+- `Manager.Rotate` moved the session's expiry to now + TTL, so periodic
+  rotations kept a session alive forever, and only the expiry written in the
+  cookie was checked — lowering the TTL did not affect issued cookies. The
+  absolute lifetime `CreatedAt + TTL` is now enforced on every read and
+  never extended. `session.WithValidator` makes server-side revocation
+  possible (a stolen copy after logout).
+- Session values decoded numbers as float64: 1234567890123456789 came back
+  as 1234567890123456768, mapping a session to another account. Numbers now
+  decode as `json.Number`.
+- Session cookie hygiene: the session cookie had no `__Host-` prefix, so a
+  sibling host could plant a cookie of the same name that shadowed the
+  user's own (cookie tossing, login CSRF); a `__Host-` name with `Domain`
+  and `Path` was emitted although browsers reject it; an oversized session
+  was emitted and silently dropped by browsers; an invalid cookie name
+  produced an empty `Set-Cookie` while `Login` reported success. The
+  default name is now `__Host-session`, the configuration is checked at
+  construction, a request whose cookies open as two valid sessions —
+  copies of one session included — has none, and an oversized cookie is an
+  error.
+- Credentials printed and serialized: the exported fields of a
+  `session.Session` revealed its CSRF token (and its raw ID) through `%+v`
+  and `encoding/json` — `slog`'s JSON handler included; `basic` and `bearer`
+  authentications printed the password, the bearer token and, once
+  authenticated, the application's user record (password hash included);
+  and a verified `bearer.Authentication` kept its token for the rest of the
+  request. They now print, log and encode without secrets, and the bearer
+  token is dropped once verified.
+- The `bearer-jwt` example served an unauthenticated `/token` endpoint that
+  minted an access token for anyone who asked, and the `bearer-jwt`,
+  `grpc-bearer` and `connectrpc-bearer` examples printed a bearer token,
+  valid one hour, to their logs. The demos now mint their token in-process,
+  valid 15 minutes, write it to a file only the current user can read, log
+  the file's path and remove the file when they stop.
+- The `session-web` example's sign-in form carried no CSRF token, so another
+  site could sign a victim into the attacker's account (login CSRF), and it
+  verified the password of known users only, so its response time told
+  which accounts exist. The form now carries the token of a session opened
+  for it on a `Manager` of its own (cookie `__Host-signin`), cross-origin
+  posts are refused (`http.CrossOriginProtection`) and the credentials go
+  through `basic.Authenticator`.
