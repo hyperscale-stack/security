@@ -63,6 +63,7 @@ make generate   # mockery mocks (in-package mock_*_test.go, never committed), se
 make test       # generate, then go test -race -cover in every module, aggregated -> build/coverage.out
 make lint       # golangci-lint (pinned in tools/golangci-lint, shared .golangci.yml) on every module
 make vuln       # govulncheck -test on every module, outside the workspace
+make test-backends # the store suites on real PostgreSQL/MySQL/MariaDB/Redis (variables: scripts/test-backends.sh); CI runs it
 make tools      # build the pinned tools (tools/<name>) into build/bin
 make tidy       # go work sync + go mod tidy per module (and tools/*) + go work sync
 make check-modules # one go line, go.work complete, sync no-op, every module tidy/buildable with GOWORK=off
@@ -95,6 +96,12 @@ persisted; keep it `actionlint`- and `zizmor`-clean):
 - `.github/workflows/go.yml` runs `make tools generate check-modules build
   test lint` against the whole workspace, then `make coveralls` (goveralls,
   pinned in `tools/goveralls`; a Coveralls outage does not fail the build);
+  a second job, `Store suites (real backends)`, runs `make test-backends`
+  against PostgreSQL 16, MySQL 8.0/8.4, MariaDB 11.4 and Redis 7.4 service
+  containers (digests of the compose files, loopback only, no credentials).
+  A real-backend test skips while its variable is unset, and that run fails
+  on any skip: a new real-backend test follows that rule, and its variable
+  is added to `scripts/test-backends.sh` and to the job;
 - `govulncheck.yml` runs `make vuln` (every module, tests included) on every
   change and weekly;
 - `release.yml`, on a `v*` or `**/v*` tag: a read-only `verify` job
@@ -136,9 +143,9 @@ persisted; keep it `actionlint`- and `zizmor`-clean):
 | `./internal/integrations` | (private)                                  | Cross-module end-to-end tests                        |
 | `./internal/interop/oidcop` | (private, tests only)                    | `oidc/provider` vs go-oidc + x/oauth2 as independent RP |
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
-| `./internal/interop/oidcstack` | (private, tests only)                 | our RP ↔ our OP end to end, attacks included; opt-in real-backend store runs |
+| `./internal/interop/oidcstack` | (private, tests only)                 | our RP ↔ our OP end to end, attacks included; real-backend store runs (CI job; opt-in locally) |
 | `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
-| `./internal/interop/sqlstores` | (private, tests only)                 | the three SQL stores on real servers (SQLite always; opt-in PostgreSQL, MySQL, MariaDB): racing `Migrate`, oauth2 conformance, MySQL upgrade statements |
+| `./internal/interop/sqlstores` | (private, tests only)                 | the three SQL stores on real servers (SQLite always; PostgreSQL, MySQL, MariaDB in the CI job, opt-in locally): racing `Migrate`, oauth2 conformance, MySQL upgrade statements |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
 of `oauth2`; likewise `oidc/client/storage/memory` and `oidc/client/storetest`
@@ -386,9 +393,10 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 - `internal/interop/oidcstack` runs the client against the provider over
   HTTP — flows, attacks, failures, concurrency — importing no third-party
   OIDC, OAuth 2.0 or JOSE library (`TestDependencyPolicy`; the client's own
-  go-jose is part of the code under test); its real-backend store runs are
-  opt-in (`OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`,
-  `OIDCCLIENT_REDIS_ADDR`, `compose.yaml`). `TestDocumentedTestsExist`
+  go-jose is part of the code under test); its real-backend store runs
+  (`OIDCCLIENT_POSTGRES_DSN`, `OIDCCLIENT_MYSQL_DSN`,
+  `OIDCCLIENT_REDIS_ADDR`, `compose.yaml`) are opt-in locally and run in CI
+  through `make test-backends`. `TestDocumentedTestsExist`
   fails when `docs/oidc-{conformance,client,provider}.md` cite a test that
   does not exist, or when a page claims a certification.
 - Opt-in, never in CI: `make e2e-oidc` (`e2e/oidc/*.tales`, Tales
@@ -444,7 +452,8 @@ by response content).
   `SAMLSP_KEYCLOAK_ADMIN_PASSWORD` (`TestKeycloakLive`; `-args
   -keycloak.capture` rewrites the 26.7.4 captures, and only `-args
   -keycloak.fixture` against Keycloak 26.0.7 rewrites the 26.0.7 fixture),
-  `SAMLSP_REDIS_ADDR`, `SAMLSP_POSTGRES_DSN`, `SAMLSP_MYSQL_DSN`.
+  `SAMLSP_REDIS_ADDR`, `SAMLSP_POSTGRES_DSN`, `SAMLSP_MYSQL_DSN` — CI runs
+  the shared-store backends through `make test-backends`.
 - `e2e/saml/*.tales` (`make e2e`, `e2e/saml/run.sh`) drives
   `examples/saml-sp` in Chrome; its sites are served by
   `TestE2EHelperProcess` (skipped unless `SAMLSP_E2E_SERVE` is set). CI
