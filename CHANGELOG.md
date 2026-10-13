@@ -1456,8 +1456,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   consent — and remembers a consent for the scopes and claims the end-user
   saw: a consent given once to a client silently approved any later
   request of that client, new claims included. A consent answer applies to
-  the very request its page showed, no longer to another one sharing its
-  `client_id`, `state`, `nonce` and `code_challenge`.
+  the very request its page showed — no longer to another one sharing its
+  `client_id`, `state`, `nonce` and `code_challenge` — and to the end-user
+  who gave it: another end-user signing in in the same browser before the
+  request resumes is asked again.
 - `examples/oidc-provider` bounds the logins in progress it remembers (at
   most 10,000; unused for 15 minutes, they expire and are purged): every
   authorization request of a browser without a session used to leave an

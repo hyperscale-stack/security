@@ -18,8 +18,9 @@
 // http://localhost:9000/oidc/demo/callback — the callback of the "demo"
 // connection of examples/oidc-client served at http://localhost:9000 — and
 // sign in as alice / alice-secret. A refresh token comes with
-// offline_access — requested with prompt=consent by an OpenID request —
-// when the end-user ticks "Keep access while I am away".
+// offline_access when the end-user ticks "Keep access while I am away" on
+// the consent page, which offers it to plain OAuth 2.0 requests and to
+// OpenID requests with prompt=consent.
 //
 // The environment overrides the defaults: OIDC_PROVIDER_ISSUER (https, or
 // http on a loopback host), OIDC_PROVIDER_ADDR (the listen address) and
@@ -137,9 +138,12 @@ type principal struct{ subject string }
 
 func (p principal) Subject() string { return p.subject }
 
-// consentAnswer is the end-user's answer to the consent page of one
-// authorization request.
-type consentAnswer struct{ allow, offline bool }
+// consentAnswer is an end-user's answer to the consent page of one
+// authorization request: subject's, and no one else's.
+type consentAnswer struct {
+	subject        string
+	allow, offline bool
+}
 
 // consentRecord is what an end-user last allowed a client: the scopes —
 // offline_access excepted, never remembered (OpenID Connect Core §11: "a
@@ -207,12 +211,10 @@ func newServer(cfg config) (http.Handler, error) {
 func buildServer(cfg config, now func() time.Time) (http.Handler, *app, error) {
 	issuer := cfg.Issuer
 
-	a, err := newApp(issuer)
+	a, err := newApp(issuer, now)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	a.now = now
 
 	keys, err := demoKeys()
 	if err != nil {
@@ -273,7 +275,9 @@ func buildServer(cfg config, now func() time.Time) (http.Handler, *app, error) {
 	return mux, a, nil
 }
 
-func newApp(issuer string) (*app, error) {
+// newApp builds the application of issuer, on the clock now — its sessions'
+// too.
+func newApp(issuer string, now func() time.Time) (*app, error) {
 	cookieKey := make([]byte, 32)
 	if _, err := rand.Read(cookieKey); err != nil {
 		return nil, fmt.Errorf("session key: %w", err)
@@ -300,9 +304,9 @@ func newApp(issuer string) (*app, error) {
 	secure := strings.HasPrefix(issuer, "https://")
 
 	return &app{
-		now:      time.Now,
+		now:      now,
 		issuer:   issuer,
-		sessions: session.NewManager(codec, session.WithCookieName("op_session"), session.WithSecure(secure)),
+		sessions: session.NewManager(codec, session.WithCookieName("op_session"), session.WithSecure(secure), session.WithClock(now)),
 		hasher:   hasher,
 		accounts: map[string]account{"alice": {passwordHash: aliceHash, claims: map[string]any{
 			"name": "Alice Liddell", "given_name": "Alice", "family_name": "Liddell",
@@ -411,7 +415,7 @@ func (a *app) Authorize(w http.ResponseWriter, r *http.Request, req *oidcprovide
 func (a *app) consentTo(
 	w http.ResponseWriter, s *session.Session, ev oidcprovider.AuthenticationEvent, req *oidcprovider.Request, key, resume string,
 ) (*oidcprovider.Decision, error) {
-	answer, answered := a.answerOf(s, key)
+	answer, answered := a.answerOf(s, key, ev.Subject)
 
 	switch {
 	case answered && !answer.allow:
@@ -588,7 +592,7 @@ func (a *app) consent(w http.ResponseWriter, r *http.Request) {
 	// remembers an allowed consent from that request once it resumes.
 	allow := r.PostFormValue("decision") == "allow"
 
-	answer := consentAnswer{allow: allow, offline: allow && r.PostFormValue("offline_access") == "on"}
+	answer := consentAnswer{subject: ev.Subject, allow: allow, offline: allow && r.PostFormValue("offline_access") == "on"}
 
 	a.mu.Lock()
 	a.update(s.ID, requestKey(form), func(p *pendingRequest) { p.answer = &answer })
@@ -681,13 +685,15 @@ func (a *app) carryOver(from, to, key string) {
 	}
 }
 
-// answerOf returns the consent page answer of an authorization request.
-func (a *app) answerOf(s *session.Session, key string) (consentAnswer, bool) {
+// answerOf returns the answer subject gave to the consent page of an
+// authorization request — none when another end-user gave it: a login in
+// the same browser hands the pending request over, never the answer.
+func (a *app) answerOf(s *session.Session, key, subject string) (consentAnswer, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	p, ok := a.pendingOf(s.ID, key)
-	if !ok || p.answer == nil {
+	if !ok || p.answer == nil || p.answer.subject != subject {
 		return consentAnswer{}, false
 	}
 

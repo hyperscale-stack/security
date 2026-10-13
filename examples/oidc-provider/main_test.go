@@ -897,18 +897,36 @@ func TestPendingRequestsExpire(t *testing.T) {
 	a.begin(browser.ID, "request", clock.Now())
 
 	a.mu.Lock()
-	a.update(browser.ID, "request", func(p *pendingRequest) { p.answer = &consentAnswer{allow: true} })
+	a.update(browser.ID, "request", func(p *pendingRequest) { p.answer = &consentAnswer{subject: "alice", allow: true} })
 	a.mu.Unlock()
 
-	_, answered := a.answerOf(browser, "request")
+	_, answered := a.answerOf(browser, "request", "alice")
 	require.True(t, answered)
+
+	_, answered = a.answerOf(browser, "request", "bob")
+	require.False(t, answered, "alice's answer, not bob's")
 	require.False(t, a.startedAt(browser, "request").IsZero())
 
 	clock.Advance(oidcprovider.MaxInteractionDuration + time.Second)
 
-	_, answered = a.answerOf(browser, "request")
+	_, answered = a.answerOf(browser, "request", "alice")
 	assert.False(t, answered, "an answer expires with its request")
 	assert.True(t, a.startedAt(browser, "request").IsZero(), "so does a login start")
+
+	// A login start counts for MaxInteractionDuration, however recently its
+	// request was used.
+	a.begin(browser.ID, "later", clock.Now())
+	clock.Advance(oidcprovider.MaxInteractionDuration - time.Minute)
+
+	a.mu.Lock()
+	a.update(browser.ID, "later", func(p *pendingRequest) { p.answer = &consentAnswer{subject: "alice", allow: true} })
+	a.mu.Unlock()
+
+	clock.Advance(2 * time.Minute)
+
+	_, answered = a.answerOf(browser, "later", "alice")
+	assert.True(t, answered, "the request was used a minute ago")
+	assert.True(t, a.startedAt(browser, "later").IsZero(), "its login started too long ago")
 }
 
 // matchingHasher reports every password as matching.
@@ -927,4 +945,105 @@ func TestUnknownUsernamesNeverSignIn(t *testing.T) {
 	a.hasher = matchingHasher{a.hasher}
 	assert.False(t, a.verifyPassword(t.Context(), "nobody", "anything"))
 	assert.True(t, a.verifyPassword(t.Context(), "alice", "anything"))
+}
+
+// newClockedHarness is newHarness on the clock of the provider, the
+// application and its sessions; setup changes the application before the
+// server starts.
+func newClockedHarness(t *testing.T, clock *testClock, setup func(*app)) *harness {
+	t.Helper()
+
+	srv := httptest.NewUnstartedServer(nil)
+	issuer := "http://" + srv.Listener.Addr().String()
+
+	handler, a, err := buildServer(config{Issuer: issuer, RedirectURI: defaultRedirectURI}, clock.Now)
+	require.NoError(t, err)
+
+	setup(a)
+
+	srv.Config.Handler = handler
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	h := &harness{t: t, issuer: issuer, browser: newBrowser(t)}
+	h.getJSON(issuer+"/.well-known/openid-configuration", &h.doc)
+
+	return h
+}
+
+// TestConsentAnswerIsTheAnsweringEndUsers: a consent answer belongs to the
+// end-user who gave it. alice answers the consent page of a request but her
+// browser does not resume it; the request later needs a new login
+// (max_age) and bob signs in, in that browser: he is shown the consent
+// page — alice's answer is not his — and nothing is remembered for him.
+func TestConsentAnswerIsTheAnsweringEndUsers(t *testing.T) {
+	t.Parallel()
+
+	clock := &testClock{now: time.Now()}
+
+	var a *app
+
+	h := newClockedHarness(t, clock, func(app *app) {
+		a = app
+
+		bobHash, err := app.hasher.Hash(t.Context(), "bob-secret")
+		require.NoError(t, err)
+
+		app.accounts["bob"] = account{passwordHash: bobHash, claims: map[string]any{"name": "Bob"}}
+	})
+
+	_, challenge := pkce()
+	_, page := h.signIn(h.authorizeURL(challenge, "n-0", "scope", "openid"))
+	require.NotEmpty(t, redirected(t, h.consent(page, "allow", false)).Get("code"))
+
+	_, challenge = pkce()
+	request := h.authorizeURL(challenge, "n-1", "scope", "openid profile email", "max_age", "60")
+	resp, page := h.do(h.browser, http.MethodGet, request, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	fields := formFields(t, page)
+	fields.Set("decision", "allow")
+	resp, _ = h.do(h.browser, http.MethodPost, h.issuer+"/consent", fields)
+	require.Equal(t, http.StatusSeeOther, resp.StatusCode, "alice allows; her browser does not resume")
+
+	clock.Advance(2 * time.Minute)
+
+	resp, page = h.do(h.browser, http.MethodGet, request, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, page, `name="username"`, "max_age: the login page")
+
+	login := formFields(t, page)
+	login.Set("username", "bob")
+	login.Set("password", "bob-secret")
+	resp, _ = h.do(h.browser, http.MethodPost, h.issuer+"/login", login)
+	require.Equal(t, http.StatusSeeOther, resp.StatusCode)
+
+	resp, page = h.do(h.browser, http.MethodGet, h.issuer+resp.Header.Get("Location"), nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "bob's consent page, not a code")
+	assert.Contains(t, page, `name="decision"`)
+
+	a.mu.Lock()
+	_, remembered := a.consents["bob\x00"+rpClientID]
+	a.mu.Unlock()
+	assert.False(t, remembered, "no consent remembered for bob")
+}
+
+// TestCompletedRequestsAreForgotten: once an authorization request is
+// answered, its consent answer is forgotten — replaying the very same
+// request shows the consent page again, offline access included (OIDC Core
+// §11: consent to offline access is obtained every time).
+func TestCompletedRequestsAreForgotten(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	verifier, challenge := pkce()
+	request := h.authorizeURL(challenge, "n-1", "scope", "openid profile offline_access", "prompt", "consent")
+
+	_, page := h.signIn(request)
+	require.True(t, offersOffline(page))
+	require.NotEmpty(t, h.exchange(h.consent(page, "allow", true), verifier).RefreshToken)
+
+	resp, page := h.do(h.browser, http.MethodGet, request, nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "the consent page again, not a code")
+	assert.True(t, offersOffline(page), "offline access asked for again")
 }
