@@ -157,7 +157,9 @@ type AuthenticationEvent struct {
 
 // OfflineAccessConsent says why a requested offline_access is granted (Core
 // §11, §17.4); its zero value refuses it. It applies to every request the
-// provider serves: offline_access has one meaning at its server.
+// provider serves — offline_access has one meaning at its server — but
+// one that returns no authorization code (the implicit flow), whose
+// offline_access is always ignored (§11).
 type OfflineAccessConsent int
 
 const (

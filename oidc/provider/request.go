@@ -82,6 +82,9 @@ type authRequest struct {
 	uiLocales     []string
 	claimsLocales []string
 	offline       bool
+	// codeFlow reports a response type returning an authorization code:
+	// offline_access is ignored otherwise (Core §11).
+	codeFlow bool
 }
 
 // public returns a deep copy of v for the application.
@@ -112,7 +115,7 @@ func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oau
 	view := &authRequest{
 		openID: slices.Contains(scopes, ScopeOpenID), issuer: ar.Issuer, client: ar.Client,
 		redirectURI: ar.RedirectURI, scopes: scopes, receivedAt: p.now(),
-		offline: slices.Contains(scopes, ScopeOfflineAccess),
+		offline: slices.Contains(scopes, ScopeOfflineAccess), codeFlow: ar.ResponseType == responseTypeCode,
 	}
 
 	if !view.openID {

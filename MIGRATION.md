@@ -1770,6 +1770,7 @@ has one meaning at the provider's server:
 | plain OAuth 2.0, `Decision.OfflineAccess` unset | `offline_access` granted | dropped from the grant (no refresh token with `RefreshTokenScope = offline_access`) |
 | plain OAuth 2.0, only `offline_access` requested, `Decision.OfflineAccess` unset | code issued | `access_denied`, nothing issued |
 | plain OAuth 2.0, `OfflineAccessPrompted` or `OfflineAccessByPolicy` | granted | granted (`prompt=consent` is not required: no OAuth 2.0 parameter) |
+| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) |
 | OpenID request | §11 rules | unchanged |
 | plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged |
 

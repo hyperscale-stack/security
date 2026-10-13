@@ -6,12 +6,14 @@ package oidcprovider_test
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
+	"github.com/hyperscale-stack/security/oauth2/token"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -308,6 +310,26 @@ func TestPlainOAuth2OfflineAccessNeedsTheDecision(t *testing.T) {
 			assert.Empty(t, resp.IDToken)
 		})
 	}
+
+	t.Run("implicit flow", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t, withProfile(oauth2.Profile20))
+		e.decide(nil, func(d *oidcprovider.Decision) { d.OfflineAccess = oidcprovider.OfflineAccessPrompted })
+		cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)}}
+
+		implicit := func(scope string) url.Values {
+			t.Helper()
+
+			return redirect(t, e.authorizeWith(cfg, with(authorizeQuery(), "response_type", "token", "scope", scope, "nonce", "")))
+		}
+
+		params := implicit("read offline_access")
+		assert.Equal(t, "read", params.Get("scope"), "Core §11: offline_access needs a response type returning a code")
+		assert.NotEmpty(t, params.Get("access_token"))
+
+		assert.Equal(t, oauth2.CodeAccessDenied, implicit("offline_access").Get("error"))
+	})
 
 	t.Run("another ConsentFunc", func(t *testing.T) {
 		t.Parallel()

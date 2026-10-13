@@ -1446,8 +1446,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `RefreshTokenScope = offline_access`, even right after the end-user
   declined offline access. `Request.OfflineAccess` is now set for every
   request; `OfflineAccessPrompted` needs no `prompt=consent` for a plain
-  request, `OfflineAccessByPolicy` keeps the former behaviour, and an
-  approval left without any scope answers `access_denied` (breaking, see
+  request, `OfflineAccessByPolicy` keeps the former behaviour, an implicit
+  request never keeps it (Core §11), and an approval left without any
+  scope answers `access_denied` (breaking, see
   [MIGRATION.md](MIGRATION.md)).
 - `examples/oidc-provider` grants offline access only on the end-user's
   explicit choice — the consent page offers it to every request that can
