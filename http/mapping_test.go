@@ -16,6 +16,7 @@ import (
 	httpsec "github.com/hyperscale-stack/security/http"
 	"github.com/hyperscale-stack/security/voter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -248,13 +249,18 @@ func TestAuthorizeKeepsANonAccessErrorOfACustomManager(t *testing.T) {
 func TestAuthorizeWithUsesItsExplicitMapper(t *testing.T) {
 	t.Parallel()
 
-	custom := &customMapper{}
+	custom := httpsec.NewMockErrorMapper(t)
+	custom.EXPECT().Map(mock.Anything, mock.Anything, mock.MatchedBy(func(err error) bool {
+		return errors.Is(err, security.ErrAccessDenied)
+	})).
+		Run(func(w http.ResponseWriter, _ *http.Request, _ error) { w.WriteHeader(http.StatusTeapot) }).
+		Once()
+
 	h := httpsec.Middleware(security.NewEngine(security.NewManager(), scriptedExtractor{}), httpsec.WithAnonymousFallback(true))(
 		httpsec.AuthorizeWith(scriptedADM{err: security.ErrAccessDenied}, custom, fakeAttr("x"))(next204()))
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.True(t, custom.invoked.Load())
 	assert.Equal(t, http.StatusTeapot, rec.Code)
 }
 
