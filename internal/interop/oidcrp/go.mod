@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/internal/interop/oidcrp
 
-go 1.26.5
+go 1.27.2
 
 require (
 	github.com/chromedp/cdproto v0.157.9
@@ -24,6 +24,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/muhlemmer/gu v0.3.1 // indirect
 	github.com/muhlemmer/httpforwarded v0.1.0 // indirect
+	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/zitadel/schema v1.3.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

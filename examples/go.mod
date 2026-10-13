@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/examples
 
-go 1.26.5
+go 1.27.2
 
 // Examples may depend on every other module of the workspace.
 replace github.com/hyperscale-stack/security => ../

@@ -49,9 +49,14 @@ the `saml/sp` module.
 
 The legacy v0 packages (`authentication/`, `authentication/credential/`,
 `authentication/provider/{dao,oauth2}/`, `authorization/`, and the old
-in-tree `password`) were removed during the rewrite. The core module now
-depends only on stdlib + `go.opentelemetry.io/otel` (+ `testify` for its
-own tests).
+in-tree `password`) were removed during the rewrite. The core module's
+non-test imports are now stdlib + `go.opentelemetry.io/otel`; its tests also
+use `testify` and `otel/sdk`.
+
+`tools/golangci-lint`, `tools/govulncheck` and `tools/mockery` are not
+library modules: each pins one development tool, outside `go.work`, so the
+tools' dependencies never reach a library `go.mod` or a consumer's module
+graph. They are never released.
 
 ## Dependency policy
 
@@ -110,9 +115,12 @@ and `golang.org/x/oauth2` are not dependencies of any production module
 (see the package documentation of `oidc/client` for the evaluation).
 
 The core MUST NOT depend on: gRPC, ConnectRPC, JWT/JOSE libs, OAuth2, Redis,
-SQL drivers, HTTP routers, or concrete loggers. Its direct dependency set is exactly
-stdlib + `go.opentelemetry.io/otel` (+ `stretchr/testify` scoped to its own
-tests). The policy is enforced by review. `oauth2` never imports OIDC or JOSE:
+SQL drivers, HTTP routers, or concrete loggers. Its non-test imports are
+exactly stdlib + `go.opentelemetry.io/otel`; its tests also use
+`stretchr/testify` (with `stretchr/objx` behind the generated testify mocks)
+and `otel/sdk`. No development tool is a dependency of any library module:
+the tools live in their own modules under `tools/`. The policy is enforced by
+review. `oauth2` never imports OIDC or JOSE:
 `oidc/provider` plugs into its extension points, and imports no relying-party
 library, store driver or template engine (`TestDependencyPolicy`). go-oidc
 and x/oauth2 are confined to the test-only `internal/interop/oidcop` module,
@@ -132,25 +140,42 @@ and Chrome; it adds no Go dependency.
 ```sh
 make sync         # go work sync
 make build        # build all modules
-make test         # race + coverage, aggregated into build/coverage.out
-make lint         # golangci-lint on every module with the shared config
-make tidy         # go mod tidy on every module + go work sync
+make generate     # mockery mocks: in-package mock_*_test.go files, never committed
+make test         # generate, then race + coverage, aggregated into build/coverage.out
+make lint         # golangci-lint (tools/golangci-lint) on every module with the shared config
+make vuln         # govulncheck -test on every module, outside the workspace
+make tidy         # go work sync + go mod tidy on every module and tool + go work sync
+make check-modules # one go line, go.work complete, sync no-op, every module on its own (GOWORK=off)
 make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 ```
 
-The `Makefile` discovers modules dynamically via `find . -name go.mod`, so a
-new sub-module is picked up automatically as soon as its `go.mod` lands.
+The `Makefile` discovers modules dynamically via `find . -name go.mod`
+(except the tool modules under `tools/`), so a new sub-module is picked up
+automatically as soon as its `go.mod` lands. The tools (golangci-lint,
+govulncheck, mockery) are built from their pinned modules into `build/bin`
+on first use; mocks are generated before anything that compiles tests.
 Example program lines are excluded from the aggregated coverage profile
 (their `main()` is not unit-testable); the examples are still built, tested,
 and linted.
 
 ## CI
 
-`.github/workflows/go.yml` runs `make sync`, `make build`, `make test`, and
-`make lint` against every module in one job, then publishes the aggregated
-coverage to Coveralls. `.github/workflows/release.yml` validates the whole
-workspace and publishes a GitHub release when a `module/vX.Y.Z` tag is
-pushed.
+The workflows run with a read-only token by default (only the release
+`publish` job gets `contents: write`), with every action pinned to a commit
+SHA.
+- `.github/workflows/go.yml` builds the pinned tools, generates the mocks,
+  runs `make check-modules`, `make build`, `make test` and `make lint`
+  against every module, and uploads the aggregated coverage to Coveralls
+  with goveralls (pinned in `tools/goveralls`).
+- `.github/workflows/govulncheck.yml` runs `make vuln` (every module, tests
+  included) on every change and weekly.
+- `.github/workflows/release.yml` runs when a `vX.Y.Z` or `<module>/vX.Y.Z`
+  tag is pushed. A read-only job verifies it (`scripts/release-check.sh`,
+  `check-modules`, build, test, lint, govulncheck on the released module),
+  then a separate job publishes the GitHub release
+  ([docs/releasing.md](docs/releasing.md)).
+- Dependabot proposes updates for every workspace module (go.work mode), the
+  tool modules and the actions, after a 7-day cooldown.
 
 ## Replace directives
 
@@ -159,12 +184,19 @@ Every sub-module declares `replace github.com/hyperscale-stack/security => ../`
 for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
 for the OIDC client and SAML SP stores), plus one for each in-repo module
 of its graph,
-so local development and CI work without published versions. Releases are cut per module with `module/vX.Y.Z` tags.
+so local development and CI work without published versions. Releases are
+cut per module with `module/vX.Y.Z` tags (`vX.Y.Z` for the core). Consumers
+ignore these `replace` directives, so the in-repo requirements keep the
+`v0.0.0-00010101000000-000000000000` placeholder only until a module's first
+release: the release commit sets them to the released versions, and
+`make release-check` builds each tagged module the way a consumer resolves
+it (see [docs/releasing.md](docs/releasing.md)).
 
-## Breaking changes before the first v2 release
+## Breaking changes before the first release
 
-The v2 stack is not tagged yet, but code tracking `master` may already rely
-on its behavior. Each entry below states what changed and how to adapt.
+No module is tagged yet (the first release of every module is `v1.0.0`),
+but code tracking `master` may already rely on its behavior. Each entry
+below states what changed and how to adapt.
 
 ### `oauth2`: `/introspect` only answers confidential clients (#81)
 
@@ -780,3 +812,45 @@ To migrate:
 2. A `Profile20` client that sends a `code_verifier` without having sent a
    `code_challenge` now fails: send the matching `code_challenge` (S256) in
    its authorization requests, or stop sending the verifier.
+
+### Toolchain: every module requires Go 1.27.2
+
+Every `go.mod`, and `go.work`, now declares `go 1.27.2`. Since Go 1.21 the
+`go` line is a minimum: a module that requires one of ours must declare
+`go 1.27.2` or later, and building it needs a go1.27.2 or later toolchain.
+The modules used to declare `go 1.26.0` or `go 1.26.5`, and the toolchain CI
+tested with (go1.26.5) carries standard-library advisories reachable from
+the library's own call paths: HTTP/2 server crashes and request smuggling in
+`net/http`, `crypto/tls`, `encoding/asn1`, `net/url`, `encoding/xml`. All of
+them are fixed in go1.27.2, on which `govulncheck` reports none.
+
+|                                            | Before                    | After                                                      |
+| ------------------------------------------ | ------------------------- | ---------------------------------------------------------- |
+| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.2`                                                |
+| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.2 or later (switched to under `GOTOOLCHAIN=auto`)   |
+| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.2, read from `go.work`                              |
+
+Behaviour the Go 1.27 floor brings to every consumer (Go 1.27 release
+notes):
+
+- `encoding/json` runs on the `encoding/json/v2` implementation: what is
+  marshaled and unmarshaled is unchanged, but error texts may differ, so
+  never match on them;
+- `net/http`: closing an HTTP/1 `Response.Body` drains the unread content;
+- `crypto/x509`: on darwin and windows `SystemCertPool` honours
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` (`GODEBUG=x509sslcertoverrideplatform=0`
+  restores the platform verifier);
+- `compress/flate` (and so `gzip`) output differs from Go 1.26 for the same
+  input.
+
+To migrate:
+
+1. Set your module's `go` line to `1.27.2` or later: `go get` of one of our
+   modules does it, or run `go mod edit -go=1.27.2`.
+2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.2
+   from the module proxy, verified by the checksum database. Where
+   `GOTOOLCHAIN=local` (some Linux distributions, hermetic CI), install
+   go1.27.2 or later first: an older toolchain stops with
+   `go.mod requires go >= 1.27.2`.
+3. Build and ship with the latest Go patch release: the `go` line is a
+   floor, not the toolchain to release with.

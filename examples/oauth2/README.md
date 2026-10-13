@@ -1,6 +1,6 @@
 # OAuth2 server + Bearer resource server
 
-End-to-end wiring of the v2 security library running in a single binary:
+End-to-end wiring of the security library running in a single binary:
 
 - an OAuth2 authorization server exposing `/oauth2/authorize`,
   `/oauth2/token`, `/oauth2/revoke`, `/oauth2/introspect`, and

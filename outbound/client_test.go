@@ -630,7 +630,6 @@ func TestResponseSizeLimit(t *testing.T) {
 		zw := gzip.NewWriter(&compressed)
 		_, _ = zw.Write(make([]byte, 8<<20))
 		require.NoError(t, zw.Close())
-		require.Less(t, compressed.Len(), capBytes*16)
 
 		s := newServer(t, true, func(w http.ResponseWriter, r *http.Request) {
 			require.Contains(t, r.Header.Get("Accept-Encoding"), "gzip")
@@ -639,6 +638,11 @@ func TestResponseSizeLimit(t *testing.T) {
 		})
 		p := loopbackPolicy(s)
 		p.MaxResponseBytes = 64 * capBytes
+
+		// The bytes on the wire stay under the cap: only the decompressed
+		// size can exceed it. (The exact gzip output size depends on the Go
+		// release: 8 MiB of zeros compress to 16,438 bytes with Go 1.27.)
+		require.Less(t, int64(compressed.Len()), p.MaxResponseBytes)
 
 		resp, err := get(t, mustClient(t, p), s.URL)
 		require.NoError(t, err)

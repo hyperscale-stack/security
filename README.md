@@ -42,6 +42,9 @@ The core module also ships `…/security/outbound`, an SSRF-safe
 
 ## Install
 
+Every module requires **Go 1.27.2** or later (`go` line of each `go.mod`);
+with the default `GOTOOLCHAIN=auto` an older go command downloads it.
+
 ```sh
 go get github.com/hyperscale-stack/security
 go get github.com/hyperscale-stack/security/http   # and any other module you need
@@ -97,6 +100,7 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 - [docs/oidc-conformance.md](docs/oidc-conformance.md) — OpenID Connect coverage, interoperability and conformance-suite runs.
 - [docs/saml-sp.md](docs/saml-sp.md) — SAML Service Provider integration guide.
 - [docs/migration-from-v0.md](docs/migration-from-v0.md) — upgrading from the v0 stack.
+- [docs/releasing.md](docs/releasing.md) — versions, tags and the release checklist.
 - [MIGRATION.md](MIGRATION.md) — workspace layout and dependency policy.
 - [LIMITATIONS.md](LIMITATIONS.md) — known gaps.
 - [examples/](examples) — runnable per-scenario demos.
@@ -106,8 +110,11 @@ mux.Handle("/admin", httpsec.Authorize(adm, security.Role("ADMIN"))(adminHandler
 ```sh
 make sync     # go work sync
 make build    # build every module
+make generate # mockery mocks for the tests (never committed; test/lint/vuln run it first)
 make test     # race + coverage
-make lint     # golangci-lint with the shared config
+make lint     # golangci-lint with the shared config (pinned in tools/golangci-lint)
+make vuln     # govulncheck on every module
+make check-modules # every module on its own (GOWORK=off), workspace in sync
 make e2e      # opt-in browser suites (Tales and Chrome: docs/saml-sp.md, e2e/oidc/run.sh)
 make conformance # opt-in: the OpenID Foundation conformance suite, locally (docs/oidc-conformance.md)
 ```

@@ -1,7 +1,14 @@
+# mockery v3, pinned in tools/mockery and run by `make generate` (CI runs it
+# before build, test and lint). Mocks are in-package mock_<interface>_test.go
+# files: they exist only in test binaries, never in a library build, and are
+# never committed (.gitignore: mock_*). Every module whose packages get mocks
+# keeps a mockery_test.go importing testify/mock, so its go.mod and go.sum are
+# the same with or without them.
+# Unexported interfaces included: their in-package mocks serve in-package tests.
 all: true
 dir: '{{.InterfaceDir}}'
-filename: 'mock_{{.InterfaceName | snakecase}}.go'
-structname: Mock{{.InterfaceName}}
+filename: 'mock_{{.InterfaceName | snakecase}}_test.go'
+structname: 'Mock{{.InterfaceName}}'
 pkgname: '{{.SrcPackageName}}'
 inpackage: true
 template: testify
@@ -11,3 +18,7 @@ packages:
   github.com/hyperscale-stack/security:
     config:
       recursive: true
+      # Library packages only: the examples and the private test modules need
+      # no mocks, and the tool modules are not part of the workspace.
+      exclude-subpkg-regex:
+        - '^github\.com/hyperscale-stack/security/(examples|internal|tools)(/|$)'

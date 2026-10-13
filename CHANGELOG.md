@@ -5,8 +5,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The library is a multi-module workspace; modules are tagged independently
-(`module/vX.Y.Z`). The entries below describe the ground-up rewrite that
-replaced the v0 stack.
+(`module/vX.Y.Z`), and the first release of every module is `v1.0.0`. The
+entries below describe the ground-up rewrite that replaced the v0 stack.
 
 ## [Unreleased]
 
@@ -20,7 +20,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   immutable `Authentication`/`Principal`, `Carrier`, `Extractor`,
   `Authenticator`, first-success-wins `Manager`, `Engine`, typed
   `SecurityError` sentinels, and a `Clock` abstraction.
-- **Authorization v2**: `Voter`/`Decision`/`Attribute`, an
+- **Authorization**: `Voter`/`Decision`/`Attribute`, an
   `AccessDecisionManager` with Affirmative/Consensus/Unanimous strategies,
   and a `voter/` catalog (`HasRole`, `HasAnyRole`, `HasScope`,
   `HasAuthority`, `HasPermission`, `Authenticated`, `Anonymous`,
@@ -514,6 +514,36 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
   without the client secret and the keys, whatever the `fmt` verb. The example
   reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
+- **Go 1.27.2 minimum** (breaking): every module and `go.work` declare
+  `go 1.27.2`, so no consumer can build the library with a toolchain that
+  carries the standard-library advisories of go1.26.5, the version CI tested
+  with until now (HTTP/2 crashes, request smuggling, `crypto/tls`,
+  `encoding/asn1`; govulncheck finds none on go1.27.2). CI runs the version
+  `go.work` names. See [MIGRATION.md](MIGRATION.md).
+- **Module and release checks**: `make check-modules` (run by CI) fails
+  unless `go.work` and every `go.mod` share one `go` line, `go.work` lists
+  every module, `go work sync` changes nothing and every module builds, vets
+  and is tidy on its own (`GOWORK=off`). `make release-check TAG=…` (also run
+  by the release workflow) accepts only canonical `v1.x.y` tags of released
+  modules, refuses placeholder requirements and commits off `master`, and
+  builds the module as a consumer resolves it, without its in-repo
+  `replace` directives. The first release of every module is `v1.0.0`; the
+  checklist is [docs/releasing.md](docs/releasing.md).
+- **Development tools in their own modules**: golangci-lint (v2.14.0, Go
+  1.27 support), govulncheck (v1.9.0), goveralls (v0.0.12) and mockery
+  (v3.8.1) are pinned in one module each under `tools/`, outside `go.work`.
+  The core module no longer declares the mockery `tool` directive: a
+  consumer importing only the core now resolves 23 modules instead of 50,
+  both counts including the consumer (no mockery, cobra, viper, zerolog or
+  `x/tools`). `make lint` builds golangci-lint from its pinned module instead
+  of piping an unpinned install script (`curl …/HEAD/install.sh | sh`).
+- **Mocks are generated, never committed**: `make generate` (mockery v3,
+  testify template) writes in-package `mock_<interface>_test.go` files, which
+  exist only in test binaries; `make test`/`lint`/`vuln`/`tidy` and CI run it
+  first. New tests use them for interface doubles. A module that gets mocks
+  keeps a `mockery_test.go` importing `testify/mock`, so its `go.mod` is the
+  same with or without them (`github.com/stretchr/objx` becomes an indirect
+  requirement).
 
 ### Fixed
 
@@ -585,6 +615,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   escape is a malformed header); credentials made of unreserved characters
   are unaffected. The empty-credential guard applies to the decoded values.
   See [MIGRATION.md](MIGRATION.md).
+- `make generate` works again: `.mockery.yaml` used mockery v3 syntax while
+  the pinned tool was v2, and mockery needs a Go 1.27-aware `x/tools` to load
+  the packages (v3.8.1).
 
 ### Removed
 
@@ -594,6 +627,30 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- **CI and release supply chain**:
+  - the workflows run with a read-only `GITHUB_TOKEN` by default
+    (`permissions: contents: read`); only the release `publish` job gets
+    `contents: write`;
+  - every action is pinned to a full commit SHA, which Dependabot keeps
+    current;
+  - checkouts no longer persist credentials;
+  - the coverage goes to Coveralls through goveralls, built from its pinned
+    module (`tools/goveralls`), instead of an action referenced as `@master`
+    and handed the token, and a Coveralls outage no longer fails the build;
+  - pushes to `master` are never cancelled by a later push, so every master
+    commit keeps its CI result;
+  - the release workflow is split: a read-only job verifies the tag
+    (`scripts/release-check.sh`, build, test, lint, govulncheck on the
+    released module), then a
+    minimal job publishes with `gh release create`, without checkout or
+    third-party action. The tag reaches the scripts through the environment,
+    and tags of nested modules (`oidc/client/v…`) now trigger it;
+  - a new `govulncheck` workflow scans every module on every change and
+    weekly;
+  - Dependabot also covers the tool modules and the actions, groups related
+    updates, and waits 7 days before proposing a version.
+- `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of
+  v0.58.0: HTTP/2 advisories GO-2026-6603, -6610, -6611, -6612 and -6617.
 - The OAuth2 token endpoint refuses a `code_verifier` presented for an
   authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
   §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is

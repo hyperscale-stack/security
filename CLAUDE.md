@@ -11,17 +11,18 @@ several independently-releasable modules**, so consumers import only the
 pieces they need and the core stays free of heavy transitive dependencies.
 
 The whole `v0.x` series was replaced by a ground-up transport-agnostic
-rewrite (the "v2 stack"); the legacy `authentication/` / `authorization/`
-packages were removed. The rewrite is functionally complete and currently
-`[Unreleased]` — remaining gaps are tracked as GitHub issues, not refactor
-phases. Source-of-truth docs:
+rewrite; the legacy `authentication/` / `authorization/` packages were
+removed. The rewrite is functionally complete and currently `[Unreleased]`:
+its first release is **v1.0.0** for every module (the module paths carry
+no `/vN` suffix; see `docs/releasing.md`). Remaining gaps are tracked as
+GitHub issues, not refactor phases. Source-of-truth docs:
 
-- `CHANGELOG.md` — what the v2 stack ships.
+- `CHANGELOG.md` — what the first release ships.
 - `MIGRATION.md` — workspace layout and dependency policy.
 - `LIMITATIONS.md` — known gaps and explicitly out-of-scope items.
 - `docs/` — `architecture.md`, `oidc-provider.md`, `oidc-client.md`,
   `oidc-conformance.md`, `saml-sp.md`, `observability.md`,
-  `security-considerations.md`, `migration-from-v0.md`.
+  `security-considerations.md`, `migration-from-v0.md`, `releasing.md`.
 
 ## Working rules
 
@@ -37,9 +38,14 @@ These rules are mandatory when working in this repository:
   follow the RFC to the letter.
 - **Security:** write secure code with no known vulnerabilities. `gosec` is
   part of the lint gate — keep it clean.
-- **Per-step gate:** at the end of every feature/step, **run the tests and the
-  linter** (`make test` + `make lint`, or the per-module equivalent). They
-  MUST pass.
+- **Per-step gate:** at the end of every feature/step, run
+  **`make test lint check-modules`** (and **`make vuln`** before opening a
+  pull request). They MUST pass. `make generate` runs on its own through
+  `test`, `lint`, `vuln` and `tidy`.
+- **Commit what `make tidy` / `go work sync` change.** CI fails when a
+  `go.mod` or `go.sum` is out of sync with the workspace or untidy on its own
+  (`make check-modules`). To resolve a `go.mod` conflict: take either side,
+  run `make tidy`, then `make check-modules`, and commit.
 - **Commit per step:** once tests and lint pass, **commit** the step before
   moving on. Use Conventional Commits with a module scope, as in the git
   history (`feat(oauth2): ...`, `fix(jwt): ...`, `docs(...): ...`).
@@ -53,22 +59,29 @@ All targets operate on **every module in the workspace** (discovered via
 
 ```sh
 make build      # go build ./... in every module
-make test       # go test -race -cover in every module, aggregated -> build/coverage.out
-make lint       # golangci-lint (shared .golangci.yml) on every module
-make tidy       # go mod tidy per module + go work sync
+make generate   # mockery mocks (in-package mock_*_test.go, never committed), see "Tooling caveats"
+make test       # generate, then go test -race -cover in every module, aggregated -> build/coverage.out
+make lint       # golangci-lint (pinned in tools/golangci-lint, shared .golangci.yml) on every module
+make vuln       # govulncheck -test on every module, outside the workspace
+make tools      # build the pinned tools (tools/<name>) into build/bin
+make tidy       # go work sync + go mod tidy per module (and tools/*) + go work sync
+make check-modules # one go line, go.work complete, sync no-op, every module tidy/buildable with GOWORK=off
+make release-check TAG=oauth2/v1.0.0 # pre-push check of a release tag (docs/releasing.md)
 make sync       # go work sync
 make bench      # benchmarks across all modules
 make coverage   # go tool cover -func on the aggregated profile
-make generate   # mockery — currently BROKEN, see "Tooling caveats" below
 make e2e        # opt-in browser suites (Tales + Chrome: e2e/saml, e2e/oidc), never in CI
 make e2e-oidc   # only the OIDC one (make e2e-saml: only the SAML one)
 make conformance # opt-in: the OpenID Foundation suite against oidc/provider and oidc/client (Docker, OIDF_SUITE_DIR)
 ```
 
 To run a **single test** or work on one module, `cd` into that module first
-(each module is its own `go.mod` with `replace` directives back to the core):
+(each module is its own `go.mod` with `replace` directives back to the core).
+Run `make generate` once before running `go test` directly: the tests use
+the generated mocks.
 
 ```sh
+make generate
 cd oauth2 && go test -race -run TestServer_Token ./...
 cd jwt    && go test ./...
 ```
@@ -76,10 +89,19 @@ cd jwt    && go test ./...
 `make test` aggregates coverage but **excludes example `main()` programs**
 (they bind a socket and block); examples are still built, tested, and linted.
 
-CI: `.github/workflows/go.yml` runs `make sync build test lint` against the
-whole workspace in one job. `.github/workflows/release.yml` validates the
-workspace and cuts a GitHub release on a `module/vX.Y.Z` tag. `make generate`
-is intentionally skipped in CI.
+CI (read-only token by default, only the release `publish` job gets
+`contents: write`; every action pinned to a commit SHA; credentials never
+persisted; keep it `actionlint`- and `zizmor`-clean):
+- `.github/workflows/go.yml` runs `make tools generate check-modules build
+  test lint` against the whole workspace, then `make coveralls` (goveralls,
+  pinned in `tools/goveralls`; a Coveralls outage does not fail the build);
+- `govulncheck.yml` runs `make vuln` (every module, tests included) on every
+  change and weekly;
+- `release.yml`, on a `v*` or `**/v*` tag: a read-only `verify` job
+  (`scripts/release-check.sh`, `check-modules`, build, test, lint, and
+  govulncheck on the released module), then a `publish` job (`contents:
+  write`, environment `release`, `gh release create`, no checkout). See
+  `docs/releasing.md`.
 
 ## Module layout & dependency policy
 
@@ -150,7 +172,10 @@ for the OAuth2 SQL/Redis stores and the interop modules, `=> ../../../../`
 for the OIDC client and SAML SP stores, which also replace
 `oidc/client => ../../` or `saml/sp => ../../`) plus
 one per in-repo module of its graph, so local dev works without published
-versions. New modules declare `go 1.26.5`, like the core.
+versions; consumers ignore them, so a release commit sets the in-repo
+requirements to real versions (`docs/releasing.md`). New modules declare
+`go 1.27.2`: every `go.mod` and `go.work` carry the same `go` line, and a
+new module must be added to `go.work` (`make check-modules` enforces both).
 
 ## Core architecture
 
@@ -263,7 +288,7 @@ mount path of every handler (`AuthorizeHandler`, `UserInfoHandler`,
 - `docs/oidc-provider.md` is the exact feature matrix (no certification
   claimed); `internal/interop/oidcop` checks interop with go-oidc.
 
-`examples/oauth2/main.go` is the canonical wiring example for the v2 stack;
+`examples/oauth2/main.go` is the canonical wiring example of the library;
 `examples/oidc-provider` the one for the OpenID Provider (login and consent
 pages, CSRF, sessions); `examples/` also has `basic-http`, `bearer-jwt`,
 `grpc-bearer`, `connectrpc-bearer`, `session-web`, `oidc-client` and `saml-sp` demos.
@@ -366,14 +391,32 @@ by response content).
 
 ## Tooling caveats
 
-- **`make generate` is broken**: `.mockery.yaml` uses mockery v3 syntax but
-  `go.mod` pins the v2 tool (`vektra/mockery v2.53.5`). No module depends on
-  generated mocks — **all tests use hand-written fakes**. Don't rely on
-  `make generate`; write a fake.
-- **Lint**: `golangci-lint v2`, `default: none` + ~30 explicitly-enabled
+- **Mocks**: `make generate` runs mockery v3 (pinned in `tools/mockery`,
+  configured by `.mockery.yaml`). Every interface of the library packages
+  gets an in-package `mock_<interface>_test.go` (`Mock<Interface>`, testify
+  template, `EXPECT()` API). These files exist only in test binaries, are
+  **never committed** (`.gitignore`: `mock_*`) and are regenerated by
+  `make generate`, which `make test`/`lint`/`vuln`/`tidy` and CI run first.
+  Use them for interface doubles in new tests; migrate a hand-written fake
+  when you touch its test (no big-bang rewrite). A module whose packages get
+  mocks keeps a `mockery_test.go` that imports `testify/mock`, so its
+  `go.mod`/`go.sum` are the same with or without generated mocks (Dependabot
+  and `go mod tidy` never generate them). Every module builds with
+  `GOWORK=off` without them; only its tests need them, so the tests of a
+  published module only compile after `make generate` in a repository
+  checkout (a module zip has neither the mocks nor `.mockery.yaml`). Never
+  hand-write a `Mock<Interface>` identifier or a `mock_*` file (git-ignored).
+- **Tools**: one module per tool under `tools/` (golangci-lint, govulncheck,
+  goveralls, mockery), outside `go.work`, so their dependencies never reach a library
+  `go.mod` and each tool builds with exactly its own tested dependency set.
+  `make tools` installs them into `build/bin` (checksum-verified by each
+  tool's `go.sum`). Bump one with
+  `cd tools/<name> && GOWORK=off go get -tool <package>@<version>`.
+- **Lint**: `golangci-lint` v2.14.0, `default: none` + ~30 explicitly-enabled
   linters including `gosec`, `wrapcheck`, `errorlint`, `wsl_v5`,
   `forcetypeassert`. `gocyclo` max complexity 18. Tests are excluded from
   lint (`run.tests: false`). All wrapped errors must keep `%w`.
-- Go 1.26. Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
+- Go 1.27.2 in every `go.mod` and in `go.work` (CI installs the version
+  `go.work` names). Indentation: tabs in `.go` and `Makefile`, 4 spaces elsewhere,
   2 spaces in YAML (see `.editorconfig`). All source files carry the MIT
   copyright header.
