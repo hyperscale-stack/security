@@ -392,6 +392,8 @@ func (m *Manager) load(ctx context.Context, value string) (*Session, error) {
 		return nil, fmt.Errorf("session: %w", security.ErrTokenExpired)
 	}
 
+	s.ExpiresAt = m.deadline(s) // the enforced deadline, earlier after a TTL decrease
+
 	if err := m.validate(ctx, s); err != nil {
 		return nil, err
 	}

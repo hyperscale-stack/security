@@ -86,8 +86,9 @@ func TestManagerEnforcesItsTTLOnOlderCookies(t *testing.T) {
 
 	now = epoch.Add(14 * time.Minute)
 
-	_, err = short.Get(context.Background(), c.replay())
+	s, err := short.Get(context.Background(), c.replay())
 	require.NoError(t, err)
+	assert.True(t, s.ExpiresAt.Equal(epoch.Add(15*time.Minute)), "Get reports the enforced deadline: %s", s.ExpiresAt)
 
 	now = epoch.Add(16 * time.Minute)
 

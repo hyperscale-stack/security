@@ -825,10 +825,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   has no session. See [MIGRATION.md](MIGRATION.md).
 - `bearer.Authentication.WithAuthenticated` drops the token: `Token()` is
   `""` once authenticated (read the request's `Authorization` field to relay
-  a token), and a failed `bearer.Authenticator.Authenticate` returns
-  `security.Anonymous()`. `json.Marshal` of a `session.Session` writes its
-  ID fingerprint, the keys of its values and its times, never the CSRF
-  token, the ID or the values. See [MIGRATION.md](MIGRATION.md).
+  a token), and a failed `bearer.Authenticator.Authenticate` or
+  `session.Authenticator.Authenticate` returns `security.Anonymous()`.
+  `json.Marshal` of a `session.Session` writes its ID fingerprint, the keys
+  of its values and its times, never the CSRF token, the ID or the values.
+  See [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);

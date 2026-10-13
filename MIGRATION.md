@@ -2141,7 +2141,7 @@ in again** after the upgrade.
 | Cookies issued before the upgrade | — | refused (`ErrNoSession` wrapping `ErrDecode`) |
 | `Codec.Encode` / `Codec.Decode` | exported | removed: only the `Manager` seals and opens cookies |
 | Same keys, another cookie name or `WithPurpose` | cookie accepted | refused |
-| Session deadline | the `ExpiresAt` in the cookie | the earlier of it and `CreatedAt + TTL` of the reading `Manager` |
+| Session deadline | the `ExpiresAt` in the cookie | the earlier of it and `CreatedAt + TTL` of the reading `Manager`, which `Get` reports in `ExpiresAt` |
 | `Rotate` | `ExpiresAt` = now + TTL | creation time and deadline kept; new ID and CSRF token |
 | `Touch` on a session at or past its deadline / on nil | cookie written (Max-Age 1) / panic | `ErrTokenExpired` / `ErrNoSession`, nothing written |
 | Numbers in `Values` after a round trip | `float64` (precision lost above 2^53) | `json.Number` (`Session.GetInt64`) |
@@ -2225,6 +2225,7 @@ To migrate:
 | `fmt` of a `bearer.Authentication` | the token | name, state, authorities; `Token: REDACTED` |
 | `bearer.Authentication` after `WithAuthenticated` | keeps the token (`Token()`) | `Token()` is `""` |
 | Value returned by a failed `bearer.Authenticator.Authenticate` | its input (the token) | `security.Anonymous()` |
+| Value returned by a failed `session.Authenticator.Authenticate` | its input (the decoded session) | `security.Anonymous()` |
 
 To migrate:
 

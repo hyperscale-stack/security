@@ -159,3 +159,33 @@ type userRecord struct {
 }
 
 func (u userRecord) Subject() string { return u.sub }
+
+// Review nit 8: like the basic and bearer authenticators, a failed
+// Authenticate returns security.Anonymous(), never its input — the pending
+// Authentication holding the decoded session.
+func TestSessionAuthenticatorFailureReturnsAnonymous(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManager(t)
+
+	c := newCarrier()
+	_, err := mgr.Login(context.Background(), c, principal{sub: "alice"})
+	require.NoError(t, err)
+
+	pending, err := session.NewExtractor(mgr).Extract(context.Background(), c.replay())
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+
+	refusing := session.NewMockPrincipalLoader(t)
+	refusing.EXPECT().Load(mock.Anything, mock.Anything).Return(nil, nil, security.ErrInvalidCredentials).Once()
+
+	nilPrincipal := session.NewMockPrincipalLoader(t)
+	nilPrincipal.EXPECT().Load(mock.Anything, mock.Anything).Return(nil, nil, nil).Once()
+
+	for name, loader := range map[string]session.PrincipalLoader{"refused session": refusing, "nil principal": nilPrincipal} {
+		out, err := session.NewAuthenticator(loader).Authenticate(context.Background(), pending)
+
+		require.ErrorIs(t, err, security.ErrInvalidCredentials, name)
+		assert.Equal(t, security.Anonymous(), out, name)
+	}
+}

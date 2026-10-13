@@ -259,6 +259,10 @@ func TestManagerRefusesAmbiguousSessionCookies(t *testing.T) {
 	_, err = request("")
 	require.ErrorIs(t, err, session.ErrNoSession, "an empty cookie is no session")
 
+	s, err := request("garbage", "garbage", "garbage", victim)
+	require.NoError(t, err, "four cookies of one name are inspected")
+	assert.Equal(t, "victim", s.GetString("sub"))
+
 	_, err = request("garbage", "garbage", "garbage", "garbage", victim)
 	require.ErrorIs(t, err, session.ErrNoSession, "more than four cookies of one name are not inspected")
 }

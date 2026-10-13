@@ -76,16 +76,18 @@ func (a *Authenticator) Supports(auth security.Authentication) bool {
 func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authentication) (security.Authentication, error) {
 	in, ok := auth.(Authentication)
 	if !ok {
-		return auth, security.ErrUnsupportedCredential
+		return security.Anonymous(), security.ErrUnsupportedCredential
 	}
 
+	// A failure returns the anonymous authentication, never its input: the
+	// pending value holds the decoded session.
 	principal, authorities, err := a.loader.Load(ctx, in.session.Values)
 	if err != nil {
-		return auth, fmt.Errorf("session: load principal: %w", err)
+		return security.Anonymous(), fmt.Errorf("session: load principal: %w", err)
 	}
 
 	if principal == nil {
-		return auth, fmt.Errorf("session: loader returned nil principal: %w", security.ErrInvalidCredentials)
+		return security.Anonymous(), fmt.Errorf("session: loader returned nil principal: %w", security.ErrInvalidCredentials)
 	}
 
 	return in.withAuthenticated(principal, authorities), nil

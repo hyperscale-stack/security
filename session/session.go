@@ -28,16 +28,20 @@ type Session struct {
 	// Keep it small: the whole map is JSON-encoded into the cookie, and
 	// browsers cap a cookie at ~4 KiB.
 	Values map[string]any
-	// CSRFToken is a random token minted with the session. It is never
-	// exposed to JavaScript (the cookie is HttpOnly); the application
-	// echoes it into forms / a meta tag and the csrf helpers verify it.
+	// CSRFToken is a random token minted with the session and sealed in
+	// its (HttpOnly) cookie. The application renders it into forms or a
+	// meta tag — where a page script, an XSS, can read it — and
+	// [VerifyCSRF] checks the value the browser echoes back.
 	CSRFToken string
 	// CreatedAt is the session creation time.
 	CreatedAt time.Time
-	// LastAccessed is refreshed on every successful load; idle-timeout
-	// enforcement keys off it.
+	// LastAccessed is the time the cookie was last written (Login, Touch,
+	// Rotate): the idle timeout keys off that written value. Get updates
+	// it in memory only.
 	LastAccessed time.Time
-	// ExpiresAt is the absolute expiry time.
+	// ExpiresAt is the absolute expiry time. Get reports the deadline the
+	// Manager enforces: the earlier of the cookie's ExpiresAt and
+	// CreatedAt + the Manager's TTL.
 	ExpiresAt time.Time
 }
 
