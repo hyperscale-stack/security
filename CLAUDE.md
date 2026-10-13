@@ -138,6 +138,7 @@ persisted; keep it `actionlint`- and `zizmor`-clean):
 | `./internal/interop/oidcrp` | (private, tests only)                    | `oidc/client` against zitadel/oidc + opt-in Chrome test |
 | `./internal/interop/oidcstack` | (private, tests only)                 | our RP ↔ our OP end to end, attacks included; opt-in real-backend store runs |
 | `./internal/interop/saml` | (private, tests only)                      | `saml/sp` against crewjam's IdP, Keycloak (pinned + opt-in live), shared stores, e2e helper |
+| `./internal/interop/sqlstores` | (private, tests only)                 | the three SQL stores on real servers (SQLite always; opt-in PostgreSQL, MySQL, MariaDB): racing `Migrate`, oauth2 conformance, MySQL upgrade statements |
 
 `oauth2/storage/memory` is **not** a standalone module — it is a sub-package
 of `oauth2`; likewise `oidc/client/storage/memory` and `oidc/client/storetest`
@@ -403,7 +404,9 @@ cookie included). `UserInfo` fetches claims whose `sub` must match.
 
 `samlsp.New(Config{...})` takes a `ConnectionResolver` (each `Connection` has
 its own SP entity ID, ACS URL and trusted `IdentityProvider`), a
-`TransactionStore` and a `ReplayCache`. `BeginLogin` (HTTP-Redirect
+`TransactionStore`, a `ReplayCache` and the REQUIRED `TransactionKeys` (1 to
+4 server-held keys of at least 32 bytes; every stored transaction carries
+their HMAC, verified before any field is used). `BeginLogin` (HTTP-Redirect
 AuthnRequest + `__Host-samlsp` browser-binding cookie) and `CompleteLogin`
 (HTTP-POST ACS) are the flow; `Metadata`/`ServeMetadata` publish SP
 metadata; `ParseIdentityProviderMetadata` imports trusted IdP metadata, and
@@ -412,10 +415,12 @@ URL through `outbound` (pinned entity ID, bounded refresh, never triggered
 by response content).
 
 - Validation is layered: streaming lexical gate (`xmlgate.go`) → structural
-  profile on the raw etree (`precheck*.go`) → gosaml2/goxmldsig verification
-  (`verify.go`) → processing rules on the verified decoded values
-  (`postcheck.go`) → atomic consumption → replay mark. Never read identity
-  data from the raw tree; never write XML-DSig/C14N code.
+  profile on the raw etree (`precheck*.go`) → transaction lookup: integrity
+  MAC (`integrity.go`), browser binding, expiry → status and Response
+  `InResponseTo` → atomic consumption (one verification per login) →
+  gosaml2/goxmldsig verification (`verify.go`) → processing rules on the
+  verified decoded values (`postcheck.go`) → replay mark. Never read
+  identity data from the raw tree; never write XML-DSig/C14N code.
 - Strict by default: SHA-1 only via `Connection.InsecureAllowSHA1`;
   ambiguous shapes and encrypted assertions refused with typed errors.
   Every refusal matches `ErrRejected` (wraps
@@ -423,12 +428,15 @@ by response content).
 - `Storage` implementations: `saml/sp/storage/memory` (dev/tests),
   `saml/sp/store/sql`, `saml/sp/store/redis`; all must pass
   `saml/sp/storetest`.
-- `saml/sp/testdata/corpus` pins 359 signed adversarial responses, stored
-  uncompressed (review them as text diffs); after a
+- `saml/sp/testdata/corpus` pins 390 entries over 360 signed adversarial
+  responses, stored uncompressed (review them as text diffs); after a
   deliberate change regenerate it with `go test -run '^TestCorpusGenerate$'
   -count=1 . -args -corpus.update` (in `saml/sp`): regeneration is
-  byte-identical, and `TestCorpusCoversEveryRule` requires every refusal
-  rule of the sources in some entry (or in its documented allowlist).
+  byte-identical only with the toolchain recorded in the manifest
+  (`generatedWith`); with another Go version every file changes (new RSA
+  keys), so regenerate in a commit of its own. `TestCorpusCoversEveryRule`
+  requires every refusal rule of the sources in some entry (or in its
+  documented allowlist).
 - `internal/interop/saml` runs the SP against crewjam's IdP, replays the
   pinned Keycloak responses (`testdata/keycloak-*`), races instances on
   shared stores and tests metadata retrieval. Opt-in, with
