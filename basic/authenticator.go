@@ -6,11 +6,22 @@ package basic
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"runtime"
 
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/password"
 )
+
+// UnlimitedVerifications removes the cap on concurrent password
+// verifications: WithMaxConcurrentVerifications(UnlimitedVerifications).
+// Use it only with a hasher whose Verify is neither CPU- nor memory-bound
+// (one calling a remote HSM, say): bcrypt and Argon2id gain nothing from
+// running more verifications than there are cores — only latency and
+// memory.
+const UnlimitedVerifications = -1
 
 // AuthorityResolver maps a [PasswordUser] to the authorities (roles, scopes,
 // claims) attached to the resulting [security.Authentication]. The default
@@ -22,32 +33,78 @@ import (
 type AuthorityResolver func(PasswordUser) []string
 
 // Authenticator implements [security.Authenticator] for the HTTP Basic
-// scheme. It loads the user via a [UserLoader], runs lifecycle checks,
-// verifies the password with a [password.Hasher], then returns the
+// scheme. It loads the user via a [UserLoader], verifies the password with a
+// [password.Hasher], checks the account's lifecycle flags, then returns the
 // authenticated [Authentication].
 //
-// Errors are always wrapped in [security.ErrInvalidCredentials] to avoid
-// account-enumeration via response-time / response-code analysis — but a
-// [UserLoader] error wrapping [security.ErrUnavailable] keeps it, and
-// [security.ErrorClass] ranks the outage first: a user store that is down
-// is answered 503 / Unavailable for every username, not refused. Detailed
-// causes remain reachable through errors.As / errors.Is for server-side
-// telemetry only — do NOT mirror them in the client response.
+// Every attempt runs exactly one password verification, whatever the
+// account: an unknown user, a loader failure or an account without a
+// password hash is verified against a dummy hash the hasher made at
+// construction, and the lifecycle flags (disabled, locked, expired) are
+// read only after the verification. The response time therefore does not
+// tell which accounts exist or are locked (CWE-208), and every refusal
+// wraps [security.ErrInvalidCredentials] — the detailed cause stays in the
+// error chain for server-side telemetry only: do NOT mirror it in the
+// client response. A [UserLoader] error wrapping [security.ErrUnavailable]
+// keeps it, and [security.ErrorClass] ranks the outage first: a user store
+// that is down is answered 503 / Unavailable for every username, not
+// refused.
+//
+// The equalization holds for stored hashes made with the hasher's current
+// algorithm and parameters: configure the hasher with the parameters of
+// your stored hashes, and let a [PasswordRehasher] loader upgrade the ones
+// that differ — a hash at other parameters costs another time to verify
+// than the dummy.
+//
+// Since every attempt costs a hash, at most runtime.GOMAXPROCS(0)
+// verifications run at once by default ([WithMaxConcurrentVerifications]):
+// further attempts wait for a slot, so a flood of attempts cannot exhaust
+// memory (an Argon2id verification with the default parameters allocates
+// 19 MiB). Rate-limit failed attempts per account and per client in front
+// of it (NIST SP 800-63B-4 §3.2.2).
 type Authenticator struct {
 	loader     UserLoader
 	hasher     password.Hasher
 	authResolv AuthorityResolver
+	dummyHash  string
+	maxVerify  int
+	slots      chan struct{} // nil: unlimited
 }
 
 // NewAuthenticator returns an Authenticator using the supplied loader and
 // hasher. Authorities default to nil (use [WithAuthorityResolver] to
 // populate them from the user record).
+//
+// It hashes a random password once with hasher — the dummy hash that
+// unknown accounts are verified against — so construction costs one hash:
+// build the Authenticator once, not per request. It panics on a nil loader
+// or hasher, and when hasher cannot hash: an Authenticator without its dummy
+// hash would answer unknown accounts faster than known ones.
 func NewAuthenticator(loader UserLoader, hasher password.Hasher, opts ...Option) *Authenticator {
-	a := &Authenticator{loader: loader, hasher: hasher}
+	if loader == nil {
+		panic("basic: NewAuthenticator: nil UserLoader")
+	}
+
+	if hasher == nil {
+		panic("basic: NewAuthenticator: nil password.Hasher")
+	}
+
+	a := &Authenticator{loader: loader, hasher: hasher, maxVerify: runtime.GOMAXPROCS(0)}
 
 	for _, o := range opts {
 		o(a)
 	}
+
+	if a.maxVerify != UnlimitedVerifications {
+		a.slots = make(chan struct{}, a.maxVerify)
+	}
+
+	dummy, err := hasher.Hash(context.Background(), rand.Text())
+	if err != nil {
+		panic("basic: NewAuthenticator: the hasher cannot make the dummy hash: " + err.Error())
+	}
+
+	a.dummyHash = dummy
 
 	return a
 }
@@ -59,6 +116,23 @@ type Option func(*Authenticator)
 // the authorities materialized on the [Authentication].
 func WithAuthorityResolver(r AuthorityResolver) Option {
 	return func(a *Authenticator) { a.authResolv = r }
+}
+
+// WithMaxConcurrentVerifications runs at most n password verifications at
+// once — the dummy ones included. Default: runtime.GOMAXPROCS(0).
+// [UnlimitedVerifications] removes the cap. An attempt waits for a slot
+// until its context ends, then fails with an error wrapping
+// [security.ErrUnavailable] (HTTP 503 / Unavailable): an overloaded
+// verifier is not a verdict on the credentials. net/http request contexts
+// carry no deadline — a queued attempt waits as long as its client stays
+// connected — so bound the request time (http.TimeoutHandler, a deadline
+// middleware). It panics unless n ≥ 1 or n is UnlimitedVerifications.
+func WithMaxConcurrentVerifications(n int) Option {
+	if n < 1 && n != UnlimitedVerifications {
+		panic(fmt.Sprintf("basic: WithMaxConcurrentVerifications: %d is neither ≥ 1 nor UnlimitedVerifications", n))
+	}
+
+	return func(a *Authenticator) { a.maxVerify = n }
 }
 
 // AuthenticatorName implements [security.NamedAuthenticator] so the core
@@ -74,38 +148,34 @@ func (a *Authenticator) Supports(auth security.Authentication) bool {
 	return ok
 }
 
-// Authenticate implements [security.Authenticator].
+// Authenticate implements [security.Authenticator]. On failure it returns
+// [security.Anonymous]: the presented credentials never flow back.
 func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authentication) (security.Authentication, error) {
 	in, ok := auth.(Authentication)
 	if !ok {
-		return auth, security.ErrUnsupportedCredential
+		return security.Anonymous(), security.ErrUnsupportedCredential
 	}
 
-	user, err := a.loader.LoadByUsername(ctx, in.Username())
-	if err != nil {
-		// Loader-level errors (db down, unknown user, ...) collapse to a
-		// single ErrInvalidCredentials at the client boundary. The original
-		// error stays in the chain for observability; the typed username
-		// does not (it can be a password typed in the wrong field).
-		return auth, fmt.Errorf("basic: load user: %w (%w)", err, security.ErrInvalidCredentials)
+	user, loadErr := a.loader.LoadByUsername(ctx, in.Username())
+
+	stored, hasPassword := "", false
+	if loadErr == nil && user != nil {
+		stored = user.GetPasswordHash()
+		hasPassword = stored != ""
 	}
 
-	if user == nil {
-		return auth, fmt.Errorf("basic: user not found: %w", security.ErrInvalidCredentials)
+	hash := a.dummyHash
+	if hasPassword {
+		hash = stored
 	}
 
-	if !user.IsEnabled() || user.IsLocked() || user.IsExpired() || user.IsCredentialsExpired() {
-		return auth, fmt.Errorf("basic: account ineligible: %w", security.ErrInvalidCredentials)
+	match, verifyErr := a.verify(ctx, hash, in.Password())
+
+	if err := refusal(loadErr, user, hasPassword, match, verifyErr); err != nil {
+		return security.Anonymous(), err
 	}
 
-	ok, err = a.hasher.Verify(ctx, user.GetPasswordHash(), in.Password())
-	if err != nil {
-		return auth, fmt.Errorf("basic: hash verify: %w (%w)", err, security.ErrInvalidCredentials)
-	}
-
-	if !ok {
-		return auth, fmt.Errorf("basic: password mismatch: %w", security.ErrInvalidCredentials)
-	}
+	a.rehash(ctx, user, stored, in.Password())
 
 	var authorities []string
 	if a.authResolv != nil {
@@ -113,6 +183,108 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 	}
 
 	return in.WithAuthenticated(user, authorities), nil
+}
+
+// refusal returns the reason to refuse the attempt, or nil. It runs after
+// the verification, so every refusal costs the same work. An unavailable
+// verifier comes first: it is not a verdict on the account, and answering
+// it differently for unknown accounts would reveal them under load.
+func refusal(loadErr error, user PasswordUser, hasPassword, match bool, verifyErr error) error {
+	switch {
+	case verifyErr != nil && unavailable(verifyErr):
+		return fmt.Errorf("basic: verify password: %w (%w)", verifyErr, security.ErrUnavailable)
+	case loadErr != nil:
+		// Loader-level errors (db down, unknown user, ...) collapse to a
+		// single ErrInvalidCredentials at the client boundary (an
+		// ErrUnavailable the loader wrapped still answers 503). The original
+		// error stays in the chain for observability; the typed username
+		// does not (it can be a password typed in the wrong field).
+		return fmt.Errorf("basic: load user: %w (%w)", loadErr, security.ErrInvalidCredentials)
+	case user == nil:
+		return fmt.Errorf("basic: user not found: %w", security.ErrInvalidCredentials)
+	case !hasPassword:
+		return fmt.Errorf("basic: account without a password hash: %w", security.ErrInvalidCredentials)
+	case verifyErr != nil:
+		return fmt.Errorf("basic: verify password: %w (%w)", verifyErr, security.ErrInvalidCredentials)
+	case !match:
+		return fmt.Errorf("basic: password mismatch: %w", security.ErrInvalidCredentials)
+	case !user.IsEnabled() || user.IsLocked() || user.IsExpired() || user.IsCredentialsExpired():
+		return fmt.Errorf("basic: account ineligible: %w", security.ErrInvalidCredentials)
+	}
+
+	return nil
+}
+
+// unavailable reports whether a verification error means the credentials
+// were not checked: no slot before the context ended, or the context ended
+// before the hashing.
+func unavailable(err error) bool {
+	return errors.Is(err, security.ErrUnavailable) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// verify runs one password verification inside a slot.
+func (a *Authenticator) verify(ctx context.Context, hash, pw string) (bool, error) {
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	defer release()
+
+	match, err := a.hasher.Verify(ctx, hash, pw)
+	if err != nil {
+		return false, fmt.Errorf("basic: %w", err)
+	}
+
+	return match, nil
+}
+
+// acquire waits for a verification slot until ctx ends. A context that has
+// already ended never gets a slot (select would pick a free slot or the
+// done context at random).
+func (a *Authenticator) acquire(ctx context.Context) (func(), error) {
+	if a.slots == nil {
+		return func() {}, nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("basic: no verification slot: %w (%w)", err, security.ErrUnavailable)
+	}
+
+	select {
+	case a.slots <- struct{}{}:
+		return func() { <-a.slots }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("basic: waiting for a verification slot: %w (%w)", ctx.Err(), security.ErrUnavailable)
+	}
+}
+
+// rehash re-hashes the password of a successfully authenticated user whose
+// stored hash NeedsRehash, when the loader can store it. A failure leaves
+// the stored hash as it is — the next login tries again — and never fails
+// the authentication. It runs only after a success, so it reveals nothing
+// about other accounts.
+func (a *Authenticator) rehash(ctx context.Context, user PasswordUser, stored, pw string) {
+	rehasher, ok := a.loader.(PasswordRehasher)
+	if !ok || !a.hasher.NeedsRehash(stored) {
+		return
+	}
+
+	release, err := a.acquire(ctx)
+	if err != nil {
+		return
+	}
+
+	defer release()
+
+	hash, err := a.hasher.Hash(ctx, pw)
+	if err != nil {
+		return
+	}
+
+	_ = rehasher.UpdatePasswordHash(ctx, user, hash)
 }
 
 // Compile-time interface check.

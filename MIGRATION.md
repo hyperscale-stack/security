@@ -2056,3 +2056,40 @@ To migrate:
 5. Unicode: the hashers still hash bytes as given. To apply NFC (NIST
    SP 800-63B-4 §3.1.1.2), use the decorator of the `password` package
    documentation at enrollment and at login.
+
+### `basic`: every attempt costs one verification; concurrent verifications are capped
+
+`basic.Authenticator` returned before verifying the password for unknown,
+disabled, locked and expired accounts, so the response time revealed which
+accounts exist. Every attempt now runs exactly one password verification —
+against the user's hash, or against a dummy hash the hasher made at
+construction — and the account state is read after it. Because any username
+now costs a full hash, the concurrent verifications are capped by default.
+
+| | Before | After |
+| --- | --- | --- |
+| Unknown user, loader failure, account without a password hash | refused at once | verified against the dummy hash, then refused |
+| Disabled, locked, expired account | refused before the password check | password verified, then refused |
+| `NewAuthenticator(nil, …)`, `NewAuthenticator(…, nil)` | panic on the first request | panic at construction |
+| `NewAuthenticator` | free | hashes one random password (the dummy) — panics if the hasher cannot hash |
+| Concurrent verifications | unbounded | `runtime.GOMAXPROCS(0)` by default; `WithMaxConcurrentVerifications(n)`, `UnlimitedVerifications` |
+| No slot before the request context ends; a verification ended by the context | `ErrInvalidCredentials` (401) | `ErrUnavailable` (503) |
+| Value returned by a failed `Authenticate` | its input (password included) | `security.Anonymous()` |
+| Stored hash that `NeedsRehash` | left as is | re-hashed after a successful login when the loader implements `PasswordRehasher` |
+
+To migrate:
+
+1. Build the `Authenticator` once at start-up: each construction hashes a
+   password.
+2. Configure the hasher with the parameters of your stored hashes, and
+   implement `PasswordRehasher` on your loader so that hashes made with
+   other parameters (older settings, imports) are upgraded: the timing
+   equalization holds for hashes at the hasher's current parameters.
+3. Bound the request time (`http.TimeoutHandler`, a deadline middleware):
+   an attempt waits for a verification slot until its context ends, and
+   `net/http` request contexts have no deadline. Keep the default cap for
+   bcrypt and Argon2id; pass `UnlimitedVerifications` only for a hasher that
+   is not CPU-bound.
+4. A loader should return `(nil, nil)` or an error wrapping
+   `security.ErrInvalidCredentials` for an unknown user, and an error
+   wrapping `security.ErrUnavailable` when its store is down.

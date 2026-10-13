@@ -462,6 +462,18 @@ PKCE. Not supported, and refused where a provider could select them:
   expects the user-id and password in Unicode Normalization Form C; `basic`
   checks them as received.
 
+## HTTP Basic
+
+- **No rate limiter or account lockout is shipped** — NIST SP 800-63B-4
+  §3.2.2 requires verifiers to limit failed attempts: do it at the edge or
+  in an `Authenticator` wrapper. The `Authenticator` only caps the number
+  of concurrent verifications (`runtime.GOMAXPROCS(0)` by default).
+- **Timing equalization residuals** — every attempt costs one verification,
+  but a stored hash made with other parameters than the hasher's costs
+  another time until it is re-hashed (`PasswordRehasher`), and the
+  `UserLoader`'s own latency (a cache hit for a known user) is outside the
+  library's control.
+
 ## Passwords
 
 - **No Unicode normalization** — the hashers hash a password's bytes as

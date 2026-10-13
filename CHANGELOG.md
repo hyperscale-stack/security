@@ -491,6 +491,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `WithArgon2idLimits`, `Argon2idHasher.Limits`; `WithBCryptMaxCost`,
   `DefaultBCryptMaxCost` (14), `BCryptHasher.MaxCost` — and the sentinels
   `ErrCostLimitExceeded`, `ErrPasswordTooLong` and `ErrEmptyPassword`.
+- `basic.WithMaxConcurrentVerifications(n)` and `basic.UnlimitedVerifications`:
+  the cap on concurrent password verifications (`runtime.GOMAXPROCS(0)` by
+  default), and `basic.PasswordRehasher`, an optional `UserLoader`
+  capability through which the `Authenticator` upgrades a stored hash that
+  `NeedsRehash` after a successful authentication.
 
 ### Changed
 
@@ -770,6 +775,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `Hash` refuses an empty password (`ErrEmptyPassword`) and `Verify` never
   accepts one; `NeedsRehash` also flags a shorter salt and every hash
   `Verify` refuses. See [MIGRATION.md](MIGRATION.md).
+- `basic.NewAuthenticator` panics on a nil loader or hasher and hashes a
+  random password once (the dummy hash unknown accounts are verified
+  against): build the `Authenticator` once, not per request. Every attempt
+  runs exactly one password verification, at most `GOMAXPROCS`
+  verifications run at once by default (an attempt that gets no slot before
+  its context ends fails with `ErrUnavailable`, 503), and a failed
+  `Authenticate` returns `security.Anonymous()` instead of its input. See
+  [MIGRATION.md](MIGRATION.md).
 
 - **SAML Service Provider (breaking, security audit).** `samlsp.New`
   requires `Config.TransactionKeys` (1 to 4 keys of at least 32 bytes);
@@ -1657,3 +1670,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   contrary to NIST SP 800-63B-4 §3.1.1.2 ("SHALL verify the entire submitted
   password"), while `Hash` refused such passwords; it now refuses them.
   Empty passwords are no longer hashed nor accepted (RFC 8265 §4.1).
+- `basic.Authenticator` answered unknown, disabled, locked and expired
+  accounts before verifying the password — about 250× faster than a known
+  account with a wrong password at bcrypt cost 10 — so the response time
+  told which accounts exist, contrary to its documentation. Every attempt
+  now costs one password verification: unknown accounts, loader failures
+  and accounts without a password are verified against a dummy hash made by
+  the configured hasher, and the account state is read after the
+  verification. Since any username now costs a full hash, the number of
+  concurrent verifications is capped by default (`runtime.GOMAXPROCS(0)`):
+  a flood of Basic attempts can no longer exhaust memory (19 MiB per
+  default Argon2id verification).

@@ -50,11 +50,47 @@ enrollment and at login.
 
 ## Account enumeration
 
-`basic.Authenticator` collapses every failure — unknown user, loader error,
-disabled/locked/expired account, password mismatch — into a single
-`security.ErrInvalidCredentials` at the client boundary. The detailed cause
-stays in the wrapped error chain for server-side telemetry only. Do not
-mirror the detailed cause in the HTTP/gRPC response.
+`basic.Authenticator` answers every refused attempt — unknown user, loader
+error, account without a password, disabled/locked/expired account, password
+mismatch — with `security.ErrInvalidCredentials` at the client boundary, and
+spends the same work on each: exactly one password verification, against
+the user's hash or against a dummy hash the configured hasher made at
+construction; the account state is read only after the verification. The
+detailed cause stays in the wrapped error chain for server-side telemetry
+only. Do not mirror it in the HTTP/gRPC response.
+
+What remains measurable, and how to close it:
+
+- **Stored hashes at other parameters** cost another time than the dummy:
+  configure the hasher with the parameters of your stored hashes and
+  implement `basic.PasswordRehasher` on your loader, which re-hashes a
+  stored hash that `NeedsRehash` after a successful login.
+- **The loader's own latency** (a cache hit for known users, a slower miss)
+  is the application's: make unknown and known lookups cost the same.
+- A stored hash `Verify` refuses (malformed, above the limits) fails without
+  hashing — an operator data problem, not reachable by a client.
+- Under overload an attempt that gets no verification slot answers 503
+  (`ErrUnavailable`) whatever the account, so overload reveals nothing.
+
+### Online guessing and hashing cost
+
+Basic authentication runs a full password verification on every request,
+and since any username now costs one, a flood of attempts costs the server
+CPU and memory (19 MiB per default Argon2id verification). The
+`Authenticator` therefore runs at most `runtime.GOMAXPROCS(0)` verifications
+at once by default (`WithMaxConcurrentVerifications`); further attempts wait
+for a slot until their request context ends, then answer 503. Hashing is
+CPU-bound: more parallel verifications than cores add latency and memory,
+not throughput. Bound the request time (`http.TimeoutHandler`): `net/http`
+request contexts carry no deadline.
+
+The library ships no rate limiter: limit failed attempts per account and per
+client at the edge or in an `Authenticator` wrapper (NIST SP 800-63B-4
+§3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts), and prefer
+exchanging Basic credentials once for a session or a token over sending them
+on every request. Form logins and the OAuth2 `password` grant's
+`ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the same
+protections.
 
 ## JWT
 
@@ -1489,6 +1525,11 @@ span catalog.
 - [ ] Pick a password hasher and review its cost against current hardware;
       raise its limits (`WithArgon2idLimits`, `WithBCryptMaxCost`) before
       importing hashes costlier than the defaults.
+- [ ] HTTP Basic: build each `basic.Authenticator` once, configure its hasher
+      with the parameters of the stored hashes (and implement
+      `basic.PasswordRehasher`), bound the request time
+      (`http.TimeoutHandler`), and rate-limit failed attempts per account
+      and per client in front of it.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.
