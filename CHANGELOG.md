@@ -992,6 +992,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `none` for the latter), whose absence meant `client_secret_basic` alone
   (RFC 8414 §2); its grant types are sorted, no longer in map order. The
   godoc gives the `jwks_uri` and `.well-known` locations actually built.
+- `oauth2.DefaultClient.SecretMatches` no longer discloses the length of
+  the registered secret through its timing: `subtle.ConstantTimeCompare`
+  answers at once when the lengths differ, so it now compares the SHA-256
+  digests of the two secrets, in constant time.
 - OAuth2 storage failures stop hiding: a token lookup that failed at
   `/introspect` answered `{"active":false}` without reaching `OnError` (it
   still answers so — RFC 7662 §2.1 — and is now reported), and a failing

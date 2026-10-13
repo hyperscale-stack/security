@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,6 +210,41 @@ func TestDefaultClient(t *testing.T) {
 	secretless := &oauth2.DefaultClient{IDValue: "client-2"}
 	assert.False(t, secretless.SecretMatches(""))
 	assert.False(t, secretless.SecretMatches("s3cr3t"))
+}
+
+// TestDefaultClientSecretMatches pins what DefaultClient.SecretMatches
+// accepts — the registered secret, byte for byte, nothing else — now that
+// it compares digests, which hide the registered secret's length.
+func TestDefaultClientSecretMatches(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, registered, presented string
+		match                       bool
+	}{
+		{"equal", "s3cr3t", "s3cr3t", true},
+		{"different, same length", "s3cr3t", "s3cr3T", false},
+		{"prefix", "s3cr3t", "s3cr3", false},
+		{"longer", "s3cr3t", "s3cr3t!", false},
+		{"trailing NUL", "s3cr3t", "s3cr3t\x00", false},
+		{"empty presented", "s3cr3t", "", false},
+		{"empty registered", "", "", false},
+		{"empty registered, any presented", "", "s3cr3t", false},
+		{"long secret", strings.Repeat("k", 1024), strings.Repeat("k", 1024), true},
+		{"long secret, last byte differs", strings.Repeat("k", 1024), strings.Repeat("k", 1023) + "K", false},
+		// Their SHA-256 digests share their first four bytes (b65abac7):
+		// the whole digest is compared.
+		{"digests sharing a prefix", "secret-36533", "secret-103289", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := &oauth2.DefaultClient{IDValue: "client", Secret: tc.registered}
+			assert.Equal(t, tc.match, c.SecretMatches(tc.presented))
+		})
+	}
 }
 
 func TestStaticIssuer(t *testing.T) {

@@ -6,6 +6,7 @@ package oauth2
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"slices"
 )
@@ -89,6 +90,15 @@ type Client interface {
 // authentication methods (client_secret_basic, client_secret_post) to
 // verify the registered secret without exposing it. Implementations MUST
 // use constant-time comparison (or a hashed-secret scheme).
+//
+// Keep a hash of the secret, not the secret. A secret the server generates
+// with at least 128 bits of entropy (RFC 6749 §10.10: a guessing
+// probability of at most 2^-128, 2^-160 recommended) — 32 random bytes,
+// for instance — is safe behind a fast hash: store its SHA-256 and compare
+// the digest of the presented secret with it in constant time. A secret
+// chosen by a human needs a password hash (the password module): it is slow
+// by design, so verify a dummy hash for unknown clients too, or their
+// faster answer tells them apart.
 //
 // An empty secret is never a credential: implementations MUST NOT match
 // it — not even against a hash of the empty string — nor anything when no
@@ -216,17 +226,23 @@ func (c *DefaultClient) Scopes() []string { return c.ScopeValues }
 // AuthMethods implements [Client].
 func (c *DefaultClient) AuthMethods() []string { return c.AuthMethodValues }
 
-// SecretMatches implements [SecretMatcher] using constant-time comparison.
-// An empty Secret registers no secret and matches nothing, the empty string
+// SecretMatches implements [SecretMatcher]: it compares the SHA-256
+// digests of the presented and registered secrets in constant time, so the
+// time it takes tells nothing about the registered secret — its length
+// included, which comparing the secrets themselves would leak. An empty
+// Secret registers no secret and matches nothing, the empty string
 // included. The DefaultClient stores secrets in cleartext for development
 // convenience; production deployments SHOULD wrap a hashed-secret store and
-// implement SecretMatches themselves.
+// implement SecretMatches themselves (see [SecretMatcher]).
 func (c *DefaultClient) SecretMatches(secret string) bool {
 	if c.Secret == "" {
 		return false
 	}
 
-	return subtle.ConstantTimeCompare([]byte(c.Secret), []byte(secret)) == 1
+	registered := sha256.Sum256([]byte(c.Secret))
+	presented := sha256.Sum256([]byte(secret))
+
+	return subtle.ConstantTimeCompare(registered[:], presented[:]) == 1
 }
 
 // AllowsIssuer implements [IssuerBoundClient]: the issuers listed in

@@ -300,6 +300,23 @@ keys by `kid` against a JWKS provider (static or remote).
   `/authorize`, which tells an unknown `client_id` from an unregistered
   `redirect_uri` by design (RFC 6749 §4.1.2.1 asks it to inform the resource
   owner).
+- **Client secrets and guessing** — a client secret is a password the
+  server verifies on every `/token`, `/revoke` and `/introspect` request:
+  RFC 6749 §2.3.1 has the authorization server protect these endpoints
+  against brute force, and RFC 7662 §4 warns that an un-throttled
+  `/introspect` lets an attacker fish for valid tokens. The server does not
+  throttle — every failed client authentication answers the same `401
+  invalid_client` and reaches `OnError` — so rate-limit the three endpoints
+  per `client_id` and per source address in front of the handlers, and
+  alert on the failures. Generate secrets with at least 128 bits of entropy
+  (RFC 6749 §10.10: a guessing probability of at most 2^-128, 2^-160
+  recommended — 32 random bytes), out of reach of online guessing. At
+  rest, keep a hash: `DefaultClient` holds its secret in cleartext — for
+  tests, examples and static configurations — and compares SHA-256 digests
+  in constant time, so its timing discloses neither the secret nor its
+  length; a production `Client` implements `SecretMatcher` over the stored
+  SHA-256 of a generated secret, compared in constant time, or over a
+  password hash for a human-chosen one (with the dummy verification above).
 - **Token introspection** — RFC 7662 §4 requires the authorization server
   to authenticate the protected resources calling `/introspect`. A public
   client cannot authenticate: its `client_id` ships inside every copy of the
@@ -324,6 +341,13 @@ keys by `kid` against a JWKS provider (static or remote).
   the same bytes as an unknown token (`{"active":false}`), so the response
   discloses nothing (its latency may still differ); a policy failure is
   reported to `OnError`.
+- **Token revocation** — `/revoke` revokes the caller's own tokens of the
+  request's issuer: a refresh token with its whole family, an access token
+  with its family too (RFC 7009 §2.1). A token issued to another client, or
+  under another issuer, is left untouched and answered with the `200` of an
+  invalid token (RFC 7009 §2.2) — a deliberate deviation from RFC 7009
+  §2.1, which refuses such a request with an error: the error would confirm
+  to whoever holds a token that it is valid for another client.
 - **Issuer binding (realms)** — a subject is only meaningful within its
   issuer (OIDC Core §16.15). Every endpoint resolves the issuer of the
   request through the `IssuerResolver` before it loads the client;
@@ -1463,6 +1487,12 @@ span catalog.
       clients, have them call it at the issuer of the tokens they accept,
       and set `ServerConfig.IntrospectionPolicy` when several resource
       servers or tenants share the authorization server.
+- [ ] Rate-limit `/token`, `/revoke` and `/introspect` per `client_id` and
+      per source address, and alert on the `invalid_client` failures
+      `OnError` reports.
+- [ ] Generate client secrets with at least 128 bits of entropy and keep
+      only a hash of them, behind a `SecretMatcher` (`DefaultClient` holds
+      them in cleartext).
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.

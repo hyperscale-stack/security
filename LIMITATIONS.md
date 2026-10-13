@@ -11,6 +11,24 @@ future refactor phases.
 
 - **`private_key_jwt` client authentication (RFC 7523)** — not implemented.
   `client_secret_basic`, `client_secret_post`, and `none` are.
+- **No throttling of client authentication** — `/token`, `/revoke` and
+  `/introspect` verify a client secret on every request without limiting
+  attempts: RFC 6749 §2.3.1 asks for brute-force protection, which a rate
+  limiter in front of the handlers provides (per `client_id` and source
+  address). Failures reach `OnError`.
+- **No hashed-secret client** — `DefaultClient` keeps its secret in
+  cleartext (compared by SHA-256 digest in constant time); keeping only a
+  hash at rest takes a `Client` implementing `SecretMatcher` over your
+  store — see [docs/security-considerations.md](docs/security-considerations.md).
+- **Another client's token is "revoked" with 200** — `/revoke` leaves a
+  token issued to another client, or under another issuer, untouched and
+  answers it as an invalid token (RFC 7009 §2.2) where RFC 7009 §2.1 refuses
+  the request with an error: a deliberate deviation, so that the answer
+  never confirms the token is valid for someone else.
+- **A failed introspection lookup answers inactive** — when the store fails
+  to look a token up, `/introspect` answers `{"active":false}` (RFC 7662
+  §2.1) and reports the failure to `OnError`: the resource server cannot
+  tell an outage from a revoked token, and refuses the request either way.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
   none, although its RFC 8414 metadata advertises `jwks_uri` (the issuer
   followed by `/.well-known/jwks.json`): mount the

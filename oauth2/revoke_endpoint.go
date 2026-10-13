@@ -25,9 +25,12 @@ var errRevocationUnavailable = newCoded(CodeTemporarilyUnavailable, "revocation 
 //
 // A client revokes its own tokens of that issuer only: a token issued to
 // another client, or under another issuer (OpenID Connect Core §16.15:
-// issuers are separate realms), is left untouched. A token recorded without
-// issuer — written before tokens recorded one — is revoked by its client at
-// any issuer: revocation only takes away.
+// issuers are separate realms), is left untouched. RFC 7009 §2.1 has such a
+// request refused with an error; the server answers it as an invalid token
+// instead (§2.2), so that /revoke never confirms to whoever holds a token
+// that it is valid for another client. A token recorded without issuer —
+// written before tokens recorded one — is revoked by its client at any
+// issuer: revocation only takes away.
 //
 // The answer is 200 OK whether or not the token existed or belonged to the
 // caller (RFC 7009 §2.2), and 503 temporarily_unavailable when a failure
