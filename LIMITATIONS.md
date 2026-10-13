@@ -109,8 +109,10 @@ future refactor phases.
 matrix. Not supported, and never advertised:
 
 - **Other flows and response modes** — the implicit and hybrid flows
-  (`unsupported_response_type`), `form_post`, `fragment` and JARM response
-  modes (refused by the core with a bare 400).
+  (`unsupported_response_type`, for plain OAuth 2.0 requests too:
+  `Provider.AuthorizeHandler` refuses `AuthorizeConfig.AllowImplicit`),
+  `form_post`, `fragment` and JARM response modes (refused by the core with
+  a bare 400).
 - **Request objects and registration** — `request` and `request_uri` are
   refused (`request_not_supported`, `request_uri_not_supported`), and so is
   the `registration` parameter; clients are static (`oauth2.ClientStore`),

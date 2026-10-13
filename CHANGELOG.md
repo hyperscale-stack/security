@@ -817,6 +817,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **OAuth2 metadata answers GET and HEAD only (breaking for other
   methods)**: any other method gets 405 with `Allow: GET, HEAD` (RFC 8414
   §3.1). See [MIGRATION.md](MIGRATION.md).
+- **The OpenID Provider serves no implicit flow (breaking for `Profile20`
+  providers enabling it)**: `oidcprovider.Provider.AuthorizeHandler` panics
+  when `AuthorizeConfig.AllowImplicit` is set — RFC 9700 §2.1.2 deprecates
+  the implicit grant — so plain OAuth 2.0 `response_type=token` requests
+  get `unsupported_response_type` too, and the RFC 8414 metadata and the
+  discovery document both advertise the code flow alone (RFC 9068 §4). See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
@@ -1543,7 +1550,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   declined offline access. `Request.OfflineAccess` is now set for every
   request; `OfflineAccessPrompted` needs no `prompt=consent` for a plain
   request, `OfflineAccessByPolicy` keeps the former behaviour, an implicit
-  request never keeps it (Core §11), and an approval left without any
+  request never keeps it (Core §11; the provider now serves no implicit
+  flow, see Changed), and an approval left without any
   scope answers `access_denied` (breaking, see
   [MIGRATION.md](MIGRATION.md)).
 - `examples/oidc-provider` grants offline access only on the end-user's

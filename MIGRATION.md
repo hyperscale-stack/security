@@ -1775,7 +1775,7 @@ has one meaning at the provider's server:
 | plain OAuth 2.0, `Decision.OfflineAccess` unset | `offline_access` granted | dropped from the grant (no refresh token with `RefreshTokenScope = offline_access`) |
 | plain OAuth 2.0, only `offline_access` requested, `Decision.OfflineAccess` unset | code issued | `access_denied`, nothing issued |
 | plain OAuth 2.0, `OfflineAccessPrompted` or `OfflineAccessByPolicy` | granted | granted (`prompt=consent` is not required: no OAuth 2.0 parameter) |
-| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) |
+| plain OAuth 2.0 implicit request (`response_type=token`) | `offline_access` as approved | always dropped (Core §11: it needs a response type returning a code) — and the provider now serves no implicit flow at all ([below](#oidcprovider-the-provider-serves-no-implicit-flow)) |
 | OpenID request | §11 rules | unchanged |
 | plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged |
 
@@ -1971,3 +1971,21 @@ To migrate:
 To migrate: serve the document to GET (a Go `GET` route pattern serves HEAD
 too), and build the `AuthorizeHandler`s before serving it — the implicit
 members reflect the handlers built so far.
+
+### `oidc/provider`: the provider serves no implicit flow
+
+A `Profile20` provider could enable the legacy implicit flow for plain OAuth
+2.0 requests (`Provider.AuthorizeHandler(oauth2.AuthorizeConfig{AllowImplicit:
+true, …})`); the oauth2 RFC 8414 metadata then advertised `response_type=token`
+while the OpenID discovery document did not — two documents of one
+authorization server disagreeing, which RFC 9068 §4 forbids. RFC 9700 §2.1.2
+deprecates the implicit grant, and OpenID requests could never use it.
+
+| | Before | After |
+| --- | --- | --- |
+| `Provider.AuthorizeHandler` with `AllowImplicit` (`Profile20`) | the OAuth 2.0 implicit flow served for requests without `openid` | panics at construction: `oidcprovider: AuthorizeHandler: the provider serves no implicit flow (AllowImplicit)` |
+| `response_type=token` at the provider | `unsupported_response_type` for OpenID requests only | `unsupported_response_type` for every request |
+
+To migrate: drop `AllowImplicit` and `ImplicitTokens` from the configuration
+of the provider's `AuthorizeHandler`, and move the clients still using the
+implicit flow to the authorization code flow with PKCE (RFC 9700 §2.1.2).

@@ -15,6 +15,7 @@ import (
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/clientauth"
 	"github.com/hyperscale-stack/security/oauth2/grant"
+	"github.com/hyperscale-stack/security/oauth2/token"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -212,14 +213,34 @@ func withClientAuth(auths ...oauth2.ClientAuthenticator) envOption {
 func TestDiscoveryConsistentWithRFC8414Metadata(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string][]envOption{
-		"default routes":      nil,
-		"route prefix":        {withRoutePrefix("/connect")},
-		"public clients only": {withClientAuth(clientauth.NewNone())},
+	// attemptImplicit tries to enable the implicit flow, which the provider
+	// refuses (UD-1): the documents must stay consistent all the same.
+	attemptImplicit := func(e *env) {
+		defer func() { _ = recover() }()
+
+		e.op.AuthorizeHandler(oauth2.AuthorizeConfig{
+			AllowImplicit: true, ImplicitTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)},
+		})
 	}
 
-	for name, opts := range cases {
-		e := newEnv(t, append(opts, withResolver(fixedIssuer{issuer: "https://op.example/tenant-a"}))...)
+	cases := map[string]struct {
+		opts  []envOption
+		setup func(*env)
+	}{
+		"default routes":      {},
+		"route prefix":        {opts: []envOption{withRoutePrefix("/connect")}},
+		"public clients only": {opts: []envOption{withClientAuth(clientauth.NewNone())}},
+		"implicit flow attempted (Profile20)": {
+			opts: []envOption{withProfile(oauth2.Profile20)}, setup: attemptImplicit,
+		},
+	}
+
+	for name, tc := range cases {
+		e := newEnv(t, append(tc.opts, withResolver(fixedIssuer{issuer: "https://op.example/tenant-a"}))...)
+
+		if tc.setup != nil {
+			tc.setup(e)
+		}
 
 		oidc := discovery(t, e, get("/tenant-a/.well-known/openid-configuration"))
 

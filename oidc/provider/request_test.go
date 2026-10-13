@@ -13,7 +13,6 @@ import (
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/grant"
-	"github.com/hyperscale-stack/security/oauth2/token"
 	oidcprovider "github.com/hyperscale-stack/security/oidc/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,19 +134,22 @@ func TestDuplicatedParameters(t *testing.T) {
 	}
 }
 
-// TestOpenIDImplicitRefused pins OIDC Core §3: OpenID Connect does not use
-// response_type=token, which returns no ID Token.
+// TestOpenIDImplicitRefused pins OIDC Core §3 — OpenID Connect does not use
+// response_type=token, which returns no ID Token — and UD-1: the provider
+// serves no implicit flow at all (TestAuthorizeHandlerServesNoImplicitFlow),
+// so a plain OAuth 2.0 response_type=token is unsupported too, even under
+// Profile20.
 func TestOpenIDImplicitRefused(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, withProfile(oauth2.Profile20))
-	cfg := oauth2.AuthorizeConfig{AllowImplicit: true, ImplicitTokens: token.OpaqueRefreshAdapter{Opaque: token.NewOpaque(32)}}
 
-	params := redirect(t, e.authorizeWith(cfg, with(authorizeQuery(), "response_type", "token")))
+	params := redirect(t, e.authorize(with(authorizeQuery(), "response_type", "token")))
 	assert.Equal(t, oauth2.CodeUnsupportedResponseType, params.Get("error"))
 
-	plain := redirect(t, e.authorizeWith(cfg, with(authorizeQuery(), "response_type", "token", "scope", "read", "nonce", "")))
-	assert.NotEmpty(t, plain.Get("access_token"), "the OAuth 2.0 implicit flow is unaffected")
+	plain := redirect(t, e.authorize(with(authorizeQuery(), "response_type", "token", "scope", "read", "nonce", "")))
+	assert.Equal(t, oauth2.CodeUnsupportedResponseType, plain.Get("error"), "no OAuth 2.0 implicit flow either")
+	assert.Empty(t, plain.Get("access_token"))
 }
 
 // TestRequestObjectParametersRefused pins OIDC Core §3.1.2.6, §6, §7.2.1.

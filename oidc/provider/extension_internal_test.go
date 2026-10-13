@@ -32,3 +32,27 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 		require.ErrorIs(t, err, errClientMismatch)
 	}
 }
+
+// TestOfflineAccessNeedsTheCodeFlow pins OpenID Connect Core §11: the
+// provider ignores offline_access outside the authorization code flow,
+// whatever the decision. It serves no implicit flow — the core refuses any
+// other response type first — so only a direct call reaches the rule.
+func TestOfflineAccessNeedsTheCodeFlow(t *testing.T) {
+	t.Parallel()
+
+	view := &authRequest{scopes: []string{"read", ScopeOfflineAccess}}
+
+	scope, offline, err := view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessPrompted)
+	require.NoError(t, err)
+	require.Equal(t, "read", scope)
+	require.False(t, offline)
+
+	_, _, err = view.offlineScope(ScopeOfflineAccess, OfflineAccessByPolicy)
+	require.Equal(t, oauth2.CodeAccessDenied, oauth2.IsCode(err))
+
+	view.codeFlow = true
+
+	_, offline, err = view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessByPolicy)
+	require.NoError(t, err)
+	require.True(t, offline, "kept in the code flow")
+}
