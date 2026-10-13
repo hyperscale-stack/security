@@ -6,6 +6,7 @@ package connectrpcsec_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -174,4 +175,34 @@ func TestStreamAuthorizationChallengesABearerRequest(t *testing.T) {
 	assert.Equal(t, connect.CodePermissionDenied, ce.Code())
 	assert.Equal(t, []string{insufficient}, ce.Meta().Values("WWW-Authenticate"))
 	assert.False(t, stream.called)
+}
+
+// Re-review nit (mutant N6): a bearer request answered with a class that
+// has no RFC 6750 code — authentication required, an outage, an internal
+// error — gets the bare challenge, never an empty error="".
+func TestWrapUnaryChallengesABearerRequestWithoutACode(t *testing.T) {
+	t.Parallel()
+
+	failing := func(err error) security.Engine {
+		return security.NewEngine(security.NewManager(security.AuthenticatorFunc(
+			func(context.Context, security.Authentication) (security.Authentication, error) { return nil, err })),
+			tokenExtractor{})
+	}
+
+	for name, c := range map[string]struct {
+		engine        security.Engine
+		authorization string
+		code          connect.Code
+	}{
+		"bearer scheme without a token": {newEngine(), "Bearer", connect.CodeUnauthenticated},
+		"outage":                        {failing(fmt.Errorf("jwks: %w", security.ErrUnavailable)), "Bearer letmein", connect.CodeUnavailable},
+		"internal error":                {failing(errors.New("verifier bug")), "Bearer letmein", connect.CodeInternal},
+	} {
+		_, err := connectrpcsec.NewAuthenticationInterceptor(c.engine).WrapUnary((&recordingUnary{}).fn)(
+			context.Background(), requestWith(c.authorization))
+
+		ce := connectError(t, err)
+		assert.Equal(t, c.code, ce.Code(), name)
+		assert.Equal(t, []string{bearerAPI}, ce.Meta().Values("WWW-Authenticate"), name)
+	}
 }
