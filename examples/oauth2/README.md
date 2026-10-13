@@ -92,7 +92,9 @@ A code is single-use: running the same exchange again is refused with
 - The POST carrying the decision is refused when it comes from another site
   (`http.CrossOriginProtection`, RFC 6749 §10.12): a page elsewhere cannot
   approve on the user's behalf. An authorization request POSTed from
-  another site still shows the consent page. A real application also binds
+  another site still shows the consent page — its parameters in the query
+  string or in the body: the consent form posts them back with the
+  decision. A real application also binds
   the decision to the user's login session with a CSRF token — see
   `examples/oidc-provider`.
 - The approval is answered with `303 See Other`, the redirect that turns a

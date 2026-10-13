@@ -6,10 +6,12 @@ package main
 
 import (
 	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -252,4 +254,76 @@ func TestExampleConsentIsProtected(t *testing.T) {
 	loc, err := url.Parse(approved.Header().Get("Location"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, loc.Query().Get("code"))
+}
+
+// consentForm extracts the action and the hidden fields of the consent
+// page's form, as a browser submits them.
+func consentForm(t *testing.T, page string) (string, url.Values) {
+	t.Helper()
+
+	action := regexp.MustCompile(`<form method="post" action="([^"]*)">`).FindStringSubmatch(page)
+	require.Len(t, action, 2, page)
+
+	fields := url.Values{}
+	for _, m := range regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`).FindAllStringSubmatch(page, -1) {
+		fields.Add(html.UnescapeString(m[1]), html.UnescapeString(m[2]))
+	}
+
+	return html.UnescapeString(action[1]), fields
+}
+
+// TestExampleConsentKeepsABodyPostedRequest: an authorization request
+// POSTed with its parameters in the body (RFC 6749 §3.1, OpenID Connect
+// Core §3.1.2.1) gets a consent page whose form posts the request back
+// with the decision, so the approval issues a code.
+func TestExampleConsentKeepsABodyPostedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler, err := buildServer()
+	require.NoError(t, err)
+
+	authz := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {demoClientID},
+		"redirect_uri":          {"http://localhost:1337/callback"},
+		"scope":                 {"api:read"},
+		"state":                 {"demo-state"},
+		"code_challenge":        {pkceChallenge},
+		"code_challenge_method": {"S256"},
+	}
+
+	post := func(target string, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec
+	}
+
+	withEmptyDecision := url.Values{"decision": {""}}
+	for k, v := range authz {
+		withEmptyDecision[k] = v
+	}
+
+	// An empty decision in the request is no decision: the page must not
+	// post it back ahead of the button's.
+	for name, request := range map[string]url.Values{"request": authz, "request with an empty decision": withEmptyDecision} {
+		page := post("/oauth2/authorize", request)
+		require.Equal(t, http.StatusOK, page.Code, name)
+
+		action, fields := consentForm(t, page.Body.String())
+		assert.NotContains(t, fields, "decision", name)
+		fields.Add("decision", "approve")
+
+		approved := post(action, fields)
+		require.Equal(t, http.StatusSeeOther, approved.Code, "%s: %s", name, approved.Body.String())
+
+		loc, err := url.Parse(approved.Header().Get("Location"))
+		require.NoError(t, err)
+		assert.NotEmpty(t, loc.Query().Get("code"), name)
+		assert.Equal(t, "demo-state", loc.Query().Get("state"), name)
+	}
 }

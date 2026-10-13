@@ -33,6 +33,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hyperscale-stack/security"
@@ -233,20 +234,37 @@ func refusedCrossOrigin(csrf *http.CrossOriginProtection, w http.ResponseWriter,
 	return true
 }
 
-// renderConsent writes the consent page of ar.
+// renderConsent writes the consent page of ar: it shows the request as the
+// server validated it (ar), and its form posts the decision with the
+// authorization request as received — its query string, and the
+// parameters of a POSTed body as hidden fields — for the server to
+// validate it again.
 func renderConsent(w http.ResponseWriter, r *http.Request, ar *oauth2.AuthorizeRequest) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	var fields strings.Builder
+
+	for name, values := range r.PostForm {
+		if name == "decision" {
+			continue
+		}
+
+		for _, v := range values {
+			fmt.Fprintf(&fields, "<input type=\"hidden\" name=\"%s\" value=\"%s\">\n", html.EscapeString(name), html.EscapeString(v))
+		}
+	}
 
 	//nolint:gosec // G705: every interpolated value is HTML-escaped
 	fmt.Fprintf(w, `<!doctype html><title>Authorize</title>
 <p>Client <b>%s</b> requests scope <b>%s</b>.</p>
 <form method="post" action="/oauth2/authorize?%s">
-<button name="decision" value="approve">Approve</button>
+%s<button name="decision" value="approve">Approve</button>
 <button name="decision" value="deny">Deny</button>
 </form>`,
 		html.EscapeString(ar.Client.ID()),
 		html.EscapeString(ar.Scope),
-		html.EscapeString(r.URL.RawQuery))
+		html.EscapeString(r.URL.RawQuery),
+		fields.String())
 }
 
 // showCallback stands in for the client's redirect endpoint: it just

@@ -92,7 +92,10 @@ type ServerConfig struct {
 	// is read, its declared length checked before the body is. Zero or
 	// negative selects [DefaultMaxRequestBytes] (64 KiB); raise it only for
 	// custom grants carrying large assertions. A ConsentFunc reading the
-	// body of a POST /authorize itself reads it within the same bound.
+	// body of a POST /authorize itself reads it within the same bound. A
+	// body a middleware parsed before the handler (r.ParseForm,
+	// r.FormValue) was read without it — only its declared length is
+	// checked: bound such a middleware's reads too (http.MaxBytesReader).
 	MaxRequestBytes int64
 	// Extension, when set, plugs a protocol extension — an OpenID Connect
 	// provider — into /authorize and into the authorization_code and

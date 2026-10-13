@@ -467,10 +467,14 @@ keys by `kid` against a JWKS provider (static or remote).
   recorded with the code (512 bytes of UTF-8 without NUL, for every request
   — so no store is handed a multi-megabyte value to persist and re-encode),
   the scope (100 tokens, 4096 bytes) and the `client_id` (255 bytes: a longer
-  one is unknown, never looked up). A 4 KiB `state` keeps the redirect URL
-  within the usual 8 KiB request-line limits, but an authorization server
-  behind a proxy whose response-header buffer is smaller (nginx's
-  `proxy_buffer_size` defaults to 4 KiB) needs that buffer raised.
+  one is unknown, never looked up). A 4 KiB `state` of unreserved
+  characters keeps the redirect URL within the usual 8 KiB request-line
+  limits; percent-encoding triples every other VSCHAR, so a state made of
+  them reaches 12 KiB of `Location` — and an authorization server behind a
+  proxy whose response-header buffer is smaller (nginx's
+  `proxy_buffer_size` defaults to 4 KiB) needs that buffer raised. A body a
+  middleware parses before the handlers (`r.ParseForm`, `r.FormValue`) is
+  read without `MaxRequestBytes`: bound that middleware's reads too.
 - **Mix-up defense (RFC 9207)** — every authorization response, code and
   implicit, success and redirected error, carries `iss`, the issuer the
   request resolved to, and the RFC 8414 metadata sets
