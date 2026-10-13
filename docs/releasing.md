@@ -69,7 +69,9 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
    - a malformed or non-v1 tag;
    - a module that is never released;
    - a placeholder requirement (`v0.0.0-00010101000000-000000000000`);
-   - a commit that is not on `origin/master`.
+   - a commit that is not on `origin/master`;
+   - any `replace` directive other than the in-repo ones, and any `exclude`
+     directive: consumers ignore both, so a release must not need them.
 
    It then builds and vets a copy of the module **without its in-repo
    `replace` directives**, outside the workspace. That is exactly what a
@@ -79,7 +81,10 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
    that its required versions lack.
 4. **The Release workflow** (`.github/workflows/release.yml`) runs on every
    `v*` and `**/v*` tag, with a read-only token:
-   - the same check, then `make check-modules build test lint vuln`;
+   - the same check, then `make check-modules build test lint`, and
+     govulncheck on the released module's own code (outside the workspace,
+     tests excluded; the full scan of every module is step 1's `govulncheck`
+     workflow);
    - only then a separate job creates the GitHub release, with
      `contents: write`, no checkout and no third-party action;
    - `-rc` versions are published as pre-releases, and a sub-module release
@@ -103,17 +108,52 @@ requirements are the `github.com/hyperscale-stack/security…` lines of its
   1. bump `go.work` and every `go` line together (`go work edit -go=…`,
      `go mod edit -go=…` in each module and tool module);
   2. release patch versions of the affected modules.
-- The `govulncheck` workflow runs on every change, weekly, and inside the
-  release workflow. An advisory with no fixed version keeps it red. Triage
+- The `govulncheck` workflow scans every module, tests included, on every
+  change and weekly. An advisory with no fixed version keeps it red. Triage
   it:
   - remove the call path if you can;
   - otherwise record the decision in `docs/security-considerations.md`:
     advisory ID, why it is not exploitable or is accepted, owner, review
     date.
 
-  The release workflow never publishes over a reachable advisory. A release
-  with a documented, accepted advisory is published by hand
+  The release workflow scans the released module itself, and never
+  publishes over an advisory reachable from it. A release with a
+  documented, accepted advisory is published by hand
   (`gh release create <tag> --verify-tag`).
+
+## Dependabot
+
+- Version updates: the root `gomod` entry runs in go.work mode and updates
+  every workspace module in one PR. The `/tools/*` entry updates the tool
+  modules, and the `github-actions` entry updates the SHA pins. A version is
+  proposed after a 7-day cooldown.
+- Security updates (once enabled in the repository settings) run in the
+  directory of the vulnerable module and do not see `go.work`. A PR that
+  bumps a dependency in one sub-module leaves the other modules that require
+  it out of sync, and `make check-modules` fails ("go work sync rewrote …").
+  Check out the PR branch, run `make tidy`, and push the result onto it
+  before merging.
+- After a change to `.github/dependabot.yml`, or when the update PRs stop
+  coming, run "Check for updates" on each entry (Insights → Dependency graph
+  → Dependabot) and read the log.
+  - Dependabot's image ships an older Go than the `go` line, so every
+    `gomod` job downloads the toolchain (`GOTOOLCHAIN=auto`): look for a
+    toolchain download error.
+  - For `/tools/*`, check that the three tools are seen: they are
+    `// indirect` requirements, allowed by name.
+  - Fallback while an entry fails: bump by hand. For a workspace dependency:
+    `cd <module> && go get <module path>@<version>`, then `make tidy`. For a
+    tool: `cd tools/<name> && GOWORK=off go get -tool <package>@<version>`.
+    Then `make check-modules` and a pull request.
+
+## Tests of published modules
+
+The tests use mockery mocks that `make generate` writes as in-package
+`mock_*_test.go` files, never committed. A module downloaded from the module
+proxy has neither those files nor `.mockery.yaml`, so its tests (`go test` or
+`go vet` from the module cache, a consumer's `go test all`, a distribution
+build) only compile from a repository checkout after `make generate`. The
+library code itself builds without them.
 
 ## Repository settings (maintainer)
 

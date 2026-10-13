@@ -160,17 +160,19 @@ and linted.
 
 ## CI
 
-Every workflow runs with a read-only token and actions pinned to a commit
+The workflows run with a read-only token by default (only the release
+`publish` job gets `contents: write`), with every action pinned to a commit
 SHA.
 - `.github/workflows/go.yml` builds the pinned tools, generates the mocks,
   runs `make check-modules`, `make build`, `make test` and `make lint`
-  against every module, and uploads the aggregated coverage to Coveralls from
-  a separate job.
-- `.github/workflows/govulncheck.yml` runs `make vuln` on every change and
-  weekly.
+  against every module, and uploads the aggregated coverage to Coveralls
+  with goveralls (pinned in `tools/goveralls`).
+- `.github/workflows/govulncheck.yml` runs `make vuln` (every module, tests
+  included) on every change and weekly.
 - `.github/workflows/release.yml` runs when a `vX.Y.Z` or `<module>/vX.Y.Z`
   tag is pushed. A read-only job verifies it (`scripts/release-check.sh`,
-  then the whole gate), then a separate job publishes the GitHub release
+  `check-modules`, build, test, lint, govulncheck on the released module),
+  then a separate job publishes the GitHub release
   ([docs/releasing.md](docs/releasing.md)).
 - Dependabot proposes updates for every workspace module (go.work mode), the
   tool modules and the actions, after a 7-day cooldown.

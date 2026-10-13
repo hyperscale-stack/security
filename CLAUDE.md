@@ -38,9 +38,14 @@ These rules are mandatory when working in this repository:
   follow the RFC to the letter.
 - **Security:** write secure code with no known vulnerabilities. `gosec` is
   part of the lint gate — keep it clean.
-- **Per-step gate:** at the end of every feature/step, **run the tests and the
-  linter** (`make test` + `make lint`, or the per-module equivalent). They
-  MUST pass.
+- **Per-step gate:** at the end of every feature/step, run
+  **`make test lint check-modules`** (and **`make vuln`** before opening a
+  pull request). They MUST pass. `make generate` runs on its own through
+  `test`, `lint`, `vuln` and `tidy`.
+- **Commit what `make tidy` / `go work sync` change.** CI fails when a
+  `go.mod` or `go.sum` is out of sync with the workspace or untidy on its own
+  (`make check-modules`). To resolve a `go.mod` conflict: take either side,
+  run `make tidy`, then `make check-modules`, and commit.
 - **Commit per step:** once tests and lint pass, **commit** the step before
   moving on. Use Conventional Commits with a module scope, as in the git
   history (`feat(oauth2): ...`, `fix(jwt): ...`, `docs(...): ...`).
@@ -71,9 +76,12 @@ make conformance # opt-in: the OpenID Foundation suite against oidc/provider and
 ```
 
 To run a **single test** or work on one module, `cd` into that module first
-(each module is its own `go.mod` with `replace` directives back to the core):
+(each module is its own `go.mod` with `replace` directives back to the core).
+Run `make generate` once before running `go test` directly: the tests use
+the generated mocks.
 
 ```sh
+make generate
 cd oauth2 && go test -race -run TestServer_Token ./...
 cd jwt    && go test ./...
 ```
@@ -81,16 +89,19 @@ cd jwt    && go test ./...
 `make test` aggregates coverage but **excludes example `main()` programs**
 (they bind a socket and block); examples are still built, tested, and linted.
 
-CI (read-only token, every action pinned to a commit SHA, credentials never
+CI (read-only token by default, only the release `publish` job gets
+`contents: write`; every action pinned to a commit SHA; credentials never
 persisted; keep it `actionlint`- and `zizmor`-clean):
 - `.github/workflows/go.yml` runs `make tools generate check-modules build
-  test lint` against the whole workspace, then uploads the coverage to
-  Coveralls from a separate, non-blocking job;
-- `govulncheck.yml` runs `make vuln` on every change and weekly;
+  test lint` against the whole workspace, then `make coveralls` (goveralls,
+  pinned in `tools/goveralls`; a Coveralls outage does not fail the build);
+- `govulncheck.yml` runs `make vuln` (every module, tests included) on every
+  change and weekly;
 - `release.yml`, on a `v*` or `**/v*` tag: a read-only `verify` job
-  (`scripts/release-check.sh` + the whole gate), then a `publish` job
-  (`contents: write`, environment `release`, `gh release create`, no
-  checkout). See `docs/releasing.md`.
+  (`scripts/release-check.sh`, `check-modules`, build, test, lint, and
+  govulncheck on the released module), then a `publish` job (`contents:
+  write`, environment `release`, `gh release create`, no checkout). See
+  `docs/releasing.md`.
 
 ## Module layout & dependency policy
 
@@ -391,9 +402,12 @@ by response content).
   mocks keeps a `mockery_test.go` that imports `testify/mock`, so its
   `go.mod`/`go.sum` are the same with or without generated mocks (Dependabot
   and `go mod tidy` never generate them). Every module builds with
-  `GOWORK=off` without them; only its tests need them.
+  `GOWORK=off` without them; only its tests need them, so the tests of a
+  published module only compile after `make generate` in a repository
+  checkout (a module zip has neither the mocks nor `.mockery.yaml`). Never
+  hand-write a `Mock<Interface>` identifier or a `mock_*` file (git-ignored).
 - **Tools**: one module per tool under `tools/` (golangci-lint, govulncheck,
-  mockery), outside `go.work`, so their dependencies never reach a library
+  goveralls, mockery), outside `go.work`, so their dependencies never reach a library
   `go.mod` and each tool builds with exactly its own tested dependency set.
   `make tools` installs them into `build/bin` (checksum-verified by each
   tool's `go.sum`). Bump one with

@@ -530,10 +530,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `replace` directives. The first release of every module is `v1.0.0`; the
   checklist is [docs/releasing.md](docs/releasing.md).
 - **Development tools in their own modules**: golangci-lint (v2.14.0, Go
-  1.27 support), govulncheck (v1.9.0) and mockery (v3.8.1) are pinned in one
-  module each under `tools/`, outside `go.work`. The core module no longer
-  declares the mockery `tool` directive: a consumer importing only the core
-  now resolves 22 modules instead of 50 (no mockery, cobra, viper, zerolog or
+  1.27 support), govulncheck (v1.9.0), goveralls (v0.0.12) and mockery
+  (v3.8.1) are pinned in one module each under `tools/`, outside `go.work`.
+  The core module no longer declares the mockery `tool` directive: a
+  consumer importing only the core now resolves 23 modules instead of 50,
+  both counts including the consumer (no mockery, cobra, viper, zerolog or
   `x/tools`). `make lint` builds golangci-lint from its pinned module instead
   of piping an unpinned install script (`curl …/HEAD/install.sh | sh`).
 - **Mocks are generated, never committed**: `make generate` (mockery v3,
@@ -627,15 +628,20 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 ### Security
 
 - **CI and release supply chain**:
-  - every workflow runs with a read-only `GITHUB_TOKEN`
-    (`permissions: contents: read`);
+  - the workflows run with a read-only `GITHUB_TOKEN` by default
+    (`permissions: contents: read`); only the release `publish` job gets
+    `contents: write`;
   - every action is pinned to a full commit SHA, which Dependabot keeps
     current;
   - checkouts no longer persist credentials;
-  - Coveralls uploads from a separate, non-blocking job, instead of an
-    action referenced as `@master` and handed the token;
+  - the coverage goes to Coveralls through goveralls, built from its pinned
+    module (`tools/goveralls`), instead of an action referenced as `@master`
+    and handed the token, and a Coveralls outage no longer fails the build;
+  - pushes to `master` are never cancelled by a later push, so every master
+    commit keeps its CI result;
   - the release workflow is split: a read-only job verifies the tag
-    (`scripts/release-check.sh`, build, test, lint, govulncheck), then a
+    (`scripts/release-check.sh`, build, test, lint, govulncheck on the
+    released module), then a
     minimal job publishes with `gh release create`, without checkout or
     third-party action. The tag reaches the scripts through the environment,
     and tags of nested modules (`oidc/client/v…`) now trigger it;
@@ -645,7 +651,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     updates, and waits 7 days before proposing a version.
 - `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of
   v0.58.0: HTTP/2 advisories GO-2026-6603, -6610, -6611, -6612 and -6617.
-
 - The OAuth2 token endpoint refuses a `code_verifier` presented for an
   authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
   §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is

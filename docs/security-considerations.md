@@ -969,32 +969,35 @@ span catalog.
   code you call.
 - **Vulnerability scanning.** The `govulncheck` workflow scans every module
   outside the workspace (its own requirements, tests included) on every
-  change, weekly and before every release; the release workflow never
-  publishes over a reachable advisory. Known and not reachable:
+  change and weekly, and it must be green on the commit of a release; the
+  release workflow also scans the released module itself and never
+  publishes over an advisory reachable from it. Known and not reachable:
   GO-2026-5932 (`golang.org/x/crypto/openpgp` is unmaintained, no fix) is
   reported at module level for the modules that require
   `golang.org/x/crypto`; none imports `openpgp`. Accepted reachable
   advisories (ID, reason, owner, review date): none.
 - **Dependencies.** Dependabot proposes version updates for every module
   after a 7-day cooldown (security updates are not delayed). The
-  development tools (golangci-lint, govulncheck, mockery) are pinned in
-  modules of their own under `tools/` and never reach a library's module
-  graph.
+  development tools (golangci-lint, govulncheck, goveralls, mockery) are
+  pinned in modules of their own under `tools/` and never reach a library's
+  module graph.
 - **CI and releases.**
-  - Every workflow runs with a read-only token, every action is pinned to a
-    full commit SHA, and checkouts keep no credentials.
+  - The workflows run with a read-only token by default (only the release
+    publish job gets `contents: write`), every action is pinned to a full
+    commit SHA, and checkouts keep no credentials.
   - A release is verified with a read-only token (`scripts/release-check.sh`,
     build, test, lint, govulncheck) before a separate job publishes the
     GitHub release, without checkout or third-party code.
   - Module tags are not signed: verify the modules through the Go checksum
-    database (`sum.golang.org`), as `go get` does by default. Never disable
-    it (`GONOSUMDB`, `GONOSUMCHECK`, `GOFLAGS=-insecure`) for these modules.
+    database (`sum.golang.org`), as `go get` does by default. Never set
+    `GOSUMDB=off`, and never let a `GOPRIVATE` or `GONOSUMDB` pattern match
+    `github.com/hyperscale-stack/*` (`GOINSECURE` and `GONOPROXY` do not
+    affect checksum verification).
 
 ## Operator checklist
 
 - [ ] Build with Go 1.27.2 or later, the latest patch release, and run
       `govulncheck` on your application.
-
 - [ ] Pick a password hasher and review its cost against current hardware.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).

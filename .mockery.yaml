@@ -4,6 +4,7 @@
 # never committed (.gitignore: mock_*). Every module whose packages get mocks
 # keeps a mockery_test.go importing testify/mock, so its go.mod and go.sum are
 # the same with or without them.
+# Unexported interfaces included: their in-package mocks serve in-package tests.
 all: true
 dir: '{{.InterfaceDir}}'
 filename: 'mock_{{.InterfaceName | snakecase}}_test.go'
