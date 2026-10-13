@@ -323,13 +323,17 @@ BeginLogin ──▶ transaction (store) + __Host- binding cookie ──▶ 302 
                                                                      │
 CompleteLogin ◀── HTTP-POST SAMLResponse + RelayState + cookie ◀─────┘
     │
+    ├─ received location (path, host, no query) and, when configured,
+    │  the origin of the POST (ResponseOrigins)
     ├─ lexical gate (bounded streaming tokenizer)
     ├─ structural profile on the raw tree (shape, IDs, signature placement,
     │  algorithm allowlist)
-    ├─ transaction lookup (browser binding, expiry, connection)
+    ├─ transaction lookup (integrity MAC, browser binding, expiry, connection)
+    ├─ status, Response InResponseTo
+    ├─ atomic consumption: one verification per login
     ├─ gosaml2 / goxmldsig verification (trusted certificates only)
     ├─ processing rules on the verified, decoded values
-    └─ atomic consumption, then replay cache ──▶ Identity
+    └─ replay cache ──▶ Identity
 ```
 
 - **Connections** — the application resolves them (`ConnectionResolver`);
@@ -338,7 +342,9 @@ CompleteLogin ◀── HTTP-POST SAMLResponse + RelayState + cookie ◀──�
   `MetadataSource`, which fetches through `outbound` (see
   [Outbound requests](#outbound-requests)).
 - **Storage** — `TransactionStore` (insert-if-absent, lookup, atomic
-  single consumption bound to the browser) and `ReplayCache`
+  single consumption bound to the browser; each record carries a MAC under
+  the server-held `Config.TransactionKeys`, so the store is trusted for
+  availability and single consumption only) and `ReplayCache`
   (insert-if-absent): in-memory, SQL and Redis implementations, checked by
   the shared `saml/sp/storetest` conformance suite.
 - **Errors** — every refusal matches `ErrRejected` (which wraps

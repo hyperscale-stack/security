@@ -35,6 +35,22 @@
 //   - MySQL tables must use InnoDB.
 //   - SQLite: one writer at a time; set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option).
+//   - Every column holds ASCII (hex digests, ASCII-only JSON, integers): no
+//     character set, collation or sql_mode requirement.
+//   - Give the SP a database user limited to the two tables: each record
+//     carries a MAC under samlsp.Config.TransactionKeys, so the database is
+//     trusted for availability and single consumption only.
+//
+// # Upgrading
+//
+// Migrate never alters an existing table. A samlsp_transactions table
+// created before the integrity column needs it before the new version
+// runs:
+//
+//	ALTER TABLE samlsp_transactions ADD COLUMN integrity VARCHAR(64) NOT NULL DEFAULT ''
+//
+// or can be dropped and recreated with Migrate: it only holds logins in
+// progress, which fail once either way.
 //
 // The CI of this module exercises SQLite only; the PostgreSQL and MySQL
 // guarantees are argued from the statements above.

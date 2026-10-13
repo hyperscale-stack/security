@@ -280,16 +280,20 @@ PKCE. Not supported, and refused where a provider could select them:
   signs AuthnRequests with RSA only.
 - **IdP certificate rollover** — a certificate carried in a signature's
   `KeyInfo` must equal a trusted one: import the IdP's new certificate
-  (refresh its metadata) before the IdP signs with it. Without `KeyInfo`,
+  (refresh its metadata) before the IdP signs with it. Without `KeyInfo` —
+  or with a `KeyInfo` that carries no certificate, which counts as absent —
   only the three most recent valid certificates of the connection are
-  tried. Validity is checked at `now − ClockSkew`, so a certificate whose
-  validity starts at the rollover is accepted only `ClockSkew` later.
+  tried, the one that verified its last such signature first. Validity is
+  checked at `now − ClockSkew`, so a certificate whose validity starts at
+  the rollover is accepted only `ClockSkew` later.
 - **Clock skew cannot be zero** — `ClockSkew: 0` means the 3-minute
   default; one nanosecond is the strictest setting.
 - **XML attribute names** — an element of a response carrying two
-  attributes of one local name (whatever their prefixes), or a prefixed
-  attribute named like a SAML or XML-DSig attribute, is refused: parsers
-  disagree on such documents. No IdP is known to emit them.
+  attributes of one local name (whatever their prefixes), a prefixed
+  attribute named like a SAML or XML-DSig attribute, or an attribute in the
+  `xml` namespace other than `xml:lang`, `xml:space`, `xml:base` and
+  `xml:id`, is refused: parsers disagree on such documents. No IdP is known
+  to emit them.
 - **Legacy browsers** that mishandle `SameSite=None` (Safari on iOS 12 and
   macOS 10.14, Chrome 51–66) drop the binding cookie: their logins fail
   with `ErrMissingBrowserBinding`.
@@ -297,6 +301,29 @@ PKCE. Not supported, and refused where a provider could select them:
   the user meant to start a login: the application must start logins only
   from a same-origin gesture (see
   [docs/saml-sp.md](docs/saml-sp.md#5-sessions-and-logout)).
+- **Login CSRF through a leaked in-flight request** — the IdP redirect URL
+  carries the request ID and the RelayState handle. Whoever learns it
+  while the login is pending (`TransactionTTL`) can sign the victim in as
+  herself, or burn the victim's login with a forged response, from a page
+  the victim visits. `Connection.ResponseOrigins` refuses such POSTs, but
+  only for an IdP whose page lets browsers send its origin: Keycloak's
+  default realm sends `Referrer-Policy: no-referrer`, so browsers post
+  `Origin: null`, which no check can tell from an attacker's page. Keep the
+  TTL short and never log full IdP redirect URLs.
+- **One verification per login** — a response refused after the browser
+  binding and transaction checks consumes the transaction: a legitimate
+  response refused there (an IdP key not imported yet, clock drift) makes
+  the user start the login over.
+- **Stores are trusted for availability and single consumption** — a MAC
+  under `Config.TransactionKeys` protects the content of each transaction,
+  not its existence or its consumed flag: a writer of the stores can delete
+  pending logins, or let a transaction and an assertion be used again. The
+  keys are the records' only integrity protection: a leaked key together
+  with write access to the store allows rebinding again (rotate at once).
+- **Host forwarding** — `CompleteLogin` compares the request's `Host` with
+  the ACS URL's host and reads no forwarding header: behind a proxy that
+  rewrites `Host`, forward the original or restore `r.Host` from the
+  trusted proxy's header.
 - **Stores** — `saml/sp/storage/memory` never purges anything (development
   and tests only); `saml/sp/store/sql` ships no expiry job (its package
   documentation gives the cleanup statements). CI runs the stores on

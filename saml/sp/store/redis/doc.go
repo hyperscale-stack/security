@@ -43,6 +43,10 @@
 //     failover. Choose the persistence settings accordingly.
 //   - Clocks of the SP instances and of Redis should be synchronized: the
 //     expiries are absolute instants.
+//   - Give the SP an ACL limited to its key prefix: each transaction
+//     carries a MAC under samlsp.Config.TransactionKeys, so Redis is trusted
+//     for availability and single consumption only. A transaction saved
+//     before the MAC existed (no field i) fails its login once.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/saml/sp

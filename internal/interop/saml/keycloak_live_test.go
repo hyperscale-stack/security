@@ -272,6 +272,24 @@ func (k *kcAdmin) setClientAttributes(id string, attrs map[string]string) {
 	k.do(http.MethodPut, "/admin/realms/"+k.realm+"/clients/"+id, rep, http.StatusNoContent)
 }
 
+// setRealmHeader sets one of the realm's browser security headers
+// (Realm settings → Security defenses → Headers), keeping the others.
+func (k *kcAdmin) setRealmHeader(name, value string) {
+	k.t.Helper()
+
+	var realm map[string]any
+
+	require.NoError(k.t, json.Unmarshal(k.do(http.MethodGet, "/admin/realms/"+k.realm, nil, http.StatusOK), &realm))
+
+	headers, _ := realm["browserSecurityHeaders"].(map[string]any)
+	if headers == nil {
+		headers = map[string]any{}
+	}
+
+	headers[name] = value
+	k.do(http.MethodPut, "/admin/realms/"+k.realm, map[string]any{"browserSecurityHeaders": headers}, http.StatusNoContent)
+}
+
 // addRSAKey adds an active RS256 key provider with the given priority and
 // returns its component ID.
 func (k *kcAdmin) addRSAKey(name string, priority int) string {
@@ -410,7 +428,10 @@ type kcAttempt struct {
 	relayState string
 	response   string // "" when Keycloak answered no form
 	page       string // Keycloak's last page (diagnostics)
-	at         time.Time
+	// referrerPolicy is the Referrer-Policy header of that page: it decides
+	// the Origin browsers send with the POST (Fetch §3.2).
+	referrerPolicy string
+	at             time.Time
 }
 
 var (
@@ -435,19 +456,20 @@ func (s *kcSP) login(b *kcBrowser, opts samlsp.LoginOptions, user, password stri
 		a.cookie = c.Value
 	}
 
-	page := s.get(b, target)
+	page, policy := s.getPage(b, target)
 
 	if m := kcLoginForm.FindSubmatch(page); m != nil {
 		resp, err := b.client.PostForm(html.UnescapeString(string(m[1])),
 			url.Values{"username": {user}, "password": {password}, "credentialId": {""}})
 		require.NoError(s.t, err)
 
+		policy = resp.Header.Get("Referrer-Policy")
 		page, err = io.ReadAll(resp.Body)
 		require.NoError(s.t, err)
 		require.NoError(s.t, resp.Body.Close())
 	}
 
-	a.page = string(page)
+	a.page, a.referrerPolicy = string(page), policy
 
 	if m := kcField("SAMLResponse").FindSubmatch(page); m != nil {
 		a.response = html.UnescapeString(string(m[1]))
@@ -460,7 +482,8 @@ func (s *kcSP) login(b *kcBrowser, opts samlsp.LoginOptions, user, password stri
 	return a
 }
 
-func (s *kcSP) get(b *kcBrowser, u string) []byte {
+// getPage returns the body and the Referrer-Policy header of u.
+func (s *kcSP) getPage(b *kcBrowser, u string) ([]byte, string) {
 	s.t.Helper()
 
 	resp, err := b.client.Get(u)
@@ -471,7 +494,7 @@ func (s *kcSP) get(b *kcBrowser, u string) []byte {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(s.t, err)
 
-	return body
+	return body, resp.Header.Get("Referrer-Policy")
 }
 
 // complete posts the attempt to the SP's ACS.
@@ -675,6 +698,26 @@ func TestKeycloakLive(t *testing.T) {
 			record(c.name, c.about, s, a, descriptor, id, c.expect)
 		})
 	}
+
+	// K8: the page carrying Keycloak's POST form, with the realm's default
+	// security headers. Its Referrer-Policy decides the Origin browsers
+	// send with the POST (Fetch §3.2): no-referrer makes it "null", which
+	// Connection.ResponseOrigins refuses (audit SAML-02, docs/saml-sp.md).
+	t.Run("K8 POST form referrer policy", func(t *testing.T) {
+		s, _ := newCase("referrer-policy", nil)
+		a := s.login(newKCBrowser(t), samlsp.LoginOptions{}, "alice", password)
+		require.NotEmpty(t, a.response, "Keycloak answered no form: %.300s", a.page)
+		require.Equal(t, "no-referrer", a.referrerPolicy, "a default realm: browsers post Origin: null")
+
+		// The IdP-side remedy: a realm Referrer-Policy that keeps the origin
+		// of cross-origin requests (browsers then post the IdP's origin).
+		k.setRealmHeader("referrerPolicy", "strict-origin-when-cross-origin")
+		t.Cleanup(func() { k.setRealmHeader("referrerPolicy", "no-referrer") })
+
+		a = s.login(newKCBrowser(t), samlsp.LoginOptions{}, "alice", password)
+		require.NotEmpty(t, a.response, "Keycloak answered no form: %.300s", a.page)
+		require.Equal(t, "strict-origin-when-cross-origin", a.referrerPolicy)
+	})
 
 	// K7: statuses and freshness.
 	t.Run("K7 IsPassive without a session", func(t *testing.T) {

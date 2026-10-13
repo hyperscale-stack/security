@@ -545,7 +545,11 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   accepted with a pinned entity ID.
   Nothing in a response extends that trust: the `Issuer` must equal the
   connection's entity ID, and a `KeyInfo` certificate only *selects* one of
-  the trusted certificates (it must equal it exactly).
+  the trusted certificates (it must equal it exactly). A `KeyInfo` without
+  certificate (a `KeyName` or `KeyValue` only, which Core §5.4.5 allows)
+  selects nothing: it is cut from the verified bytes where no digest covers
+  it, after both parsers agreed on its position, and the signature is then
+  verified as one without `KeyInfo`.
 - **What is verified is what is used.** gosaml2 and goxmldsig verify the
   signature and decode the identity from the verified canonical bytes; no
   identity data is read from the raw document, so a comment injected in a
@@ -565,7 +569,10 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   `foo:Destination`) are therefore refused, and the pre-check reads
   unprefixed attributes only. Without this, `Algorithm="…sha256"
   foo:Algorithm="…sha1"` passed the allowlist while goxmldsig digested with
-  SHA-1.
+  SHA-1. The `xml` prefix is bound to the XML namespace, which defines
+  `xml:lang`, `xml:space`, `xml:base` and `xml:id` only: any other `xml:`
+  attribute is refused, since `encoding/xml` matches attributes by local
+  name and read `xml:NotBefore` as the `NotBefore` the pre-check never saw.
 - **Signed Response or signed Assertion** (Profiles §4.1.3.5/§4.1.4.5 as
   amended by errata E93 and E26): a signed Response covers its single
   assertion. The SP metadata omits `WantAssertionsSigned`.
@@ -646,15 +653,55 @@ IdP to send one assertion carrying a persistent NameID:
   `safeReturn` in `examples/saml-sp` implements this.
 - **Unsolicited responses are refused**: IdP-initiated SSO cannot be bound
   to a browser (Profiles §4.1.5, errata E90).
+- **Leaked in-flight requests.** The binding proves that the browser
+  posting a response started the login, not that the IdP's page posted it.
+  The IdP redirect URL carries the request ID (in `SAMLRequest`) and the
+  RelayState handle: whoever learns it while the login is pending — browser
+  history, a proxy or server log, a shared screen — can sign in at the IdP
+  as herself, get the response to the victim's request and auto-post it
+  from a page the victim visits; the victim's browser attaches its
+  `SameSite=None` cookie and ends up signed in as the attacker. The same
+  page can post a forged response that burns the victim's login (see
+  *Single use*). `Connection.ResponseOrigins` (opt-in) closes both: the
+  request's single `Origin` header (Fetch §3.2) — or, from a browser that
+  sends none, its `Referer`'s origin — must be one of the IdP's origins,
+  before the transaction is touched (`ErrOriginMismatch`). It is off by
+  default because browsers send `Origin: null`, which an attacker's page
+  can produce too and which is therefore refused, from a page whose
+  Referrer-Policy is `no-referrer` (or `same-origin`, cross-origin), from a
+  sandboxed page, and after any cross-origin redirect before the POST.
+  Keycloak's default realm sends `Referrer-Policy: no-referrer` from its
+  POST page; a realm header of `strict-origin-when-cross-origin` makes
+  browsers send its origin (Keycloak live run, K8). Without the option, keep
+  `TransactionTTL` as short as the IdP interaction allows, never log full
+  IdP redirect URLs, and show the signed-in account after a login.
 - **Single use.** `CompleteLogin` consumes the transaction atomically — one
-  winner across instances — then records the assertion in the replay cache
-  (Profiles §4.1.4.5), keyed by a digest of the issuer and the assertion ID
-  and retained until the assertion can no longer be accepted (the earlier
-  of `SubjectConfirmationData NotOnOrAfter` + skew and the transaction
-  expiry, plus one minute). Both stores must be shared by every instance,
-  and read from the primary.
+  winner across instances — once the response passed the browser binding,
+  the transaction checks, the status and the Response `InResponseTo`, and
+  before any signature verification: a login allows one verification, and a
+  response refused from then on ends it (`ErrTransactionConsumed` for any
+  later POST; the span carries `samlsp.transaction_consumed`). Only the
+  browser holding the binding cookie gets that far. The assertion then goes
+  to the replay cache (Profiles §4.1.4.5), keyed by a digest of the
+  connection, the issuer and the assertion ID and retained until the
+  assertion can no longer be accepted (the earlier of
+  `SubjectConfirmationData NotOnOrAfter` + skew and the transaction expiry,
+  plus one minute). Both stores must be shared by every instance, and read
+  from the primary.
+- **Transaction integrity.** Each stored transaction carries an
+  HMAC-SHA256 under a server-held key (`Config.TransactionKeys`, required)
+  over its ID, browser binding, payload and expiry, verified in constant
+  time before any stored field is used: a writer of the store can neither
+  rebind a pending login to another browser or request nor relax its
+  `ForceAuthn` or requested context (`ErrTransactionIntegrity`). The stores
+  are trusted for availability and single consumption only: give the SP
+  least-privilege access — a Redis ACL limited to its key prefix, a
+  database user limited to its two tables. The keys are the records' only
+  integrity protection: use keys distinct from the OpenID Connect client's
+  and the session's, and replace a leaked one at once.
 - **`BeginLogin` writes to the store without authentication**: rate-limit
-  the login entry point.
+  the login entry point, and the ACS per client too — a POST that passes
+  the binding check costs one verification.
 - **Gate login initiation.** A page of another site can send the user's
   browser to the login entry point (forced login initiation, a form of
   login CSRF): with an IdP session alive, the user is logged in, or
@@ -669,9 +716,13 @@ IdP to send one assertion carrying a persistent NameID:
   Metadata keep working but stay exposed; a strict deployment refuses a
   missing header too. The browser suite (BR8) shows both
   ([guide](saml-sp.md#5-sessions-and-logout)).
-- **The ACS location is checked**: the request path must be the
-  connection's ACS path (Bindings §3.5.5.2); `Destination` (required on a
-  signed Response) and `Recipient` must equal the configured ACS URL.
+- **The ACS location is checked** (Core §3.2.2, Bindings §3.5.5.2): the
+  request must have been received at the connection's ACS URL — the same
+  escaped path, the same host (`r.Host`, never a forwarding header), no
+  query string — and `Destination` (required on a signed Response) and
+  `Recipient` must equal it. Behind a proxy that rewrites `Host`, forward
+  the original or restore `r.Host` from the trusted proxy's header. A
+  Success `Response` must carry `InResponseTo`, equal to the request ID.
 
 ### Time
 
@@ -720,8 +771,12 @@ default limits about 25–33 ms and 21–28 MiB, about 61–69 ms and 33–43 Mi
 the 1 MiB ceiling; inputs aimed at amplification are refused within 10 ms
 and 9 MiB. When a signature carries no KeyInfo and the connection trusts
 several certificates, each certificate tried re-runs the whole verification:
-at most the three most recent valid ones are tried, which bounds that case
-to three times the costs above. A response carrying hundreds of group
+at most the three most recent valid ones are tried, the one that verified
+the connection's last such signature first, which bounds that case to three
+times the costs above — once per login, since the transaction is consumed
+before the verification. The pre-check runs twice on a response whose
+certificate-less `KeyInfo` it cuts, within the same limits and before any
+store access. A response carrying hundreds of group
 memberships exceeds the element cap (`ErrResponseTooLarge`): filter the
 groups the IdP releases to the application rather than raising limits.
 
