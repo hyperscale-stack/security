@@ -73,6 +73,8 @@ func TestValidateJSON(t *testing.T) {
 		"null":                      `null`,
 		"empty":                     ``,
 		"truncated":                 `{"a":`,
+		"object closed by ]":        `{"a":1]`,
+		"array closed by }":         `{"a":[1}}`,
 		"too deep":                  nest(maxJSONDepth + 1),
 		"unquoted name":             `{a:1}`,
 		"leading comma":             `{,}`,
