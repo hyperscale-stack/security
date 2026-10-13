@@ -323,10 +323,11 @@ func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error)
 
 // pick returns the one valid session among the cookies of the session's
 // name. Several cookies of one name come from a cookie tossed by a sibling
-// host or a more specific path, or from a stale configuration: when more
-// than one is a valid session the request is ambiguous and has none — a
-// tossed cookie can deny a session, never swap it. Cookies that do not open
-// or are expired do not count. An unavailable validator ends the search.
+// host or a more specific path, or from a stale configuration: when they
+// hold different valid sessions the request is ambiguous and has none — a
+// tossed cookie can deny a session, never swap it. Copies of the same
+// session (same ID), cookies that do not open and expired ones do not make
+// it ambiguous. An unavailable validator ends the search.
 func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, error) {
 	if len(found) == 0 {
 		return nil, ErrNoSession
@@ -345,9 +346,9 @@ func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, err
 		s, err := m.load(ctx, cookie.Value)
 
 		switch {
-		case err == nil && chosen != nil:
+		case err == nil && chosen != nil && s.ID != chosen.ID:
 			return nil, fmt.Errorf("%w: several valid session cookies", ErrNoSession)
-		case err == nil:
+		case err == nil && chosen == nil:
 			chosen = s
 		case errors.Is(err, security.ErrUnavailable):
 			return nil, err

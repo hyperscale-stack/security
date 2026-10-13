@@ -233,10 +233,11 @@ func TestManagerRefusesAmbiguousSessionCookies(t *testing.T) {
 	require.ErrorIs(t, err, session.ErrNoSession, "in either order")
 
 	for name, values := range map[string][]string{
-		"garbage first":       {"garbage", victim},
-		"garbage last":        {victim, "garbage"},
-		"expired first":       {stale, victim},
-		"another key's first": {v2Cookie(t, randomKey(t), 2, 2, name, "", samplePayload(t, now)), victim},
+		"the same session twice": {victim, victim},
+		"garbage first":          {"garbage", victim},
+		"garbage last":           {victim, "garbage"},
+		"expired first":          {stale, victim},
+		"another key's first":    {v2Cookie(t, randomKey(t), 2, 2, name, "", samplePayload(t, now)), victim},
 	} {
 		s, err := request(values...)
 		require.NoError(t, err, name)
