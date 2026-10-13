@@ -376,6 +376,35 @@ func TestAuthenticatorSkipsTheRehashWhenTheContextEnded(t *testing.T) {
 	assert.True(t, out.IsAuthenticated())
 }
 
+// downHasher cannot verify: its Verify wraps security.ErrUnavailable, as a
+// hasher calling a remote HSM or pepper service does while it is down.
+type downHasher struct{ recordingHasher }
+
+func (*downHasher) Verify(context.Context, string, string) (bool, error) {
+	return false, fmt.Errorf("hsm: %w", security.ErrUnavailable)
+}
+
+// Review finding 2: a hasher that cannot verify is answered 503 for every
+// account. Answered 401 for unknown accounts and 503 for known ones, the
+// status code would tell which accounts exist during the outage.
+func TestAuthenticatorAnswersAnUnavailableHasherAlikeForEveryAccount(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range attempts("real-hash") {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := basic.NewAuthenticator(c.loader(t), &downHasher{})
+
+			out, err := a.Authenticate(context.Background(), basic.New("alice", c.password))
+
+			require.ErrorIs(t, err, security.ErrUnavailable)
+			assert.Equal(t, security.ErrorClassUnavailable, security.ErrorClass(err))
+			assert.False(t, out.IsAuthenticated())
+		})
+	}
+}
+
 // A canceled request never starts a verification.
 func TestAuthenticatorDoesNotVerifyForACanceledRequest(t *testing.T) {
 	t.Parallel()
