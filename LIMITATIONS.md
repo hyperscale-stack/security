@@ -224,8 +224,8 @@ PKCE. Not supported, and refused where a provider could select them:
   members). RFC 7515 §4 would let a recipient ignore them; this is a local
   policy, with no opt-out: providers that send them are not supported
   (Cloud Foundry UAA and SAP BTP XSUAA put `jku` in their token headers).
-  So is the 4 KiB bound on the decoded header. RSA keys of the JWK Set
-  outside 2048–4096 bits are ignored.
+  The 4 KiB bound on the decoded header has no opt-out either. RSA keys of
+  the JWK Set outside 2048–4096 bits are ignored.
 - **RSA keys without `alg`** — one algorithm per key (RFC 8725 §3.1): an
   RSA JWK without `alg` verifies RS256 only, or the single RSA algorithm of
   `Config.Algorithms`. A provider signing with PS256/384/512, RS384 or
@@ -356,9 +356,11 @@ PKCE. Not supported, and refused where a provider could select them:
   configured key set only: RFC 9068 §4, RFC 8725 §3.10). Issuers that send
   them are not supported: Cloud Foundry UAA and SAP BTP XSUAA put `jku` in
   every token header. `x5t` and `x5t#S256` are accepted and ignored.
-- **RSA key sizes** — signing keys are 2048–4096 bits (`NewSigner` refuses
-  larger ones: go-jose ≥ v4.1.6 JWK Set consumers ignore them), and so are
-  the keys of a remote JWK Set; verification keys given to
+- **RSA key sizes** — signing and published keys are 2048–4096 bits
+  (`NewSigner` and `MarshalJWKS` refuse larger ones: once published, this
+  library's key sets ignore such a key and go-jose ≥ v4.1.6's
+  `JSONWebKeySet`, used by go-oidc among others, refuses the whole JWK Set),
+  and so are the keys of a remote JWK Set; verification keys given to
   `NewStaticJWKS` have no upper bound.
 - **Size bound** — tokens over 16 KiB are refused by default
   (`WithMaxTokenSize` on a `Verifier`); `VerifySignature` always applies

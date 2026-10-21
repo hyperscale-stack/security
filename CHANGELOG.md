@@ -525,10 +525,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   (`jwtsec.NewRemoteJWKS`, the provider's `jwks_uri`) must be of 2048–4096
   bits instead of 2048–8192 — go-jose v4.1.6's default cap, kept as the
   library's own bound: raising `jose.MaxRSAModulusBits` does not move it.
-  An RSA signing key over 4096 bits is refused at construction
+  An RSA key over 4096 bits is refused at construction when it signs
   (`jwtsec.PrivateKey.Validate`, so `NewSigner`,
   `NewOAuth2AccessTokenSigner` and the provider's `KeyRing`; opaque signers
-  through their public half), since its tokens would verify nowhere.
+  through their public half) or is published (`jwtsec.MarshalJWKS`,
+  `KeyRing.Published`): go-jose ≥ v4.1.6's `JSONWebKeySet` (go-oidc relying
+  parties among others) refuses a whole JWK Set holding one, and this
+  library's key sets ignore it, so its tokens would verify nowhere.
 - `examples/oidc-client` bounds its unauthenticated login starts: each
   client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
   each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
@@ -1203,9 +1206,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   size of its primes. One unauthenticated token of at most 16 KiB cost a
   `jwtsec` resource server — or the OpenID Provider's `/authorize`, through
   `id_token_hint` — up to minutes of CPU, and a hostile provider could make
-  each `oidc/client` login cost hours. Every module now requires go-jose
-  v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and `x5u` before
-  go-jose parses a header (see Changed).
+  each `oidc/client` login cost hours. Every module that depends on go-jose
+  now requires v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and
+  `x5u` before go-jose parses a header (see Changed).
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets

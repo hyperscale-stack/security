@@ -2382,12 +2382,13 @@ To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
 go-jose up to v4.1.5 parsed the `jwk` member of a JWS header before any
 check and validated an embedded RSA private key at a cost cubic in its size
 (GHSA-mgcc-cww5-fp2q): one unauthenticated token cost minutes of CPU. Every
-module now requires go-jose v4.1.6, and the library refuses the header
-members that carry or locate a key (RFC 7515 §4.1.2–§4.1.6) before go-jose
-parses the header. RFC 7515 §4 would let a recipient ignore them; refusing
-them is a local policy: keys come from configuration only (RFC 9068 §4,
-OpenID Connect Core §2 and §3.1.3.7, RFC 8725 §3.10). go-jose v4.1.6 also
-caps RSA moduli at 4096 bits, which the library adopts as its own bound.
+module that depends on go-jose now requires v4.1.6, and the library refuses
+the header members that carry or locate a key (RFC 7515 §4.1.2, §4.1.3,
+§4.1.5, §4.1.6) before go-jose parses the header. RFC 7515 §4 would let a
+recipient ignore them; refusing them is a local policy: keys come from
+configuration only (RFC 9068 §4, OpenID Connect Core §2 and §3.1.3.7, RFC
+8725 §3.10). go-jose v4.1.6 also caps RSA moduli at 4096 bits, which the
+library adopts as its own bound.
 
 | | Before | After |
 | --- | --- | --- |
@@ -2397,7 +2398,9 @@ caps RSA moduli at 4096 bits, which the library adopts as its own bound.
 | ID Token JOSE header (`oidc/client`) | go-jose's rules: case-variant names, unpaired surrogates, any size within the 64 KiB token | strict JSON of at most 4 KiB, else `ErrIDTokenMalformed` |
 | `x5t`, `x5t#S256` | ignored | ignored |
 | RSA key of 4097–8192 bits in a fetched JWK Set (`jwtsec.NewRemoteJWKS`, `oidc/client`) | used | ignored, whatever `jose.MaxRSAModulusBits` |
-| RSA signing key over 4096 bits (`jwtsec.NewSigner`, `NewOAuth2AccessTokenSigner`, `PrivateKey.Validate`, an opaque signer's public half, `oidcprovider.KeyRing`) | accepted | `jwtsec.ErrInvalidKey`, `oidcprovider.ErrInvalidKeyRing` |
+| RSA signing key over 4096 bits (`jwtsec.NewSigner`, `NewOAuth2AccessTokenSigner`, `PrivateKey.Validate`, an opaque signer's public half, `oidcprovider.KeyRing.Signing`) | accepted | `jwtsec.ErrInvalidKey`, `oidcprovider.ErrInvalidKeyRing` |
+| RSA key over 4096 bits published (`jwtsec.MarshalJWKS`, `oidcprovider.KeyRing.Published`) | published | `jwtsec.ErrInvalidKey`, `oidcprovider.ErrInvalidKeyRing` — go-jose ≥ v4.1.6's `JSONWebKeySet` (go-oidc relying parties among others) refuses a whole JWK Set holding one |
+| `jwk` header with an algorithm outside the allow-list | `ErrAlgorithmNotAllowed` / `ErrIDTokenAlgorithm` | `ErrMalformedToken` / `ErrIDTokenMalformed`: the header is refused first |
 | RSA verification key given to `jwtsec.NewStaticJWKS` | 2048 bits or more | unchanged |
 
 Issuers that put these members in their token headers are not supported:
@@ -2410,11 +2413,17 @@ Google, Keycloak, Okta, Auth0, Amazon Cognito and Apple send none of them.
    tokens be verified by another library: there is no option to ignore
    them.
 2. **Rotate RSA keys over 4096 bits** to RSA of 2048–4096 bits, ECDSA or
-   EdDSA: signing keys now fail at construction, and a provider's
-   published key over 4096 bits is ignored, so every token it signs fails
-   with an unknown key.
+   EdDSA: signing keys and published keys (a `KeyRing.Published` next key,
+   a `MarshalJWKS` set) now fail at construction. A provider's published
+   key over 4096 bits is ignored by this library's key sets — every token it
+   signs fails with an unknown key — and makes go-jose ≥ v4.1.6's
+   `JSONWebKeySet` (go-oidc relying parties) refuse the provider's whole
+   JWK Set.
 3. **Update error matching**: an ID Token with a `jku`, `x5u` or `jwk`
    header now fails with `ErrIDTokenMalformed`, no longer
-   `ErrIDTokenSignature` or `ErrUnknownSigningKey`.
+   `ErrIDTokenSignature` or `ErrUnknownSigningKey`; a `jwk` header with an
+   algorithm outside the allow-list fails with `ErrMalformedToken` /
+   `ErrIDTokenMalformed`, no longer `ErrAlgorithmNotAllowed` /
+   `ErrIDTokenAlgorithm`.
 4. **Raising `jose.MaxRSAModulusBits`** in your application has no effect
    on these bounds.

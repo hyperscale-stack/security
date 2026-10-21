@@ -50,7 +50,9 @@
 //     ErrKeySetUnavailable — a security.ErrUnavailable, which the
 //     transports answer with 503 / Unavailable — never as an invalid token.
 //   - MarshalJWKS publishes a JWK Set of public signature keys and refuses
-//     private or symmetric material; PublicKey.Validate and
+//     private or symmetric material and RSA keys over 4096 bits (go-jose ≥
+//     v4.1.6's JSONWebKeySet refuses a whole set holding one);
+//     PublicKey.Validate and
 //     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,
 //     RFC 7518 key sizes and curves). NewSigner refuses a key that cannot
 //     sign with its algorithm — KMS and HSM keys (jose.OpaqueSigner) are

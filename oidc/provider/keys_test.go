@@ -70,6 +70,14 @@ func TestKeyRingValidate(t *testing.T) {
 		{"RSA signing key of 4096 bits", oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{
 			{KeyID: "max", Algorithm: jwtsec.RS256, Key: rsaPrivateOfBits(4096)},
 		}}, true},
+		{"RSA key over 4096 bits published (go-jose relying parties refuse the whole set)", oidcprovider.KeyRing{
+			Signing:   []jwtsec.PrivateKey{signingRSA()},
+			Published: []jwtsec.PublicKey{{KeyID: "big", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4097).PublicKey}},
+		}, false},
+		{"RSA key of 4096 bits published", oidcprovider.KeyRing{
+			Signing:   []jwtsec.PrivateKey{signingRSA()},
+			Published: []jwtsec.PublicKey{{KeyID: "max", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4096).PublicKey}},
+		}, true},
 		{"duplicated kid across lists", oidcprovider.KeyRing{
 			Signing:   []jwtsec.PrivateKey{signingRSA()},
 			Published: []jwtsec.PublicKey{{KeyID: "rsa-a", Algorithm: jwtsec.RS256, Key: &rsaKeyB.PublicKey}},

@@ -21,13 +21,15 @@ import (
 const minRSABits = 2048
 
 // maxRSABits is the largest RSA modulus of a remote JWK Set key (a larger
-// one is ignored) and of a signing key (refused). It is go-jose's default
-// jose.MaxRSAModulusBits since v4.1.6 (GHSA-mgcc-cww5-fp2q): it bounds the
-// cost of a key a tenant chooses, and JWK Set consumers built on go-jose —
-// this package's remote key sets and oidc/client included — ignore a larger
-// published key, so a token signed with one would verify nowhere. It is the
-// package's own bound: raising that process-wide variable does not move it.
-// Verification keys given directly (NewStaticJWKS) are not bounded.
+// one is ignored), of a signing key and of a published key (refused). It is
+// go-jose's default jose.MaxRSAModulusBits since v4.1.6
+// (GHSA-mgcc-cww5-fp2q): it bounds the cost of a key a tenant chooses, and a
+// larger published key breaks its consumers — this package's remote key
+// sets and oidc/client ignore it, go-jose's JSONWebKeySet (go-oidc among
+// others) refuses the whole JWK Set — so a token signed with one would
+// verify nowhere. It is the package's own bound: raising that process-wide
+// variable does not move it. Verification keys given directly
+// (NewStaticJWKS) are not bounded.
 const maxRSABits = 4096
 
 // keyFamily is the kind of key an asymmetric algorithm signs with.
@@ -106,8 +108,15 @@ func validateOpaqueSigner(alg Algorithm, s jose.OpaqueSigner) error {
 		return err
 	}
 
-	if key, ok := pub.Key.(*rsa.PublicKey); ok && key.N.BitLen() > maxRSABits {
-		return fmt.Errorf("%w: RSA signing key over %d bits", ErrInvalidKey, maxRSABits)
+	return checkPublishable(pub.Key)
+}
+
+// checkPublishable refuses, wrapping ErrInvalidKey, an RSA key over
+// maxRSABits: once published, go-jose's JSONWebKeySet refuses the whole JWK
+// Set holding it.
+func checkPublishable(key crypto.PublicKey) error {
+	if k, ok := key.(*rsa.PublicKey); ok && k.N != nil && k.N.BitLen() > maxRSABits {
+		return fmt.Errorf("%w: RSA key over %d bits", ErrInvalidKey, maxRSABits)
 	}
 
 	return nil
@@ -185,8 +194,8 @@ func (k PublicKey) Validate() error {
 
 // Validate reports, wrapping [ErrInvalidKey], why k cannot sign with its
 // algorithm: the private counterpart of [PublicKey.Validate] — an
-// *rsa.PrivateKey of 2048 to 4096 bits for RS* and PS* (go-jose ≥ v4.1.6
-// JWK Set consumers ignore a larger published key), an
+// *rsa.PrivateKey of 2048 to 4096 bits for RS* and PS* (see maxRSABits:
+// a larger published key breaks go-jose ≥ v4.1.6 consumers), an
 // *ecdsa.PrivateKey on the algorithm's curve for ES*, an
 // ed25519.PrivateKey for EdDSA. HMAC secrets and public keys are refused.
 func (k PrivateKey) Validate() error {

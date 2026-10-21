@@ -36,6 +36,8 @@ func rsaPrivateOfBits(bits uint) *rsa.PrivateKey {
 }
 
 // publicOpaque is an opaque (KMS, HSM) signer whose public half is pub.
+// Hand-written like noPublicOpaque and limitedOpaque: go-jose's
+// OpaqueSigner is a third-party interface, and a real signer is embedded.
 type publicOpaque struct {
 	jose.OpaqueSigner
 
@@ -101,4 +103,20 @@ func TestSigningKeyRSABound(t *testing.T) {
 
 		require.NoError(t, jwtsec.PublicKey{KeyID: "k", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(8192).PublicKey}.Validate())
 	})
+}
+
+// TestMarshalJWKSRSABound pins that a published JWK Set never holds an RSA
+// key over 4096 bits: go-jose ≥ v4.1.6's JSONWebKeySet — go-oidc relying
+// parties among others — refuses the whole set when one key is larger, so
+// every login of such a relying party would fail. MarshalJWKS refuses it;
+// a key of 4096 bits is published.
+func TestMarshalJWKSRSABound(t *testing.T) {
+	t.Parallel()
+
+	_, err := jwtsec.MarshalJWKS([]jwtsec.PublicKey{{KeyID: "max", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4096).PublicKey}})
+	require.NoError(t, err)
+
+	out, err := jwtsec.MarshalJWKS([]jwtsec.PublicKey{{KeyID: "big", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4097).PublicKey}})
+	require.ErrorIs(t, err, jwtsec.ErrInvalidKey)
+	assert.Nil(t, out, "nothing is published")
 }
