@@ -68,10 +68,16 @@ func TestEd25519PublicKeyValidation(t *testing.T) {
 		require.ErrorIs(t, err, jwtsec.ErrInvalidKey, name)
 	}
 
-	// The largest canonical y (p-1 is small order: p-2) is accepted when
-	// it is not small order — the bound is exact.
-	assert.NoError(t, jwtsec.PublicKey{Algorithm: jwtsec.EdDSA,
-		Key: edKey(t, "ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")}.Validate(), "y=p-2 is canonical")
+	// Canonical encodings next to p are accepted — the bound is exact: y =
+	// p-2 (p-1 is small order), and a y whose low byte and high byte are
+	// those of p but with a middle byte below 0xff.
+	for _, enc := range []string{
+		"ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"edff00ffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"edfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe7f",
+	} {
+		assert.NoError(t, jwtsec.PublicKey{Algorithm: jwtsec.EdDSA, Key: edKey(t, enc)}.Validate(), enc)
+	}
 
 	for range 1000 {
 		pub, _, err := ed25519.GenerateKey(rand.Reader)
