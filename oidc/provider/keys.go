@@ -7,11 +7,18 @@ package oidcprovider
 import (
 	"context"
 	"crypto"
+	"crypto/rsa"
 	"fmt"
 	"slices"
 
 	jwtsec "github.com/hyperscale-stack/security/jwt"
 )
+
+// maxPublishedRSABits is the largest RSA key a key ring may publish: go-jose
+// ≥ v4.1.6's JSONWebKeySet (go-oidc relying parties among others) refuses a
+// whole JWK Set holding a larger one, and jwtsec refuses such a signing key
+// alike.
+const maxPublishedRSABits = 4096
 
 // idTokenAlgorithms are the ID Token signing algorithms the provider
 // supports, RS256 — mandatory (OpenID Connect Core §15.1, Discovery §3) and
@@ -68,7 +75,9 @@ type KeyRing struct {
 //     §4.5, Core §10.1: the kid selects the key);
 //   - a key unfit for its algorithm (jwtsec PrivateKey.Validate and
 //     PublicKey.Validate: RSA under 2048 bits, another curve, an HMAC
-//     secret, a private key in Published);
+//     secret, a private key in Published) and an RSA key over 4096 bits,
+//     signing or published: go-jose ≥ v4.1.6's JSONWebKeySet (go-oidc
+//     relying parties among others) refuses a whole JWK Set holding one;
 //   - one key material under two entries — RFC 8725 §3.1: a key is used
 //     with exactly one algorithm.
 func (r KeyRing) Validate() error {
@@ -98,7 +107,7 @@ func (r KeyRing) Validate() error {
 			return fmt.Errorf("%w: published key %d: %w", ErrInvalidKeyRing, i, err)
 		}
 
-		if err := k.Validate(); err != nil {
+		if err := validPublishedKey(k); err != nil {
 			return fmt.Errorf("%w: published key %d: %w", ErrInvalidKeyRing, i, err)
 		}
 
@@ -138,6 +147,20 @@ func validSigningKey(k jwtsec.PrivateKey, kids map[string]struct{}, algs map[jwt
 	}
 
 	return pub, nil
+}
+
+// validPublishedKey checks one published key: jwtsec PublicKey.Validate,
+// and an RSA key of at most maxPublishedRSABits.
+func validPublishedKey(k jwtsec.PublicKey) error {
+	if err := k.Validate(); err != nil {
+		return fmt.Errorf("oidcprovider: %w", err)
+	}
+
+	if pub, ok := k.Key.(*rsa.PublicKey); ok && pub.N.BitLen() > maxPublishedRSABits {
+		return fmt.Errorf("an RSA key over %d bits", maxPublishedRSABits)
+	}
+
+	return nil
 }
 
 // validKid checks that kid is set and not seen yet, and records it.

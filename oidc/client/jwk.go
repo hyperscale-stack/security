@@ -21,7 +21,11 @@ import (
 const (
 	maxKeys    = 100
 	minRSABits = 2048 // RFC 7518 §3.3
-	maxRSABits = 8192 // bounds the verification cost a provider can impose
+	// maxRSABits bounds the verification cost a provider can impose. It is
+	// go-jose's default jose.MaxRSAModulusBits since v4.1.6, kept as the
+	// package's own bound: raising that process-wide variable does not move
+	// it.
+	maxRSABits = 4096
 )
 
 // privateMembers are the JWK members that carry private or symmetric key
@@ -58,7 +62,7 @@ type verificationKey struct {
 // a set publishing private or symmetric key material is refused as a whole
 // (OpenID Connect Discovery §3: "The JWK Set MUST NOT contain private or
 // symmetric key values"); keys that cannot verify ID Tokens — unknown or
-// malformed, encryption keys, RSA keys outside 2048-8192 bits, other curves
+// malformed, encryption keys, RSA keys outside 2048-4096 bits, other curves
 // — are ignored (RFC 7517 §5).
 func parseKeySet(data []byte) ([]verificationKey, error) {
 	var set struct {

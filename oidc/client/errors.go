@@ -92,7 +92,9 @@ var (
 	// (OpenID Connect Core §3.1.3.7).
 	ErrInvalidIDToken = fmt.Errorf("oidcclient: invalid ID token: %w", security.ErrInvalidCredentials)
 	// ErrIDTokenMalformed reports an ID Token that is not a JWS Compact
-	// Serialization of a strict JSON claims set.
+	// Serialization of a strict JSON claims set, or whose JOSE header is not
+	// a strict JSON object of at most 4 KiB or carries a jwk, x5c, jku or
+	// x5u member (refused before the token is parsed).
 	ErrIDTokenMalformed = idTokenError("malformed")
 	// ErrIDTokenAlgorithm reports a signature algorithm outside the
 	// effective allow-list ("none" and HMAC algorithms are never allowed).

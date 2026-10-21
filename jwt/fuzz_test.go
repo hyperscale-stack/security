@@ -41,9 +41,10 @@ func FuzzVerifyToken(f *testing.F) {
 
 // FuzzVerifyClaims signs arbitrary header and payload bytes with a trusted
 // key, exercising everything behind the signature. Invariants of an
-// accepted token: a JSON object payload, an exp in the future, a nbf not in
-// the future, and a Subject equal to the exact "sub" member — as go-jose's
-// case-sensitive decoder reads it — whatever case variants sit around it.
+// accepted token: a header without jwk, x5c, jku or x5u, a JSON object
+// payload, an exp in the future, a nbf not in the future, and a Subject
+// equal to the exact "sub" member — as go-jose's case-sensitive decoder
+// reads it — whatever case variants sit around it.
 func FuzzVerifyClaims(f *testing.F) {
 	priv, pub := genECDSA(f)
 	now := time.Unix(1_800_000_000, 0)
@@ -55,6 +56,7 @@ func FuzzVerifyClaims(f *testing.F) {
 		{`{"alg":"ES256","kid":"ec-1","crit":["b64"],"b64":false}`, `{"exp":-62135596800}`},
 		{`{"alg":"ES256","kid":"ec-1"}`, `{"sub":"a","Sub":"b","exp":1900000000}`},
 		{`{"alg":"ES256","kid":"ec-1"}`, `{"SUB":"b","exp":1900000000,"nbf":null}`},
+		{`{"alg":"ES256","kid":"ec-1","jwk":{"kty":"EC","crv":"P-256","x":"AQ","y":"AQ"},"x5u":"https://x"}`, `{"sub":"a","exp":1900000000}`},
 	} {
 		f.Add(seed[0], seed[1])
 	}
@@ -63,6 +65,13 @@ func FuzzVerifyClaims(f *testing.F) {
 		std, err := v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, head, payload), nil)
 		if err != nil {
 			return
+		}
+
+		var header map[string]josejson.RawMessage
+		require.NoError(t, josejson.Unmarshal([]byte(head), &header), "an accepted header is one object")
+
+		for _, name := range []string{"jwk", "x5c", "jku", "x5u"} {
+			require.NotContains(t, header, name, "accepted a key-bearing header: %s", head)
 		}
 
 		var members map[string]josejson.RawMessage

@@ -509,6 +509,29 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Changed
 
+- `jwt`, `oidc/client`, `oidc/provider`: a JOSE header holding `jwk`,
+  `x5c`, `jku` or `x5u` is refused, whatever its value — by
+  `jwtsec.Verifier`, `VerifySignature` and `BearerVerifier`
+  (`ErrMalformedToken`), by `oidc/client` for an ID Token
+  (`ErrIDTokenMalformed`, where an ID Token naming another key used to fail
+  with `ErrIDTokenSignature` or `ErrUnknownSigningKey`) and by the OpenID
+  Provider for an `id_token_hint` (`invalid_request`). RFC 7515 §4 would
+  let a recipient ignore them; refusing them is a local policy (keys come
+  from configuration only: RFC 9068 §4, OpenID Connect Core §2 and
+  §3.1.3.7, RFC 8725 §3.10). Issuers that send them, such as Cloud Foundry
+  UAA and SAP BTP XSUAA (`jku`), are no longer supported. `x5t` and
+  `x5t#S256` stay accepted. See [MIGRATION.md](MIGRATION.md).
+- `jwt`, `oidc/client`: an RSA key of a fetched JWK Set
+  (`jwtsec.NewRemoteJWKS`, the provider's `jwks_uri`) must be of 2048–4096
+  bits instead of 2048–8192 — go-jose v4.1.6's default cap, kept as the
+  library's own bound: raising `jose.MaxRSAModulusBits` does not move it.
+  An RSA key over 4096 bits is refused at construction when it signs
+  (`jwtsec.PrivateKey.Validate`, so `NewSigner`,
+  `NewOAuth2AccessTokenSigner` and the provider's `KeyRing`; opaque signers
+  through their public half) or is published (`jwtsec.MarshalJWKS`,
+  `KeyRing.Published`): go-jose ≥ v4.1.6's `JSONWebKeySet` (go-oidc relying
+  parties among others) refuses a whole JWK Set holding one, and this
+  library's key sets ignore it, so its tokens would verify nowhere.
 - `examples/oidc-client` bounds its unauthenticated login starts: each
   client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
   each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
@@ -927,6 +950,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Fixed
 
+- `oidc/client` decoded the JOSE header of an ID Token with go-jose's rules
+  only — case-variant names (`Typ` next to `typ`), unpaired surrogates,
+  any size within the 64 KiB token — although its documentation promised
+  strict JSON everywhere and said that `jku`, `x5u`, `jwk` and `x5c` were
+  ignored, when go-jose parsed `jwk` and `x5c`. The header is now decoded
+  strictly, bounded to 4 KiB, before go-jose parses the token.
 - `oidcclient.Client.StartLogin` capped the binding cookies at four by
   expiring the oldest cookies whose name started with the binding prefix —
   `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could
@@ -1171,6 +1200,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- **go-jose v4.1.6** (GHSA-mgcc-cww5-fp2q, not yet in the Go vulnerability
+  database): go-jose ≤ v4.1.5 parsed a JWS header's `jwk` member before any
+  check and validated an embedded RSA private key at a cost cubic in the
+  size of its primes. One unauthenticated token of at most 16 KiB cost a
+  `jwtsec` resource server — or the OpenID Provider's `/authorize`, through
+  `id_token_hint` — up to minutes of CPU, and a hostile provider could make
+  each `oidc/client` login cost hours. Every module that depends on go-jose
+  now requires v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and
+  `x5u` before go-jose parses a header (see Changed).
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets

@@ -318,8 +318,10 @@ StartLogin / Begin                          HandleCallback / Complete
   asymmetric algorithms only, keys from the issuer's `jwks_uri` through a
   bounded, rate-limited cache, and every claim check including nonce,
   auth_time against `max_age`, acr and at_hash. JSON is decoded strictly
-  (no duplicate member names, no two names differing only by case); claims
-  are read with exact names (`DecodeClaims`).
+  (no duplicate member names, no two names differing only by case), the
+  JOSE header included — bounded, and without `jwk`, `x5c`, `jku` or `x5u`
+  — before go-jose parses the token; claims are read with exact names
+  (`DecodeClaims`).
 - **What stays with the application** — choosing the connection, deploying
   the store, linking an identity (issuer + subject, never email) to an
   account, its own session, and rate limiting login starts. See

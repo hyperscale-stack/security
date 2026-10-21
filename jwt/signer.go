@@ -32,12 +32,12 @@ type Signer interface {
 // NewSigner returns a Signer using the supplied PrivateKey, or, wrapping
 // [ErrInvalidKey], why the key cannot sign with its Algorithm (RFC 7518
 // §3.2-§3.5, RFC 8725 §3.5). Accepted keys:
-//   - an *rsa.PrivateKey of at least 2048 bits for RS*/PS*, an
+//   - an *rsa.PrivateKey of 2048 to 4096 bits for RS*/PS*, an
 //     *ecdsa.PrivateKey on the algorithm's curve for ES*, an
 //     ed25519.PrivateKey for EdDSA (see [PrivateKey.Validate]);
 //   - a jose.OpaqueSigner — a KMS or HSM key, e.g. through go-jose's
 //     cryptosigner.Opaque — that offers the algorithm and whose public half
-//     passes [PublicKey.Validate];
+//     passes [PublicKey.Validate], an RSA one of at most 4096 bits;
 //   - a jose.JSONWebKey, or a pointer to one, holding one of the above;
 //   - for HS256 / HS384 / HS512, a []byte secret of at least 32 / 48 / 64
 //     bytes.

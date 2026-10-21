@@ -16,8 +16,11 @@
 //     (16 KiB, WithMaxTokenSize) is refused before any decoding; only the
 //     canonical compact serialization is accepted (unpadded base64url, no
 //     whitespace, zero pad bits); the header is strict JSON and may not use
-//     the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797); values taken
-//     from a token are clipped in errors and spans.
+//     the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797) nor the jwk,
+//     x5c, jku or x5u members, refused before go-jose parses the header —
+//     a local policy: keys come from the configured key set only (RFC 9068
+//     §4, RFC 8725 §3.10); values taken from a token are clipped in errors
+//     and spans.
 //   - Claims are decoded case-sensitively (RFC 7519 §7.3, §10.1.1): a claims
 //     set whose member names repeat — exactly, through an escape, or under
 //     Unicode case folding — at any depth is refused, as are invalid UTF-8,
@@ -47,7 +50,9 @@
 //     ErrKeySetUnavailable — a security.ErrUnavailable, which the
 //     transports answer with 503 / Unavailable — never as an invalid token.
 //   - MarshalJWKS publishes a JWK Set of public signature keys and refuses
-//     private or symmetric material; PublicKey.Validate and
+//     private or symmetric material and RSA keys over 4096 bits (go-jose ≥
+//     v4.1.6's JSONWebKeySet refuses a whole set holding one);
+//     PublicKey.Validate and
 //     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,
 //     RFC 7518 key sizes and curves). NewSigner refuses a key that cannot
 //     sign with its algorithm — KMS and HSM keys (jose.OpaqueSigner) are

@@ -134,7 +134,7 @@ func WithCacheTTL(d time.Duration) RemoteOption {
 // tokens. The document is strict JSON; each key is validated on its
 // own and an unusable one is ignored without discarding the set (RFC 7517
 // §5): private or symmetric material, use other than sig, key_ops without
-// verify, an unknown key type or curve, RSA outside 2048–8192 bits, an alg
+// verify, an unknown key type or curve, RSA outside 2048–4096 bits, an alg
 // the key cannot verify. A key without alg gets the algorithm its curve
 // implies (EC, Ed25519); an RSA key without alg verifies RS256 when the
 // verifier allows it, otherwise the verifier's only RSA algorithm.

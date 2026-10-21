@@ -14,7 +14,9 @@ import (
 // MarshalJWKS serializes keys as an RFC 7517 §5 JWK Set of public signature
 // keys — the document an authorization server or OpenID Provider serves at
 // its jwks_uri. Every key needs a kid, unique in the set (RFC 7517 §4.5,
-// OIDC Core §10.1), and must pass [PublicKey.Validate]; it is published
+// OIDC Core §10.1), and must pass [PublicKey.Validate] — an RSA key of at
+// most 4096 bits: go-jose ≥ v4.1.6's JSONWebKeySet (go-oidc relying parties
+// among others) refuses a whole set holding a larger one; it is published
 // with its "alg" and "use": "sig" (RFC 7517 §4.2, §4.4). A private or
 // symmetric key, an invalid key, a missing or duplicated kid fail the
 // whole call with [ErrInvalidKey]: nothing is published (OIDC Discovery 1.0
@@ -36,6 +38,10 @@ func MarshalJWKS(keys []PublicKey) ([]byte, error) {
 		seen[k.KeyID] = struct{}{}
 
 		if err := k.Validate(); err != nil {
+			return nil, fmt.Errorf("jwt: key %d: %w", i, err)
+		}
+
+		if err := checkPublishable(k.Key); err != nil {
 			return nil, fmt.Errorf("jwt: key %d: %w", i, err)
 		}
 

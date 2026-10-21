@@ -8,8 +8,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -62,6 +64,20 @@ func TestKeyRingValidate(t *testing.T) {
 		{"RSA signing key below 2048 bits", oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{
 			{KeyID: "small", Algorithm: jwtsec.RS256, Key: rsa1024},
 		}}, false},
+		{"RSA signing key over 4096 bits (unusable by go-jose consumers)", oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{
+			{KeyID: "big", Algorithm: jwtsec.RS256, Key: rsaPrivateOfBits(4097)},
+		}}, false},
+		{"RSA signing key of 4096 bits", oidcprovider.KeyRing{Signing: []jwtsec.PrivateKey{
+			{KeyID: "max", Algorithm: jwtsec.RS256, Key: rsaPrivateOfBits(4096)},
+		}}, true},
+		{"RSA key over 4096 bits published (go-jose relying parties refuse the whole set)", oidcprovider.KeyRing{
+			Signing:   []jwtsec.PrivateKey{signingRSA()},
+			Published: []jwtsec.PublicKey{{KeyID: "big", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4097).PublicKey}},
+		}, false},
+		{"RSA key of 4096 bits published", oidcprovider.KeyRing{
+			Signing:   []jwtsec.PrivateKey{signingRSA()},
+			Published: []jwtsec.PublicKey{{KeyID: "max", Algorithm: jwtsec.RS256, Key: &rsaPrivateOfBits(4096).PublicKey}},
+		}, true},
 		{"duplicated kid across lists", oidcprovider.KeyRing{
 			Signing:   []jwtsec.PrivateKey{signingRSA()},
 			Published: []jwtsec.PublicKey{{KeyID: "rsa-a", Algorithm: jwtsec.RS256, Key: &rsaKeyB.PublicKey}},
@@ -276,5 +292,19 @@ func TestKeyRotationThroughJWKS(t *testing.T) {
 	for _, s := range stages {
 		e.keys.set(s.ring)
 		assert.Equal(t, s.want, kids(jwksKeys(t, e, get("/.well-known/jwks.json"))))
+	}
+}
+
+// rsaPrivateOfBits is an RSA private key whose modulus has bits bits. Its
+// values are not a real key — key-ring validation only reads the sizes —
+// which spares generating multi-kilobit primes.
+func rsaPrivateOfBits(bits uint) *rsa.PrivateKey {
+	n := new(big.Int).Lsh(big.NewInt(1), bits-1)
+	n.Or(n, big.NewInt(1))
+
+	return &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{N: n, E: 65537},
+		D:         big.NewInt(3),
+		Primes:    []*big.Int{big.NewInt(3), big.NewInt(5)},
 	}
 }

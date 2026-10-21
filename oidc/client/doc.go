@@ -40,8 +40,10 @@
 // # Security contract
 //
 //   - The issuer comes from configuration only, never from a token, a
-//     callback parameter or a JOSE header (jku, x5u, jwk and x5c are never
-//     used: keys come from the issuer's jwks_uri only).
+//     callback parameter or a JOSE header. Keys come from the issuer's
+//     jwks_uri only: an ID Token whose header carries jku, x5u, jwk or x5c
+//     is refused before it is parsed (OpenID Connect Core §2), as is a
+//     header over 4 KiB or that is not strict JSON.
 //   - Every outbound request — discovery, JWK Set, token, UserInfo — goes
 //     through the outbound package: https, publicly routable destinations,
 //     bounded time and size. Token and UserInfo requests never follow
@@ -70,9 +72,10 @@
 //     Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
-//   - JSON is parsed strictly: duplicate member names, two names that
-//     differ only by case, invalid UTF-8 and unpaired surrogate escapes are
-//     refused at every nesting level. A lone name that differs from a known
+//   - JSON — the ID Token's JOSE header included — is parsed strictly:
+//     duplicate member names, two names that differ only by case, invalid
+//     UTF-8 and unpaired surrogate escapes are refused at every nesting
+//     level. A lone name that differs from a known
 //     claim only by case (EMAIL_VERIFIED) is another claim (OpenID Connect
 //     Core §14 compares names code point by code point), ignored as Core §2
 //     and RFC 7519 §4 require; encoding/json, which matches struct fields
