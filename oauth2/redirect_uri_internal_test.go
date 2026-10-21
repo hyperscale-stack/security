@@ -123,6 +123,10 @@ func FuzzAuthorizeRedirectTarget(f *testing.F) {
 			t.Fatalf("%q -> unparsable %q: %v", uri, target, err)
 		}
 
+		if u.Fragment != "_" || strings.Count(target, "#") != 1 {
+			t.Fatalf("%q -> %q: the fragment is not reset to _ (RFC 9700 §4.1.3)", uri, target)
+		}
+
 		// The error reports a registered ";" pair, skipped: not one of ours.
 		got, _ := url.ParseQuery(u.RawQuery)
 		for name, values := range want {

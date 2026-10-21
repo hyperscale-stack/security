@@ -477,6 +477,7 @@ func (r *rp) authorize(t *testing.T, opts ...xoauth2.AuthCodeOption) url.Values 
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
 	require.Equal(t, redirectURI, loc.Scheme+"://"+loc.Host+loc.Path)
+	require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_ (RFC 9700 §4.1.3)")
 
 	return loc.Query()
 }

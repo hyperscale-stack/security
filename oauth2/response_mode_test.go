@@ -145,6 +145,7 @@ func TestAuthorizeAcceptsTheDefaultResponseMode(t *testing.T) {
 			}
 
 			assert.NotEmpty(t, loc.Query().Get("code"))
+			assert.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
 		})
 	}
 }

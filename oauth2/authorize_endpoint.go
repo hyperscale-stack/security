@@ -345,6 +345,11 @@ type AuthorizeConfig struct {
 // only to a client [AuthorizeConfig.TrustedRedirect] trusts (RFC 9700
 // §4.11.2).
 //
+// A response answered in the query ends with the fragment "#_", so that
+// browsers do not re-attach the fragment of the authorization request to
+// the client's redirect URI (RFC 9700 §4.1.3): parse the redirect as a URL
+// (RFC 3986), never by splitting its raw text.
+//
 // Every response carries X-Frame-Options: DENY, Content-Security-Policy:
 // frame-ancestors 'none' (added to any policy already set), Cache-Control:
 // no-store and Referrer-Policy: same-origin (RFC 6749 §10.13, RFC 9700
@@ -1279,26 +1284,44 @@ func (s *Server) redirectAuthorizeError(w http.ResponseWriter, r *http.Request, 
 	target.redirect(w, r, params)
 }
 
+// resetFragment ends every authorization response answered in the query:
+// browsers re-attach the fragment of the request to a Location without one,
+// so a fragment the authorization request carried — chosen by whoever
+// crafted the link — would reach the client's redirect page (RFC 9700
+// §4.1.3: "servers MAY prevent browsers from reattaching fragments to
+// redirection URLs by attaching an arbitrary fragment identifier, for
+// example #_").
+const resetFragment = "#_"
+
 // authorizeRedirectTarget builds the redirect URL: params land in the
 // fragment for the implicit flow (RFC 6749 §4.2.2) and in the query string
-// otherwise, appended to the redirect URI as registered — its query "MUST
-// be retained" (RFC 6749 §3.1.2), byte for byte. A validated redirect URI
-// has no fragment and no query parameter named like a response one
-// ([ValidateRedirectURI]). The separator depends on the query component —
+// otherwise, followed by resetFragment, appended to the redirect URI as
+// registered — its query "MUST be retained" (RFC 6749 §3.1.2), byte for
+// byte. A validated redirect URI has no fragment and no query parameter
+// named like a response one ([ValidateRedirectURI]).
+func authorizeRedirectTarget(redirectURI string, params url.Values, useFragment bool) string {
+	if useFragment {
+		return redirectURI + "#" + params.Encode()
+	}
+
+	return redirectURI + querySeparator(redirectURI) + params.Encode() + resetFragment
+}
+
+// querySeparator returns what goes between redirectURI and the parameters
+// added to its query: "?" without a query, nothing after an empty one or a
+// trailing "&", "&" otherwise. It depends on the query component —
 // everything after the first "?" — not on the whole URI: a query whose last
 // value ends with "?" still needs one.
-func authorizeRedirectTarget(redirectURI string, params url.Values, useFragment bool) string {
+func querySeparator(redirectURI string) string {
 	_, query, hasQuery := strings.Cut(redirectURI, "?")
 
 	switch {
-	case useFragment:
-		return redirectURI + "#" + params.Encode()
 	case !hasQuery:
-		return redirectURI + "?" + params.Encode()
+		return "?"
 	case query == "", strings.HasSuffix(query, "&"):
-		return redirectURI + params.Encode()
+		return ""
 	default:
-		return redirectURI + "&" + params.Encode()
+		return "&"
 	}
 }
 

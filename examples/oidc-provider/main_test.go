@@ -173,6 +173,7 @@ func redirected(t *testing.T, resp *http.Response) url.Values {
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(loc.String(), defaultRedirectURI+"?"), loc.String())
+	require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_ (RFC 9700 §4.1.3)")
 
 	return loc.Query()
 }

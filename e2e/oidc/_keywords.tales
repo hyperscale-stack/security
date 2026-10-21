@@ -69,7 +69,8 @@ keyword "discover" {
 # response is "${prefix}code=[^&]+${suffix}", an error response
 # "${prefix}error=<code>&error_description=[^&]*${suffix}" — the redirect
 # URI, then the parameters in the provider's order (sorted), iss (RFC 9207)
-# and state last.
+# and state last, then the fragment "#_" the provider resets (RFC 9700
+# §4.1.3).
 keyword "new_authorization" {
   inputs {
     client_id = string
@@ -107,7 +108,7 @@ keyword "new_authorization" {
     state    = result.new_authorization_discovery.state
     nonce    = result.new_authorization_discovery.nonce
     prefix   = "^${config.redirect_uri}\\?"
-    suffix   = "&iss=${url_encode(config.issuer)}&state=${result.new_authorization_discovery.state}$"
+    suffix   = "&iss=${url_encode(config.issuer)}&state=${result.new_authorization_discovery.state}#_$"
   }
 }
 

@@ -29,6 +29,9 @@ func redirectParams(t *testing.T, rec *httptest.ResponseRecorder, fragment bool)
 
 	loc := mustLocation(t, rec)
 	if !fragment {
+		// RFC 9700 §4.1.3: every query-mode response resets the fragment.
+		require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
+
 		return loc.Query()
 	}
 

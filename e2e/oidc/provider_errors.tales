@@ -154,7 +154,7 @@ scenario "PKCE: code_challenge required, plain refused" {
     expect {
       status = 302
       headers = {
-        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s1$")]
+        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s1#_$")]
       }
     }
   }
@@ -167,7 +167,7 @@ scenario "PKCE: code_challenge required, plain refused" {
     expect {
       status = 302
       headers = {
-        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s2$")]
+        Location = [matches("^${config.redirect_uri}\\?error=invalid_request&error_description=[^&]*&iss=${url_encode(config.issuer)}&state=s2#_$")]
       }
     }
   }

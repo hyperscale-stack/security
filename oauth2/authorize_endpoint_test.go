@@ -483,7 +483,7 @@ func TestAuthorizeImplicitRefusedWhenNotEnabled(t *testing.T) {
 
 	loc := mustLocation(t, rec)
 	assert.Equal(t, oauth2.CodeUnsupportedResponseType, loc.Query().Get("error"))
-	assert.Empty(t, loc.Fragment)
+	assert.Equal(t, "_", loc.Fragment, "answered in the query, the fragment reset")
 }
 
 func TestAuthorizeImplicitConsentDenied(t *testing.T) {

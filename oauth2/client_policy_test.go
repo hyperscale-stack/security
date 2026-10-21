@@ -645,6 +645,8 @@ func TestAuthorizeChecksTheClientGrantTypes(t *testing.T) {
 
 				params, err = url.ParseQuery(loc.Fragment)
 				require.NoError(t, err)
+			} else {
+				assert.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
 			}
 
 			if tc.allowed {
