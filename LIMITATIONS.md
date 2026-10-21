@@ -54,12 +54,18 @@ future refactor phases.
   their lifetime short. See
   [docs/security-considerations.md](docs/security-considerations.md#offline-jwt-access-tokens).
 - **Redis Cluster** — not supported by `oauth2/store/redis`: its Lua
-  scripts touch keys of several hash slots. Use a standalone server or a
-  Sentinel primary.
-- **SQL expired-row cleanup** — `oauth2/store/sql` ships no expiry job:
-  rows — consumed and abandoned authorization codes included — stay until
-  an operator deletes those past `expires_at` (see the package
-  documentation for a safe order).
+  scripts touch keys of several hash slots (a token, its family, its
+  replacement), and lookups by token hash cannot place them in one slot.
+  Use a standalone server or a Sentinel primary: `New` refuses a Cluster or
+  Ring client, and `Store.CheckDeployment` a server in cluster mode; a
+  proxy sharding keys behind one endpoint is not detected and fails
+  closed at runtime.
+- **SQL expired-row cleanup is scheduled by you** — `oauth2/store/sql`
+  runs no job of its own: rows — consumed and abandoned authorization codes
+  included — stay until `Store.PurgeExpired` deletes those past
+  `expires_at`. Schedule it, and add the `expires_at` indexes the package
+  documentation lists: `Schema` creates none (MySQL has no `CREATE INDEX IF
+  NOT EXISTS`, and building one at boot would block a populated table).
 - **In-memory store growth** — `oauth2/storage/memory` never purges
   anything: consumed and expired codes, expired tokens and revoked
   families stay for the process lifetime. It is meant for development and
@@ -76,9 +82,20 @@ future refactor phases.
 - **SQL schema upgrades are manual** — `Store.Migrate` creates missing
   tables and never alters an existing one: the columns a release adds (#80's
   `consumed`, #83's `issuer` and `extension_data`, the codes'
-  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`) and the
-  binary key columns of MySQL are added or converted with the statements
-  MIGRATION.md lists, through your migration tool.
+  `redirect_uri_omitted`, the refresh tokens' `family_issued_at`), the
+  binary key columns and the InnoDB engine of MySQL are added or converted
+  with the statements MIGRATION.md lists, through your migration tool.
+  `Migrate` — and `Store.CheckDeployment`, for a schema applied by your own
+  tool — refuses a MySQL database still missing the engine or the binary
+  keys; a missing column fails the statements that use it, closed.
+- **Deployment checks see what the server reports** — `CheckDeployment`
+  verifies on MySQL the engine, the key columns and the `sql_mode` of one
+  pooled connection (set the strict mode server-wide or in the DSN), and on
+  Redis what `INFO` reports. It checks nothing on PostgreSQL:
+  `synchronous_commit=off` can lose an acknowledged revocation in a crash,
+  but it can be set per role, session or transaction, so one connection's
+  value proves nothing — keep it on. Replicas, proxies and eviction set
+  after boot are not seen.
 - **A leaked code can be burned** — codes are consumed before they are
   validated, so a party holding a code (but not its client's credentials or
   PKCE verifier) can make the legitimate exchange fail with
@@ -569,8 +586,8 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Stores** — `saml/sp/storage/memory` (development and tests) sweeps its
   expired records every 64 writes on its own clock (`memory.WithClock`) and
   is otherwise unbounded: it holds the login rate times `TransactionTTL`.
-  `saml/sp/store/sql` ships no expiry job (its package documentation gives
-  the cleanup statements). CI runs the stores on
+  `saml/sp/store/sql` deletes expired rows only when its `PurgeExpired`
+  runs: schedule it. CI runs the stores on
   SQLite and miniredis, and (`make test-backends`) their races,
   conformance suite and payload round trip on PostgreSQL 16.15, MySQL
   8.0.46 (end of life since April 2026) and Redis 7.4.11

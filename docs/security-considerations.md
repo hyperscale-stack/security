@@ -395,7 +395,7 @@ keys by `kid` against a JWKS provider (static or remote).
   Redis family key, or a SQL family row deleted before its `expires_at`,
   lets the in-flight exchange recreate the family active. Stores keep a
   consumed code, hashed and flagged, at least until it expires — Redis
-  expires the key with the code, SQL rows stay until your cleanup, the
+  expires the key with the code, SQL rows stay until `PurgeExpired`, the
   memory store keeps them for good — so a replay is recognized for the
   code's lifetime (`AuthorizeConfig.CodeTTL`, 10 minutes by default); a
   later one is refused like any replay, and revokes nothing. A failed
@@ -788,7 +788,11 @@ MySQL tables use InnoDB, Redis is a standalone server or a Sentinel primary
 (not Cluster) running 6.0 or later with `maxmemory-policy noeviction`, no
 family row or key is deleted before it expires, and durability is the
 backend's: a revocation acknowledged by a primary that fails before
-persisting or replicating it can be lost in a failover. CI checks these
+persisting or replicating it can be lost in a failover. `CheckDeployment`
+checks what the server reports of them — on MySQL the engine, the binary
+key columns and a strict `sql_mode` (`Migrate` runs it), on Redis the
+version, the eviction policy and cluster mode — and the Redis store's
+`New` refuses a Cluster or Ring client. CI checks these
 guarantees on SQLite and, in its "Store suites (real backends)" job
 (`make test-backends`), on PostgreSQL 16, MySQL 8.0 and 8.4, MariaDB 11.4
 (`internal/interop/sqlstores`) and Redis 7.4 (the conformance suite of
@@ -1917,12 +1921,17 @@ span catalog.
 - [ ] Give `ServerConfig.Storage` and every grant the same store, and wire
       `ServerConfig.OnError` and `grant.Config.OnError` to the same sink:
       failed family revocations are reported there.
-- [ ] With `store/sql`, periodically delete rows past `expires_at` —
-      consumed authorization codes included, never a family row before
-      it — in the deadlock-free order the package documentation gives;
-      with `store/redis`, run Redis 6.0+ standalone or behind Sentinel with
-      `maxmemory-policy noeviction`, and read from the primary only. A
-      revoked family whose state is lost before it expires can be revived.
+- [ ] With `store/sql`, schedule `Store.PurgeExpired` with the current
+      time — every few minutes — after adding the `expires_at` indexes the
+      package documentation lists; with `store/redis`, run Redis 6.0+
+      standalone or behind Sentinel with `maxmemory-policy noeviction`, and
+      read from the primary only. A revoked family whose state is lost
+      before it expires can be revived.
+- [ ] Call `CheckDeployment` on every SQL and Redis store at boot when
+      your migration tool, not `Migrate`, applies the schema (`Migrate`
+      runs it), and treat its error as fatal: on MySQL, InnoDB tables,
+      binary oauth2 key columns and a strict `sql_mode`; on Redis, `+info`
+      for the check, version 6.0+, `noeviction`, no cluster mode.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
 - [ ] Bound refresh-token families with `grant.Config.RefreshFamilyTTL` —
@@ -1967,8 +1976,8 @@ span catalog.
       `CheckURL`, `RootCAs`). Enable `InsecureAllowSHA1` only for an IdP
       that cannot do better, with a plan to remove it.
 - [ ] SAML: share the transaction store and the replay cache between
-      instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and purge
-      expired SQL rows. Give the SP least-privilege access to them: a Redis
+      instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and schedule
+      the SQL store's `PurgeExpired`. Give the SP least-privilege access to them: a Redis
       ACL limited to its key prefix, a database user limited to its two
       tables.
 - [ ] SAML: load `samlsp.Config.TransactionKeys` from your secret store —

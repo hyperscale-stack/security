@@ -3298,3 +3298,45 @@ acknowledged before a crash could be lost. The DDL now names
    requirements; it lists every one it finds unmet. When you apply
    `Schema` with your own migration tool, call `store.CheckDeployment(ctx)`
    at boot, before serving traffic.
+
+### `oauth2/store/redis`: `New` refuses Cluster and Ring clients
+
+The store's scripts touch several keys at once — a token, its family, its
+replacement. A Redis Cluster puts them in different hash slots, and a
+client-side `redis.Ring` on different shards: a Cluster client failed every
+script with CROSSSLOT, a Ring client found a token only when it shared its
+family's shard. `New` now refuses both, with an error matching
+`redisstore.ErrDeploymentRequirement`, and `Store.CheckDeployment` checks
+the server (Redis 6.0 or later, `maxmemory-policy noeviction`, no cluster
+mode).
+
+|                                      | Before                         | After                                             |
+| ------------------------------------ | ------------------------------ | ------------------------------------------------- |
+| `New(*redis.ClusterClient)`          | accepted, scripts fail at runtime | error matching `ErrDeploymentRequirement`      |
+| `New(*redis.Ring)`                   | accepted, lookups fail at random | error matching `ErrDeploymentRequirement`       |
+| `New(*redis.Client)` (standalone, Sentinel failover client) | accepted | unchanged                                |
+| `Store.CheckDeployment(ctx)`         | —                              | new: checks the server through `INFO`            |
+
+To migrate:
+
+1. Run the store on a standalone Redis or the primary of a Sentinel
+   deployment (`redis.NewClient`, `redis.NewFailoverClient`).
+2. Call `store.CheckDeployment(ctx)` at boot. A restricted ACL user needs
+   `+info` for it (`INFO` is in the `@dangerous` category); without it the
+   call returns the server's NOPERM error — verify the requirements by hand
+   and skip the call. A `maxmemory-policy` other than `noeviction` is
+   refused: a "revoked" family key evicted within its retention lets the
+   next issuance revive the family.
+
+### `oidc/client`: `TransactionStore.Consume` validates its keys
+
+`Consume` of the memory, SQL and Redis stores now refuses, before any I/O, a
+state hash or binding hash that is not 64 lowercase hex digits, with an
+error matching `oidcclient.ErrInvalidTransaction`, as the
+`TransactionStore` contract states. `Client.Complete` always passes
+canonical keys: nothing changes for it.
+
+To migrate a `TransactionStore` of your own: call
+`oidcclient.ValidateStoreKey` on both keys first in `Consume`, and run
+`storetest.RunConformance`, which now checks it
+(`ConsumeRefusesInvalidKeys`).

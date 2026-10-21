@@ -242,8 +242,9 @@ Keycloak run hit this with a freshly generated realm key.
     it the SP's with `memory.WithClock` when that is not `time.Now`; it
     holds the login rate times `TransactionTTL`, so rate-limit
     `BeginLogin`;
-  - `saml/sp/store/sql` ships no job, and its package documentation gives
-    the cleanup statements;
+  - `saml/sp/store/sql` deletes expired rows when its `PurgeExpired` runs:
+    schedule it, and add the `expires_at` indexes its package documentation
+    lists;
   - `saml/sp/store/redis` uses key expiry, so Redis must run with
     `noeviction`.
 
