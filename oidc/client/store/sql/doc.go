@@ -49,11 +49,15 @@
 // Consume deletes the transactions it reaches; an abandoned login keeps
 // its row until [Store.PurgeExpired] deletes it, so schedule that call.
 // The DDL creates no index — MySQL has no CREATE INDEX IF NOT EXISTS — so
-// add one on expires_at through your migration tool: without it, the purge
-// scans the table and, on MySQL, locks every row it scans, holding back the
-// logins starting or completing meanwhile. A transaction lives minutes,
-// so the table stays small when the purge runs every few minutes; the
-// purge is one DELETE, not batched.
+// add one on expires_at through your migration tool:
+//
+//	CREATE INDEX oidc_client_transactions_expires_at ON oidc_client_transactions (expires_at);
+//
+// Without it the purge scans the table and, on MySQL, waits for every row
+// a login completing meanwhile holds; it runs at READ COMMITTED, so it does
+// not lock the gaps it scans, which would hold back the logins starting. A
+// transaction lives minutes, so the table stays small when the purge runs
+// every few minutes; the purge is one DELETE, not batched.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oidc/client

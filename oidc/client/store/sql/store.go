@@ -202,9 +202,20 @@ func (s *Store) lockRow(ctx context.Context, tx *sql.Tx, stateHash string) (*oid
 // PurgeExpired deletes the transactions expired at now — abandoned logins,
 // which Consume never reaches — and returns how many it deleted. Schedule
 // it, every few minutes for instance: nothing else deletes them. It is one
-// DELETE statement (see the package documentation for its index).
+// DELETE statement (see the package documentation for its index), in a
+// transaction at READ COMMITTED on PostgreSQL and MySQL. On MySQL, READ
+// COMMITTED keeps it from locking the gaps it scans, which would block the
+// logins starting meanwhile; a server logging statements
+// (binlog_format=STATEMENT) refuses it, and the purge fails, closed.
 func (s *Store) PurgeExpired(ctx context.Context, now time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, s.dialect.rebind(deleteExpired), now.Unix())
+	tx, err := s.db.BeginTx(ctx, s.dialect.purgeTxOptions())
+	if err != nil {
+		return 0, fmt.Errorf("sqlstore: purge expired transactions: begin: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+	res, err := tx.ExecContext(ctx, s.dialect.rebind(deleteExpired), now.Unix())
 	if err != nil {
 		return 0, fmt.Errorf("sqlstore: purge expired transactions: %w", err)
 	}
@@ -212,6 +223,10 @@ func (s *Store) PurgeExpired(ctx context.Context, now time.Time) (int64, error) 
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf(errAffectedContext, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("sqlstore: purge expired transactions: commit: %w", err)
 	}
 
 	return n, nil

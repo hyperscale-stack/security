@@ -38,6 +38,9 @@ type Dialect interface {
 	// checkDeployment verifies the requirements of the package
 	// documentation the database reports (see [Store.CheckDeployment]).
 	checkDeployment(ctx context.Context, db *sql.DB) error
+	// purgeTxOptions are the options of the [Store.PurgeExpired]
+	// transaction.
+	purgeTxOptions() *sql.TxOptions
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -117,6 +120,10 @@ func (postgres) migrationLock() string {
 
 func (postgres) tableOptions() string { return "" }
 
+func (postgres) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 // checkDeployment checks nothing: the store pins READ COMMITTED itself.
 func (postgres) checkDeployment(context.Context, *sql.DB) error { return nil }
 
@@ -138,6 +145,12 @@ func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8
 
 func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
 
+// purgeTxOptions pins READ COMMITTED: at REPEATABLE READ the purge locks
+// the gaps it scans, blocking the inserts of Save until it commits.
+func (mysql) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 type sqlite struct{}
 
 func (sqlite) Name() string           { return "sqlite" }
@@ -155,6 +168,8 @@ func (sqlite) txOptions() *sql.TxOptions { return nil }
 func (sqlite) migrationLock() string { return "" }
 
 func (sqlite) tableOptions() string { return "" }
+
+func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
 
 // checkDeployment checks nothing: SQLite has one engine.
 func (sqlite) checkDeployment(context.Context, *sql.DB) error { return nil }

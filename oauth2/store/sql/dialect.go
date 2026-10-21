@@ -49,6 +49,15 @@ type Dialect interface {
 	// checkDeployment verifies the requirements of the package
 	// documentation the database reports (see [Store.CheckDeployment]).
 	checkDeployment(ctx context.Context, db *sql.DB) error
+	// purgeStatements are the statements [Store.PurgeExpired] runs, one
+	// per table — codes, access tokens, refresh tokens, then families —
+	// each deleting at most a batch of the rows expired before a second.
+	purgeStatements() []string
+	// purgeArgs are the arguments of a purge statement: the second rows
+	// must have expired before, and the batch size.
+	purgeArgs(before int64, limit int) []any
+	// purgeTxOptions are the options of a purge batch's transaction.
+	purgeTxOptions() *sql.TxOptions
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -143,6 +152,16 @@ func (postgres) keyType(length int) string { return varchar(length) }
 
 func (postgres) tableOptions() string { return "" }
 
+func (postgres) purgeStatements() []string               { return purgeSubqueries }
+func (postgres) purgeArgs(before int64, limit int) []any { return subqueryArgs(before, limit) }
+
+// purgeTxOptions pins READ COMMITTED: the outer DELETE then re-checks the
+// expiry of a row a concurrent transaction changed, where REPEATABLE READ
+// or SERIALIZABLE would abort the batch with a serialization failure.
+func (postgres) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 // checkDeployment checks nothing: the store pins READ COMMITTED itself,
 // and synchronous_commit — off, it can lose an acknowledged revocation in a
 // crash — can be set per role, session or transaction, so the value one
@@ -177,6 +196,27 @@ func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8
 
 func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
 
+// purgeStatements are single-table DELETEs with LIMIT, which MySQL accepts
+// (unlike LIMIT in an IN subquery): the statement locks and re-checks each
+// row it deletes on its latest version.
+func (mysql) purgeStatements() []string {
+	return []string{
+		`DELETE FROM oauth2_auth_codes WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_access_tokens WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_refresh_tokens WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_token_families WHERE expires_at < ? LIMIT ?`,
+	}
+}
+
+func (mysql) purgeArgs(before int64, limit int) []any { return []any{before, limit} }
+
+// purgeTxOptions pins READ COMMITTED: at the server's default, REPEATABLE
+// READ, a batch locks every record it scans and the gaps between them,
+// blocking the inserts of /authorize and /token until it commits.
+func (mysql) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 func (mysql) txOptions() *sql.TxOptions { return nil }
 
 // migrationLock is empty: MySQL commits every DDL statement on its own,
@@ -198,6 +238,13 @@ func (sqlite) insertFamily() string { return insertFamilyOnConflict }
 func (sqlite) keyType(length int) string { return varchar(length) }
 
 func (sqlite) tableOptions() string { return "" }
+
+func (sqlite) purgeStatements() []string               { return purgeSubqueries }
+func (sqlite) purgeArgs(before int64, limit int) []any { return subqueryArgs(before, limit) }
+
+// purgeTxOptions are the defaults: SQLite's single writer serializes the
+// batches with every other write.
+func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
 
 // checkDeployment checks nothing: SQLite has one engine, and a missing busy
 // timeout fails operations closed (SQLITE_BUSY).

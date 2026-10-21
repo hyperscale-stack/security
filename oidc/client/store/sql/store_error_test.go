@@ -194,6 +194,10 @@ func TestBackendErrors(t *testing.T) {
 	_, err = store.Consume(t.Context(), tx.StateHash, tx.BindingHash, at)
 	requireBackendError(t, err)
 	requireBackendError(t, store.Migrate(t.Context()))
+
+	_, err = store.PurgeExpired(t.Context(), at)
+	requireBackendError(t, err)
+	require.ErrorContains(t, err, "sqlstore: purge expired transactions: begin: ")
 }
 
 // TestSaveRefusesInvalidBeforeIO checks Validate runs before any

@@ -32,6 +32,15 @@ type Dialect interface {
 	// checkDeployment verifies the requirements of the package
 	// documentation the database reports (see [Store.CheckDeployment]).
 	checkDeployment(ctx context.Context, db *sql.DB) error
+	// purgeStatements are the statements [Store.PurgeExpired] runs, one
+	// per table, each deleting at most a batch of the rows expired before
+	// a second.
+	purgeStatements() []string
+	// purgeArgs are the arguments of a purge statement: the second rows
+	// must have expired before, and the batch size.
+	purgeArgs(before int64, limit int) []any
+	// purgeTxOptions are the options of a purge batch's transaction.
+	purgeTxOptions() *sql.TxOptions
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -94,6 +103,14 @@ func (postgres) migrationLock() string {
 
 func (postgres) tableOptions() string { return "" }
 
+func (postgres) purgeStatements() []string { return purgeSubqueries }
+
+func (postgres) purgeArgs(before int64, limit int) []any { return []any{before, limit, before} }
+
+// purgeTxOptions pins READ COMMITTED: a serialization failure would abort
+// a batch under REPEATABLE READ or SERIALIZABLE.
+func (postgres) purgeTxOptions() *sql.TxOptions { return readCommitted }
+
 // checkDeployment checks nothing PostgreSQL reports.
 func (postgres) checkDeployment(context.Context, *sql.DB) error { return nil }
 
@@ -113,6 +130,22 @@ func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8
 
 func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
 
+// purgeStatements are single-table DELETEs with LIMIT, which MySQL accepts
+// (unlike LIMIT in an IN subquery).
+func (mysql) purgeStatements() []string {
+	return []string{
+		`DELETE FROM samlsp_transactions WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM samlsp_used_assertions WHERE expires_at < ? LIMIT ?`,
+	}
+}
+
+func (mysql) purgeArgs(before int64, limit int) []any { return []any{before, limit} }
+
+// purgeTxOptions pins READ COMMITTED: at REPEATABLE READ a batch locks
+// the gaps it scans, blocking the inserts of SaveTransaction and
+// MarkAssertionUsed until it commits.
+func (mysql) purgeTxOptions() *sql.TxOptions { return readCommitted }
+
 type sqlite struct{}
 
 func (sqlite) Name() string           { return "sqlite" }
@@ -124,6 +157,14 @@ func (sqlite) rebind(q string) string { return q }
 func (sqlite) migrationLock() string { return "" }
 
 func (sqlite) tableOptions() string { return "" }
+
+func (sqlite) purgeStatements() []string { return purgeSubqueries }
+
+func (sqlite) purgeArgs(before int64, limit int) []any { return []any{before, limit, before} }
+
+// purgeTxOptions are the defaults: SQLite's single writer serializes the
+// batches with every other write.
+func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
 
 // checkDeployment checks nothing: SQLite has one engine.
 func (sqlite) checkDeployment(context.Context, *sql.DB) error { return nil }
