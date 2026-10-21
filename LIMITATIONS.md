@@ -445,6 +445,20 @@ PKCE. Not supported, and refused where a provider could select them:
   tried, the one that verified its last such signature first. Validity is
   checked at `now − ClockSkew`, so a certificate whose validity starts at
   the rollover is accepted only `ClockSkew` later.
+- **Metadata keys** — each imported certificate is trusted as a signing key
+  by itself (no chain building): a signing `KeyDescriptor` carrying several
+  certificates, such as the IdP's certificate chain, or two `KeyInfo`
+  elements, is refused (`ErrInvalidMetadata`). An IdP that publishes its
+  chain cannot be followed through `FetchIdentityProviderMetadata` or
+  `MetadataSource` (each refresh fails; the last good document is served up
+  to `MaxStale`): import an edited copy keeping only the signing
+  certificate — never a CA certificate, which would become a signing key.
+  The SAML Metadata Interoperability Profile §2.6.1 is not followed where
+  it would accept more: the certificate, not only its key, is trusted (a
+  certificate re-issued over the same key must be imported first), its
+  validity window is enforced, and `ds:KeyValue`-only keys are not
+  imported. See
+  [docs/saml-sp.md](docs/saml-sp.md#34-metadata-trust).
 - **Clock skew cannot be zero** — `ClockSkew: 0` means the 3-minute
   default; one nanosecond is the strictest setting.
 - **XML attribute names** — an element of a response carrying two

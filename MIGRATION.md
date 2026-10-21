@@ -2557,3 +2557,43 @@ To migrate:
 
 1. Nothing for tokens of common issuers. An issuer whose headers exceed
    4 KiB — custom header members — must move that data to the claims.
+
+### `saml/sp`: one certificate per signing KeyDescriptor in IdP metadata
+
+`ParseIdentityProviderMetadata` — and so `FetchIdentityProviderMetadata`
+and `MetadataSource` — trusted every `X509Certificate` found anywhere under
+a signing `KeyDescriptor`. An IdP publishing its certificate chain there
+made the issuing CA's key a trusted SAML signing key: whoever held it could
+sign any user in. Each imported certificate is trusted as a signing key by
+itself (no chain is built), so a signing `KeyDescriptor` now holds one
+certificate (SAML V2.0 Metadata Interoperability Profile §2.5.1):
+
+| Signing (or use-less) `KeyDescriptor` | Before | After |
+| --- | --- | --- |
+| one `X509Certificate`, possibly repeated | imported | unchanged |
+| several different certificates (a chain, a CA next to the signing certificate, two certificates of one key), in one `X509Data` or several | each imported as a signing key | refused: `ErrInvalidMetadata` |
+| two `ds:KeyInfo` elements | their certificates imported | refused: `ErrInvalidMetadata` |
+| a certificate outside `ds:KeyInfo/ds:X509Data/ds:X509Certificate` (in `EncryptionMethod` content, under another element or namespace) | imported | ignored (never trusted) |
+| `use="encryption"` descriptors | ignored | unchanged (never read, whatever they carry) |
+| one key per `KeyDescriptor`, several descriptors (rollover) | imported | unchanged |
+
+To migrate:
+
+1. Re-import every administrator-provided metadata document once: an
+   `ErrInvalidMetadata` saying "a KeyDescriptor carries several
+   certificates" names the problem.
+2. Edit such a document to keep, in that `KeyDescriptor`, **only the
+   certificate the IdP signs with**. Delete the CA and intermediate
+   certificates. Do **not** move them to `KeyDescriptor`s of their own:
+   every listed certificate is trusted as a signing key, so that would
+   re-open the flaw. A second signing key (a rollover) gets its own
+   `KeyDescriptor`. A self-signed IdP certificate marked `CA:TRUE` is the
+   signing certificate: keep it.
+3. An IdP that *publishes* its chain at its metadata URL can no longer be
+   followed through `FetchIdentityProviderMetadata` or `MetadataSource`:
+   each refresh fails (watch the errors of the `samlsp.FetchMetadata` span,
+   class `invalid_metadata`), the last good document is served for at most
+   `MaxStale`, then logins fail with `ErrMetadataExpired`. Import an edited
+   copy with `ParseIdentityProviderMetadata` and follow the IdP's key
+   rollovers by hand, or have the IdP publish its signing certificate
+   alone.

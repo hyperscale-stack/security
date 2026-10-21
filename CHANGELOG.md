@@ -1999,3 +1999,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   record, so that none is revived.
   `storetest.RunConformance` checks that every store compares its keys byte
   for byte (`KeysAreComparedExactly`).
+- `saml/sp` trusted every certificate of a signing `KeyDescriptor` in IdP
+  metadata, CA certificates of a published chain included: whoever held
+  the issuing CA's key could sign any user in on that connection. A
+  signing `KeyDescriptor` carrying several certificates, or two `KeyInfo`
+  elements, is now refused with `ErrInvalidMetadata` (SAML V2.0 Metadata
+  Interoperability Profile §2.5.1), and certificates are read at
+  `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only, matched by namespace.
+  See MIGRATION.md: keep only the signing certificate, never a CA in a
+  descriptor of its own.

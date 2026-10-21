@@ -434,7 +434,12 @@ func (cfg MetadataSourceConfig) validate() error {
 // rollover is picked up at the next refresh. When refreshes fail, the last
 // such document keeps being served for at most MaxStale after it was
 // fetched, never past its validUntil (Metadata §4.3.2, errata E94); then
-// IdentityProvider fails closed with [ErrMetadataExpired].
+// IdentityProvider fails closed with [ErrMetadataExpired]. A document the
+// import refuses — for instance one whose KeyDescriptor carries the IdP's
+// certificate chain — counts as a failed refresh (an error on the
+// samlsp.FetchMetadata span): an IdP that publishes such metadata cannot be
+// followed through its URL; import an edited copy with
+// [ParseIdentityProviderMetadata] instead.
 //
 // A MetadataSource is safe for concurrent use.
 type MetadataSource struct {

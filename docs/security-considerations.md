@@ -907,7 +907,13 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   (`FetchIdentityProviderMetadata`, `MetadataSource`) or configured
   directly. Importing is the act of trust: a signature embedded in the
   metadata is not verified, and an aggregate (`EntitiesDescriptor`) is only
-  accepted with a pinned entity ID.
+  accepted with a pinned entity ID. Each imported certificate is trusted as
+  a signing key by itself, without chain building: a signing
+  `KeyDescriptor` carrying several certificates (a chain) is refused, and a
+  CA or intermediate certificate must never be listed, not even in a
+  descriptor of its own — its key would sign any user in (Metadata
+  Interoperability Profile §2.5.1; the §2.6.1 deviations are listed in
+  [saml-sp.md](saml-sp.md#34-metadata-trust)).
   Nothing in a response extends that trust: the `Issuer` must equal the
   connection's entity ID, and a `KeyInfo` certificate only *selects* one of
   the trusted certificates (it must equal it exactly). A `KeyInfo` without

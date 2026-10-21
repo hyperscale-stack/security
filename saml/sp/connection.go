@@ -55,6 +55,13 @@ type IdentityProvider struct {
 	// verified as goxmldsig implements it (ASN.1 DER signature values): IdPs
 	// that follow XML Signature 1.1 (raw r‖s values) fail closed. The
 	// certificate validity window is enforced at verification time.
+	//
+	// Each certificate is trusted as a signing key by itself: no chain is
+	// built and no certificate extension is read. Never list a CA or
+	// intermediate certificate: whoever holds its key could then sign any
+	// user in. The trust unit is the certificate, not its key (unlike the
+	// Metadata Interoperability Profile §2.6.1): a certificate re-issued
+	// over the same key is refused until it is imported.
 	SigningCertificates []*x509.Certificate
 
 	// WantAuthnRequestsSigned mirrors the IdP metadata attribute (Metadata

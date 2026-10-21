@@ -126,6 +126,42 @@ Keycloak run hit this with a freshly generated realm key.
 - **No response content triggers a fetch.** A response signed by an
   unknown key is refused; it does not refresh the metadata, so an attacker
   cannot make the SP fetch.
+- **One certificate per signing `KeyDescriptor`.** The SP trusts each
+  imported certificate as a signing key by itself: it builds no chain and
+  reads no certificate extension. It reads the certificate of each
+  `KeyDescriptor` whose `use` is `signing` or absent at
+  `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only (namespaces, not
+  prefixes, are matched; a certificate anywhere else is never trusted). A
+  descriptor carrying two different certificates — typically the signing
+  certificate and its issuing CA — or two `KeyInfo` elements is refused
+  with `ErrInvalidMetadata` (Metadata Interoperability Profile §2.5.1: one
+  key, one certificate per `KeyDescriptor`; XML Signature 1.1 §4.5.4 gives
+  the certificates of an `X509Data` no order, so the SP cannot tell the end
+  entity apart). Keep only the certificate the IdP signs with. **Never list
+  a CA or intermediate certificate, not even in a descriptor of its own**:
+  every listed certificate is a signing key, and whoever holds that CA's
+  key could then sign any user in. A self-signed IdP certificate marked
+  `CA:TRUE` (as `openssl req -x509` makes them) is fine: it is the signing
+  certificate. An IdP that *publishes* its chain cannot be followed through
+  `FetchIdentityProviderMetadata` or `MetadataSource`: every refresh fails
+  (`ErrInvalidMetadata` on the `samlsp.FetchMetadata` span), the last good
+  document is served up to `MaxStale`, then logins fail with
+  `ErrMetadataExpired`. Import an edited copy with
+  `ParseIdentityProviderMetadata` (and follow its rollovers by hand), or
+  have the IdP fixed.
+- **Deviations from the Metadata Interoperability Profile §2.6.1**, which
+  asks consumers to treat each published key as valid and nothing else. All
+  of them fail closed:
+  - the trust unit is the certificate, not its key: a signature's
+    `KeyInfo` certificate must equal an imported one byte for byte, so a
+    certificate re-issued over the same key is refused until it is
+    imported (goxmldsig selects certificates by equality);
+  - the certificate validity window is enforced at verification (see
+    [§3.3](#33-time)), which §2.6.1 forbids: an IdP signing under an
+    expired certificate is refused (§2.5.1 recommends unexpired
+    certificates);
+  - a key published only as `ds:KeyValue` is not imported: publish its
+    certificate.
 - **Refresh and failure** of a `MetadataSource`:
 
 | Setting | Default | Meaning |
@@ -437,8 +473,9 @@ TAB payload lands on the attacker's site.
 
 ### IdP signing key
 
-1. The IdP publishes the new certificate next to the current one (errata
-   E68: any listed key may sign).
+1. The IdP publishes the new certificate next to the current one, in a
+   `KeyDescriptor` of its own (errata E68: any listed key may sign; one
+   certificate per descriptor, see [§3.4](#34-metadata-trust)).
 2. The SP learns it. With imported metadata, re-import the document on
    every instance. With a `MetadataSource`, wait one refresh interval
    (`MaxRefresh` at worst) plus the clock skew. Each instance refreshes on
@@ -517,7 +554,7 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | `ErrResponseTooLarge` | too many attributes or groups; an oversized body | filter what the IdP releases |
 | `ErrMalformedResponse`, `ErrInvalidAssertion`, `ErrMalformedRequest` | a response shape the SP refuses (several assertions, an unknown condition, a non-POST request) | configure the IdP to send one assertion with a persistent NameID |
 | `*StatusError` (`ErrResponseStatus`) | the IdP refused: `NoPassive` (an `IsPassive` login without a session), `AuthnFailed`, `RequestDenied`, `InvalidNameIDPolicy` | per status; its `AppState` and `ConnectionID` identify the login |
-| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; refreshes have failed for `MaxStale` | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID |
+| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; a signing `KeyDescriptor` carrying several certificates (a chain) or two `KeyInfo`; refreshes have failed for `MaxStale` (watch the `samlsp.FetchMetadata` span errors) | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID; keep only the certificate the IdP signs with — never move a CA or intermediate certificate into a descriptor of its own (see [§3.4](#34-metadata-trust)) |
 | `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; the IdP wants signed requests and the SP has no key | configure the transaction keys; configure `SigningKey` and `SigningCertificate` |
 
 ## 9. Testing your integration

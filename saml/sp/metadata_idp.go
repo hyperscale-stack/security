@@ -52,15 +52,30 @@ type MetadataOptions struct {
 //   - the entity ID;
 //   - the first SingleSignOnService of the HTTP-Redirect binding (none is an
 //     error), validated like [IdentityProvider.SSOURL];
-//   - every X509Certificate of the KeyDescriptors whose use is "signing" or
-//     absent (encryption-only keys are ignored), deduplicated, subject to
-//     the key policy (RSA ≥ 2048 bits, ECDSA P-256/384/521), 1 to 8 of them;
+//   - the certificate of each KeyDescriptor whose use is "signing" or
+//     absent (encryption-only keys are ignored), read at
+//     ds:KeyInfo/ds:X509Data/ds:X509Certificate only, deduplicated, subject
+//     to the key policy (RSA ≥ 2048 bits, ECDSA P-256/384/521), 1 to 8 of
+//     them. Each is trusted as a signing key by itself: no chain is built.
+//     A KeyDescriptor carrying two different certificates — typically the
+//     signing certificate and its issuing CA — or two ds:KeyInfo elements
+//     is refused (SAML V2.0 Metadata Interoperability Profile §2.5.1: one
+//     key, one certificate per KeyDescriptor): keep only the certificate the
+//     IdP signs with, and never list a CA or intermediate certificate, in
+//     that descriptor or in one of its own. A key published only as
+//     ds:KeyValue is not imported;
 //   - WantAuthnRequestsSigned;
 //   - validUntil and cacheDuration: the smallest of the root, entity and
 //     role values (errata E76). Expired metadata yields ErrMetadataExpired
 //     (Metadata §4.3.2, errata E94).
 //
 // Other failures match [ErrInvalidMetadata].
+//
+// Deviations from the Metadata Interoperability Profile §2.6.1, all failing
+// closed: a signature's KeyInfo certificate must equal an imported
+// certificate (the certificate, not only its key, is trusted); the
+// certificate validity window is enforced at verification; ds:KeyValue keys
+// are not imported. See [IdentityProvider].SigningCertificates.
 func ParseIdentityProviderMetadata(data []byte, opts MetadataOptions) (*IdentityProvider, error) {
 	idp, _, err := parseIdentityProviderMetadata(data, opts)
 
@@ -300,7 +315,10 @@ func containsToken(list, tok string) bool {
 	return false
 }
 
-// signingCertificates collects the signing certificates of a role.
+// signingCertificates collects the signing certificates of a role: the
+// certificate of each KeyDescriptor whose use is "signing" or absent
+// (encryption-only descriptors are neither read nor checked), deduplicated
+// across descriptors.
 func signingCertificates(role *etree.Element) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 
@@ -313,19 +331,13 @@ func signingCertificates(role *etree.Element) ([]*x509.Certificate, error) {
 			continue
 		}
 
-		for _, el := range kd.FindElements(".//X509Certificate") {
-			if el.NamespaceURI() != nsDSig {
-				continue
-			}
+		cert, err := keyDescriptorCertificate(kd)
+		if err != nil {
+			return nil, err
+		}
 
-			cert, err := parseCertificateText(el.Text())
-			if err != nil {
-				return nil, err
-			}
-
-			if !containsCert(certs, cert) {
-				certs = append(certs, cert)
-			}
+		if cert != nil && !containsCert(certs, cert) {
+			certs = append(certs, cert)
 		}
 	}
 
@@ -334,6 +346,75 @@ func signingCertificates(role *etree.Element) ([]*x509.Certificate, error) {
 	}
 
 	return certs, nil
+}
+
+// errSeveralCertificates refuses a KeyDescriptor carrying more than one
+// certificate. Every certificate the SP imports is trusted as a signing key
+// by itself — no chain is built — so a chain would make its CA a signing
+// key; and the certificates of an X509Data have no order (XML Signature 1.1
+// §4.5.4), so the end entity cannot be told apart safely.
+const errSeveralCertificates = "a KeyDescriptor carries several certificates: keep only the certificate the IdP " +
+	"signs with, never a CA or intermediate certificate (every listed certificate is trusted as a signing key)"
+
+// keyDescriptorCertificate returns the certificate of a KeyDescriptor (nil
+// when it has none, e.g. a ds:KeyValue only): the SAML V2.0 Metadata
+// Interoperability Profile §2.5.1 places each key in its own KeyDescriptor,
+// as one X509Certificate. It is read at ds:KeyInfo/ds:X509Data/
+// ds:X509Certificate only, each level matched by namespace: a certificate
+// anywhere else is no key representation and is never trusted. The
+// KeyDescriptor must hold at most one ds:KeyInfo (Metadata §2.4.1.1), and
+// its X509Data may repeat one certificate, never carry two.
+func keyDescriptorCertificate(kd *etree.Element) (*x509.Certificate, error) {
+	var (
+		found    *x509.Certificate
+		keyInfos int
+	)
+
+	for _, ki := range kd.ChildElements() {
+		if !inNS(ki, nsDSig, "KeyInfo") {
+			continue
+		}
+
+		if keyInfos++; keyInfos > 1 {
+			return nil, fmt.Errorf("%w: a KeyDescriptor carries several KeyInfo elements", ErrInvalidMetadata)
+		}
+
+		for _, el := range x509Certificates(ki) {
+			cert, err := parseCertificateText(el.Text())
+			if err != nil {
+				return nil, err
+			}
+
+			switch {
+			case found == nil:
+				found = cert
+			case !found.Equal(cert):
+				return nil, fmt.Errorf("%w: %s", ErrInvalidMetadata, errSeveralCertificates)
+			}
+		}
+	}
+
+	return found, nil
+}
+
+// x509Certificates returns the ds:X509Certificate children of the
+// ds:X509Data children of keyInfo.
+func x509Certificates(keyInfo *etree.Element) []*etree.Element {
+	var out []*etree.Element
+
+	for _, data := range keyInfo.ChildElements() {
+		if !inNS(data, nsDSig, "X509Data") {
+			continue
+		}
+
+		for _, el := range data.ChildElements() {
+			if inNS(el, nsDSig, "X509Certificate") {
+				out = append(out, el)
+			}
+		}
+	}
+
+	return out
 }
 
 // parseCertificateText decodes a base64 DER certificate, white space
