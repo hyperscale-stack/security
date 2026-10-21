@@ -5,6 +5,7 @@
 package sqlstores_test
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -25,14 +26,59 @@ var mysql84FoundRows = backend{
 	name: "mysql84-client-found-rows", engine: engineMySQL, env: envMySQL84DSN, clientFoundRows: true,
 }
 
-// conformancePool returns a pool on dsn sized for one conformance case:
-// RunConformance builds a store per case on the parent test, so each pool
-// keeps a single idle connection once its case is over.
-func conformancePool(t *testing.T, driver, dsn string) *sql.DB {
+// conformancePoolSize is the number of connections a conformance case
+// races on: every one is open before the case starts.
+const conformancePoolSize = 8
+
+// conformancePools returns the pool opener of a RunConformance run: each
+// call returns a pool on dsn whose conformancePoolSize connections are open
+// and idle before the case starts, so the racers of the concurrency cases
+// overlap for real instead of queuing on connection setup (with one warm
+// connection, a check-then-act consumption passes them). RunConformance
+// builds every case's store on the parent test, which keeps the pools
+// until it ends: each call closes the pool of the previous case, so a run
+// holds conformancePoolSize connections, not one set per case. That relies
+// on RunConformance running its cases one after the other, as it does.
+func conformancePools(t *testing.T) func(driver, dsn string) *sql.DB {
 	t.Helper()
 
-	db := open(t, driver, dsn, 8)
-	db.SetMaxIdleConns(1)
+	var previous *sql.DB
+
+	return func(driver, dsn string) *sql.DB {
+		if previous != nil {
+			_ = previous.Close()
+		}
+
+		previous = warmPool(t, driver, dsn, conformancePoolSize)
+
+		return previous
+	}
+}
+
+// warmPool returns a pool of size connections on dsn, every one of them
+// opened — each held until all are, so that they are distinct — and
+// returned to the pool idle.
+func warmPool(t *testing.T, driver, dsn string, size int) *sql.DB {
+	t.Helper()
+
+	db := open(t, driver, dsn, size)
+	conns := make([]*sql.Conn, 0, size)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	for i := range size {
+		c, err := db.Conn(ctx)
+		require.NoError(t, err, "opening connection %d of the pool", i)
+
+		conns = append(conns, c)
+	}
+
+	for _, c := range conns {
+		require.NoError(t, c.Close())
+	}
+
+	require.Equal(t, size, db.Stats().Idle, "idle connections of the warmed pool")
 
 	return db
 }
@@ -46,10 +92,12 @@ func TestOAuth2Conformance(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			b.server(t)
 
+			pool := conformancePools(t)
+
 			storetest.RunConformance(t, func() oauth2.Storage {
 				driver, dsn := b.namespace(t)
 
-				s, err := oauth2sql.New(conformancePool(t, driver, dsn), oauth2Dialect(b.engine))
+				s, err := oauth2sql.New(pool(driver, dsn), oauth2Dialect(b.engine))
 				require.NoError(t, err)
 				require.NoError(t, s.Migrate(t.Context()))
 
@@ -276,9 +324,11 @@ func TestOAuth2MySQLUpgrade(t *testing.T) {
 			})
 
 			t.Run("conformance", func(t *testing.T) {
+				pool := conformancePools(t)
+
 				storetest.RunConformance(t, func() oauth2.Storage {
 					driver, dsn := b.namespace(t)
-					db := conformancePool(t, driver, dsn)
+					db := pool(driver, dsn)
 					execAll(t, db, legacyMySQLSchema...)
 					execAll(t, db, upgrade...)
 
