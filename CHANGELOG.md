@@ -1279,6 +1279,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   session without a `"sub"` string is refused before the loader is called,
   as the `PrincipalLoader` contract required. See
   [MIGRATION.md](MIGRATION.md).
+- `grpcsec` recovered no panic, and neither does grpc-go: one panic in an
+  extractor, an authenticator, a loader or a voter — a typed-nil
+  dereference, say — ended the process on one unauthenticated RPC. The
+  authentication and authorization interceptors now recover the panics of
+  the security pipeline and answer `Internal`, with a `panic recovered`
+  span event that never holds the panic value. The handler's own panics
+  are not recovered.
 
 ### Removed
 

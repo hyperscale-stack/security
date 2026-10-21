@@ -193,6 +193,12 @@ the middleware runs inside a route, never the raw path.
 | `grpcsec.Authenticate` | Per RPC, unary and stream interceptors          | `rpc.method` (string), `security.authenticated` (bool)       | inherited from the core |
 | `grpcsec.Authorize`    | `UnaryAuthorize` / `StreamAuthorize`            | none directly — delegates to `security.AccessDecisionManager.Decide` | inherited from the core |
 
+A panic of the security pipeline — an extractor, an authenticator, a
+voter — is recovered (grpc-go recovers none, so it would end the process)
+and answered `Internal`: the span gets the error status with the
+description `_OTHER` and a `panic recovered` event, never the panic value,
+which may hold a credential.
+
 `grpcsec` deliberately does **not** open an `rpc` span — that belongs to
 `otelgrpc`, which you compose alongside these interceptors. `rpc.method` is
 the full method gRPC routed the call to; behind a `grpc.UnknownServiceHandler`

@@ -21,6 +21,9 @@ import (
 // the interceptor chain so the context already carries an authentication,
 // and install [StreamAuthorize] too — or use [AuthorizeServerOptions].
 //
+// A panic of the decision manager or of a voter is recovered and answered
+// as an internal error, like a panic of the authentication pipeline.
+//
 // On grant the handler runs. On deny it answers with its [WithErrorMapper],
 // else the mapper of the authentication interceptor before it, else
 // [DefaultErrorMapper]: codes.PermissionDenied for an authenticated
@@ -83,7 +86,10 @@ func decide(ctx context.Context, adm security.AccessDecisionManager, attrs []sec
 
 	auth, _ := security.FromContext(ctx)
 
-	if err := adm.Decide(ctx, auth, attrs); err != nil {
+	err := contain(span, func() error {
+		return adm.Decide(ctx, auth, attrs) //nolint:wrapcheck // classified by refusal
+	})
+	if err != nil {
 		return refusal(auth, err)
 	}
 

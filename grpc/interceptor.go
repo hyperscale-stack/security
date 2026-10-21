@@ -12,6 +12,8 @@ import (
 	"github.com/hyperscale-stack/security"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 )
@@ -22,6 +24,27 @@ const tracerName = "github.com/hyperscale-stack/security/grpc"
 // context or no authentication (nil or a typed nil) without an error: an
 // internal error.
 var errEngineContract = errors.New("grpcsec: the engine returned no context or authentication")
+
+// errPipelinePanic reports a panic of the security pipeline — an
+// extractor, an authenticator, a voter —, recovered: an internal error.
+// It never carries the panic value, which may hold a credential.
+var errPipelinePanic = errors.New("grpcsec: panic in the security pipeline")
+
+// contain runs fn and turns a panic into errPipelinePanic: grpc-go recovers
+// no panic, so one would end the process. The span records the error status
+// and a "panic recovered" event, never the panic value.
+func contain(span trace.Span, fn func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			span.AddEvent("panic recovered")
+			span.SetStatus(otelcodes.Error, security.ErrorClassOther)
+
+			err = errPipelinePanic
+		}
+	}()
+
+	return fn()
+}
 
 // authenticate runs the engine against the RPC metadata and returns the
 // enriched context with the carrier, whose staged writes the caller sends.
@@ -35,7 +58,16 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 	ctx = withClientAddr(ctx)
 	carrier := NewCarrier(ctx)
 
-	newCtx, auth, err := engine.Process(ctx, carrier)
+	var (
+		newCtx context.Context
+		auth   security.Authentication
+	)
+
+	err := contain(span, func() (err error) {
+		newCtx, auth, err = engine.Process(ctx, carrier)
+
+		return err //nolint:wrapcheck // wrapped below
+	})
 
 	// "no extractor configured" is tolerated only when the caller opted into
 	// anonymous fallback; every other error is fatal.
@@ -91,6 +123,12 @@ func withClientAddr(ctx context.Context) context.Context {
 // [security.AttemptLimiter] keys on, unless an interceptor before it stored
 // one with [security.WithClientAddr] — do so behind a proxy (Envoy, a load
 // balancer terminating the connection), or every RPC counts as the proxy's.
+//
+// A panic of the security pipeline — an extractor, an authenticator — is
+// recovered and answered as an internal error (codes.Internal with the
+// default mapper): grpc-go recovers no panic, and one unauthenticated RPC
+// would otherwise end the process. The handler's own panics are not
+// recovered.
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside
