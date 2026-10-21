@@ -37,8 +37,13 @@ const (
 	EdDSA Algorithm = "EdDSA"
 )
 
-// supportedAlgorithms is the default Config.Algorithms.
+// supportedAlgorithms are the algorithms Config.Algorithms may list.
 var supportedAlgorithms = []Algorithm{RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384, ES512, EdDSA}
+
+// defaultAlgorithms is the default Config.Algorithms: RS256, the algorithm
+// of a client that registered none (OpenID Connect Core §3.1.3.7 step 7),
+// which every provider supports (Discovery §3).
+var defaultAlgorithms = []Algorithm{RS256}
 
 // AuthMethod is a token endpoint client authentication method (OpenID
 // Connect Core §9).
@@ -159,9 +164,17 @@ type Config struct {
 	// MaxTransactionTTL.
 	TransactionTTL time.Duration
 
-	// Algorithms restricts the ID Token signature algorithms; empty means
-	// every asymmetric algorithm. The effective set is its intersection
-	// with the provider's id_token_signing_alg_values_supported.
+	// Algorithms are the ID Token signature algorithms accepted: the
+	// id_token_signed_response_alg registered for the client — RS256 when
+	// empty. OpenID Connect Core §3.1.3.7 step 7: "The alg value SHOULD be
+	// the default of RS256 or the algorithm sent by the Client in the
+	// id_token_signed_response_alg parameter during Registration". A
+	// provider signing its ID Tokens with another algorithm (ES256, PS256,
+	// EdDSA…) needs it listed here, else its logins fail with
+	// ErrIDTokenAlgorithm; list several only while the provider moves from
+	// one to another. The effective set is the intersection with the
+	// provider's id_token_signing_alg_values_supported: New fails with
+	// ErrInvalidMetadata when it is empty.
 	//
 	// One algorithm per key (RFC 8725 §3.1): an RSA JWK without "alg" is
 	// used for RS256 only — or for the single RSA algorithm of the
@@ -478,7 +491,7 @@ func isScopeToken(s string) bool {
 
 func normalizeAlgorithms(in []Algorithm) ([]Algorithm, error) {
 	if len(in) == 0 {
-		return slices.Clone(supportedAlgorithms), nil
+		return slices.Clone(defaultAlgorithms), nil
 	}
 
 	out := make([]Algorithm, 0, len(in))

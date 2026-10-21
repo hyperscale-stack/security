@@ -3081,3 +3081,26 @@ To migrate:
    `BASE_URL` is http).
 2. Over https — including `https://localhost` — drop it: the `__Host-`
    cookie works on any https origin.
+
+### `oidc/client`: ID Tokens are expected in RS256 unless `Config.Algorithms` says otherwise
+
+OpenID Connect Core §3.1.3.7 step 7: "The alg value SHOULD be the default
+of RS256 or the algorithm sent by the Client in the
+id_token_signed_response_alg parameter during Registration". An empty
+`Config.Algorithms` used to accept every asymmetric algorithm the provider
+listed; it now means RS256, which every provider supports (Discovery §3).
+
+| Provider signing ID Tokens with | `Config.Algorithms` | Before | After |
+| --- | --- | --- | --- |
+| RS256 | empty | logins succeed | unchanged |
+| ES256, PS256, EdDSA, RS384… | empty | logins succeed | every login fails with `ErrIDTokenAlgorithm` (`New` fails with `ErrInvalidMetadata` when the provider does not list RS256) |
+| any | the algorithm(s) listed | only those | unchanged |
+
+To migrate:
+
+1. Find the algorithm each provider signs your client's ID Tokens with —
+   the `id_token_signed_response_alg` of its registration, or the `alg` of
+   an ID Token it issued.
+2. For any algorithm but RS256, set `Config.Algorithms` to it, for example
+   `[]oidcclient.Algorithm{oidcclient.ES256}`. List two only while the
+   provider moves from one to the other.

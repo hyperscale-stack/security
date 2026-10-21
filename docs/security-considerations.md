@@ -1424,7 +1424,9 @@ are attacker-influenced.
   header the proxy forwards: preserve it, or give `Complete` the public
   URL.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
-  is returned: asymmetric algorithms only (HMAC and `none` refused), `typ`
+  is returned: RS256 — or the algorithm registered for the client, named in
+  `Config.Algorithms` (OpenID Connect Core §3.1.3.7 step 7) — asymmetric
+  algorithms only (HMAC and `none` refused), `typ`
   absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from
   the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk` and `x5c`
   are refused, see below) through a bounded cache that refetches once, rate

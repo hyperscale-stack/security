@@ -266,7 +266,8 @@ func (md *providerMetadata) negotiate(cfg Config) ([]Algorithm, error) {
 	}
 
 	if len(algs) == 0 {
-		return nil, fmt.Errorf("%w: no ID Token signature algorithm in common", ErrInvalidMetadata)
+		return nil, fmt.Errorf("%w: no ID Token signature algorithm in common with Config.Algorithms "+
+			"(RS256 by default: set it to the algorithm registered for the client)", ErrInvalidMetadata)
 	}
 
 	return algs, nil

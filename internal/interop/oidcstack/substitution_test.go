@@ -112,7 +112,9 @@ func TestResignedIDTokensAreRefused(t *testing.T) {
 		}, oidcclient.ErrIDTokenType, true, nil},
 		{"PS256 with the RS256 key (one algorithm per key)", oidcclient.AuthOptions{}, func(t *testing.T, _ *op, tok string) string {
 			return resign(t, tok, "PS256", rootKey(), nil, nil)
-		}, oidcclient.ErrUnknownSigningKey, true, nil},
+		}, oidcclient.ErrUnknownSigningKey, true, func(cfg *oidcclient.Config) {
+			cfg.Algorithms = []oidcclient.Algorithm{oidcclient.RS256, oidcclient.PS256} // PS256 accepted, never with the RS256 key
+		}},
 		{"kid of another issuer's key", oidcclient.AuthOptions{}, func(t *testing.T, _ *op, tok string) string {
 			return resign(t, tok, "RS256", rsaKeys()[6], func(h map[string]any) { h["kid"] = "tenant-a" }, nil)
 		}, oidcclient.ErrUnknownSigningKey, true, nil},

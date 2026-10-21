@@ -1039,6 +1039,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   unless `RedirectURL` is plain http, which is accepted on a loopback host
   only (breaking for a configuration combining it with an https redirect
   URI; see MIGRATION.md).
+- `oidc/client` expects ID Tokens signed with RS256 unless
+  `Config.Algorithms` names another algorithm (breaking): an empty
+  `Algorithms` used to accept every asymmetric algorithm the provider
+  listed. OpenID Connect Core §3.1.3.7 step 7: the algorithm "SHOULD be the
+  default of RS256 or the algorithm sent by the Client in the
+  id_token_signed_response_alg parameter during Registration". A provider
+  signing with ES256, PS256, EdDSA… needs `Config.Algorithms` set to that
+  algorithm; the errors say so.
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in

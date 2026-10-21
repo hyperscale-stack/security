@@ -27,9 +27,10 @@
 // Supported: response modes query and form_post; client authentication
 // client_secret_basic (identifier and secret form-urlencoded first, RFC 6749
 // §2.3.1), client_secret_post and none (public clients, which require the
-// provider to advertise S256); ID Tokens signed with RS256/384/512,
-// PS256/384/512, ES256/384/512 or EdDSA (Ed25519); RFC 9207 authorization
-// response issuer identification; JWK Set rollover.
+// provider to advertise S256); ID Tokens signed with RS256 — the default
+// (OpenID Connect Core §3.1.3.7 step 7) — or, once Config.Algorithms names
+// it, RS384/512, PS256/384/512, ES256/384/512 or EdDSA (Ed25519); RFC 9207
+// authorization response issuer identification; JWK Set rollover.
 //
 // Not supported, and refused: implicit and hybrid flows, the fragment
 // response mode, HMAC-signed (HS256/384/512) or unsigned ID Tokens,

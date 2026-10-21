@@ -83,8 +83,9 @@ func TestCodeFlowAgainstOurProvider(t *testing.T) {
 
 // TestCodeFlowSigningAlgorithms checks every ID Token algorithm a client
 // may register (Registration §2 id_token_signed_response_alg): our provider
-// signs with the issuer's key of that algorithm, our client verifies the
-// signature and the at_hash computed with the algorithm's hash (Core
+// signs with the issuer's key of that algorithm, our client — configured
+// with that algorithm (Config.Algorithms, Core §3.1.3.7 step 7) — verifies
+// the signature and the at_hash computed with the algorithm's hash (Core
 // §3.1.3.6).
 func TestCodeFlowSigningAlgorithms(t *testing.T) {
 	t.Parallel()
@@ -99,7 +100,8 @@ func TestCodeFlowSigningAlgorithms(t *testing.T) {
 			t.Parallel()
 
 			name := strings.ToLower(string(alg))
-			c := o.rp(t, conn(name, o.base, "rp-"+name, secret, oidcclient.AuthMethodClientSecretBasic))
+			c := o.rp(t, conn(name, o.base, "rp-"+name, secret, oidcclient.AuthMethodClientSecretBasic),
+				func(cfg *oidcclient.Config) { cfg.Algorithms = []oidcclient.Algorithm{oidcclient.Algorithm(alg)} })
 
 			id, err := o.login(t, c, oidcclient.AuthOptions{})
 			require.NoError(t, err)

@@ -282,6 +282,14 @@ func loginWith(t *testing.T, plan rpPlan, module, issuer, secret string) (string
 		cfg.ClientSecret = oidcclient.NewSecret(secret)
 	}
 
+	// The ID Token algorithm of the static registration
+	// (id_token_signed_response_alg): RS256, the default, unless the module
+	// signs with another one — the client then verifies it (OpenID Connect
+	// Core §3.1.3.7 step 7) instead of refusing the algorithm.
+	if strings.HasSuffix(module, "-es256") {
+		cfg.Algorithms = []oidcclient.Algorithm{oidcclient.ES256}
+	}
+
 	client, err := oidcclient.New(ctx, cfg)
 	if err != nil {
 		return outcomeOf(err), err.Error()

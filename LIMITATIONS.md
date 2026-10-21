@@ -295,6 +295,11 @@ PKCE. Not supported, and refused where a provider could select them:
   run time. One exception: a public client (`none`) requires the provider
   to advertise S256 in `code_challenge_methods_supported`, which some
   providers omit although they support it.
+- **ID Tokens are expected in RS256** — the default of OpenID Connect Core
+  §3.1.3.7 step 7: a provider signing with another algorithm fails every
+  login (`ErrIDTokenAlgorithm`, or `ErrInvalidMetadata` at `New` when it
+  does not list RS256) until `Config.Algorithms` names the algorithm
+  registered for the client.
 - **`acr_values` makes `acr` required** — when sent, the ID Token must
   carry one of the requested values; list every acceptable level.
 - **No OpenTelemetry spans** — `oidc/client` and `outbound` return errors
