@@ -84,6 +84,7 @@ func preAuthenticationFailures() []preAuthenticationFailure {
 	return []preAuthenticationFailure{
 		{name: "invalid state", query: with("state", "a\x01b"), code: oauth2.CodeInvalidRequest, status: http.StatusBadRequest},
 		{name: "unsupported response type", query: with("response_type", "magic"), code: oauth2.CodeUnsupportedResponseType, status: http.StatusBadRequest},
+		{name: "missing response type", query: with("response_type", ""), code: oauth2.CodeInvalidRequest, status: http.StatusBadRequest},
 		{name: "repeated parameter", query: func() url.Values {
 			q := boundsQuery()
 			q["scope"] = []string{"read", "write"}

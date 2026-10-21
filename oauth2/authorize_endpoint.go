@@ -649,7 +649,7 @@ func (s *Server) validateAuthorize(
 ) (*authorizeState, bool) {
 	// An unsupported — or repeated — response type is answered in the query
 	// string, and a repeated or invalid state is not echoed.
-	flow, flowErr := resolveFlow(cfg, in.params.Get("response_type"))
+	flow, flowErr := resolveFlow(cfg, s.codeFlowEnabled(), in.params.Get("response_type"))
 	state := in.params.Get(paramState)
 	stateValid := validState(state)
 	target := authorizeTarget{
@@ -950,12 +950,32 @@ func responseModeSupported(cfg AuthorizeConfig, params url.Values) bool {
 	return mode == responseModeQuery
 }
 
-// resolveFlow maps the response_type parameter to a flow, refusing the
-// implicit flow when it is not enabled. The description never echoes the
-// request.
-func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Error) {
+// The refusals of a response type (RFC 6749 §4.1.2.1). Their descriptions
+// never echo the request.
+var (
+	// errMissingResponseType answers a request without response_type, which
+	// RFC 6749 §4.1.1 makes REQUIRED: invalid_request, "missing a required
+	// parameter" — an empty occurrence is an omitted one (§3.1).
+	errMissingResponseType = ErrInvalidRequest.WithDescription("response_type is required")
+	// errCodeFlowDisabled answers response_type=code on a server without
+	// the authorization_code grant: a code nothing could redeem is never
+	// minted, and the metadata does not advertise the code response type.
+	errCodeFlowDisabled = ErrUnsupportedResponseType.WithDescription("the authorization_code grant is not enabled")
+)
+
+// resolveFlow maps the response_type parameter to a flow: the code flow
+// when codeEnabled — the server registers the authorization_code grant —
+// the implicit flow when cfg enables it; a missing response type is
+// invalid_request, any other unsupported_response_type.
+func resolveFlow(cfg AuthorizeConfig, codeEnabled bool, responseType string) (authorizeFlow, *Error) {
 	switch responseType {
+	case "":
+		return 0, errMissingResponseType
 	case responseTypeCode:
+		if !codeEnabled {
+			return 0, errCodeFlowDisabled
+		}
+
 		return flowCode, nil
 	case responseTypeToken:
 		if !cfg.AllowImplicit {
@@ -966,6 +986,15 @@ func resolveFlow(cfg AuthorizeConfig, responseType string) (authorizeFlow, *Erro
 	default:
 		return 0, ErrUnsupportedResponseType.WithDescription("response_type is not supported")
 	}
+}
+
+// codeFlowEnabled reports whether the server registers the
+// authorization_code grant: the code response type is served, and
+// advertised, only then.
+func (s *Server) codeFlowEnabled() bool {
+	_, ok := s.dispatch[GrantTypeAuthorizationCode]
+
+	return ok
 }
 
 // parseAuthorizeRequest validates the scope, (for the code flow) the PKCE

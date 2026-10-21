@@ -324,6 +324,7 @@ func TestAuthorizeIssuanceFailuresAreServerErrors(t *testing.T) {
 			sink := &errorSink{}
 			srv, err := oauth2.NewServer(oauth2.ServerConfig{
 				Profile: oauth2.Profile20, Storage: failingCodeStore{memory.New()},
+				Grants:         []oauth2.Grant{codeGrant(memory.New())},
 				IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
 				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 					testClientID: &oauth2.DefaultClient{
