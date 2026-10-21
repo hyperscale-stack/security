@@ -315,10 +315,13 @@ func encodeArgon2idPHC(p Argon2idParams, salt, key []byte) string {
 }
 
 // decodeArgon2idPHC parses a PHC-formatted argon2id hash and checks its
-// bounds: version 19, each of m, t and p exactly once (in any order) and
-// nothing else, RFC 9106 §3.1 ranges, salt and tag of 16 to 64 bytes. The
-// algorithm is checked first so that cross-algorithm inputs (bcrypt,
-// scrypt) get a clear ErrUnsupportedAlgorithm.
+// bounds: version 19, m, t and p in that order and nothing else, RFC 9106
+// §3.1 ranges, salt and tag of 16 to 64 bytes. It accepts the canonical
+// encoding only (C2SP phc-strings): decimal values without leading zeros,
+// unpadded standard base64 without any other character and with zero
+// trailing bits — one stored hash has one encoding. The algorithm is
+// checked first so that cross-algorithm inputs (bcrypt, scrypt) get a clear
+// ErrUnsupportedAlgorithm.
 func decodeArgon2idPHC(s string) (Argon2idParams, []byte, []byte, error) {
 	rest, ok := strings.CutPrefix(s, "$")
 	if !ok {
@@ -345,14 +348,14 @@ func decodeArgon2idPHC(s string) (Argon2idParams, []byte, []byte, error) {
 		return Argon2idParams{}, nil, nil, err
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	salt, err := decodeB64(parts[4])
 	if err != nil {
-		return Argon2idParams{}, nil, nil, ErrMalformedHash
+		return Argon2idParams{}, nil, nil, err
 	}
 
-	key, err := base64.RawStdEncoding.DecodeString(parts[5])
+	key, err := decodeB64(parts[5])
 	if err != nil {
-		return Argon2idParams{}, nil, nil, ErrMalformedHash
+		return Argon2idParams{}, nil, nil, err
 	}
 
 	// Both lengths are bounded by the 256-byte encoding checked above.
@@ -366,47 +369,68 @@ func decodeArgon2idPHC(s string) (Argon2idParams, []byte, []byte, error) {
 	return p, salt, key, nil
 }
 
-// parseArgon2idParams parses the "m=…,t=…,p=…" field: each parameter
-// exactly once, in any order, unsigned decimal, nothing else.
+// parseArgon2idParams parses the "m=…,t=…,p=…" field: the three
+// parameters in that order — the order Argon2 defines, which C2SP
+// phc-strings forbids producers to change —, each a canonical decimal, and
+// nothing else.
 func parseArgon2idParams(field string) (Argon2idParams, error) {
-	var (
-		p    Argon2idParams
-		seen [3]bool
-	)
-
-	for kv := range strings.SplitSeq(field, ",") {
-		name, value, _ := strings.Cut(kv, "=")
-
-		switch name {
-		case "m":
-			n, err := strconv.ParseUint(value, 10, 32)
-			if err != nil || seen[0] {
-				return Argon2idParams{}, ErrMalformedHash
-			}
-
-			seen[0], p.MemoryKiB = true, uint32(n)
-		case "t":
-			n, err := strconv.ParseUint(value, 10, 32)
-			if err != nil || seen[1] {
-				return Argon2idParams{}, ErrMalformedHash
-			}
-
-			seen[1], p.Time = true, uint32(n)
-		case "p":
-			n, err := strconv.ParseUint(value, 10, 8)
-			if err != nil || seen[2] {
-				return Argon2idParams{}, ErrMalformedHash
-			}
-
-			seen[2], p.Parallelism = true, uint8(n)
-		default:
-			return Argon2idParams{}, ErrMalformedHash
-		}
-	}
-
-	if !seen[0] || !seen[1] || !seen[2] {
+	parts := strings.Split(field, ",")
+	if len(parts) != 3 {
 		return Argon2idParams{}, ErrMalformedHash
 	}
 
-	return p, nil
+	m, okM := decimalParam(parts[0], "m", 32)
+	t, okT := decimalParam(parts[1], "t", 32)
+	p, okP := decimalParam(parts[2], "p", 8)
+
+	if !okM || !okT || !okP {
+		return Argon2idParams{}, ErrMalformedHash
+	}
+
+	return Argon2idParams{
+		MemoryKiB:   uint32(m), //nolint:gosec // G115: parsed on 32 bits
+		Time:        uint32(t), //nolint:gosec // G115: parsed on 32 bits
+		Parallelism: uint8(p),  //nolint:gosec // G115: parsed on 8 bits
+	}, nil
+}
+
+// decimalParam parses kv, "name=value", whose value is a canonical decimal
+// of at most bits bits (C2SP phc-strings): ASCII digits only — ParseUint
+// in base 10 takes no sign —, and no leading zero.
+func decimalParam(kv, name string, bits int) (uint64, bool) {
+	value, ok := strings.CutPrefix(kv, name+"=")
+	if !ok || (len(value) > 1 && value[0] == '0') {
+		return 0, false
+	}
+
+	n, err := strconv.ParseUint(value, 10, bits)
+
+	return n, err == nil
+}
+
+// decodeB64 decodes a canonical PHC base64 value (C2SP phc-strings):
+// standard alphabet, no padding, no other character — encoding/base64
+// skips CR and LF, even in strict mode — and zero trailing bits.
+func decodeB64(s string) ([]byte, error) {
+	if strings.IndexFunc(s, notB64) >= 0 {
+		return nil, ErrMalformedHash
+	}
+
+	out, err := base64.RawStdEncoding.Strict().DecodeString(s)
+	if err != nil {
+		return nil, ErrMalformedHash
+	}
+
+	return out, nil
+}
+
+// notB64 reports whether r is outside the standard base64 alphabet (RFC
+// 4648 §4), padding excluded.
+func notB64(r rune) bool {
+	switch {
+	case 'A' <= r && r <= 'Z', 'a' <= r && r <= 'z', '0' <= r && r <= '9', r == '+', r == '/':
+		return false
+	}
+
+	return true
 }

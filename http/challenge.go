@@ -59,15 +59,26 @@ func quoteString(s string) (string, bool) {
 }
 
 // bearerTokenSent reports whether the request carried an Authorization
-// field with the Bearer scheme (auth-scheme names are case-insensitive,
-// RFC 9110 §11.1): the RFC 6750 error codes describe why a request made
-// with an access token was refused, so they are not sent otherwise.
+// field with the Bearer scheme — its first word, ended by a space, a tab or
+// the end (auth-scheme names are case-insensitive, RFC 9110 §11.1): the
+// RFC 6750 error codes describe why a request made with an access token
+// was refused, so they are not sent otherwise.
 func bearerTokenSent(values []string) bool {
 	for _, v := range values {
-		if scheme, _, _ := strings.Cut(v, " "); strings.EqualFold(scheme, "Bearer") {
+		if strings.EqualFold(authScheme(v), "Bearer") {
 			return true
 		}
 	}
 
 	return false
+}
+
+// authScheme returns the auth-scheme of an Authorization field value: its
+// first word, ended by a space, a tab or the end.
+func authScheme(v string) string {
+	if i := strings.IndexAny(v, " \t"); i >= 0 {
+		return v[:i]
+	}
+
+	return v
 }

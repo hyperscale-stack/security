@@ -95,6 +95,9 @@ func WithPath(path string) Option {
 }
 
 // WithDomain sets the cookie Domain attribute. Default: empty (host-only).
+// A Domain rules out the __Host- name: a sibling host can then plant a
+// cookie of the session's name, which signs a browser without a session
+// into the planted one (login CSRF).
 func WithDomain(domain string) Option {
 	return func(m *Manager) { m.domain = domain }
 }
@@ -334,11 +337,14 @@ func (m *Manager) Get(ctx context.Context, c security.Carrier) (*Session, error)
 // name. Several cookies of one name come from a cookie tossed by a sibling
 // host or a more specific path, or from a stale configuration: when more
 // than one is a valid session the request is ambiguous and has none — a
-// tossed cookie can deny a session, never swap it. Copies of one session
-// count as several: they can differ (a copy planted before a sign-in
-// without Rotate), and nothing tells which one the browser meant. Cookies
-// that do not open or are expired do not count. An unavailable validator
-// ends the search.
+// tossed cookie next to the user's own denies the session. A browser
+// without a session of its own carries the tossed cookie alone, and is
+// signed into the planted session (login CSRF): only a __Host- name, which
+// no other host can set, prevents that. Copies of one session count as
+// several: they can differ (a copy planted before a sign-in without
+// Rotate), and nothing tells which one the browser meant. Cookies that do
+// not open or are expired do not count. An unavailable validator ends the
+// search.
 func (m *Manager) pick(ctx context.Context, found []*http.Cookie) (*Session, error) {
 	if len(found) == 0 {
 		return nil, ErrNoSession

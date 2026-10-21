@@ -546,7 +546,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     (HTTP 429, the same fields in the error metadata), and store the
     transport peer as the client address unless a middleware or
     interceptor before them stored one. A custom `ErrorMapper` switching on
-    the error classes sees the new `too_many_attempts` class.
+    the error classes sees the new `too_many_attempts` class;
+  - `basic.WithAttemptLimiter` and `basic.WithAttemptSubject`: the
+    `Authenticator` admits each well-formed attempt through the limiter
+    before the user lookup — keyed by the realm `basic`, the user-id
+    lower-cased (or normalized by `WithAttemptSubject`) and the client
+    address — and settles it after the verification: unknown and known
+    accounts alike, an outage as inconclusive, on a context a canceled
+    request does not cancel. A limiter error that is not a throttle
+    answers 503.
+- `grpcsec.WithPanicHandler(func(ctx context.Context, recovered any))`:
+  receives the value of every security-pipeline panic the interceptors
+  recover (the value may hold a credential: it is the application's to
+  log or report); a panic of the handler is ignored.
 
 ### Changed
 
@@ -1005,6 +1017,45 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `memory.New` takes options; `memory.WithClock` gives it the
   ServiceProvider's clock (`time.Now` by default).
 
+- A typed-nil dependency — an interface holding a nil pointer,
+  `bearer.VerifierFunc(nil)` — now panics at construction in
+  `security.NewEngine`, `NewManager`, the `AccessDecisionManager`
+  constructors, `voter.And`/`Or`/`Not`, `httpsec.Middleware`/`Authorize`,
+  the `grpcsec` and `connectrpcsec` interceptors, and the `basic`, `bearer`
+  and `session` authenticators, instead of on the first request;
+  `session.NewExtractor(nil)` panics too, and a typed-nil `ErrorMapper`
+  counts as none. See [MIGRATION.md](MIGRATION.md).
+- `bearer.Extractor` enforces RFC 6750 §2.1 (`"Bearer" 1*SP b64token`):
+  a malformed Bearer credential — the scheme alone, a tab, an empty token,
+  a character outside the b64token alphabet, a second word or credential —
+  is refused with `ErrInvalidRequest` (400 `invalid_request`, §3.1) instead
+  of reaching the `TokenVerifier` or counting as no credential, and a
+  token over `DefaultMaxTokenLength` (16 KiB, `WithMaxTokenLength`) with
+  `ErrInvalidCredentials` (401 `invalid_token`). Several spaces after the
+  scheme are accepted. `httpsec.ExtractAuthorizationValue` strips
+  `1*SP` and returns `("", true)` for the scheme alone or followed by a
+  tab; the `httpsec` and
+  `connectrpcsec` mappers recognize a Bearer credential ended by a tab.
+  See [MIGRATION.md](MIGRATION.md).
+- `password`: an argon2id stored hash verifies in its canonical encoding
+  only — `m`, `t`, `p` in that order, decimal values without leading
+  zeros, unpadded standard base64 without any other character (CR and LF
+  were skipped) and with zero trailing bits (C2SP phc-strings) — else
+  `ErrMalformedHash`. A bcrypt hash verifies with version `$2a$`, `$2b$` or
+  `$2y$` only — `$2x$` (crypt_blowfish's buggy-hash marker) and `$2$`
+  answer `ErrUnsupportedAlgorithm`; x/crypto still ignores what follows
+  the 60th character and the salt's unused bits. See
+  [MIGRATION.md](MIGRATION.md).
+- `session.CSRFToken` renders the session's secret masked anew on every
+  call (`base64url(mask ‖ mask ⊕ secret)`, BREACH hardening) and
+  `VerifyCSRF` unmasks it before the constant-time comparison; the raw
+  `Session.CSRFToken` field no longer verifies. A source test pins the
+  constant-time comparison. See [MIGRATION.md](MIGRATION.md).
+- `security.AnonymousPrincipal` is a function returning one immutable value,
+  and `security.DefaultClock` is removed (`security.SystemClock{}` is the
+  default, as in `jwtsec`): neither global could be replaced for the whole
+  process any more. See [MIGRATION.md](MIGRATION.md).
+
 ### Fixed
 
 - `oidc/client` decoded the JOSE header of an ID Token with go-jose's rules
@@ -1257,6 +1308,35 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `samlsp.New` accepted a `TransactionTTL` with a sub-second part, with
   which every `BeginLogin` then failed (the stores keep expiries to the
   second); it now refuses it with `ErrInvalidConfig`.
+
+- `basic.Authenticator` dereferenced a typed-nil user — a `UserLoader`
+  returning `m[name], nil` over a map of pointers for an unknown name —, so
+  one unauthenticated request with an unknown user-id panicked (and, under
+  `grpcsec`, crashed the server). A typed nil is now an unknown user:
+  verified against the dummy hash and refused like any unknown account.
+- `session.Authenticator` authenticated a typed-nil principal — a
+  `PrincipalLoader` returning `users[sub], roles, nil` over a map of
+  pointers for a deleted user —, which `voter.Authenticated` granted and
+  which panicked on its first use: the deleted user's cookie kept access
+  until it expired. A typed nil is refused (`ErrInvalidCredentials`), and a
+  session without a `"sub"` string is refused before the loader is called,
+  as the `PrincipalLoader` contract required. See
+  [MIGRATION.md](MIGRATION.md).
+- `grpcsec` recovered no panic, and neither does grpc-go: one panic in an
+  extractor, an authenticator, a loader or a voter — a typed-nil
+  dereference, say — ended the process on one unauthenticated RPC. The
+  authentication and authorization interceptors now recover the panics of
+  the security pipeline and answer `Internal`, with the span's error status,
+  `error.type=_OTHER` and a `panic recovered` event that never holds the
+  panic value; `grpcsec.WithPanicHandler` receives the value. An outer
+  recovery interceptor no longer sees these panics; the handler's own
+  panics are not recovered. See [MIGRATION.md](MIGRATION.md).
+- Documentation: a cookie tossed by a sibling host — with a session cookie
+  name that is not `__Host-` — does not only deny a session: a signed-out
+  browser carrying it alone is signed into the planted session (login
+  CSRF). `LIMITATIONS.md`, the `session` godoc and the security
+  considerations said "denial, never a swap"; a test pins the behaviour.
+  The NFC, revocation and key-volume limitations now give their reasons.
 
 ### Removed
 
@@ -2054,3 +2134,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   browser that sends no Fetch Metadata. The example now answers such a
   request 403, like a `cross-site` or `same-site` one; browsers without
   Fetch Metadata (Safari and iOS before 16.4) cannot sign in to it.
+
+- `outbound`: `Policy.CheckURL` saw the port as written, so a string port
+  deny-list was bypassed with leading zeros (`:022` dials 22); it now sees
+  the canonical port (no leading zero, none for the scheme's default).
+  Addresses with an ISATAP interface identifier (RFC 5214 §6.1), which an
+  ISATAP router tunnels to the IPv4 address they embed, are refused like
+  6to4 and Teredo. Dial errors keep their cause but no longer name the
+  resolved address or the resolver. See [MIGRATION.md](MIGRATION.md).

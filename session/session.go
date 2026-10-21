@@ -28,10 +28,10 @@ type Session struct {
 	// Keep it small: the whole map is JSON-encoded into the cookie, and
 	// browsers cap a cookie at ~4 KiB.
 	Values map[string]any
-	// CSRFToken is a random token minted with the session and sealed in
-	// its (HttpOnly) cookie. The application renders it into forms or a
-	// meta tag — where a page script, an XSS, can read it — and
-	// [VerifyCSRF] checks the value the browser echoes back.
+	// CSRFToken is the random CSRF secret minted with the session and
+	// sealed in its (HttpOnly) cookie. Never render it: render
+	// [CSRFToken](s), a masked token anew on every call, which
+	// [VerifyCSRF] checks — the raw secret does not verify.
 	CSRFToken string
 	// CreatedAt is the session creation time.
 	CreatedAt time.Time

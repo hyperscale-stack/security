@@ -7,6 +7,7 @@ package outbound
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -162,4 +164,73 @@ func TestDialCheckSeesTheResolvedAddress(t *testing.T) {
 	})
 
 	t.Cleanup(func() { assert.Zero(t, hits.Load(), "the 127.0.0.1 listener is never reached") })
+}
+
+// failingDNS is a resolver whose server cannot be reached.
+func failingDNS() *net.Resolver {
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("network unreachable")
+		},
+	}
+}
+
+// Audit D-16: the errors of allowed destinations came from the standard
+// library and named the resolved address and port — and a resolver
+// failure the resolver's address. A dial error now keeps its cause and
+// names neither.
+func TestDialErrorsNameNoAddress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused connection", func(t *testing.T) {
+		t.Parallel()
+
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+
+		port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+		require.NoError(t, l.Close()) // nothing listens there any more
+
+		dns := &rebindingDNS{first4: net.IPv4(127, 0, 0, 1).To4(), later4: net.IPv4(127, 0, 0, 1).To4()}
+
+		client, err := newClient(Policy{AllowHTTP: true, AllowedPrefixes: LoopbackPrefixes()}, dns.resolver())
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://closed.test:"+port+"/", nil)
+		require.NoError(t, err)
+
+		_, err = client.Do(req)
+		require.Error(t, err)
+		require.ErrorIs(t, err, syscall.ECONNREFUSED, "the cause is kept")
+		assert.NotContains(t, err.Error(), "127.0.0.1")
+	})
+
+	t.Run("resolver failure", func(t *testing.T) {
+		t.Parallel()
+
+		client, err := newClient(Policy{}, failingDNS())
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://unresolvable.test/", nil)
+		require.NoError(t, err)
+
+		_, err = client.Do(req)
+
+		var dnsErr *net.DNSError
+
+		require.ErrorAs(t, err, &dnsErr, "the cause is kept")
+		assert.Empty(t, dnsErr.Server, "the resolver's address is dropped")
+		assert.NotContains(t, err.Error(), ":53")
+	})
+}
+
+// An error that is not a *net.OpError names no address of net's: it is
+// kept as is.
+func TestAnonymousKeepsOtherErrors(t *testing.T) {
+	t.Parallel()
+
+	plain := errors.New("plain")
+
+	assert.Same(t, plain, anonymous("tcp", plain))
 }

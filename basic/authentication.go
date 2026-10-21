@@ -68,7 +68,7 @@ func (a Authentication) Principal() security.Principal {
 		return a.user
 	}
 
-	return security.AnonymousPrincipal
+	return security.AnonymousPrincipal()
 }
 
 // Credentials implements [security.Authentication]. Returns the cleartext

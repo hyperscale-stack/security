@@ -29,8 +29,8 @@ func Authorize(adm security.AccessDecisionManager, attrs ...security.Attribute) 
 }
 
 // AuthorizeWith is the explicit-mapper variant of [Authorize] — useful for
-// authoritative servers that want a structured error body. A nil mapper
-// behaves like [Authorize].
+// authoritative servers that want a structured error body. A nil mapper, a
+// typed nil included, behaves like [Authorize].
 func AuthorizeWith(
 	adm security.AccessDecisionManager,
 	mapper ErrorMapper,
@@ -45,7 +45,7 @@ func AuthorizeWith(
 
 			if err := adm.Decide(r.Context(), auth, attrs); err != nil {
 				m := mapper
-				if m == nil {
+				if isNil(m) {
 					var ok bool
 					if m, ok = errorMapperFrom(r.Context()); !ok {
 						m = fallback
@@ -65,7 +65,7 @@ func AuthorizeWith(
 // mustPolicy checks the static configuration of [Authorize] and returns a
 // copy of attrs, so the caller reusing its slice cannot rewrite the policy.
 func mustPolicy(adm security.AccessDecisionManager, attrs []security.Attribute) []security.Attribute {
-	if adm == nil {
+	if isNil(adm) {
 		panic("httpsec: Authorize: nil AccessDecisionManager")
 	}
 

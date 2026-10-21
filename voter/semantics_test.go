@@ -16,7 +16,7 @@ import (
 // pending is an unauthenticated value that nonetheless carries authorities:
 // it proves the stock voters check IsAuthenticated, not only the authorities.
 func pending(authorities ...string) fakeAuth {
-	return fakeAuth{pr: security.AnonymousPrincipal, authorities: authorities}
+	return fakeAuth{pr: security.AnonymousPrincipal(), authorities: authorities}
 }
 
 func decide(adm security.AccessDecisionManager, auth security.Authentication, attrs ...security.Attribute) error {

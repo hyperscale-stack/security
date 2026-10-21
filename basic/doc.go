@@ -13,7 +13,9 @@
 // Authenticator checks the same rules — form logins can build the value with
 // New — then spends exactly one password verification on every attempt,
 // unknown accounts included, so that the response time reveals nothing; at
-// most runtime.GOMAXPROCS(0) verifications run at once.
+// most runtime.GOMAXPROCS(0) verifications run at once, and
+// WithAttemptLimiter limits the failed attempts per account and per client
+// (NIST SP 800-63B-4 §3.2.2).
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

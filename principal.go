@@ -20,10 +20,12 @@ type Principal interface {
 	Subject() string
 }
 
-// AnonymousPrincipal is the singleton principal returned by the core when no
-// credentials were extracted from a [Carrier]. Authorisation voters use it to
-// distinguish "no authentication attempt" from "authentication failed".
-var AnonymousPrincipal Principal = anonymousPrincipal{}
+// AnonymousPrincipal returns the principal of the [Anonymous]
+// authentication — the one the core reports when no credentials were
+// extracted from a [Carrier] —, always the same immutable value, whose
+// subject is "anonymous". It is a function, not a variable, so that no
+// package can replace it for the whole process.
+func AnonymousPrincipal() Principal { return anonymousPrincipal{} }
 
 type anonymousPrincipal struct{}
 

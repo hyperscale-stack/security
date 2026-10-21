@@ -18,7 +18,7 @@ var anonymousAuth Authentication = anonymousAuthentication{}
 
 type anonymousAuthentication struct{}
 
-func (anonymousAuthentication) Principal() Principal { return AnonymousPrincipal }
+func (anonymousAuthentication) Principal() Principal { return AnonymousPrincipal() }
 func (anonymousAuthentication) Credentials() any     { return nil }
 func (anonymousAuthentication) Authorities() []string {
 	// Returning nil rather than a shared zero-length slice prevents

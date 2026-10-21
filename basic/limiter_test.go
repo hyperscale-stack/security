@@ -364,11 +364,14 @@ func TestAuthenticatorSkipsTheRehashWhenTheContextEnded(t *testing.T) {
 	t.Parallel()
 
 	l := newRehashingLoader(t, mockUser(t, account{subject: "alice", hash: "old"})) // no UpdatePasswordHash expected
-	h := &recordingHasher{match: "old", rehash: true, delay: 40 * time.Millisecond} // Verify ignores ctx
-	a := basic.NewAuthenticator(l, h)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	// The request ends while its password is verified — deterministically:
+	// a deadline raced the slot acquisition under a loaded test run.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	h := &cancelingHasher{recordingHasher: recordingHasher{match: "old", rehash: true}, cancel: cancel} // Verify ignores ctx
+	a := basic.NewAuthenticator(l, h)
 
 	out, err := a.Authenticate(ctx, basic.New("alice", "right"))
 

@@ -23,7 +23,7 @@ func newAuth(sub string, authorities ...string) fakeAuth {
 }
 
 func newAnonymous() fakeAuth {
-	return fakeAuth{pr: security.AnonymousPrincipal}
+	return fakeAuth{pr: security.AnonymousPrincipal()}
 }
 
 func (a fakeAuth) Principal() security.Principal { return a.pr }

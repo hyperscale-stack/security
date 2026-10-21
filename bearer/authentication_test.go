@@ -27,7 +27,7 @@ func TestAuthenticationPreAuth(t *testing.T) {
 	// Before authentication the token is the credential.
 	assert.Equal(t, "opaque-token", auth.Credentials())
 	// No principal yet -> anonymous fallback, and Name falls back to the scheme.
-	assert.Equal(t, security.AnonymousPrincipal, auth.Principal())
+	assert.Equal(t, security.AnonymousPrincipal(), auth.Principal())
 	assert.Equal(t, "bearer", auth.Name())
 }
 

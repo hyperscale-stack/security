@@ -52,7 +52,7 @@ var errEngineContract = errors.New("httpsec: the engine returned no context or a
 // construction on a nil engine and on an invalid challenge configuration
 // (see [DefaultErrorMapper]).
 func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.Handler {
-	if engine == nil {
+	if isNil(engine) {
 		panic("httpsec: Middleware: nil Engine")
 	}
 
@@ -122,7 +122,7 @@ func buildConfig(opts ...Option) *config {
 		o(cfg)
 	}
 
-	if cfg.errorMapper == nil {
+	if isNil(cfg.errorMapper) {
 		cfg.errorMapper = DefaultErrorMapper(cfg.challengeScheme, cfg.realm)
 	}
 

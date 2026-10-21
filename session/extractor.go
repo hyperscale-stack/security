@@ -20,8 +20,15 @@ type Extractor struct {
 	mgr *Manager
 }
 
-// NewExtractor returns an [Extractor] bound to mgr.
-func NewExtractor(mgr *Manager) Extractor { return Extractor{mgr: mgr} }
+// NewExtractor returns an [Extractor] bound to mgr. It panics on a nil
+// Manager, which would fail on the first request.
+func NewExtractor(mgr *Manager) Extractor {
+	if mgr == nil {
+		panic("session: NewExtractor: nil Manager")
+	}
+
+	return Extractor{mgr: mgr}
+}
 
 // Extract implements [security.Extractor]. Returns (nil, nil) when the
 // request carries no usable session cookie — absent, undecodable, expired or

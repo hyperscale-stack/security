@@ -171,10 +171,13 @@ func (h *BCryptHasher) check(encodedHash string) error {
 	return nil
 }
 
-// looksLikeBCrypt is a cheap discriminator: every bcrypt blob starts with
-// "$2", whether it's $2a (Wing/Sun reference), $2b (OpenBSD ≥ 5.5) or $2y
-// (PHP-friendly variant). Other algorithms (argon2id, scrypt, plain) start
-// with another prefix.
+// looksLikeBCrypt reports whether h is a bcrypt hash of a version this
+// hasher verifies: $2a$ (OpenBSD 2.1+), $2b$ (OpenBSD 5.5+) or $2y$
+// (crypt_blowfish's correct implementation), which x/crypto computes alike.
+// It refuses $2x$ — the prefix crypt_blowfish gives the hashes of its
+// sign-extension bug, which x/crypto would verify as $2a$ — and $2$, the
+// format before $2a$; other algorithms (argon2id, scrypt) start with
+// another prefix.
 func looksLikeBCrypt(h string) bool {
-	return strings.HasPrefix(h, "$2")
+	return strings.HasPrefix(h, "$2a$") || strings.HasPrefix(h, "$2b$") || strings.HasPrefix(h, "$2y$")
 }

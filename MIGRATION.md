@@ -2716,3 +2716,200 @@ To migrate:
    refuses an unknown grant-context member). During a rolling deployment
    the end-user authorizes again; after a rollback, the refresh tokens of
    the plain grants issued since the upgrade stop working.
+
+### `session`: a session without a subject never reaches the `PrincipalLoader`; typed-nil principals are refused
+
+`session.Authenticator` handed every decoded session to the
+`PrincipalLoader` and checked its principal with `== nil`. A loader
+returning a typed nil — `return users[sub], roles, nil` over a map of
+pointers, for a user deleted since sign-in — authenticated the request
+as a principal that panics on its first use. The `PrincipalLoader`
+contract also asked loaders to refuse a session without subject; a loader
+that mapped it to a guest principal authenticated it.
+
+| | Before | After |
+| --- | --- | --- |
+| Loader returns a typed nil principal | authenticated (then a panic) | refused, `ErrInvalidCredentials` (401) |
+| Session without a `"sub"` string — `Login(ctx, c, nil)` —, with `"sub": ""` or a non-string `"sub"` | passed to the loader | refused before the loader, `ErrInvalidCredentials` |
+
+To migrate:
+
+1. Keep the subject under `"sub"` — `Manager.Login` writes it from the
+   principal: sessions whose subject lives under another key, or whose
+   subject is empty, no longer authenticate.
+2. Keep subject-less sessions (a sign-in form's) on a `Manager` no
+   `Extractor` reads, as `VerifyCSRF`'s documentation shows.
+
+### core and adapters: typed-nil dependencies panic at construction
+
+The constructors compared their dependencies with `nil`, so a typed nil —
+an interface holding a nil pointer, the classic `var m *MyManager; return
+m` — was accepted and panicked on the first request (on gRPC, it ended
+the process). A typed nil now counts as nil wherever a constructor checks
+a dependency, as it already did in the request path. A typed-nil
+`ErrorMapper` given to `WithErrorMapper` (or `httpsec.AuthorizeWith`)
+counts as none: the default mapper answers.
+
+| | Before | After |
+| --- | --- | --- |
+| `security.NewEngine`, `NewManager`, the three `AccessDecisionManager` constructors, `voter.And`/`Or`/`Not` with a typed-nil dependency | panic on the first request | panic at construction |
+| `httpsec.Middleware`, `Authorize`, `grpcsec` and `connectrpcsec` interceptors with a typed-nil `Engine` or `AccessDecisionManager` | panic on the first request | panic at construction |
+| `basic.NewAuthenticator`, `bearer.NewAuthenticator` (`bearer.VerifierFunc(nil)` included), `session.NewAuthenticator` with a typed-nil dependency | panic on the first request | panic at construction |
+| `session.NewExtractor(nil)` | panic on the first request | panic at construction |
+| `WithErrorMapper` with a typed-nil mapper | panic on the first refusal | the default mapper |
+
+To migrate: build every component with non-nil dependencies; a panic at
+start-up names the constructor and the dependency.
+
+### `bearer`: the Authorization field follows the RFC 6750 syntax
+
+The Bearer extractor took everything after `Bearer ` as the token: extra
+spaces, a second word, a comma and a second credential, quotes,
+non-ASCII and 64 KiB values reached the `TokenVerifier`, and were answered
+401 `invalid_token` instead of 400 `invalid_request`; `Bearer` alone,
+`Bearer ` and `Bearer<TAB>token` counted as no credential at all (an
+anonymous request). It now follows RFC 6750 §2.1 to the letter:
+`credentials = "Bearer" 1*SP b64token`.
+
+| Authorization field | Before | After |
+| --- | --- | --- |
+| `Bearer  abc` (several spaces) | token `" abc"` | token `abc` |
+| `Bearer`, `Bearer `, `Bearer<TAB>abc` | no credential (anonymous) | `ErrInvalidRequest` — 400 `invalid_request` |
+| `Bearer abc def`, `Bearer abc, Basic …`, a character outside the b64token alphabet, `=` before the end, a trailing space | passed to the verifier | `ErrInvalidRequest` — 400 `invalid_request` |
+| A token over 16 KiB | passed to the verifier | `ErrInvalidCredentials` — 401 `invalid_token` |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer  abc")` | `(" abc", true)` | `("abc", true)` |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer")` | `("", false)` | `("", true)` — the scheme alone |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer<TAB>abc")` | `("", false)` — another scheme | `("", true)` — a malformed credential of this scheme |
+
+To migrate:
+
+1. Clients send `Bearer <token>`: a conforming client is not affected.
+2. Tokens longer than 16 KiB (`bearer.DefaultMaxTokenLength`, the bound
+   `jwtsec.DefaultMaxTokenSize` gives JWTs): raise both together —
+   `bearer.NewExtractor(bearer.WithMaxTokenLength(n))` and
+   `jwtsec.WithMaxTokenSize(n)`.
+3. Application extractors calling `httpsec.ExtractAuthorizationValue`
+   refuse an empty value when the result is `ok`: the scheme stood alone
+   or was followed by a tab.
+
+### `outbound`: canonical ports for `CheckURL`, ISATAP refused, dial errors without addresses
+
+`Policy.CheckURL` received the port as written: `http://h:022/` passed the
+range check as 22 while the hook, comparing strings, saw `"022"`, so a
+port deny-list was bypassed with leading zeros. ISATAP addresses (RFC 5214
+§6.1), which an ISATAP router tunnels to the IPv4 address they embed,
+were judged as ordinary global IPv6. Dial errors named the resolved
+address and the resolver.
+
+| | Before | After |
+| --- | --- | --- |
+| Port seen by `CheckURL` for `:022`, `:0443` (https), `:80` (http) | `022`, `0443`, `80` | `22`, none, none |
+| An address with an ISATAP interface identifier (`…:0:5efe:a.b.c.d`, `…:200:5efe:a.b.c.d`) | allowed (global IPv6) | refused, unless an `AllowedPrefixes` entry exempts its IPv6 prefix |
+| Dial errors (refused connection, timeout, resolver failure) | name the resolved address and port, or the resolver | keep their cause, name neither |
+
+To migrate:
+
+1. In `CheckURL`, expect no port for the scheme's default and compare
+   ports as numbers — or move the port policy to `CheckAddr`, which sees
+   the numeric port dialed.
+2. A destination reached through ISATAP needs an `AllowedPrefixes` entry
+   for its IPv6 prefix.
+3. Code that parsed the address out of a dial error reads it from its own
+   resolution instead.
+
+### `password`: canonical argon2id encodings, current bcrypt versions
+
+The argon2id parser accepted several encodings of one hash: parameters in
+any order, decimal values with leading zeros (`m=0064`), CR and LF inside
+the base64 values (which `encoding/base64` skips) and non-zero trailing
+bits. The bcrypt hasher accepted any `$2…$` prefix: `$2x$`, the marker
+crypt_blowfish gives the hashes of its sign-extension bug (x/crypto
+verified them as `$2a$`, wrongly for 8-bit passwords), and `$2$`, the
+format before `$2a$`. An argon2id hash now verifies in its canonical
+encoding only (C2SP phc-strings), and a bcrypt hash with the versions
+`$2a$`, `$2b$` and `$2y$` only — x/crypto still ignores what follows its
+60th character (the space padding of a fixed-width column, say) and the
+unused bits of its salt's last character.
+
+| Stored hash | Before | After |
+| --- | --- | --- |
+| argon2id `m=…,t=…,p=…`, canonical | verifies | verifies |
+| argon2id parameters in another order, leading zeros, CR/LF or other characters in the base64, non-zero trailing bits | verifies | `ErrMalformedHash`, `NeedsRehash` true |
+| bcrypt `$2a$`, `$2b$`, `$2y$` | verifies | verifies |
+| bcrypt `$2x$`, `$2$` | verifies (as `$2a$`) | `ErrUnsupportedAlgorithm`, `NeedsRehash` true |
+
+This library and every mainstream encoder (the argon2 reference, libsodium,
+PHP, passlib) write canonical hashes: only imported or hand-made hashes are
+affected. To migrate:
+
+1. Find the affected hashes: `NeedsRehash` is true for them, and `Verify`
+   answers the errors above.
+2. argon2id: re-encode them canonically — the parameters, salt and tag are
+   unchanged — before upgrading: parameters in the order `m,t,p`, decimals
+   without leading zeros, base64 without line breaks.
+3. bcrypt `$2x$` and `$2$`: the hash cannot be converted; reset the
+   password of these accounts (a `$2x$` hash of a password with 8-bit
+   characters did not verify correctly anyway).
+
+### `session`: CSRF tokens are masked per rendering
+
+`CSRFToken(s)` returned the session's secret as is, the same string in
+every response of the session: a page compressing its responses and
+reflecting attacker input next to it let a compression side channel
+(BREACH) recover it. It now returns the secret masked anew on every call —
+`base64url(mask ‖ mask ⊕ secret)` with a fresh random mask —, and
+`VerifyCSRF` unmasks the presented token before its constant-time
+comparison.
+
+| | Before | After |
+| --- | --- | --- |
+| `CSRFToken(s)` | `s.CSRFToken`, constant | a masked token, different on every call (twice the secret's length, base64url) |
+| `VerifyCSRF(s, CSRFToken(s))` | true | true, for every token rendered for the session |
+| `VerifyCSRF(s, s.CSRFToken)` (the raw field) | true | false |
+
+To migrate: render `session.CSRFToken(s)` — templates rendering the
+`Session.CSRFToken` field now get every state-changing request refused —,
+and compare tokens with `VerifyCSRF` only, never with `==`.
+
+### core: `AnonymousPrincipal` is a function, `DefaultClock` is removed
+
+`security.AnonymousPrincipal` and `security.DefaultClock` were exported
+variables: any package — a test override that leaked, a dependency — could
+replace them for the whole process, changing what every anonymous
+authentication reports, or freezing the clock `jwtsec` checks token expiry
+with.
+
+| Before | After |
+| --- | --- |
+| `security.AnonymousPrincipal` (variable) | `security.AnonymousPrincipal()` (function, one immutable value) |
+| `security.DefaultClock` (variable, `SystemClock{}`) | removed: use `security.SystemClock{}`, the default of every component taking a `Clock` |
+
+To migrate:
+
+1. Replace `security.AnonymousPrincipal` with `security.AnonymousPrincipal()`.
+2. Replace `security.DefaultClock` with `security.SystemClock{}`; in
+   tests, inject a clock through the component's option (`jwtsec.WithClock`,
+   `session.WithClock`, `throttle.Config.Clock`…) instead of overriding a
+   global.
+
+### `grpcsec`: the panics of the security pipeline are recovered
+
+grpc-go recovers no panic, and neither did `grpcsec`: one panic in an
+extractor, an authenticator, a user loader, a decision manager or a voter —
+a typed-nil dereference, say — ended the server on one unauthenticated
+RPC. The authentication and authorization interceptors now recover these
+panics and answer the RPC as an internal error. A recovery interceptor
+chained *outside* `grpcsec` (go-grpc-middleware's `recovery`, a Sentry
+reporter) therefore no longer sees them; the handler's own panics still
+reach it.
+
+| | Before | After |
+| --- | --- | --- |
+| Panic in the security pipeline | the process ends, or an outer recovery interceptor handles it | `codes.Internal` ("internal error"); span status Error, `error.type=_OTHER`, a `panic recovered` event — never the value |
+| Seeing the panic value | an outer recovery interceptor | `grpcsec.WithPanicHandler(func(ctx, recovered any))` on the authentication and authorization interceptors |
+| Panic in the RPC handler | unchanged | unchanged: not recovered by `grpcsec` |
+
+To migrate: pass the reporting of your recovery interceptor to
+`grpcsec.WithPanicHandler` — log the value and a stack
+(`runtime/debug.Stack()`) there, keeping in mind that the value may hold a
+credential the panicking code had at hand.

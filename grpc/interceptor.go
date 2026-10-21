@@ -12,6 +12,8 @@ import (
 	"github.com/hyperscale-stack/security"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 )
@@ -22,6 +24,43 @@ const tracerName = "github.com/hyperscale-stack/security/grpc"
 // context or no authentication (nil or a typed nil) without an error: an
 // internal error.
 var errEngineContract = errors.New("grpcsec: the engine returned no context or authentication")
+
+// errPipelinePanic reports a panic of the security pipeline — an
+// extractor, an authenticator, a voter —, recovered: an internal error.
+// It never carries the panic value, which may hold a credential.
+var errPipelinePanic = errors.New("grpcsec: panic in the security pipeline")
+
+// contain runs fn and turns a panic into errPipelinePanic: grpc-go recovers
+// no panic, so one would end the process. The span records the error status
+// and error.type of an internal error and a "panic recovered" event, never
+// the panic value; the value goes to the WithPanicHandler handler, if any.
+func contain(ctx context.Context, span trace.Span, handler func(context.Context, any), fn func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			span.AddEvent("panic recovered")
+			span.SetStatus(otelcodes.Error, security.ErrorClassOther)
+			span.SetAttributes(security.AttrErrorType.String(security.ErrorClassOther))
+			notify(ctx, handler, recovered)
+
+			err = errPipelinePanic
+		}
+	}()
+
+	return fn()
+}
+
+// notify hands a recovered panic value to the application's handler; a
+// panic of the handler itself is ignored, so that it cannot crash the
+// server either.
+func notify(ctx context.Context, handler func(context.Context, any), recovered any) {
+	if handler == nil {
+		return
+	}
+
+	defer func() { _ = recover() }() // a panicking panic handler is ignored on purpose
+
+	handler(ctx, recovered)
+}
 
 // authenticate runs the engine against the RPC metadata and returns the
 // enriched context with the carrier, whose staged writes the caller sends.
@@ -35,7 +74,16 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 	ctx = withClientAddr(ctx)
 	carrier := NewCarrier(ctx)
 
-	newCtx, auth, err := engine.Process(ctx, carrier)
+	var (
+		newCtx context.Context
+		auth   security.Authentication
+	)
+
+	err := contain(ctx, span, cfg.panicHandler, func() (err error) {
+		newCtx, auth, err = engine.Process(ctx, carrier)
+
+		return err //nolint:wrapcheck // wrapped below
+	})
 
 	// "no extractor configured" is tolerated only when the caller opted into
 	// anonymous fallback; every other error is fatal.
@@ -91,6 +139,13 @@ func withClientAddr(ctx context.Context) context.Context {
 // [security.AttemptLimiter] keys on, unless an interceptor before it stored
 // one with [security.WithClientAddr] — do so behind a proxy (Envoy, a load
 // balancer terminating the connection), or every RPC counts as the proxy's.
+//
+// A panic of the security pipeline — an extractor, an authenticator — is
+// recovered and answered as an internal error (codes.Internal with the
+// default mapper): grpc-go recovers no panic, and one unauthenticated RPC
+// would otherwise end the process. An outer recovery interceptor therefore
+// no longer sees these panics: [WithPanicHandler] receives their value. The
+// handler's own panics are not recovered.
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside
@@ -158,7 +213,7 @@ func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.Stream
 // mustEngine refuses a nil engine at construction: grpc-go recovers no
 // panic, so it would otherwise crash the server on the first RPC.
 func mustEngine(engine security.Engine) {
-	if engine == nil {
+	if isNil(engine) {
 		panic("grpcsec: nil Engine")
 	}
 }

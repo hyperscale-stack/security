@@ -38,7 +38,7 @@ func TestAuthenticationPreAuth(t *testing.T) {
 	assert.Equal(t, "s3cr3t", auth.Credentials())
 
 	// With no resolved user the principal falls back to the anonymous one.
-	assert.Equal(t, security.AnonymousPrincipal, auth.Principal())
+	assert.Equal(t, security.AnonymousPrincipal(), auth.Principal())
 }
 
 func TestAuthenticationPostAuth(t *testing.T) {

@@ -49,7 +49,7 @@ type (
 	Authentication = security.Authentication
 )
 
-func (a fakeAuthentication) Credentials() any     { return a.credentials }
+func (a fakeAuthentication) Credentials() any      { return a.credentials }
 func (a fakeAuthentication) Authorities() []string { return a.authorities }
 func (a fakeAuthentication) IsAuthenticated() bool { return a.authenticated }
 func (a fakeAuthentication) Name() string          { return a.name }

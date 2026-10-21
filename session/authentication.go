@@ -54,7 +54,7 @@ func (a Authentication) Principal() security.Principal {
 		return a.principal
 	}
 
-	return security.AnonymousPrincipal
+	return security.AnonymousPrincipal()
 }
 
 // Credentials implements [security.Authentication]. A session is not a

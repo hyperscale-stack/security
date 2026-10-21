@@ -17,8 +17,8 @@ import (
 
 // stubLoader resolves the "sub" value to a principal, optionally failing.
 type stubLoader struct {
-	authorities []string
-	err         error
+	authorities  []string
+	err          error
 	nilPrincipal bool
 }
 

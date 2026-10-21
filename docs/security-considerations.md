@@ -103,12 +103,14 @@ request contexts carry no deadline.
 Limit failed attempts per account and per client (NIST SP 800-63B-4
 §3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts): the library
 ships `security.AttemptLimiter` and its in-memory implementation
-`throttle.MemoryLimiter` (see [Attempt limiting](#attempt-limiting)), which
-`basic.Authenticator` does not take yet — until it does, limit at the edge
-or in an `Authenticator` wrapper. Prefer exchanging Basic credentials once
-for a session or a token over sending them on every request. Form logins and the OAuth2 `password` grant's
-`ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the same
-protections.
+`throttle.MemoryLimiter` (see [Attempt limiting](#attempt-limiting)): give
+the `Authenticator` one with `basic.WithAttemptLimiter`. It keys the
+attempts on the user-id lower-cased — `basic.WithAttemptSubject` when your
+store merges other variants (accents, Unicode forms) — and on the client
+address. Prefer exchanging Basic credentials once for a session or a token
+over sending them on every request. Form logins and the OAuth2 `password`
+grant's `ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the
+same protections.
 
 ## JWT
 
@@ -1288,8 +1290,11 @@ session store to compromise or scale.
   `Secure`.
 - **Shadowing cookies** — when a request carries several cookies of the
   session's name and more than one opens as a valid session, it has no
-  session: a tossed cookie can deny a session (until it expires), never
-  swap it. Copies of one session count as several — they can differ, as a
+  session: a tossed cookie next to the user's own denies it (until it
+  expires). A browser without a session of its own carries the tossed
+  cookie alone and is signed into the planted session — login CSRF —:
+  with a name that is not `__Host-` (a `Domain`, another `Path`), a sibling
+  host can do that, so keep the default name wherever possible. Copies of one session count as several — they can differ, as a
   copy planted before a sign-in without `Rotate` does — while expired or
   undecodable ones do not count. With the default `__Host-` name no other
   host can toss one at all. Stale duplicates have the same effect: after
@@ -1311,7 +1316,11 @@ session store to compromise or scale.
   `Session.GetInt64`): a 64-bit ID never loses precision through a float64.
   Treat a value that is present but unreadable as a refusal, not as absent.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
-  compares tokens in constant time, but it is a check, not a policy: call
+  renders the session's secret masked anew on every call — a fresh random
+  mask XORed with it, so that a compression side channel (BREACH) never
+  sees the same secret twice — and compares the unmasked token in constant
+  time; render `CSRFToken(s)`, never the `Session.CSRFToken` field, which
+  does not verify. It is a check, not a policy: call
   `VerifyCSRF` on every state-changing request a cookie session
   authenticates, never change state on GET, and put `net/http`'s
   `CrossOriginProtection` (Sec-Fetch-Site and Origin checks) in front of the
@@ -1523,7 +1532,10 @@ network:
   and any scoped (zoned) address. IPv4-mapped IPv6 addresses and NAT64
   (`64:ff9b::/96`) addresses are judged on the IPv4 address they reach;
   IPv6 is limited to `2000::/3` minus its special-purpose blocks (Teredo,
-  6to4, documentation), so an unknown or future reservation is refused.
+  6to4, documentation), so an unknown or future reservation is refused,
+  and an address with an ISATAP interface identifier (RFC 5214 §6.1),
+  which an ISATAP router tunnels to the IPv4 address it embeds, is refused
+  from any prefix.
 - **URLs** must be https (http only with `AllowHTTP`, for development), carry
   no userinfo, and name an ASCII host: non-ASCII names (which `net/http`
   would map to another name before dialing), percent-encoded or
@@ -1547,20 +1559,24 @@ network:
 
 Exemptions are explicit: `AllowedPrefixes` for an on-premises identity
 provider's subnet (or `outbound.LoopbackPrefixes()` in tests). Any port
-is allowed by default; restrict ports and hosts in `CheckURL`, and deny
-specific public addresses in `CheckAddr`. Only the well-known NAT64 prefix
-is decoded: on a network translating a network-specific prefix (RFC 6052),
-refuse that prefix in `CheckAddr`, or its addresses reach the private IPv4
-addresses they embed.
+is allowed by default: restrict hosts in `CheckURL`, and ports and
+specific public addresses in `CheckAddr`, which sees the numeric address
+and port actually dialed. `CheckURL` sees a canonical port too — decimal
+without leading zeros, absent for the scheme's default — so a port check
+there holds against `:022`, but compare numbers, not strings. Only the
+well-known NAT64 prefix is decoded: on a network translating a
+network-specific prefix (RFC 6052), refuse that prefix in `CheckAddr`, or
+its addresses reach the private IPv4 addresses they embed.
 
 Host names ending in a number (`127.1`, `2130706433`, `0x7f.1`) are refused
 before `CheckURL`: resolvers read them as IPv4 addresses, so a host check
-would vet another name than the one dialed. A refused destination is never
-named in an error, but the errors of allowed destinations may name their
-resolved address and port, and every error tells whether a name is
-refused: when tenants supply URLs ("test this connection"), log the error
-and show them a generic message, or the error text becomes an oracle on
-the internal network.
+would vet another name than the one dialed. A dial error never names the
+resolved address and port, nor the resolver's address — a refused
+destination, a refused connection, a timeout, a resolver failure keep only
+their cause —, but an error after the connection (a reset, a TLS failure)
+may, and every error tells whether a name is refused: when tenants supply
+URLs ("test this connection"), log the error and show them a generic
+message, or the error text becomes an oracle on the internal network.
 
 ## Credentials in header fields only
 
@@ -1806,8 +1822,8 @@ span catalog.
 - [ ] HTTP Basic: build each `basic.Authenticator` once, configure its hasher
       with the parameters of the stored hashes (and implement
       `basic.PasswordRehasher`), bound the request time
-      (`http.TimeoutHandler`), and rate-limit failed attempts per account
-      and per client in front of it.
+      (`http.TimeoutHandler`), and limit failed attempts per account and
+      per client (`basic.WithAttemptLimiter`).
 - [ ] Behind a reverse proxy, store the client address it forwards
       (`security.WithClientAddr`, from the hop your proxy appended) before
       the transport adapters: attempt limits key on it.

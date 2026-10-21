@@ -413,7 +413,8 @@ PKCE. Not supported, and refused where a provider could select them:
   connect-time address check would judge the proxy, not the destination.
   Deployments whose egress must go through a proxy cannot use them yet.
 - **Ports are not restricted** by default — restrict them in
-  `Policy.CheckURL`.
+  `Policy.CheckAddr`, which sees the numeric port dialed (`Policy.CheckURL`
+  sees a canonical port too).
 - **Private networks** need an explicit `AllowedPrefixes` exemption.
 - **NAT64** — only the well-known prefix (`64:ff9b::/96`) is decoded and
   judged on its embedded IPv4 address. A network-specific prefix (RFC 6052
@@ -421,9 +422,10 @@ PKCE. Not supported, and refused where a provider could select them:
   ordinary global IPv6 and reach whatever IPv4 address they embed, private
   ones included: a network translating such a prefix must refuse it in
   `Policy.CheckAddr`.
-- **Error text** — a refused destination is never named, but the errors of
-  allowed destinations (refused connection, timeout, TLS failure) come
-  from the standard library and may name the resolved address and port.
+- **Error text** — a dial error never names the resolved address nor the
+  resolver, but an error after the connection is made (a reset, a read
+  timeout) comes from the standard library and may name the address and
+  port.
 
 ## SAML Service Provider
 
@@ -564,17 +566,20 @@ PKCE. Not supported, and refused where a provider could select them:
   401 to list several challenges, but a client is only told about that
   scheme. Use one middleware per scheme, or a custom `ErrorMapper` that
   writes every challenge.
-- **Basic credentials are not NFC-normalized yet** — a Basic challenge
-  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 also says the server
-  expects the user-id and password in Unicode Normalization Form C; `basic`
-  checks them as received.
+- **Basic credentials are not NFC-normalized** — a Basic challenge
+  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 says the server
+  expects the user-id and password in Unicode Normalization Form C: clients
+  are to send them normalized, and `basic` checks them as received. The
+  dependency policy keeps `basic` and `password` off `golang.org/x/text`:
+  normalize passwords with the hasher decorator of the `password` package
+  documentation, user-ids in your `UserLoader` — and the attempt-limiter
+  subject alike (`basic.WithAttemptSubject`).
 
 ## Attempt limiting
 
-- **`basic` and `oauth2` do not use it yet** — `security.AttemptLimiter`
-  and its in-memory implementation `throttle.MemoryLimiter` exist, but
-  `basic.Authenticator` and the OAuth2 endpoints take none yet: limit their
-  failed attempts at the edge or in an `Authenticator` wrapper.
+- **Opt-in** — `basic.Authenticator` limits failed attempts only with
+  `basic.WithAttemptLimiter`; the OAuth2 endpoints take no
+  `security.AttemptLimiter` yet: limit their failed attempts at the edge.
 - **A throttle, not a lock-out** — `throttle.MemoryLimiter` slows guessing
   down; NIST SP 800-63B-4 §3.2.2 caps consecutive failures at 100 "by
   disabling that authenticator", which needs persistent state: an
@@ -609,10 +614,12 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## HTTP Basic
 
-- **No attempt limiting yet** — NIST SP 800-63B-4 §3.2.2 requires verifiers
-  to limit failed attempts: see [Attempt limiting](#attempt-limiting). The
+- **Attempt limiting is opt-in** — NIST SP 800-63B-4 §3.2.2 requires
+  verifiers to limit failed attempts: without `WithAttemptLimiter` the
   `Authenticator` only caps the number of concurrent verifications
-  (`runtime.GOMAXPROCS(0)` by default).
+  (`runtime.GOMAXPROCS(0)` by default). See
+  [Attempt limiting](#attempt-limiting) for what the shipped limiter does
+  not cover.
 - **Timing equalization residuals** — every attempt costs one verification,
   but a stored hash made with other parameters than the hasher's costs
   another time until it is re-hashed (`PasswordRehasher`), and the
@@ -635,8 +642,10 @@ PKCE. Not supported, and refused where a provider could select them:
   given, so a password typed in NFD on one device and NFC on another does
   not verify. NIST SP 800-63B-4 §3.1.1.2 says verifiers SHOULD apply NFC:
   wrap the hasher in the decorator shown in the `password` package
-  documentation (it needs `golang.org/x/text`, which the module does not
-  depend on).
+  documentation. Not built in: normalization needs `golang.org/x/text`,
+  which the dependency policy keeps out of `password`, and normalizing by
+  default would stop verifying the hashes of systems that never
+  normalized.
 - **bcrypt: 72 bytes** — longer passwords are refused (`ErrPasswordTooLong`),
   which caps passwords of multi-byte characters below the 64 characters
   SP 800-63B-4 asks verifiers to permit. Hashes imported from an
@@ -645,19 +654,24 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## Sessions
 
-- The session module is stateless: the whole session lives in an encrypted
-  cookie, there is no server-side session store. A session can be revoked
-  before its cookie expires only through `session.WithValidator` checking a
-  store of the application's (no Redis/SQL store is shipped); otherwise a
-  copy of the cookie stays valid until its deadline, `Logout` deleting the
-  browser's copy only.
+- The session module is stateless by design: the whole session lives in an
+  encrypted cookie, there is no server-side session store. A session can be
+  revoked before its cookie expires only through `session.WithValidator`
+  checking a store of the application's (no Redis/SQL store is shipped):
+  record a fingerprint of the session ID at logout, or a "valid since"
+  time per user, and refuse the sessions that match (OWASP ASVS V3.3).
+  Otherwise a copy of the cookie stays valid until its deadline, `Logout`
+  deleting the browser's copy only.
 - With a cookie name that is not `__Host-` (a `Domain`, another `Path`,
-  plain HTTP), a sibling host can plant a cookie of the session's name: the
-  request then carries two valid sessions and has none until that cookie
-  expires (denial, never a swap). The default `__Host-session` prevents it.
+  plain HTTP), a sibling host can plant a cookie of the session's name. A
+  signed-in browser then carries two valid sessions and has none until that
+  cookie expires (denial); a signed-out browser carries only the planted
+  one and is signed into the attacker's account (login CSRF). The default
+  `__Host-session` prevents both.
 - One active session key seals at most 2^32 cookies (random GCM nonces,
-  NIST SP 800-38D §8.3): the library does not count seals across
-  instances — rotate the key by volume.
+  NIST SP 800-38D §8.3): the library does not count seals — a per-process
+  count would miss the other instances — so rotate the key by volume
+  (about 50 days at 1 000 cookie writes per second).
 - The session cookie is read through `httpsec.Carrier` (its
   `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
   no cookies: a cookie session does not authenticate gRPC or ConnectRPC

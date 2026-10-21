@@ -12,7 +12,6 @@ import (
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/session"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,10 +33,9 @@ func TestSignInFormSessionOnADedicatedManager(t *testing.T) {
 		session.WithPurpose("sign-in form"),
 		session.WithTTL(15*time.Minute))
 
-	// The PrincipalLoader refuses a session without a subject, as its
-	// documentation requires; it is reached by the trap only.
+	// The Authenticator refuses a session without a subject before the
+	// PrincipalLoader, which is never reached.
 	loader := session.NewMockPrincipalLoader(t)
-	loader.EXPECT().Load(mock.Anything, mock.Anything).Return(nil, nil, security.ErrInvalidCredentials).Once()
 
 	engine := engineFor(sessions, loader)
 
@@ -64,7 +62,7 @@ func TestSignInFormSessionOnADedicatedManager(t *testing.T) {
 
 	got, err := form.Get(context.Background(), browser)
 	require.NoError(t, err)
-	assert.True(t, session.VerifyCSRF(got, s.CSRFToken))
+	assert.True(t, session.VerifyCSRF(got, session.CSRFToken(s)))
 
 	// Not even under the session cookie's name: the cookie name and the
 	// purpose are bound into the cookie.

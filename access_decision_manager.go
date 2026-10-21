@@ -327,11 +327,12 @@ func joinAttributes(attrs []Attribute) string {
 	return strings.Join(parts, ",")
 }
 
-// cloneVoters copies the voter list, panicking on a nil voter: it would
-// otherwise surface as a nil dereference on the first request.
+// cloneVoters copies the voter list, panicking on a nil voter, a typed nil
+// included: it would otherwise surface as a nil dereference on the first
+// request.
 func cloneVoters(constructor string, in []Voter) []Voter {
 	for i, v := range in {
-		if v == nil {
+		if isNil(v) {
 			panic(fmt.Sprintf("security: %s: nil Voter at index %d", constructor, i))
 		}
 	}

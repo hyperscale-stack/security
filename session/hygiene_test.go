@@ -328,16 +328,21 @@ func TestLogoutDeletesTheCookie(t *testing.T) {
 }
 
 // Audit §9 surviving mutants: VerifyCSRF reduced to the first byte, and its
-// empty-token guard removed.
+// empty-token guard removed. The comparison is over the unmasked secret.
 func TestVerifyCSRFComparesTheWholeToken(t *testing.T) {
 	t.Parallel()
 
 	s := &session.Session{CSRFToken: "abcdefghijklmnop"}
 
-	assert.True(t, session.VerifyCSRF(s, "abcdefghijklmnop"))
-	assert.False(t, session.VerifyCSRF(s, "abcdefghijklmnoq"), "last character differs")
-	assert.False(t, session.VerifyCSRF(s, "abcdefghijklmno"), "prefix")
-	assert.False(t, session.VerifyCSRF(s, "a"), "first character only")
+	assert.True(t, session.VerifyCSRF(s, session.CSRFToken(s)))
+
+	for name, other := range map[string]string{
+		"last character differs": "abcdefghijklmnoq",
+		"prefix":                 "abcdefghijklmno",
+		"first character only":   "a",
+	} {
+		assert.False(t, session.VerifyCSRF(s, session.CSRFToken(&session.Session{CSRFToken: other})), name)
+	}
 }
 
 func TestVerifyCSRFRefusesEmptyTokens(t *testing.T) {

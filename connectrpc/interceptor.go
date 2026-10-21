@@ -129,7 +129,7 @@ type AuthenticationInterceptor struct {
 // untouched. It panics on a nil engine and on an invalid challenge
 // configuration (see [DefaultErrorMapper]).
 func NewAuthenticationInterceptor(engine security.Engine, opts ...Option) *AuthenticationInterceptor {
-	if engine == nil {
+	if isNil(engine) {
 		panic("connectrpcsec: NewAuthenticationInterceptor: nil Engine")
 	}
 

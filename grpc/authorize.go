@@ -21,6 +21,10 @@ import (
 // the interceptor chain so the context already carries an authentication,
 // and install [StreamAuthorize] too — or use [AuthorizeServerOptions].
 //
+// A panic of the decision manager or of a voter is recovered and answered
+// as an internal error, like a panic of the authentication pipeline, and
+// handed to the [WithPanicHandler] handler.
+//
 // On grant the handler runs. On deny it answers with its [WithErrorMapper],
 // else the mapper of the authentication interceptor before it, else
 // [DefaultErrorMapper]: codes.PermissionDenied for an authenticated
@@ -42,7 +46,7 @@ func UnaryAuthorize(
 		_ *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (any, error) {
-		if err := decide(ctx, adm, attrs); err != nil {
+		if err := decide(ctx, cfg, adm, attrs); err != nil {
 			return nil, cfg.mapper(ctx).Map(ctx, err)
 		}
 
@@ -67,7 +71,7 @@ func StreamAuthorize(
 		_ *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
 	) error {
-		if err := decide(ss.Context(), adm, attrs); err != nil {
+		if err := decide(ss.Context(), cfg, adm, attrs); err != nil {
 			return cfg.mapper(ss.Context()).Map(ss.Context(), err)
 		}
 
@@ -77,13 +81,16 @@ func StreamAuthorize(
 
 // decide pulls the Authentication from ctx and runs the ADM, wrapping the
 // call in a "grpcsec.Authorize" span.
-func decide(ctx context.Context, adm security.AccessDecisionManager, attrs []security.Attribute) error {
+func decide(ctx context.Context, cfg *config, adm security.AccessDecisionManager, attrs []security.Attribute) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "grpcsec.Authorize")
 	defer span.End()
 
 	auth, _ := security.FromContext(ctx)
 
-	if err := adm.Decide(ctx, auth, attrs); err != nil {
+	err := contain(ctx, span, cfg.panicHandler, func() error {
+		return adm.Decide(ctx, auth, attrs) //nolint:wrapcheck // classified by refusal
+	})
+	if err != nil {
 		return refusal(auth, err)
 	}
 
@@ -106,7 +113,7 @@ func refusal(auth security.Authentication, err error) error {
 // interceptors and returns a copy of attrs, so the caller reusing its slice
 // cannot rewrite the policy.
 func mustPolicy(adm security.AccessDecisionManager, attrs []security.Attribute) []security.Attribute {
-	if adm == nil {
+	if isNil(adm) {
 		panic("grpcsec: nil AccessDecisionManager")
 	}
 

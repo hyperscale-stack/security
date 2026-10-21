@@ -194,8 +194,8 @@ func TestArgon2idLimitsNeverRefuseTheHashersOwnHashes(t *testing.T) {
 }
 
 // Hashes of other argon2id implementations: every mainstream encoder emits
-// m,t,p in that order; another order is accepted as long as each parameter
-// appears exactly once.
+// the canonical PHC string — m,t,p in that order, decimal without leading
+// zeros, unpadded base64 —, which verifies.
 func TestArgon2idVerifyAcceptsForeignHashes(t *testing.T) {
 	t.Parallel()
 
@@ -203,10 +203,9 @@ func TestArgon2idVerifyAcceptsForeignHashes(t *testing.T) {
 		password.WithArgon2idLimits(password.Argon2idLimits{MaxMemoryKiB: 1024}))
 
 	canonical := realPHC("correct horse", 1024, 3, 2, 16, 32)
-	reordered := strings.Replace(canonical, "m=1024,t=3,p=2", "t=3,p=2,m=1024", 1)
 	longSalt := realPHC("correct horse", 64, 1, 1, 64, 64)
 
-	for name, hash := range map[string]string{"canonical": canonical, "reordered": reordered, "64-byte salt and tag": longSalt} {
+	for name, hash := range map[string]string{"canonical": canonical, "64-byte salt and tag": longSalt} {
 		ok, err := verifyNoPanic(t, h, hash, "correct horse")
 		require.NoError(t, err, name)
 		assert.True(t, ok, name)

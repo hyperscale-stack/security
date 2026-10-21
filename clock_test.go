@@ -24,9 +24,14 @@ func TestSystemClockReturnsCurrentTime(t *testing.T) {
 	assert.False(t, got.After(after), "Now() must not postdate the call site")
 }
 
-func TestDefaultClockIsSystemClock(t *testing.T) {
+// Audit I-32: DefaultClock was an exported variable — the default clock of
+// jwtsec — that a leaked test override froze process-wide. It is gone: the
+// zero SystemClock is the default, and a value type cannot be reassigned.
+func TestSystemClockIsAValue(t *testing.T) {
 	t.Parallel()
 
-	_, ok := security.DefaultClock.(security.SystemClock)
-	assert.True(t, ok, "DefaultClock should be a SystemClock value")
+	var clock security.Clock = security.SystemClock{}
+
+	_, ok := clock.(security.SystemClock)
+	assert.True(t, ok)
 }

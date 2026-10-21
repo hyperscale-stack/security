@@ -48,8 +48,8 @@ func (staticExtractor) Extract(_ context.Context, c security.Carrier) (security.
 // staticAuthenticator accepts only "alice" / "password".
 type staticAuthenticator struct{}
 
-func (staticAuthenticator) AuthenticatorName() string                  { return "static" }
-func (staticAuthenticator) Supports(_ security.Authentication) bool    { return true }
+func (staticAuthenticator) AuthenticatorName() string               { return "static" }
+func (staticAuthenticator) Supports(_ security.Authentication) bool { return true }
 func (staticAuthenticator) Authenticate(_ context.Context, a security.Authentication) (security.Authentication, error) {
 	u, ok := a.(userAuth)
 	if !ok {
@@ -70,10 +70,10 @@ func (staticAuthenticator) Authenticate(_ context.Context, a security.Authentica
 // on the http sub-module.
 type demoCarrier struct{ headers map[string]string }
 
-func (c *demoCarrier) Get(k string) string         { return c.headers[k] }
-func (c *demoCarrier) Values(k string) []string    { return []string{c.headers[k]} }
-func (c *demoCarrier) Set(k, v string)             { c.headers[k] = v }
-func (c *demoCarrier) Add(k, v string)             { c.headers[k] = v }
+func (c *demoCarrier) Get(k string) string      { return c.headers[k] }
+func (c *demoCarrier) Values(k string) []string { return []string{c.headers[k]} }
+func (c *demoCarrier) Set(k, v string)          { c.headers[k] = v }
+func (c *demoCarrier) Add(k, v string)          { c.headers[k] = v }
 
 // roleVoter implements [security.Voter] for the example. It supports any
 // attribute string starting with "role:" and grants when the principal has

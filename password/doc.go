@@ -32,7 +32,16 @@
 // (ErrCostLimitExceeded, see WithArgon2idLimits and WithBCryptMaxCost).
 // Whoever can write or import a hash can therefore neither crash the
 // process, exhaust its memory or CPU, nor plant a hash that accepts random
-// passwords. Empty passwords are never hashed nor accepted (RFC 8265 §4.1),
+// passwords. An argon2id hash verifies in its canonical encoding only: a
+// PHC string with m, t and p in that order, decimal values without leading
+// zeros and unpadded standard base64 with zero trailing bits (C2SP
+// phc-strings). A bcrypt hash verifies with version $2a$, $2b$ or $2y$
+// only — never $2x$, crypt_blowfish's marker of its sign-extension bug,
+// nor the older $2$ —, and its cost is checked; x/crypto ignores what
+// follows its 60th character and the unused bits of its salt's last
+// character (harmless: whoever writes a stored hash controls the account;
+// a length check would lock out the space-padded values of fixed-width
+// columns). Empty passwords are never hashed nor accepted (RFC 8265 §4.1),
 // and bcrypt refuses passwords longer than 72 bytes instead of verifying a
 // truncated prefix (NIST SP 800-63B-4 §3.1.1.2).
 //

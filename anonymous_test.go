@@ -22,11 +22,15 @@ func TestAnonymousIsStableSingleton(t *testing.T) {
 	assert.Nil(t, a.Credentials())
 	assert.Nil(t, a.Authorities())
 	assert.Equal(t, "anonymous", a.Name())
-	assert.Equal(t, security.AnonymousPrincipal, a.Principal())
+	assert.Equal(t, security.AnonymousPrincipal(), a.Principal())
 }
 
+// Audit I-32: AnonymousPrincipal was an exported variable any package could
+// reassign, changing what every anonymous authentication reports. It is a
+// function returning one immutable value.
 func TestAnonymousPrincipalSubject(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "anonymous", security.AnonymousPrincipal.Subject())
+	assert.Equal(t, "anonymous", security.AnonymousPrincipal().Subject())
+	assert.Equal(t, security.AnonymousPrincipal(), security.AnonymousPrincipal(), "one value")
 }

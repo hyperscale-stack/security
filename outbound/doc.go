@@ -19,8 +19,10 @@
 //     link-local (cloud metadata endpoints), multicast, unspecified,
 //     reserved, documentation or benchmarking space, judged on the IPv4
 //     address an IPv4-mapped or NAT64 (64:ff9b::/96) address carries, or
-//     scoped (zoned). Checking the dialed address defeats DNS rebinding.
-//     IPv4 is a deny-list of the IANA special-purpose registry (RFC 6890);
+//     scoped (zoned); an ISATAP address (RFC 5214 §6.1), which tunnels to
+//     the IPv4 address it embeds, is refused from any prefix. Checking the
+//     dialed address defeats DNS rebinding. IPv4 is a deny-list of the
+//     IANA special-purpose registry (RFC 6890);
 //     IPv6 is an allow-list of 2000::/3 minus its special-purpose blocks;
 //   - host names must be ASCII, are compared lower-cased, and may not end
 //     with a dot or in a number (127.1, 0x7f.1, which a resolver reads as
@@ -34,12 +36,14 @@
 // Applications widen the policy explicitly — AllowedPrefixes for an
 // on-premises identity provider or the loopback interface in tests,
 // AllowHTTP for local development, MaxRedirects — and narrow it with the
-// CheckURL (host and port allow-lists) and CheckAddr hooks. Only the
+// CheckURL (host allow-lists; it sees canonical ports) and CheckAddr (port
+// and address policy on the numeric address dialed) hooks. Only the
 // well-known NAT64 prefix is decoded: on a network translating a
 // network-specific prefix (RFC 6052), refuse that prefix in CheckAddr.
 //
-// A refused destination is never named in an error; the errors of allowed
-// destinations may name their address. Show tenants a generic message.
+// A dial error names neither the address dialed nor the resolver; an error
+// after the connection may name the address. Show tenants a generic
+// message.
 //
 // The package depends on the standard library only; it is the only
 // networking code of the core module.
