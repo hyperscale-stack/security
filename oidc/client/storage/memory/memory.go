@@ -37,7 +37,8 @@ var ErrFull = errors.New("memory: transaction store full")
 // DefaultCapacity is the number of live transactions a Store built without
 // WithCapacity keeps: 10 000 pending logins — about 16 login starts a
 // second over the default 10-minute TransactionTTL, 2.8 over the maximum
-// of one hour — at most about 46 MB with 4 KiB AppStates.
+// of one hour — about 46 MB with 4 KiB AppStates, more with long
+// acr_values (up to about 66 MB).
 const DefaultCapacity = 10_000
 
 // Option configures a Store.

@@ -12,20 +12,27 @@ import (
 
 // Secret is a credential of the Relying Party: the client secret, a
 // transaction key, the binding secret of a login, a token. Reveal returns
-// its value; every other rendering prints REDACTED — "" for an empty
-// Secret — so that no log, error or dump carries it:
+// its value. The renderings of the standard library print REDACTED — ""
+// for an empty Secret:
 //
 //   - fmt, with every verb, flag and width (Format), String and GoString;
 //   - log/slog, as an attribute (LogValue) or nested in a struct that the
 //     text handler prints with fmt;
 //   - encoding/json (MarshalJSON), log/slog's JSON handler included. A
 //     Secret does not decode from JSON: a REDACTED document never turns
-//     back into a credential;
-//   - a Secret reached through an unexported field of another value, which
-//     fmt prints by reflection without calling any method: its value sits
-//     behind a pointer to a string, which fmt then renders as an address,
-//     whatever the verb. encoding/gob refuses a Secret (it has no exported
-//     field) and encoding/xml writes it empty.
+//     back into a credential.
+//
+// fmt prints a Secret it reaches through an unexported field of another
+// value by reflection, without calling any method: its value sits behind a
+// pointer to a string, which fmt renders there as an address, whatever the
+// verb. encoding/gob refuses any value holding a Secret (it has no
+// exported field); encoding/xml and YAML encoders write it empty. Not
+// covered: a reflection-based dumper that dereferences pointers without
+// calling methods — go-spew with DisableMethods, as in testify's failure
+// diffs — prints its value; dump these values that way in tests only, and
+// mind that test output lands in CI logs. Name the field that holds a
+// Secret: a struct embedding one is promoted its methods, and prints and
+// encodes as REDACTED as a whole.
 //
 // The zero Secret is empty. A Secret is immutable and safe to copy and
 // share between goroutines. Compare two Secrets with crypto/subtle on their

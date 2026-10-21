@@ -725,18 +725,30 @@ PKCE. Not supported, and refused where a provider could select them:
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
   Log these types directly or through exported fields, with `%v`.
   `oidc/client` holds every credential in an `oidcclient.Secret`, which
-  stays redacted even there; what such a path still prints of its values is
-  not a credential: a `Callback`'s parameters (the authorization code,
-  useless without the PKCE verifier derived from the binding secret, and
-  the state), an `AuthRequest`'s URL and state, an `Identity`'s claims.
+  `fmt` prints as an address there; what such a path still prints of its
+  values is not a `Secret`: a `Callback`'s parameters (the authorization
+  code, useless without the PKCE verifier derived from the binding secret,
+  and the state), an `AuthRequest`'s URL — every request parameter in
+  clear: the state, the `login_hint` (personal data) and the
+  `id_token_hint` (an ID Token) — and an `Identity`'s claims.
+- **Reflection dumpers** — a dumper that walks unexported fields and
+  dereferences pointers without calling methods prints every value it
+  reaches, an `oidcclient.Secret`'s included: go-spew with
+  `DisableMethods`, which testify's failure diffs use. Dump these values
+  that way in tests only, and mind that test output lands in CI logs. A
+  struct embedding an `oidcclient.Secret` is promoted its methods and
+  prints and encodes as `REDACTED` as a whole: name the field.
 - **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
   only: a value nested in another one (a struct field, a map) is encoded
   with `encoding/json`. `oidcclient` values and `session.Session` encode
   without their secrets — an `oidcclient.Secret` encodes `REDACTED` — but
   `oidcclient.Identity` encodes its claims and `UserInfo` its claims
   (personal data): log these as attributes of their own. Other
-  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
-  every exported field; an `oidcclient.Secret` has none.
+  reflection-based encoders write every exported field: `encoding/gob`
+  refuses any value holding an `oidcclient.Secret` (a gob-encoded session
+  holding an `Identity` fails to save), and `encoding/xml` and YAML write
+  it empty. Persist the identifiers and the revealed tokens in a struct of
+  your own.
 - **Credentials and tokens in flight are not redacted yet** — the `oauth2`
   records (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the
   `GrantResponse` holding them) print the raw code and tokens they carry

@@ -25,9 +25,10 @@ import (
 // can assert the same value. With pairwise subject identifiers the same
 // person has a different Subject for every client.
 //
-// Tokens holds credentials, as Secrets: fmt, log/slog and encoding/json
-// print an Identity without them, wherever it sits — an application
-// persisting tokens reveals them explicitly (Secret.Reveal). Its claims are
+// Tokens holds credentials, as Secrets, which fmt, log/slog and
+// encoding/json never print (see Secret for what they do not cover) and
+// encoding/gob refuses: an application persisting tokens reveals them
+// explicitly (Secret.Reveal), into its own struct of strings. Its claims are
 // not secrets: an Identity nested in a value that log/slog's JSON handler
 // logs (a struct field, a map) is written with them; log it as an
 // attribute of its own, which LogValue reduces to its identifiers.

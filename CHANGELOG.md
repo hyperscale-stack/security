@@ -1040,10 +1040,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   API — `Config.ClientSecret`, `Config.TransactionKeys` (now `[]Secret`),
   `AuthRequest.Binding`, `Callback.Binding`, `Tokens.AccessToken`,
   `RefreshToken` and `IDToken`, `AuthOptions.IDTokenHint` — is a `Secret`:
-  `NewSecret(s)` builds one, `Reveal()` reads it, and it prints, logs and
-  encodes as `REDACTED` everywhere, `encoding/json` included: `Identity`
-  and `Tokens` no longer encode their tokens, which applications persist by
-  revealing them (see MIGRATION.md).
+  `NewSecret(s)` builds one, `Reveal()` reads it, and every `fmt` verb,
+  `slog` and `encoding/json` render it `REDACTED` (`fmt` an address when it
+  reaches it through an unexported field): `Identity` and `Tokens` no
+  longer encode their tokens, which applications persist by revealing
+  them. `encoding/gob` refuses any value holding a `Secret` (a gob session
+  holding an `Identity` fails to save), YAML writes it empty, and documents
+  persisted before the upgrade no longer decode (see MIGRATION.md).
 - `oidcclient.Config.InsecureCookies` is refused (`ErrInvalidConfig`)
   unless `RedirectURL` is plain http, which is accepted on a loopback host
   only (breaking for a configuration combining it with an https redirect

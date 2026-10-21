@@ -1525,7 +1525,9 @@ are attacker-influenced.
   `oidcclient.Secret`: every `fmt` verb, `slog` and `encoding/json` render
   it `REDACTED` — also when fmt reaches it by reflection through an
   unexported field, where it prints as an address — and `Reveal()` is the
-  only way to its value. `Identity` encodes its claims and `UserInfo` its
+  only way to its value; a reflection dumper that follows pointers without
+  calling methods (testify's failure diffs) prints it, and `encoding/gob`
+  refuses any value holding one. `Identity` encodes its claims and `UserInfo` its
   claims (personal data): never log them nested in another value.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to

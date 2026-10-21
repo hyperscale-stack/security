@@ -172,10 +172,21 @@ distinct redirect URIs).
 - After a successful callback, create a fresh session (a new ID) and
   answer 303 to a clean URL, so the code leaves the browser history.
 - Every credential — client secret, transaction keys, binding secret,
-  tokens — is an `oidcclient.Secret`: it prints, logs and encodes as
-  `REDACTED` wherever it sits (`TestSecretsNeverPrint`), and `Reveal()`
-  returns it where it is used. An application persisting tokens reveals
-  them explicitly: `Identity` and `Tokens` encode them `REDACTED`.
+  tokens — is an `oidcclient.Secret`: every `fmt` verb, `slog` and
+  `encoding/json` render it `REDACTED`, `fmt` an address when it reaches
+  it through an unexported field (`TestSecretsNeverPrint`), and `Reveal()`
+  returns it where it is used. `encoding/gob` refuses any value holding
+  one: a gob-encoded session holding an `Identity` fails to save. An
+  application persisting tokens reveals them into its own struct of
+  strings: `Identity` and `Tokens` encode them `REDACTED`. A reflection
+  dumper that follows pointers without calling methods (go-spew with
+  `DisableMethods`, testify's failure diffs) prints a `Secret`'s value.
+- `AuthRequest.URL` is the whole authorization request: the state, the
+  `login_hint` (personal data) and the `id_token_hint` (an ID Token) are
+  in it, in clear — it must carry them to the provider. `AuthRequest`
+  prints and logs it without its query, but its JSON hand-off writes it,
+  and `fmt` prints it when it reaches an `AuthRequest` through an
+  unexported field.
 - Show users a generic message on failure: `AuthorizationError` and
   `TokenError` carry the provider's untrusted text, and errors of `New` may
   name an allowed destination's address. Provider-controlled text an error

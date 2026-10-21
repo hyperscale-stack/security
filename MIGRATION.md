@@ -3026,11 +3026,14 @@ struct holding an `oidcclient.Config`, `AuthRequest`, `Callback`,
 transaction keys, the binding secret or the tokens, and so did `slog`'s
 text handler, which prints such a struct with `fmt`. Every secret of the
 package's API is now an `oidcclient.Secret`: `NewSecret(s)` builds one,
-`Reveal()` returns its value, and every other rendering — every `fmt` verb,
-`slog`, `encoding/json`, and a `Secret` reached through an unexported field,
-whose value sits behind a pointer fmt prints as an address — shows
-`REDACTED` (`""` when empty). `encoding/gob` refuses a `Secret` and
-`encoding/xml` writes it empty; a `Secret` does not decode from JSON.
+`Reveal()` returns its value, every `fmt` verb, `slog` and `encoding/json`
+show `REDACTED` (`""` when empty), and `fmt` prints an address for a
+`Secret` it reaches through an unexported field, whose value sits behind a
+pointer. `encoding/gob` refuses any value holding a `Secret`, YAML and
+`encoding/xml` write it empty, and a `Secret` does not decode from JSON —
+values persisted with those encoders break, see the table. A reflection
+dumper that follows pointers without calling methods (testify's failure
+diffs) still prints the value.
 
 | Field | Before | After |
 | --- | --- | --- |
@@ -3041,6 +3044,10 @@ whose value sits behind a pointer fmt prints as an address — shows
 | `Tokens.AccessToken`, `RefreshToken`, `IDToken` | `string` | `Secret` — `Reveal()` to call an API or store them |
 | `AuthOptions.IDTokenHint` | `string` | `Secret` — `IDTokenHint: id.Tokens.IDToken` needs no conversion |
 | `json.Marshal` of an `Identity` or `Tokens` | tokens written, for persistence | tokens `"REDACTED"`; `json.Unmarshal` of such a document into an `Identity` fails |
+| `json.Unmarshal` into an `Identity` or `Tokens` of a document written before the upgrade (string tokens) | decoded | fails: `cannot unmarshal string into … oidcclient.Secret` |
+| `encoding/gob` of any value holding an `Identity`, `Tokens`, `Config`, `AuthRequest` or `Callback` — gob-encoded sessions (gorilla/sessions, scs) | encoded, secrets included | fails: `gob: type oidcclient.Secret has no exported fields`; gob data written before the upgrade no longer decodes either |
+| YAML (`go.yaml.in/yaml/v3`) of such a value | tokens written | each `Secret` written `{}`, without error; a string does not decode into a `Secret` |
+| Configuration decoded into an `oidcclient.Config` (YAML, envconfig, mapstructure, viper) | `ClientSecret`, `TransactionKeys` filled | not filled: decode into strings, then `NewSecret` |
 | `fmt` of a `Config`, `AuthRequest`, `Callback`, `Identity`, `Tokens` or `Client` reached through an unexported field, `%+v` of `*client` | secrets printed | secrets printed as an address |
 
 To migrate:
@@ -3054,10 +3061,33 @@ To migrate:
 3. Read the tokens with `Reveal()` where they are used (`Authorization:
    Bearer`, a refresh request) and pass `id.Tokens.IDToken` as
    `AuthOptions.IDTokenHint` unchanged.
-4. An application persisting an `Identity` or its `Tokens` as JSON stores
-   the revealed tokens explicitly, in storage fit for credentials: the
-   encoding of `Identity` and `Tokens` now writes them `REDACTED`.
-5. Compare two `Secret`s with `crypto/subtle.ConstantTimeCompare` on their
+4. An application persisting an `Identity` or its `Tokens` — in a session
+   (gob, JSON), a database, a cache — stores the identifiers and the
+   revealed tokens in a struct of its own, of strings, in storage fit for
+   credentials:
+
+   ```go
+   type storedLogin struct {
+   	ConnectionID, Issuer, Subject string
+   	AccessToken, RefreshToken, IDToken string
+   	Expiry time.Time
+   }
+
+   s := storedLogin{
+   	ConnectionID: id.ConnectionID, Issuer: id.Issuer, Subject: id.Subject,
+   	AccessToken: id.Tokens.AccessToken.Reveal(), RefreshToken: id.Tokens.RefreshToken.Reveal(),
+   	IDToken: id.Tokens.IDToken.Reveal(), Expiry: id.Tokens.Expiry,
+   }
+   ```
+
+   Read back, wrap the tokens again with `oidcclient.NewSecret` where an
+   `oidcclient` API takes them (`AuthOptions.IDTokenHint`).
+5. Expect the sessions that hold an `Identity` or `Tokens`, written before
+   the upgrade, to fail to decode at deploy: drop them, and their users
+   sign in again.
+6. Decode configuration (YAML, environment) into strings and build the
+   `Config` with `NewSecret`.
+7. Compare two `Secret`s with `crypto/subtle.ConstantTimeCompare` on their
    revealed values, never with `==` (which compares their identity).
 
 ### `oidc/client`: `InsecureCookies` only with a loopback http redirect URI

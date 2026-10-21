@@ -37,8 +37,9 @@ type AuthOptions struct {
 	// without control characters).
 	LoginHint string
 	// IDTokenHint is passed as id_token_hint: an ID Token the provider
-	// issued earlier, such as Identity.Tokens.IDToken. It never prints,
-	// logs nor encodes (see Secret).
+	// issued earlier, such as Identity.Tokens.IDToken. AuthOptions prints,
+	// logs and encodes without it (see Secret), but the request must carry
+	// it to the provider: AuthRequest.URL holds it in clear.
 	IDTokenHint Secret
 	// Prompt values are passed space-separated as prompt; "none" cannot
 	// be combined with another value.
@@ -82,7 +83,12 @@ type AuthOptions struct {
 // and state but without its binding secret: never log it nested in another
 // value under log/slog's JSON handler.
 type AuthRequest struct {
-	// URL is the authorization request: send the user agent to it.
+	// URL is the authorization request: send the user agent to it. It
+	// carries every request parameter in clear — the state, the
+	// login_hint (personal data), the id_token_hint (an ID Token) — which
+	// the provider must receive: the renderings of AuthRequest leave out
+	// its query, but its JSON encoding writes it, and so does fmt when it
+	// reaches an AuthRequest through an unexported field of another value.
 	URL string
 	// State is the state parameter, also carried by URL.
 	State string
