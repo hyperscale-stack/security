@@ -8,7 +8,8 @@
 # loopback interface — the provider at http://localhost:8083, the relying
 # party at http://127.0.0.1:9000, two sites for the browser; the redirect
 # URI is a loopback IP literal, the only http one the provider's
-# Profile20BCP accepts (RFC 9700 §2.6) — and runs the scenarios. Opt-in, never part of `make test` or CI.
+# Profile20BCP accepts (RFC 9700 §2.6) — and runs the scenarios. Opt-in,
+# never part of `make test` or CI.
 #
 # Prerequisites: Go, curl, openssl, Chrome (or CHROME_PATH) and Tales
 # v0.1.0-rc.23:

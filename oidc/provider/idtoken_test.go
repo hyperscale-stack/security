@@ -140,10 +140,11 @@ func TestClientWithoutAnAlgorithmGetsRS256(t *testing.T) {
 	assert.Equal(t, string(jwtsec.RS256), header["alg"])
 }
 
-// TestIDTokenIssuerIsCheckedAtTheExchange: an issuer the provider no longer
-// accepts — an http loopback issuer once the opt-in is gone — gets no ID
-// Token (server_error), even for a code issued before.
-func TestIDTokenIssuerIsCheckedAtTheExchange(t *testing.T) {
+// TestExchangeAtARefusedIssuerIssuesNoIDToken: an issuer the deployment no
+// longer accepts — an http loopback issuer once the opt-in is gone — gets
+// no ID Token, even for a code issued before: the server refuses the issuer
+// at /token (server_error, oauth2.ErrInvalidIssuer) before the grant runs.
+func TestExchangeAtARefusedIssuerIssuesNoIDToken(t *testing.T) {
 	t.Parallel()
 
 	loopback := withResolver(fixedIssuer{issuer: "http://127.0.0.1:8080"})
@@ -155,6 +156,7 @@ func TestIDTokenIssuerIsCheckedAtTheExchange(t *testing.T) {
 	rec := strict.exchange(code)
 	assert.Equal(t, oauth2.CodeServerError, oauthError(t, rec))
 	assert.NotContains(t, rec.Body.String(), "id_token")
+	assert.True(t, strict.sink.contains(oauth2.ErrInvalidIssuer))
 }
 
 // TestClientAlgorithmWithoutAKey: a client registered for an algorithm no

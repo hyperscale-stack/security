@@ -131,10 +131,8 @@ func (p *Provider) validateRequest(ctx context.Context, r *http.Request, ar *oau
 		return nil, errNotMounted
 	}
 
-	if _, err := p.parseIssuer(ar.Issuer); err != nil {
-		return nil, err
-	}
-
+	// ar.Issuer is valid: the server checks every issuer it resolves
+	// (oauth2.ErrInvalidIssuer) with the loopback setting New gives both.
 	if err := checkProtocol(r.Form, ar); err != nil {
 		return nil, err
 	}

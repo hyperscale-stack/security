@@ -178,10 +178,15 @@ func TestAuthorizeRefusesPlainHTTPRedirectURIsUnderBCP(t *testing.T) {
 				assert.Zero(t, sole.store.writes.Load())
 			}
 
-			env := newTransportEnv(t, p, "http://127.0.0.1/cb")
-			status, location, _ := env.authorize("http://127.0.0.1:51004/cb")
-			assert.Equal(t, http.StatusFound, status)
-			assert.Contains(t, location, "http://127.0.0.1:51004/cb?code=")
+			for registered, requested := range map[string]string{
+				"http://127.0.0.1/cb": "http://127.0.0.1:51004/cb",
+				"http://[::1]/cb":     "http://[::1]:61023/cb",
+			} {
+				env := newTransportEnv(t, p, registered)
+				status, location, _ := env.authorize(requested)
+				assert.Equal(t, http.StatusFound, status, requested)
+				assert.Contains(t, location, requested+"?code=")
+			}
 		})
 	}
 

@@ -263,6 +263,19 @@ func TestInvalidResolvedIssuerIsAnOutage(t *testing.T) {
 				form := url.Values{"grant_type": {"client_credentials"}, "token": {"ghost"}}
 				rec := serve(ep.h, boundsPost(path, strings.NewReader(form.Encode())))
 				assert.Equal(t, ep.status, rec.Code, "%s: %s", path, rec.Body.String())
+
+				body := jsonBody(t, rec)
+				if ep.status == http.StatusServiceUnavailable {
+					assert.Equal(t, oauth2.CodeTemporarilyUnavailable, body["error"], path)
+				} else {
+					assert.Equal(t, oauth2.CodeServerError, body["error"], path)
+				}
+
+				if issuer != "" {
+					assert.NotContains(t, rec.Body.String(), issuer, "%s never echoes the issuer", path)
+				}
+
+				assert.NotContains(t, rec.Body.String(), "invalid issuer", "%s never echoes the cause", path)
 			}
 
 			for _, err := range env.sink.collected() {

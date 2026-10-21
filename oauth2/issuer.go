@@ -18,11 +18,20 @@ import (
 // an https URL — or, with [ServerConfig.AllowInsecureLoopbackIssuer], an
 // http URL whose host is localhost or a loopback IP address — with a host,
 // without user info, query or fragment, with a port from 1 to 65535 when it
-// names one, in canonical form (RFC 8414 §2: "a URL that uses the "https"
-// scheme and has no query or fragment components"; RFC 9207 §2). [NewServer]
-// wraps it for a [StaticIssuer]; an [IssuerResolver] returning such an
-// issuer fails the request as an outage, with ErrInvalidIssuer as the cause
-// the [ErrorHook] gets. The reason it carries never echoes the issuer.
+// names one, in the form Go's net/url writes it (RFC 8414 §2: "a URL that
+// uses the "https" scheme and has no query or fragment components"; RFC
+// 9207 §2). [NewServer] wraps it for a [StaticIssuer]; an [IssuerResolver]
+// returning such an issuer fails the request as an outage, with
+// ErrInvalidIssuer as the cause the [ErrorHook] gets. The reason it carries
+// never echoes the issuer.
+//
+// Spellings RFC 3986 §6.2 holds equivalent but net/url keeps as written —
+// an upper-case host, the default port (":443"), a port with a leading zero,
+// dot segments, a zone in an IPv6 loopback literal — are accepted and
+// published as given: clients compare iss by simple string (RFC 9207 §2.4),
+// and one normalizing the URL first would then reject every response. Use
+// the RFC 3986 §6.2.2 normal form: lower-case host, no default port, no dot
+// segment.
 var ErrInvalidIssuer = errors.New("oauth2: invalid issuer identifier")
 
 // IssuerResolver returns the issuer identifier (and matching audience) for
@@ -113,10 +122,11 @@ func issuerParts(u *url.URL, issuer string) string {
 	case u.Fragment != "":
 		return "a fragment component"
 	case u.String() != issuer:
-		// Issuers are compared exactly (RFC 9207 §2.4): a value the URL
+		// Issuers are compared exactly (RFC 9207 §2.4): a value Go's URL
 		// syntax rewrites — an upper-case scheme, an unescaped character,
 		// an empty query or fragment ("…/?", "…/#") — is refused rather
-		// than published in two forms.
+		// than published in two forms. Forms net/url keeps as written are
+		// not caught (see ErrInvalidIssuer).
 		return "not in canonical form"
 	default:
 		return ""

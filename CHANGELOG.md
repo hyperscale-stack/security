@@ -688,9 +688,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - **OAuth2 `GrantResponse.ExtraParams` removed (breaking)**: it was never
   serialized. `GrantResponse.IDToken` is the typed member a token response
   may add (`id_token`).
-- **OAuth2 `/authorize`** resolves the issuer right after the redirect URI is
-  trusted, for both flows: a resolver failure answers a redirected
-  `server_error` before the `ConsentFunc` runs. The request a `ConsentFunc`
+- **OAuth2 `/authorize`** resolves the issuer first, for both flows: a
+  resolver failure (or an invalid issuer) is a bare 500, never redirected,
+  no client loaded (see Security). The request a `ConsentFunc`
   — or an extension hook — gets is a read-only copy: modifying any field of
   it but `ExtensionRequest`, or the identity of the client it shares, fails
   the authorization with `server_error` (`oauth2.ErrAuthorizeRequestModified`

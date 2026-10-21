@@ -646,8 +646,12 @@ keys by `kid` against a JWKS provider (static or remote).
   aborts on a mismatch (RFC 9700 §4.4.2.1), the defense RFC 9700 prefers to
   distinct redirect URIs. The server validates the issuer on every request
   (RFC 8414 §2, RFC 9207 §2: https, a host, no user info, query or
-  fragment, a valid port, canonical form; http on a loopback host only with
-  `ServerConfig.AllowInsecureLoopbackIssuer`, for development): `NewServer`
+  fragment, a valid port, the form Go's `net/url` writes; http on a
+  loopback host only with `ServerConfig.AllowInsecureLoopbackIssuer`, for
+  development — spellings RFC 3986 §6.2 holds equivalent but `net/url`
+  keeps, such as an upper-case host or `:443`, are accepted: use the RFC
+  3986 normal form, as relying parties normalizing the URL compare `iss`
+  with it): `NewServer`
   refuses an invalid `StaticIssuer` (`oauth2.ErrInvalidIssuer`), and an
   `IssuerResolver` that fails or returns an invalid issuer makes the request
   an outage — a bare 500 at `/authorize`, never redirected and before any

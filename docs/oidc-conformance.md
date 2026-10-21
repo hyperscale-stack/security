@@ -147,9 +147,10 @@ the real example binaries: `examples/oidc-provider` at
 `http://localhost:8083` and `examples/oidc-client` at
 `http://127.0.0.1:9000` — two sites, so the browser applies SameSite to the
 relying party's cookies; the redirect URI is a loopback IP literal, the
-only http one the provider's `Profile20BCP` accepts (RFC 9700 §2.6). `e2e/oidc/run.sh` builds and starts them, runs the
-provider scenarios (tag `provider`) in parallel against one pair of servers,
-then each relying-party and browser file on fresh servers.
+only http one the provider's `Profile20BCP` accepts (RFC 9700 §2.6).
+`e2e/oidc/run.sh` builds and starts them, runs the provider scenarios (tag
+`provider`) in parallel against one pair of servers, then each
+relying-party and browser file on fresh servers.
 
 - Prerequisites: Go, curl, openssl, Chrome (or `CHROME_PATH`) and Tales
   v0.1.0-rc.23 (`go install

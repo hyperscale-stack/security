@@ -482,7 +482,7 @@ issuer, and a rotation never changes the context it carries.
 
 | Before | After |
 | ------ | ----- |
-| `/authorize` resolved no issuer for the code flow (the implicit flow did, after the consent) | resolves it right after the redirect URI is trusted, for both flows: a resolver failure answers a redirected `server_error`, before the `ConsentFunc` runs; `AuthorizeRequest.Issuer` exposes it |
+| `/authorize` resolved no issuer for the code flow (the implicit flow did, after the consent) | resolves it right after the redirect URI is trusted, for both flows: a resolver failure answers a redirected `server_error`, before the `ConsentFunc` runs; `AuthorizeRequest.Issuer` exposes it — since a bare `500`, never redirected, no client loaded: see "the issuer is validated" below |
 | a code or refresh token redeemed at any issuer | `invalid_grant` (`authorization code issued by another issuer`, `refresh_token issued by another issuer`); a refused refresh consumes nothing, a code replayed at another issuer revokes nothing |
 | `AuthorizationCode`, `AccessToken`, `RefreshToken` | gain `Issuer` and `ExtensionData` (strings every store persists byte-exact); `IntrospectedToken` gains `Issuer` |
 | codes and refresh tokens written before the upgrade | carry no issuer: refused with `invalid_grant` unless your resolver returns an empty issuer — fail closed |
@@ -752,7 +752,7 @@ The server now resolves the issuer of a request before it loads its client:
 
 | Endpoint | Before | After |
 | -------- | ------ | ----- |
-| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted |
+| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted — since a bare `500`, never redirected, no client loaded: see "the issuer is validated" below |
 | `/token` | client authentication and `grant_type` checks before the resolver | the resolver first: when it fails, `server_error` wins over every other error |
 | `/revoke`, `/introspect` | no `IssuerResolver` call | the resolver runs before client authentication; a failure answers `500 server_error` |
 
@@ -2963,7 +2963,10 @@ without checking its issuer binding and redirected an `iss`-less
 To migrate:
 
 1. Make every issuer an https URL with a host, without user info, query or
-   fragment, written as `url.Parse(issuer).String()` writes it.
+   fragment, written as `url.Parse(issuer).String()` writes it — and in the
+   RFC 3986 §6.2.2 normal form (lower-case host, no default port, no dot
+   segment), which the server does not enforce but relying parties
+   comparing `iss` after normalizing the URL need.
 2. For local development over http, set
    `ServerConfig.AllowInsecureLoopbackIssuer` (or the provider's flag) and
    use a loopback host.
