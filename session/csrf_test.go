@@ -49,8 +49,10 @@ func TestCSRFTokenSurvivesCookieRoundTrip(t *testing.T) {
 	reloaded, err := mgr.Get(context.Background(), c.replay())
 	require.NoError(t, err)
 
-	assert.Equal(t, session.CSRFToken(original), session.CSRFToken(reloaded),
-		"the CSRF token must survive the cookie encrypt/decrypt round-trip")
+	assert.Equal(t, original.CSRFToken, reloaded.CSRFToken,
+		"the CSRF secret must survive the cookie encrypt/decrypt round-trip")
+	assert.True(t, session.VerifyCSRF(reloaded, session.CSRFToken(original)),
+		"a token rendered before the round-trip verifies after it")
 }
 
 func TestCSRFTokenChangesOnRotate(t *testing.T) {
@@ -65,6 +67,8 @@ func TestCSRFTokenChangesOnRotate(t *testing.T) {
 	rotated, err := mgr.Rotate(context.Background(), c.replay())
 	require.NoError(t, err)
 
-	assert.NotEqual(t, session.CSRFToken(original), session.CSRFToken(rotated),
-		"Rotate mints a fresh session, hence a fresh CSRF token")
+	assert.NotEqual(t, original.CSRFToken, rotated.CSRFToken,
+		"Rotate mints a fresh session, hence a fresh CSRF secret")
+	assert.False(t, session.VerifyCSRF(rotated, session.CSRFToken(original)),
+		"a token of the previous session no longer verifies")
 }

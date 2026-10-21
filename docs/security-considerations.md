@@ -1313,7 +1313,11 @@ session store to compromise or scale.
   `Session.GetInt64`): a 64-bit ID never loses precision through a float64.
   Treat a value that is present but unreadable as a refusal, not as absent.
 - **CSRF** — the synchronizer-token helper (`CSRFToken` / `VerifyCSRF`)
-  compares tokens in constant time, but it is a check, not a policy: call
+  renders the session's secret masked anew on every call — a fresh random
+  mask XORed with it, so that a compression side channel (BREACH) never
+  sees the same secret twice — and compares the unmasked token in constant
+  time; render `CSRFToken(s)`, never the `Session.CSRFToken` field, which
+  does not verify. It is a check, not a policy: call
   `VerifyCSRF` on every state-changing request a cookie session
   authenticates, never change state on GET, and put `net/http`'s
   `CrossOriginProtection` (Sec-Fetch-Site and Origin checks) in front of the

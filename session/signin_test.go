@@ -62,7 +62,7 @@ func TestSignInFormSessionOnADedicatedManager(t *testing.T) {
 
 	got, err := form.Get(context.Background(), browser)
 	require.NoError(t, err)
-	assert.True(t, session.VerifyCSRF(got, s.CSRFToken))
+	assert.True(t, session.VerifyCSRF(got, session.CSRFToken(s)))
 
 	// Not even under the session cookie's name: the cookie name and the
 	// purpose are bound into the cookie.

@@ -4,25 +4,45 @@
 
 package session
 
-import "crypto/subtle"
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+)
 
-// CSRFToken returns the per-session CSRF token. The application embeds it
-// into rendered forms (a hidden field) or a <meta> tag so the browser can
-// echo it back on state-changing requests. Its canonical copy lives in the
-// encrypted, HttpOnly session cookie, which page scripts cannot read — but
-// the token itself is rendered into the page, where a script injected into
-// it (XSS) can read it: no CSRF defense survives XSS.
+// CSRFToken returns a CSRF token of the session to render into a form (a
+// hidden field) or a <meta> tag, so the browser can echo it back on
+// state-changing requests. The session's secret lives in the encrypted,
+// HttpOnly session cookie, which page scripts cannot read; what is rendered
+// is masked anew on every call — base64url(mask ‖ mask ⊕ secret) with a
+// fresh random mask —, so the same secret never appears twice in responses
+// a compression side channel (BREACH) could compare. Any token CSRFToken
+// returned for the session verifies with [VerifyCSRF]. Render this value,
+// never Session.CSRFToken. A script injected into the page (XSS) can still
+// read it: no CSRF defense survives XSS. It returns "" for a nil session or
+// a session without secret.
 func CSRFToken(s *Session) string {
-	if s == nil {
+	if s == nil || s.CSRFToken == "" {
 		return ""
 	}
 
-	return s.CSRFToken
+	secret := []byte(s.CSRFToken)
+
+	out := make([]byte, 2*len(secret))
+	mask, masked := out[:len(secret)], out[len(secret):]
+
+	_, _ = rand.Read(mask) // never fails (crypto/rand, Go 1.24+)
+
+	subtle.XORBytes(masked, mask, secret)
+
+	return base64.RawURLEncoding.EncodeToString(out)
 }
 
-// VerifyCSRF reports whether presented matches the session's CSRF token.
-// The comparison is constant-time to avoid leaking the token through
-// response-timing analysis. An empty token never verifies.
+// VerifyCSRF reports whether presented is a CSRF token of the session — one
+// [CSRFToken] rendered for it: presented is unmasked and compared with the
+// session's secret in constant time, so the response time leaks nothing of
+// it. An empty or malformed token never verifies, and neither does the raw
+// secret (Session.CSRFToken).
 //
 // VerifyCSRF is a check, not a policy: nothing enforces it for you. Call it
 // on every state-changing request (POST, PUT, PATCH, DELETE) that a cookie
@@ -54,9 +74,19 @@ func CSRFToken(s *Session) string {
 // JavaScript-readable cookie, so it is robust even against subdomain
 // cookie-injection.
 func VerifyCSRF(s *Session, presented string) bool {
-	if s == nil || s.CSRFToken == "" || presented == "" {
+	if s == nil || s.CSRFToken == "" {
 		return false
 	}
 
-	return subtle.ConstantTimeCompare([]byte(s.CSRFToken), []byte(presented)) == 1
+	// An empty token decodes to nothing: the length check refuses it.
+	raw, err := base64.RawURLEncoding.DecodeString(presented)
+	if err != nil || len(raw) != 2*len(s.CSRFToken) {
+		return false
+	}
+
+	half := len(raw) / 2
+	unmasked := make([]byte, half)
+	subtle.XORBytes(unmasked, raw[:half], raw[half:])
+
+	return subtle.ConstantTimeCompare(unmasked, []byte(s.CSRFToken)) == 1
 }

@@ -2845,3 +2845,23 @@ affected. To migrate:
 3. bcrypt `$2x$` and `$2$`: the hash cannot be converted; reset the
    password of these accounts (a `$2x$` hash of a password with 8-bit
    characters did not verify correctly anyway).
+
+### `session`: CSRF tokens are masked per rendering
+
+`CSRFToken(s)` returned the session's secret as is, the same string in
+every response of the session: a page compressing its responses and
+reflecting attacker input next to it let a compression side channel
+(BREACH) recover it. It now returns the secret masked anew on every call —
+`base64url(mask ‖ mask ⊕ secret)` with a fresh random mask —, and
+`VerifyCSRF` unmasks the presented token before its constant-time
+comparison.
+
+| | Before | After |
+| --- | --- | --- |
+| `CSRFToken(s)` | `s.CSRFToken`, constant | a masked token, different on every call (twice the secret's length, base64url) |
+| `VerifyCSRF(s, CSRFToken(s))` | true | true, for every token rendered for the session |
+| `VerifyCSRF(s, s.CSRFToken)` (the raw field) | true | false |
+
+To migrate: render `session.CSRFToken(s)` — templates rendering the
+`Session.CSRFToken` field now get every state-changing request refused —,
+and compare tokens with `VerifyCSRF` only, never with `==`.

@@ -1038,6 +1038,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   zero trailing bits (C2SP phc-strings) — else `ErrMalformedHash`. Bcrypt:
   `$2a$`, `$2b$`, `$2y$` — `$2x$` (crypt_blowfish's buggy-hash marker) and
   `$2$` answer `ErrUnsupportedAlgorithm`. See [MIGRATION.md](MIGRATION.md).
+- `session.CSRFToken` renders the session's secret masked anew on every
+  call (`base64url(mask ‖ mask ⊕ secret)`, BREACH hardening) and
+  `VerifyCSRF` unmasks it before the constant-time comparison; the raw
+  `Session.CSRFToken` field no longer verifies. A source test pins the
+  constant-time comparison. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 
