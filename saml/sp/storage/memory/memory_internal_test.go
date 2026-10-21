@@ -75,21 +75,25 @@ func TestSweep_DeletesRecordsAtTheirExpiry(t *testing.T) {
 	s := New(WithClock(clk.Now))
 	exp := base.Add(time.Minute)
 
+	// A record expiring first makes the sweep before exp really walk.
+	require.NoError(t, s.SaveTransaction(ctx, record(9, base.Add(time.Second))))
 	require.NoError(t, s.SaveTransaction(ctx, record(1, exp)))
 	require.NoError(t, s.MarkAssertionUsed(ctx, hexKey("dd", 1), exp))
 
-	// One second before the expiry, a sweep keeps both.
+	// One second before the expiry, a walk keeps both.
 	clk.set(exp.Add(-time.Second))
 	fill(t, s, 0, sweepEvery)
+	require.Equal(t, 1, s.sweeps, "a walk happened")
 
 	txs, used := sizes(s)
-	assert.Equal(t, 1, txs, "pending transaction kept before its expiry")
+	assert.Equal(t, 1, txs, "pending transaction kept before its expiry, the expired one swept")
 	assert.Equal(t, 1+sweepEvery, used, "replay mark kept before its expiry")
 
 	// At the expiry (Storage contract: expired at ExpiresAt), the next
 	// sweep deletes both.
 	clk.set(exp)
 	fill(t, s, sweepEvery, sweepEvery)
+	require.Equal(t, 2, s.sweeps)
 
 	txs, used = sizes(s)
 	assert.Equal(t, 0, txs)
@@ -100,26 +104,43 @@ func TestSweep_DeletesRecordsAtTheirExpiry(t *testing.T) {
 	require.NoError(t, s.MarkAssertionUsed(ctx, hexKey("dd", 1), exp.Add(time.Hour)), "a purged mark is gone")
 }
 
+// A consumed transaction is retained until its ExpiresAt, and so is a
+// replay mark (samlsp.TransactionStore, samlsp.ReplayCache): a walk that
+// happens just before never deletes them.
 func TestSweep_KeepsConsumedRecordsAndMarksUntilTheirExpiry(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	clk := &testClock{now: base}
 	s := New(WithClock(clk.Now))
-	rec := record(1, base.Add(10*time.Minute))
+
+	// A record expiring first makes the sweeps below really walk.
+	require.NoError(t, s.SaveTransaction(ctx, record(9, base.Add(time.Second))))
+
+	exp := base.Add(10 * time.Minute)
+	live, consumed := record(1, exp), record(2, exp)
 	mark := hexKey("dd", 1)
 
-	require.NoError(t, s.SaveTransaction(ctx, rec))
-	require.NoError(t, s.ConsumeTransaction(ctx, rec.ID, rec.BindingHash))
-	require.NoError(t, s.MarkAssertionUsed(ctx, mark, base.Add(11*time.Minute)))
+	require.NoError(t, s.SaveTransaction(ctx, live))
+	require.NoError(t, s.SaveTransaction(ctx, consumed))
+	require.NoError(t, s.ConsumeTransaction(ctx, consumed.ID, consumed.BindingHash))
+	require.NoError(t, s.MarkAssertionUsed(ctx, mark, exp))
 
-	clk.set(base.Add(10*time.Minute - time.Second))
-	fill(t, s, 0, 3*sweepEvery)
+	clk.set(exp.Add(-time.Second))
+	fill(t, s, 0, sweepEvery)
+	require.Equal(t, 1, s.sweeps, "a walk happened")
 
-	_, err := s.LookupTransaction(ctx, rec.ID)
+	_, err := s.LookupTransaction(ctx, record(9, base).ID)
+	require.ErrorIs(t, err, samlsp.ErrTransactionNotFound, "the expired record was swept")
+
+	got, err := s.LookupTransaction(ctx, live.ID)
+	require.NoError(t, err, "a pending transaction is kept until its expiry")
+	assert.Equal(t, live, got)
+
+	_, err = s.LookupTransaction(ctx, consumed.ID)
 	require.ErrorIs(t, err, samlsp.ErrTransactionConsumed, "never consumable again before its expiry")
-	require.ErrorIs(t, s.ConsumeTransaction(ctx, rec.ID, rec.BindingHash), samlsp.ErrTransactionConsumed)
-	require.ErrorIs(t, s.MarkAssertionUsed(ctx, mark, base.Add(11*time.Minute)), samlsp.ErrAssertionReplayed)
+	require.ErrorIs(t, s.ConsumeTransaction(ctx, consumed.ID, consumed.BindingHash), samlsp.ErrTransactionConsumed)
+	require.ErrorIs(t, s.MarkAssertionUsed(ctx, mark, exp), samlsp.ErrAssertionReplayed)
 }
 
 // The earliest expiry tracked spans both maps: a replay mark expiring
