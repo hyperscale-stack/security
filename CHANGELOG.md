@@ -1191,7 +1191,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `oidc/client/store/sql.PurgeExpired` runs its DELETE in a READ COMMITTED
   transaction on PostgreSQL and MySQL: at MySQL's default isolation an
   unindexed purge locked the gaps it scanned, blocking the logins starting
-  meanwhile.
+  meanwhile. A MySQL server logging statements (`binlog_format=STATEMENT`)
+  now refuses it: use ROW or MIXED.
 
 ### Fixed
 

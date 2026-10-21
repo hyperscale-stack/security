@@ -1927,11 +1927,13 @@ span catalog.
       standalone or behind Sentinel with `maxmemory-policy noeviction`, and
       read from the primary only. A revoked family whose state is lost
       before it expires can be revived.
-- [ ] Call `CheckDeployment` on every SQL and Redis store at boot when
-      your migration tool, not `Migrate`, applies the schema (`Migrate`
-      runs it), and treat its error as fatal: on MySQL, InnoDB tables,
-      binary oauth2 key columns and a strict `sql_mode`; on Redis, `+info`
-      for the check, version 6.0+, `noeviction`, no cluster mode.
+- [ ] SQL stores (oauth2, OpenID Connect, SAML) whose schema your
+      migration tool applies, not `Migrate` (which runs it): call
+      `CheckDeployment` at boot and treat its error as fatal — on MySQL,
+      InnoDB tables, binary oauth2 key columns and a strict `sql_mode`.
+- [ ] `oauth2/store/redis`: call `CheckDeployment` at boot and treat its
+      error as fatal — version 6.0+, `noeviction`, no cluster mode; the
+      user needs `+info` for it.
 - [ ] Keep JWT access tokens short-lived: a store revocation does not
       reach resource servers that verify them offline.
 - [ ] Bound refresh-token families with `grant.Config.RefreshFamilyTTL` —
@@ -1976,10 +1978,11 @@ span catalog.
       `CheckURL`, `RootCAs`). Enable `InsecureAllowSHA1` only for an IdP
       that cannot do better, with a plan to remove it.
 - [ ] SAML: share the transaction store and the replay cache between
-      instances (`saml/sp/store/sql` or `saml/sp/store/redis`) and schedule
-      the SQL store's `PurgeExpired`. Give the SP least-privilege access to them: a Redis
-      ACL limited to its key prefix, a database user limited to its two
-      tables.
+      instances (`saml/sp/store/sql` or `saml/sp/store/redis`); with the
+      SQL store, schedule `PurgeExpired`, and call `CheckDeployment` at boot
+      when your migration tool applies its schema. Give the SP
+      least-privilege access to them: a Redis ACL limited to its key prefix,
+      a database user limited to its two tables.
 - [ ] SAML: load `samlsp.Config.TransactionKeys` from your secret store —
       the same keys on every instance, distinct from the OpenID Connect
       client's and the session keys — and rotate them by adding the new key

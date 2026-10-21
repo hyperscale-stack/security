@@ -366,8 +366,8 @@ PKCE. Not supported, and refused where a provider could select them:
   login starts, since a full store refuses every new login
   (`memory.ErrFull`) until transactions expire or are consumed.
   `oidc/client/store/sql` ships `PurgeExpired`, a single
-  unbatched `DELETE` the operator schedules (index `expires_at`, see its
-  package documentation). CI (`make test-backends`) runs the conformance
+  unbatched `DELETE` at READ COMMITTED the operator schedules (index
+  `expires_at`, see its package documentation). CI (`make test-backends`) runs the conformance
   suite and the replica races of the SQL and Redis stores on PostgreSQL
   16.15, MySQL 8.0.46 (end of life since April 2026) and Redis 7.4.11
   (`internal/interop/oidcstack`, `TestRealBackend*`), and the concurrent

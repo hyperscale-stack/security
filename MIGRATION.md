@@ -3290,8 +3290,9 @@ acknowledged before a crash could be lost. The DDL now names
    lock: run it at a quiet time, or with an online schema-change tool.
 5. **Make `sql_mode` strict** for the oauth2 store's connections —
    `STRICT_TRANS_TABLES` or `STRICT_ALL_TABLES`, the default of MySQL 8 and
-   MariaDB — in the server's configuration or the DSN
-   (`?sql_mode='STRICT_TRANS_TABLES'` with go-sql-driver/mysql). A
+   MariaDB — in the server's configuration, or in the DSN with
+   `?sql_mode='TRADITIONAL'` (go-sql-driver/mysql): strict, and it keeps
+   `NO_ENGINE_SUBSTITUTION`; a DSN mode replaces the whole session mode. A
    database still on `VARCHAR` key columns first needs the upgrade of the
    section "`oauth2/store/sql`: MySQL compares keys byte for byte".
 6. **Check at boot.** `Migrate` now fails, with an error matching the
@@ -3303,7 +3304,14 @@ acknowledged before a crash could be lost. The DDL now names
    lock its package documentation names (`GET_LOCK`, server-wide) while it
    creates the tables and checks them, and waits for it as long as its
    context allows: pass a deadline. A migration tool applying `Schema`
-   while instances run `Migrate` should take the same lock.
+   while instances run `Migrate` should take the same lock. A holder whose
+   client vanished without closing its connection keeps the lock until the
+   server notices (`wait_timeout`, 8 hours by default): find it with
+   `SELECT IS_USED_LOCK('hyperscale-stack/security/oauth2/store/sql.Migrate')`
+   and end it with `KILL <id>`. On a Galera or Percona XtraDB cluster named
+   locks are local to a node (some versions refuse `GET_LOCK`): instances
+   migrating through different nodes are not serialized — run `Migrate`
+   through one node, or apply `Schema` with your own tool.
 
 ### `oauth2/store/redis`: `New` refuses Cluster and Ring clients
 
