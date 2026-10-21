@@ -156,6 +156,22 @@ func TestMigrateNamedLockRefused(t *testing.T) {
 	require.ErrorIs(t, store.Migrate(context.Background()), context.DeadlineExceeded)
 }
 
+// TestMigrateDiscardsAConnectionWhoseLockIsUnknown: a GET_LOCK that fails
+// leaves the lock's state unknown — the server may have granted it before
+// the reply was lost — so the connection is discarded, never pooled with
+// the server-wide migration lock possibly held.
+func TestMigrateDiscardsAConnectionWhoseLockIsUnknown(t *testing.T) {
+	store, db := namedLockStore(t, lockFails, nil)
+
+	require.Error(t, store.Migrate(context.Background()))
+	assert.Zero(t, db.Stats().OpenConnections, "the connection is closed, not pooled")
+
+	timedOut, timedOutDB := namedLockStore(t, lockTimedOut, nil)
+
+	require.Error(t, timedOut.Migrate(context.Background()))
+	assert.Equal(t, 1, timedOutDB.Stats().Idle, "a lock refused for sure keeps its connection")
+}
+
 // TestMigrateNamedLockFailures: no connection, or a failing statement,
 // fails Migrate; a failing statement releases the lock first.
 func TestMigrateNamedLockFailures(t *testing.T) {

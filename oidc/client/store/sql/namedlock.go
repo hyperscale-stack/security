@@ -72,6 +72,10 @@ func acquireNamedLock(ctx context.Context, conn *sql.Conn, name string) error {
 	var granted sql.NullInt64
 
 	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, ?)`, name, lockWaitSeconds(ctx)).Scan(&granted); err != nil {
+		// The server may have granted the lock before the reply was lost:
+		// never pool a session that may hold it.
+		discard(conn)
+
 		return fmt.Errorf("sqlstore: migrate: lock %s: %w", name, err)
 	}
 
@@ -99,5 +103,11 @@ func releaseNamedLock(ctx context.Context, conn *sql.Conn, name string) {
 		return
 	}
 
+	discard(conn)
+}
+
+// discard closes conn instead of returning it to the pool when it is
+// closed.
+func discard(conn *sql.Conn) {
 	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 }

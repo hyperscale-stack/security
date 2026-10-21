@@ -131,7 +131,11 @@ func Schema(d Dialect) []string {
 // tables and runs the check on one connection holding the named lock
 // "hyperscale-stack/security/oauth2/store/sql.Migrate" (GET_LOCK; named
 // locks are server-wide), which it releases before returning: concurrent
-// calls run one after the other, waiting as long as ctx allows. SQLite
+// calls run one after the other, waiting as long as ctx allows. A holder
+// whose client vanished keeps the lock until the server notices
+// (wait_timeout): find it with SELECT IS_USED_LOCK('<name>') and KILL it.
+// On a Galera or Percona XtraDB cluster named locks are local to a node, so
+// Migrate calls through different nodes are not serialized. SQLite
 // serializes the creation of a table on its write lock — given the busy
 // timeout the package documentation requires, without which a concurrent
 // call fails with SQLITE_BUSY: there each statement runs on its own.
