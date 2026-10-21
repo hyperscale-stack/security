@@ -23,7 +23,7 @@ type Option func(*config)
 // use the mapper of the authentication interceptor that ran before them.
 func WithErrorMapper(m ErrorMapper) Option {
 	return func(c *config) {
-		if m != nil {
+		if !isNil(m) {
 			c.errorMapper = m
 		}
 	}

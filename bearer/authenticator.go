@@ -19,10 +19,11 @@ type Authenticator struct {
 }
 
 // NewAuthenticator returns an [Authenticator] backed by verifier.
-// A nil verifier triggers a panic at construction time — the configuration
-// would be silently insecure otherwise.
+// A nil verifier — a typed nil, VerifierFunc(nil) included — triggers a
+// panic at construction time: the configuration would be silently insecure
+// otherwise.
 func NewAuthenticator(verifier TokenVerifier) *Authenticator {
-	if verifier == nil {
+	if isNil(verifier) {
 		panic("bearer: NewAuthenticator: nil TokenVerifier")
 	}
 

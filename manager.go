@@ -40,10 +40,10 @@ type Manager interface {
 // NewManager returns a [Manager] consulting the given authenticators in
 // order. Passing zero authenticators is allowed; the returned manager will
 // always return [ErrUnsupportedCredential]. NewManager panics if one of the
-// authenticators is nil.
+// authenticators is nil, a typed nil included.
 func NewManager(authenticators ...Authenticator) Manager {
 	for i, a := range authenticators {
-		if a == nil {
+		if isNil(a) {
 			panic(fmt.Sprintf("security: NewManager: nil Authenticator at index %d", i))
 		}
 	}

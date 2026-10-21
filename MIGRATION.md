@@ -2739,3 +2739,24 @@ To migrate:
    subject is empty, no longer authenticate.
 2. Keep subject-less sessions (a sign-in form's) on a `Manager` no
    `Extractor` reads, as `VerifyCSRF`'s documentation shows.
+
+### core and adapters: typed-nil dependencies panic at construction
+
+The constructors compared their dependencies with `nil`, so a typed nil —
+an interface holding a nil pointer, the classic `var m *MyManager; return
+m` — was accepted and panicked on the first request (on gRPC, it ended
+the process). A typed nil now counts as nil wherever a constructor checks
+a dependency, as it already did in the request path. A typed-nil
+`ErrorMapper` given to `WithErrorMapper` (or `httpsec.AuthorizeWith`)
+counts as none: the default mapper answers.
+
+| | Before | After |
+| --- | --- | --- |
+| `security.NewEngine`, `NewManager`, the three `AccessDecisionManager` constructors, `voter.And`/`Or`/`Not` with a typed-nil dependency | panic on the first request | panic at construction |
+| `httpsec.Middleware`, `Authorize`, `grpcsec` and `connectrpcsec` interceptors with a typed-nil `Engine` or `AccessDecisionManager` | panic on the first request | panic at construction |
+| `basic.NewAuthenticator`, `bearer.NewAuthenticator` (`bearer.VerifierFunc(nil)` included), `session.NewAuthenticator` with a typed-nil dependency | panic on the first request | panic at construction |
+| `session.NewExtractor(nil)` | panic on the first request | panic at construction |
+| `WithErrorMapper` with a typed-nil mapper | panic on the first refusal | the default mapper |
+
+To migrate: build every component with non-nil dependencies; a panic at
+start-up names the constructor and the dependency.

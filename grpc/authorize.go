@@ -112,7 +112,7 @@ func refusal(auth security.Authentication, err error) error {
 // interceptors and returns a copy of attrs, so the caller reusing its slice
 // cannot rewrite the policy.
 func mustPolicy(adm security.AccessDecisionManager, attrs []security.Attribute) []security.Attribute {
-	if adm == nil {
+	if isNil(adm) {
 		panic("grpcsec: nil AccessDecisionManager")
 	}
 

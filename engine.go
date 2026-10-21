@@ -48,16 +48,16 @@ type Engine interface {
 // the client address ([ClientAddrFromContext]) — the Engine never returns
 // the attempted credentials.
 //
-// NewEngine panics if m or one of the extractors is nil: these are
-// programming errors that would otherwise surface as a nil dereference on
-// the first request.
+// NewEngine panics if m or one of the extractors is nil, a typed nil (an
+// interface holding a nil pointer) included: these are programming errors
+// that would otherwise surface as a nil dereference on the first request.
 func NewEngine(m Manager, extractors ...Extractor) Engine {
-	if m == nil {
+	if isNil(m) {
 		panic("security: NewEngine: nil Manager")
 	}
 
 	for i, ex := range extractors {
-		if ex == nil {
+		if isNil(ex) {
 			panic(fmt.Sprintf("security: NewEngine: nil Extractor at index %d", i))
 		}
 	}

@@ -51,11 +51,11 @@ type Authenticator struct {
 	loader PrincipalLoader
 }
 
-// NewAuthenticator returns an [Authenticator]. A nil loader panics at
-// construction time — a session authenticator with nothing to resolve the
+// NewAuthenticator returns an [Authenticator]. A nil loader, a typed nil
+// included, panics at construction time — a session authenticator with nothing to resolve the
 // principal would silently authenticate every cookie as anonymous.
 func NewAuthenticator(loader PrincipalLoader) *Authenticator {
-	if loader == nil {
+	if isNil(loader) {
 		panic("session: NewAuthenticator: nil PrincipalLoader")
 	}
 

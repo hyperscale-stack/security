@@ -45,7 +45,7 @@ func NewAuthorizationInterceptor(
 	attrs []security.Attribute,
 	opts ...Option,
 ) *AuthorizationInterceptor {
-	if adm == nil {
+	if isNil(adm) {
 		panic("connectrpcsec: NewAuthorizationInterceptor: nil AccessDecisionManager")
 	}
 

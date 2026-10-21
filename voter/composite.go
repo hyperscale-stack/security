@@ -73,7 +73,7 @@ func newComposite(
 	}
 
 	for i, v := range voters {
-		if v == nil {
+		if isNil(v) {
 			panic(fmt.Sprintf("voter: %s: nil voter at index %d", constructor, i))
 		}
 	}

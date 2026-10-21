@@ -158,3 +158,44 @@ func TestMiddlewareChallengesAMalformedRequest(t *testing.T) {
 		assert.Equal(t, []string{c.want}, rec.Header().Values("WWW-Authenticate"), name)
 	}
 }
+
+// typedNilEngine is an Engine implemented on a pointer.
+type typedNilEngine struct{}
+
+func (*typedNilEngine) Process(ctx context.Context, _ security.Carrier) (context.Context, security.Authentication, error) {
+	return ctx, nil, nil
+}
+
+// typedNilADM is an AccessDecisionManager implemented on a pointer.
+type typedNilADM struct{}
+
+func (*typedNilADM) Decide(context.Context, security.Authentication, []security.Attribute) error {
+	return nil
+}
+
+// typedNilMapper is an ErrorMapper implemented on a pointer.
+type typedNilMapper struct{}
+
+func (*typedNilMapper) Map(http.ResponseWriter, *http.Request, error) {}
+
+// Audit I-27 and review m8: typed-nil dependencies were accepted and
+// panicked on the first request; a typed-nil error mapper panicked on the
+// first refusal. Constructors refuse the former; the latter counts as no
+// mapper.
+func TestTypedNilDependencies(t *testing.T) {
+	t.Parallel()
+
+	assert.PanicsWithValue(t, "httpsec: Middleware: nil Engine", func() { httpsec.Middleware((*typedNilEngine)(nil)) })
+	assert.PanicsWithValue(t, "httpsec: Authorize: nil AccessDecisionManager", func() { httpsec.Authorize((*typedNilADM)(nil)) })
+
+	engine := security.NewEngine(security.NewManager(&scriptedAuthn{name: "x", err: security.ErrInvalidCredentials}),
+		scriptedExtractor{auth: newAuth("alice")})
+
+	rec := serve(httpsec.Middleware(engine, httpsec.WithErrorMapper((*typedNilMapper)(nil)))(next204()), bearerRequest())
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "the default mapper answers")
+
+	adm := scriptedADM{err: security.ErrAccessDenied}
+	req := bearerRequest().WithContext(security.WithAuthentication(context.Background(), newAuth("alice").verified()))
+	rec = serve(httpsec.AuthorizeWith(adm, (*typedNilMapper)(nil))(next204()), req)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "the default mapper answers")
+}

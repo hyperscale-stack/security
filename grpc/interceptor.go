@@ -196,7 +196,7 @@ func StreamServerInterceptor(engine security.Engine, opts ...Option) grpc.Stream
 // mustEngine refuses a nil engine at construction: grpc-go recovers no
 // panic, so it would otherwise crash the server on the first RPC.
 func mustEngine(engine security.Engine) {
-	if engine == nil {
+	if isNil(engine) {
 		panic("grpcsec: nil Engine")
 	}
 }

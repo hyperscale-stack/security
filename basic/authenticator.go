@@ -89,14 +89,14 @@ const attemptRealm = "basic"
 // It hashes a random password once with hasher — the dummy hash that
 // unknown accounts are verified against — so construction costs one hash:
 // build the Authenticator once, not per request. It panics on a nil loader
-// or hasher, and when hasher cannot hash: an Authenticator without its dummy
+// or hasher — a typed nil included —, and when hasher cannot hash: an Authenticator without its dummy
 // hash would answer unknown accounts faster than known ones.
 func NewAuthenticator(loader UserLoader, hasher password.Hasher, opts ...Option) *Authenticator {
-	if loader == nil {
+	if isNil(loader) {
 		panic("basic: NewAuthenticator: nil UserLoader")
 	}
 
-	if hasher == nil {
+	if isNil(hasher) {
 		panic("basic: NewAuthenticator: nil password.Hasher")
 	}
 

@@ -20,14 +20,14 @@ import (
 // `return users[sub], roles, nil` over a map of pointers — hands the
 // Authenticator a typed nil.
 type (
-	ptrUser struct{ id string }
-	mapUser    map[string]string
-	funcUser   func() string
+	ptrUser  struct{ id string }
+	mapUser  map[string]string
+	funcUser func() string
 )
 
 func (u *ptrUser) Subject() string { return u.id }
-func (u mapUser) Subject() string     { return u["sub"] }
-func (u funcUser) Subject() string    { return u() }
+func (u mapUser) Subject() string  { return u["sub"] }
+func (u funcUser) Subject() string { return u() }
 
 // Audit F-15: the Authenticator compared the principal with nil; a typed
 // nil passed, the session authenticated as a principal that panics on its

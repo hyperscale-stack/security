@@ -1013,6 +1013,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `memory.New` takes options; `memory.WithClock` gives it the
   ServiceProvider's clock (`time.Now` by default).
 
+- A typed-nil dependency — an interface holding a nil pointer,
+  `bearer.VerifierFunc(nil)` — now panics at construction in
+  `security.NewEngine`, `NewManager`, the `AccessDecisionManager`
+  constructors, `voter.And`/`Or`/`Not`, `httpsec.Middleware`/`Authorize`,
+  the `grpcsec` and `connectrpcsec` interceptors, and the `basic`, `bearer`
+  and `session` authenticators, instead of on the first request;
+  `session.NewExtractor(nil)` panics too, and a typed-nil `ErrorMapper`
+  counts as none. See [MIGRATION.md](MIGRATION.md).
+
 ### Fixed
 
 - `oidc/client` decoded the JOSE header of an ID Token with go-jose's rules
