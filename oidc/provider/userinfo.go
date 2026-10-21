@@ -234,8 +234,9 @@ func (p *Provider) userInfoGrant(ctx context.Context, issuer, token string) (*oa
 		cause = security.ErrTokenExpired
 	case at.Issuer != issuer:
 		cause = errTokenIssuer
-	case !present:
-		// No context, or one this version cannot read.
+	case !present || gc.Plain:
+		// No context, one this version cannot read, or a plain OAuth 2.0
+		// grant's.
 		cause = errors.Join(errTokenContext, ctxErr)
 	}
 

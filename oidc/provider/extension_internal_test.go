@@ -23,17 +23,37 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 	t.Parallel()
 
 	p := &Provider{}
-	access := oauth2.AccessToken{ClientID: "web", Scope: ScopeOpenID, ExtensionData: `{"v":1,"auth_time":1760000000}`}
-
 	elsewhere := &oauth2.DefaultClient{IDValue: "web", IssuerValues: []string{"https://other.example"}}
-	access.Issuer = "https://op.example"
 
-	for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}, elsewhere} {
-		_, err := p.extendTokenResponse(context.Background(), oauth2.TokenIssuance{
-			GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
-		})
-		require.ErrorIs(t, err, errClientMismatch)
+	for _, access := range []oauth2.AccessToken{
+		{ClientID: "web", Scope: ScopeOpenID, ExtensionData: `{"v":1,"auth_time":1760000000}`},
+		{ClientID: "web", Scope: "read", ExtensionData: plainContext},
+	} {
+		access.Issuer = "https://op.example"
+
+		for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}, elsewhere} {
+			_, err := p.extendTokenResponse(context.Background(), oauth2.TokenIssuance{
+				GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
+			})
+			require.ErrorIs(t, err, errClientMismatch, "%s", access.ExtensionData)
+		}
 	}
+}
+
+// TestPlainContextIsTheEncodedMark: the ExtensionData a plain OAuth 2.0
+// grant records is grantContext{Plain: true} as encode writes it, and
+// decodes as such.
+func TestPlainContextIsTheEncodedMark(t *testing.T) {
+	t.Parallel()
+
+	data, err := grantContext{Plain: true}.encode()
+	require.NoError(t, err)
+	require.Equal(t, plainContext, data)
+
+	gc, present, err := decodeContext(plainContext)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, grantContext{V: contextVersion, Plain: true}, gc)
 }
 
 // TestProtocolGuardsBehindTheCore: the provider re-checks the response type

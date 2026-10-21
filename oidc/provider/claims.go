@@ -31,9 +31,8 @@ const (
 	// it, and grant it only with the end-user's consent
 	// ([Decision].OfflineAccess). The provider drops it from every grant —
 	// OpenID or plain OAuth 2.0 — the decision does not grant it. Only the
-	// scope is gated: the refresh tokens of a plain OAuth 2.0 grant, which
-	// carries no provider context, follow RefreshTokenScope alone (Core §11
-	// "other contexts").
+	// scope is gated for a plain OAuth 2.0 grant: its refresh tokens follow
+	// RefreshTokenScope alone (Core §11 "other contexts").
 	ScopeOfflineAccess = "offline_access"
 )
 
@@ -96,11 +95,14 @@ const (
 // requested together with such a variant (an end-user can suppress it).
 // Member names inside structured values (address) are the source's.
 //
-// The provider queries it on every token exchange of an OpenID grant, an
-// ID Token being issued or not: returning [ErrUnknownSubject] for an
-// end-user that no longer exists or may no longer sign in stops the grant
-// (invalid_grant, invalid_token at UserInfo). Any other error answers
-// server_error. Implementations MUST be safe for concurrent use.
+// The provider queries it on every token exchange of a grant it approved —
+// an OpenID grant, an ID Token being issued or not, and a plain OAuth 2.0
+// grant its Interaction authenticated the end-user of, naming no claim:
+// returning [ErrUnknownSubject] for an end-user that no longer exists or
+// may no longer sign in stops the grant (invalid_grant, invalid_token at
+// UserInfo). Any other error answers server_error. Grants another
+// ConsentFunc approved, and the password and client_credentials grants,
+// are not checked. Implementations MUST be safe for concurrent use.
 type ClaimsSource interface {
 	Claims(ctx context.Context, q ClaimsQuery) (map[string]any, error)
 }
@@ -110,7 +112,8 @@ type ClaimsTarget string
 
 const (
 	// ClaimsForIDToken targets an ID Token — or, with no Names, only checks
-	// that the end-user is still valid (a refresh issuing no ID Token).
+	// that the end-user is still valid (an exchange issuing no ID Token: a
+	// refresh without openid, any exchange of a plain OAuth 2.0 grant).
 	ClaimsForIDToken ClaimsTarget = "id_token"
 	// ClaimsForUserInfo targets a UserInfo response.
 	ClaimsForUserInfo ClaimsTarget = "userinfo"

@@ -298,7 +298,8 @@ func TestOpenIDCodeWithoutContextIsRefused(t *testing.T) {
 }
 
 // TestPlainOAuth2CodeExchange: an OAuth 2.0 grant gets the core's token
-// response, without id_token.
+// response, without id_token; the provider approved it, so it checks its
+// end-user is still valid — a claims query naming no claim.
 func TestPlainOAuth2CodeExchange(t *testing.T) {
 	t.Parallel()
 
@@ -309,7 +310,9 @@ func TestPlainOAuth2CodeExchange(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := jsonMembers(t, rec)
 	assert.ElementsMatch(t, []string{"access_token", "token_type", "expires_in", "scope"}, body)
-	assert.Empty(t, e.claims.recorded(), "no OpenID grant, no claims query")
+	assert.Equal(t, []oidcprovider.ClaimsQuery{{
+		Issuer: testIssuer, Subject: "alice", ClientID: webClientID, Target: oidcprovider.ClaimsForIDToken,
+	}}, e.claims.recorded(), "an account check, no claim asked for")
 }
 
 // jsonMembers returns the member names of a JSON object response.

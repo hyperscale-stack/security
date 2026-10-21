@@ -38,7 +38,8 @@ var errOnlyOfflineAccess = errors.New("oidcprovider: offline_access, the only sc
 
 // completeAuthorization verifies an approved decision against the request
 // and returns what the grant records: the authentication event and the
-// released claims as its context, and the granted scope without an
+// released claims as an OpenID grant's context — the Plain mark as a plain
+// OAuth 2.0 grant's (plainContext) —, and the granted scope without an
 // offline_access the end-user did not consent to.
 func (p *Provider) completeAuthorization(ar *oauth2.AuthorizeRequest, consent oauth2.Consent, now time.Time) (oauth2.ExtensionGrant, error) {
 	view, ok := ar.ExtensionRequest.(*authRequest)
@@ -49,9 +50,11 @@ func (p *Provider) completeAuthorization(ar *oauth2.AuthorizeRequest, consent oa
 	result, ok := consent.ExtensionResult.(*authResult)
 
 	if !view.openID {
-		// An OAuth 2.0 request: no context; the realm rule and the
-		// offline_access rule only. Without the provider's result, another
-		// ConsentFunc approved it — OAuth 2.0 semantics, unchanged.
+		// An OAuth 2.0 request: the realm rule and the offline_access rule
+		// only, and the Plain mark, so that its end-user is checked at every
+		// exchange. Without the provider's result, another ConsentFunc
+		// approved it — OAuth 2.0 semantics, unchanged, and no context: its
+		// subject is none the Interaction authenticated.
 		if !ok || result == nil {
 			return oauth2.ExtensionGrant{}, nil
 		}
@@ -62,7 +65,7 @@ func (p *Provider) completeAuthorization(ar *oauth2.AuthorizeRequest, consent oa
 
 		scope, _, err := view.offlineScope(consent.Scope, result.offline)
 
-		return oauth2.ExtensionGrant{Scope: scope}, err
+		return oauth2.ExtensionGrant{Scope: scope, Data: plainContext}, err
 	}
 
 	if !ok || result == nil {

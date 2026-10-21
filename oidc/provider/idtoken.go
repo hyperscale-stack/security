@@ -35,10 +35,11 @@ func invalidGrant(description string, cause error) error {
 // extendTokenResponse adds the ID Token to the response of a code exchange
 // or a refresh whose tokens are minted but not persisted. For every
 // exchange it first refuses an access-token audience naming a relying
-// party (see checkAudience); for every exchange of an OpenID grant it then
-// applies the offline-access policy (Core §11) and checks the end-user is
-// still valid — also when no ID Token comes out of it, the refreshed scope
-// lacking openid.
+// party (see checkAudience). For every exchange of a grant the provider
+// approved it then checks the end-user is still valid — also when no ID
+// Token comes out of it: a plain OAuth 2.0 grant, a refreshed scope
+// lacking openid —, after the offline-access policy (Core §11) for an
+// OpenID grant.
 func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssuance) (oauth2.TokenResponseExtension, error) {
 	gc, present, err := decodeContext(iss.Access.ExtensionData)
 	if err != nil {
@@ -51,22 +52,25 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 
 	openID := hasScope(iss.Access.Scope, ScopeOpenID)
 
-	if !present {
+	switch {
+	case !present && iss.GrantType == oauth2.GrantTypeAuthorizationCode && openID:
 		// Core §3.1.3.2: a code redeemed for an ID Token must have been
 		// issued for an OpenID request.
-		if iss.GrantType == oauth2.GrantTypeAuthorizationCode && openID {
-			return oauth2.TokenResponseExtension{}, invalidGrant("the code was not issued for an OpenID request", errContext)
-		}
-
+		return oauth2.TokenResponseExtension{}, invalidGrant("the code was not issued for an OpenID request", errContext)
+	case !present:
 		return oauth2.TokenResponseExtension{}, nil
+	case gc.Plain && openID:
+		return oauth2.TokenResponseExtension{}, invalidGrant("the grant cannot be honored", errContext)
+	case gc.Plain:
+		return oauth2.TokenResponseExtension{}, p.checkEndUser(ctx, iss)
 	}
 
 	if err := p.offlinePolicy(gc, iss); err != nil {
 		return oauth2.TokenResponseExtension{}, err
 	}
 
-	if iss.Client == nil || iss.Client.ID() != iss.Access.ClientID || !oauth2.ClientAllowsIssuer(iss.Client, iss.Access.Issuer) {
-		return oauth2.TokenResponseExtension{}, errClientMismatch
+	if err := checkIssuanceClient(iss); err != nil {
+		return oauth2.TokenResponseExtension{}, err
 	}
 
 	var allowed map[string][]json.RawMessage
@@ -79,9 +83,7 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 		Target: ClaimsForIDToken, Names: queryNames(allowed),
 	})
 	if err != nil {
-		return oauth2.TokenResponseExtension{}, sourceFailure(err, func(e error) error {
-			return invalidGrant("the end-user is unknown or disabled", e)
-		})
+		return oauth2.TokenResponseExtension{}, sourceFailure(err, endUserGone)
 	}
 
 	if !openID {
@@ -99,6 +101,40 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 	}
 
 	return oauth2.TokenResponseExtension{IDToken: idToken}, nil
+}
+
+// checkIssuanceClient re-checks the TokenIssuance contract: the access
+// token belongs to the authenticated client, registered at its issuer.
+func checkIssuanceClient(iss oauth2.TokenIssuance) error {
+	if iss.Client == nil || iss.Client.ID() != iss.Access.ClientID || !oauth2.ClientAllowsIssuer(iss.Client, iss.Access.Issuer) {
+		return errClientMismatch
+	}
+
+	return nil
+}
+
+// checkEndUser checks, at an exchange of a plain OAuth 2.0 grant the
+// provider approved, that the grant is the client's and that its end-user
+// is still valid: a ClaimsQuery for an ID Token naming no claim.
+func (p *Provider) checkEndUser(ctx context.Context, iss oauth2.TokenIssuance) error {
+	if err := checkIssuanceClient(iss); err != nil {
+		return err
+	}
+
+	_, err := p.cfg.Claims.Claims(ctx, ClaimsQuery{
+		Issuer: iss.Access.Issuer, Subject: iss.Access.Subject, ClientID: iss.Access.ClientID, Target: ClaimsForIDToken,
+	})
+	if err != nil {
+		return sourceFailure(err, endUserGone)
+	}
+
+	return nil
+}
+
+// endUserGone is the refusal of an exchange whose end-user the
+// ClaimsSource no longer knows.
+func endUserGone(cause error) error {
+	return invalidGrant("the end-user is unknown or disabled", cause)
 }
 
 // checkAudience refuses an exchange whose access-token audience names a
