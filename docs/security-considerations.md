@@ -907,7 +907,14 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   (`FetchIdentityProviderMetadata`, `MetadataSource`) or configured
   directly. Importing is the act of trust: a signature embedded in the
   metadata is not verified, and an aggregate (`EntitiesDescriptor`) is only
-  accepted with a pinned entity ID.
+  accepted with a pinned entity ID. Each imported certificate is trusted as
+  a signing key by itself, without chain building: a signing
+  `KeyDescriptor` carrying several certificates (a chain), or a key value
+  that is not its certificate's key, is refused, and a
+  CA or intermediate certificate must never be listed, not even in a
+  descriptor of its own — its key would sign any user in (Metadata
+  Interoperability Profile §2.5.1; the §2.6.1 deviations are listed in
+  [saml-sp.md](saml-sp.md#34-metadata-trust)).
   Nothing in a response extends that trust: the `Issuer` must equal the
   connection's entity ID, and a `KeyInfo` certificate only *selects* one of
   the trusted certificates (it must equal it exactly). A `KeyInfo` without
@@ -917,8 +924,13 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   verified as one without `KeyInfo`.
 - **What is verified is what is used.** gosaml2 and goxmldsig verify the
   signature and decode the identity from the verified canonical bytes; no
-  identity data is read from the raw document, so a comment injected in a
-  `NameID` (the CVE-2017-11427 class) cannot truncate it. Before
+  identity value is read from the raw document (only whether a
+  `ProxyRestriction` carries a `Count`, whose value is the verified one),
+  so a comment injected in a `NameID` (the CVE-2017-11427 class) cannot
+  truncate it. The Response envelope (`Issuer`, `Destination`,
+  `InResponseTo`, `IssueInstant`) and the `Status` are signed only when
+  the Response is; unsigned, they only add refusals
+  ([guide](saml-sp.md#31-signatures-and-what-is-read-from-where)). Before
   verification, a structural profile pins the single `Assertion` as a child
   of the `Response`, unique `ID`s and the placement of every signature, so
   signature-wrapping attacks have nothing to wrap (see
@@ -1077,10 +1089,12 @@ IdP to send one assertion carrying a persistent NameID:
   navigations — Fetch Metadata's `Sec-Fetch-Site` is `same-origin` or
   `none` (typed URL, bookmark); refuse `cross-site` and `same-site` — or
   from a CSRF-protected POST. `examples/saml-sp` does the former and
-  accepts requests without the header, so browsers older than Fetch
-  Metadata keep working but stay exposed; a strict deployment refuses a
-  missing header too. The browser suite (BR8) shows both
-  ([guide](saml-sp.md#5-sessions-and-logout)).
+  also refuses a request without the header, which a login forced in a
+  browser without Fetch Metadata would be: those browsers (Safari and iOS
+  before 16.4) cannot sign in to it, the header reaches only https (or
+  loopback) sites (Fetch Metadata §3), and `none` still admits a login
+  forced through a link opened from another application. The browser suite
+  (BR8) shows the refusals ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS location is checked** (Core §3.2.2, Bindings §3.5.5.2): the
   request must have been received at the connection's ACS URL — the same
   escaped path, the same host (`r.Host`, never a forwarding header), no

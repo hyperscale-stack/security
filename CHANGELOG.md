@@ -992,6 +992,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   A handler built from `Provider.Server()` is not checked and must not
   enable the implicit flow either: the metadata would then contradict the
   discovery document. See [MIGRATION.md](MIGRATION.md).
+- `saml/sp/storage/memory` sweeps its expired transactions and replay marks
+  every 64 writes instead of keeping them for the process lifetime.
+  `memory.New` takes options; `memory.WithClock` gives it the
+  ServiceProvider's clock (`time.Now` by default).
 
 ### Fixed
 
@@ -1239,6 +1243,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ClientStore` read as an unknown client — `invalid_client`, which tells a
   client its credentials are wrong — although the `ClientAuthenticator`
   contract asked to return store failures as such.
+- `samlsp.New` accepted a `TransactionTTL` with a sub-second part, with
+  which every `BeginLogin` then failed (the stores keep expiries to the
+  second); it now refuses it with `ErrInvalidConfig`.
 
 ### Removed
 
@@ -1999,3 +2006,23 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   record, so that none is revived.
   `storetest.RunConformance` checks that every store compares its keys byte
   for byte (`KeysAreComparedExactly`).
+- `saml/sp` trusted every certificate of a signing `KeyDescriptor` in IdP
+  metadata, CA certificates of a published chain included: whoever held
+  the issuing CA's key could sign any user in on that connection. A
+  signing `KeyDescriptor` carrying several certificates, or two `KeyInfo`
+  elements, is now refused with `ErrInvalidMetadata` (SAML V2.0 Metadata
+  Interoperability Profile §2.5.1), and certificates are read at
+  `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only, matched by namespace.
+  A `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to the certificate
+  must be the certificate's key — the end entity's key next to its CA's
+  certificate made the CA a signing key too. See MIGRATION.md: keep only
+  the signing certificate, never a CA in a descriptor of its own.
+- `saml/sp` accepted a NameID made only of white space, or of invisible
+  characters such as a zero-width space, while it refused an empty one: a
+  misbehaving IdP could collapse users onto one account. Such a NameID is
+  now refused with `ErrInvalidAssertion`; values are still never trimmed.
+- `examples/saml-sp` admitted a login start without `Sec-Fetch-Site`, so a
+  page could force a login — into an account the attacker controls — in a
+  browser that sends no Fetch Metadata. The example now answers such a
+  request 403, like a `cross-site` or `same-site` one; browsers without
+  Fetch Metadata (Safari and iOS before 16.4) cannot sign in to it.

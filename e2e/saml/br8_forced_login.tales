@@ -6,8 +6,9 @@ version = 1
 # connection whose IdP the attacker controls (here the IdP's as-mallory
 # mode: it answers as mallory, unprompted) would sign the victim in to the
 # attacker's account. examples/saml-sp therefore starts a login only when
-# Sec-Fetch-Site is same-origin or none, or absent for browsers without
-# Fetch Metadata.
+# Sec-Fetch-Site is same-origin or none; a request without the header,
+# which a forced login from a browser without Fetch Metadata would be, is
+# refused too.
 
 scenario "BR8 the example refuses a login forced from another site" {
   tags = ["saml", "browser", "br8"]
@@ -208,11 +209,10 @@ scenario "BR8 the example refuses a login forced from a sibling host" {
 
 # BeginLogin itself judges no intent: a browser that sends no Fetch
 # Metadata (played by the helper, which strips the Sec-Fetch-* headers on
-# /_e2e/legacy-login before the example sees the request) passes the
-# example's gate, and the forced login completes as mallory. A strict
-# deployment refuses a missing header or starts logins with a
-# CSRF-protected POST (docs/saml-sp.md §5).
-scenario "BR8 without Fetch Metadata a forced login completes" {
+# /_e2e/legacy-login before the example sees the request) cannot be told
+# from a forced login, so the example refuses it (audit D-18): browsers
+# without Fetch Metadata cannot sign in to it (docs/saml-sp.md §5).
+scenario "BR8 without Fetch Metadata a forced login is refused" {
   tags = ["saml", "browser", "br8"]
 
   skip_unless {
@@ -238,12 +238,12 @@ scenario "BR8 without Fetch Metadata a forced login completes" {
 
     expect {
       url {
-        value = "${config.sp}/"
+        value = contains("${config.sp}/_e2e/legacy-login?return=")
       }
 
       text {
-        selector = "p"
-        value    = contains("mallory-pairwise-id")
+        selector = "body"
+        value    = contains("sign-in must start from this site")
       }
     }
   }
@@ -262,12 +262,16 @@ scenario "BR8 without Fetch Metadata a forced login completes" {
     expect {
       status = 200
       json = {
-        signed_in        = 1
+        signed_in        = 0
+        acs_count        = 0
         credential_posts = 0
         login = {
           path           = "/login"
           sec_fetch_site = ""
-          status         = 302
+          status         = 403
+        }
+        hits = {
+          "idp.test" = not_exists()
         }
       }
     }

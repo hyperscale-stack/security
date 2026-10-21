@@ -99,6 +99,9 @@ func TestVerified_DefenceInDepth(t *testing.T) {
 		{"no Response issuer", func(v *verified) { v.resp.Issuer = nil }, ErrIssuerMismatch},
 		{"other Response issuer", func(v *verified) { v.resp.Issuer.Value = "https://evil" }, ErrIssuerMismatch},
 		{"no assertion issuer", func(v *verified) { a(v).Issuer = nil }, ErrIssuerMismatch},
+		// gosaml2 refuses a foreign assertion Issuer first; this package
+		// checks it again (audit F-24).
+		{"other assertion issuer", func(v *verified) { a(v).Issuer.Value = "https://evil" }, ErrIssuerMismatch},
 		{"zero IssueInstant", func(v *verified) { v.resp.IssueInstant = time.Time{} }, ErrMalformedResponse},
 		{"no subject", func(v *verified) { a(v).Subject = nil }, ErrInvalidAssertion},
 		{"no confirmation", func(v *verified) { a(v).Subject.SubjectConfirmation = nil }, ErrInvalidAssertion},
@@ -116,6 +119,7 @@ func TestVerified_DefenceInDepth(t *testing.T) {
 		{"no AuthnStatement", func(v *verified) { a(v).AuthnStatement = nil }, ErrInvalidAssertion},
 		{"no AuthnInstant", func(v *verified) { a(v).AuthnStatement.AuthnInstant = nil }, ErrInvalidAssertion},
 		{"no NameID", func(v *verified) { a(v).Subject.NameID = nil }, ErrInvalidAssertion},
+		{"blank NameID", func(v *verified) { a(v).Subject.NameID.Value = " \u200b\t" }, ErrInvalidAssertion},
 	}
 
 	for _, tc := range cases {

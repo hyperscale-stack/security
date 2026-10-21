@@ -20,7 +20,6 @@ import (
 	"github.com/beevik/etree"
 	"github.com/hyperscale-stack/security"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
-	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -401,7 +400,7 @@ func TestCompleteLogin_FailureSemantics(t *testing.T) {
 
 		// A payload the SP cannot decode, under a valid MAC: written with
 		// the key, so a store failure, not a rejection.
-		store := memory.New()
+		store := newMemoryStore(e.clock.Now)
 		rec := &samlsp.TransactionRecord{
 			ID: txKey(connID, lr.relayState), BindingHash: bindingKey(lr.cookie.Value),
 			Payload: `{"v":99}`, ExpiresAt: t0.Add(time.Hour),

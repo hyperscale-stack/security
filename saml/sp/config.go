@@ -97,7 +97,9 @@ type Config struct {
 	TransactionKeys [][]byte
 
 	// TransactionTTL is the lifetime of a login transaction (0 means
-	// DefaultTransactionTTL); at most MaxTransactionTTL.
+	// DefaultTransactionTTL): a whole number of seconds, since the stores
+	// keep expiries to the second ([ValidateExpiry]), from one second to
+	// MaxTransactionTTL.
 	TransactionTTL time.Duration
 
 	// ClockSkew is tolerated on every time check against IdP-issued
@@ -167,8 +169,9 @@ func (c Config) validate() error {
 		return fmt.Errorf("%w: ReplayCache is required", ErrInvalidConfig)
 	case len(c.TransactionKeys) == 0 || len(c.TransactionKeys) > MaxTransactionKeys:
 		return fmt.Errorf("%w: TransactionKeys must hold 1 to %d keys", ErrInvalidConfig, MaxTransactionKeys)
-	case c.TransactionTTL < time.Second || c.TransactionTTL > MaxTransactionTTL:
-		return fmt.Errorf("%w: TransactionTTL must be between 1s and %s", ErrInvalidConfig, MaxTransactionTTL)
+	case c.TransactionTTL < time.Second || c.TransactionTTL > MaxTransactionTTL || c.TransactionTTL%time.Second != 0:
+		return fmt.Errorf("%w: TransactionTTL must be a whole number of seconds between 1s and %s",
+			ErrInvalidConfig, MaxTransactionTTL)
 	case c.ClockSkew < 0 || c.ClockSkew > MaxClockSkew:
 		return fmt.Errorf("%w: ClockSkew must be between 0 and %s", ErrInvalidConfig, MaxClockSkew)
 	case c.MaxResponseSize < MinMaxResponseSize || c.MaxResponseSize > MaxMaxResponseSize:

@@ -62,7 +62,7 @@ func replayKeycloak(t *testing.T, c keycloakCase, allowSHA1 bool, response strin
 		IdentityProvider: *idp, InsecureAllowSHA1: allowSHA1,
 	}
 
-	store := memory.New()
+	store := memory.New(memory.WithClock(now))
 	rec := withIntegrity(c.Transaction)
 	require.NoError(t, store.SaveTransaction(context.Background(), &rec))
 

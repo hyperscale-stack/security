@@ -210,6 +210,17 @@ func (c *clock) set(t time.Time) {
 	c.now = t
 }
 
+// newMemoryStore returns the memory store of a test, sweeping its expired
+// records on the test's clock. Every test store is built here: with the
+// store's default clock, time.Now, the records the tests write around t0 —
+// in the past — would be swept once 64 writes have happened.
+func newMemoryStore(now func() time.Time) *memory.Store {
+	return memory.New(memory.WithClock(now))
+}
+
+// atT0 is a clock stopped at t0, for a store built before its test env.
+func atT0() time.Time { return t0 }
+
 // env is a ready ServiceProvider over a memory store.
 type env struct {
 	sp       *samlsp.ServiceProvider
@@ -227,9 +238,9 @@ func newEnv(t testing.TB, opts ...envOption) *env {
 	t.Helper()
 
 	conn := newConnection(t)
-	store := memory.New()
 	res := newResolver()
 	clk := newClock()
+	store := newMemoryStore(clk.Now)
 
 	cfg := samlsp.Config{
 		Connections:     res,

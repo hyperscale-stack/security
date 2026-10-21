@@ -249,8 +249,17 @@ func newHarness(t *testing.T, opts ...func(*appConfig)) *harness {
 }
 
 // newBrowser returns a client with its own cookie jar that does not follow
-// redirects. Loopback origins count as secure, as in browsers.
+// redirects and sends Fetch Metadata as a browser navigating within the
+// site does. Loopback origins count as secure, as in browsers.
 func (h *harness) newBrowser() *http.Client {
+	c := h.newLegacyBrowser()
+	c.Transport = sameOriginNavigation{next: http.DefaultTransport}
+
+	return c
+}
+
+// newLegacyBrowser returns a browser that sends no Fetch Metadata.
+func (h *harness) newLegacyBrowser() *http.Client {
 	jar, err := cookiejar.New(nil)
 	require.NoError(h.t, err)
 
@@ -258,6 +267,19 @@ func (h *harness) newBrowser() *http.Client {
 		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+}
+
+// sameOriginNavigation adds "Sec-Fetch-Site: same-origin" to the requests
+// that set no Sec-Fetch-Site.
+type sameOriginNavigation struct{ next http.RoundTripper }
+
+func (s sameOriginNavigation) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get("Sec-Fetch-Site") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
+
+	return s.next.RoundTrip(r)
 }
 
 func (h *harness) get(client *http.Client, path string) (*http.Response, string) {
@@ -442,13 +464,14 @@ func TestSAMLSPExampleRefusesCrossSiteLoginInitiation(t *testing.T) {
 	h := newHarness(t)
 
 	// A page of another site must not start a login in the user's browser
-	// (forced login initiation): navigations carry Sec-Fetch-Site.
+	// (forced login initiation): navigations carry Sec-Fetch-Site, and a
+	// request without it cannot be told from a forced one (audit D-18).
 	for site, want := range map[string]int{
 		"cross-site":  http.StatusForbidden,
 		"same-site":   http.StatusForbidden,
 		"same-origin": http.StatusFound,
-		"none":        http.StatusFound, // typed URL, bookmark
-		"":            http.StatusFound, // no Fetch Metadata (older browser)
+		"none":        http.StatusFound,     // typed URL, bookmark
+		"":            http.StatusForbidden, // no Fetch Metadata (older browser, script)
 	} {
 		req, err := http.NewRequest(http.MethodGet, h.base+"/login", nil)
 		require.NoError(t, err)
@@ -457,7 +480,7 @@ func TestSAMLSPExampleRefusesCrossSiteLoginInitiation(t *testing.T) {
 			req.Header.Set("Sec-Fetch-Site", site)
 		}
 
-		resp, err := h.newBrowser().Do(req)
+		resp, err := h.newLegacyBrowser().Do(req)
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
 

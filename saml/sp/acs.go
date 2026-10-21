@@ -77,7 +77,9 @@ type LoginResult struct {
 //  9. the signatures are verified by gosaml2/goxmldsig with the
 //     connection's certificates: the Response or the Assertion must be
 //     signed (Profiles §4.1.3.5/§4.1.4.5 as amended by errata E93/E26) and
-//     every value used afterwards comes from the verified canonical bytes;
+//     every assertion value used afterwards comes from the verified
+//     canonical bytes (the Response envelope too when the Response is
+//     signed; unsigned, it only adds refusals);
 //     a signature without KeyInfo tries the certificate that verified the
 //     connection's last such signature first;
 //  10. the processing rules: Destination (required when the Response is

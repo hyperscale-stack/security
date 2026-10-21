@@ -27,7 +27,8 @@
 // only, which browsers treat as secure: they keep the Secure, __Host-
 // prefixed cookies there. The server listens on 127.0.0.1:8084 (SAMLSP_ADDR
 // changes it) with read, write and idle timeouts, and refuses logins
-// started from another site (Sec-Fetch-Site).
+// started from another site, or by a browser that does not say where the
+// navigation comes from (Sec-Fetch-Site).
 //
 // SAMLSP_TRANSACTION_KEYS holds the keys protecting the pending logins in
 // the transaction store (samlsp.Config.TransactionKeys): hex-encoded keys
@@ -135,7 +136,9 @@ func newServer(cfg appConfig) (http.Handler, error) {
 		return conn, nil
 	})
 
-	store := memory.New() // swap for sqlstore / redisstore in production
+	// Swap for sqlstore / redisstore in production. The memory store sweeps
+	// expired records on the SP's clock.
+	store := memory.New(memory.WithClock(cfg.now))
 
 	sp, err := samlsp.New(samlsp.Config{
 		Connections:     connections,
@@ -250,14 +253,24 @@ func accountKey(id *samlsp.Identity) string {
 // login starts an SP-initiated login with the configured connection. A page
 // of another site must not be able to start one in the user's browser
 // (forced login initiation, a form of login CSRF): browsers send
-// Sec-Fetch-Site with every navigation, and only same-origin navigations
-// and the user's own (a typed URL or a bookmark: "none") are accepted.
-// Requests without it (older browsers, scripts) are accepted; an
-// application needing more serves the entry point behind a CSRF-protected
-// POST.
+// Sec-Fetch-Site (Fetch Metadata §2.3) with every navigation, and only
+// same-origin navigations and the user's own (a typed URL or a bookmark:
+// "none") are accepted. A request without the header is refused too: it
+// cannot be told from a forced one. Three consequences:
+//   - browsers without Fetch Metadata — Safari and iOS web views before
+//     16.4 — cannot sign in;
+//   - browsers send the header only to potentially trustworthy URLs
+//     (Fetch Metadata §3): the site must be served over https, or http on a
+//     loopback host as here, or every login is refused;
+//   - "none" also covers a navigation the user started outside any page,
+//     such as a link opened from a mail client, so a login forced through
+//     an emailed link is still possible.
+//
+// An application that must serve older browsers, or close the last gap,
+// starts logins from a POST carrying a CSRF token instead.
 func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "", "same-origin", "none":
+	case "same-origin", "none":
 	default:
 		http.Error(w, "sign-in must start from this site", http.StatusForbidden)
 

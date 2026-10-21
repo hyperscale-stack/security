@@ -18,7 +18,6 @@ import (
 
 	"github.com/beevik/etree"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
-	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -67,7 +66,7 @@ func (tp *tamper) get() func(rec *samlsp.TransactionRecord) {
 func newTamperingEnv(t *testing.T) (*env, *tamper) {
 	t.Helper()
 
-	mem := memory.New()
+	mem := newMemoryStore(atT0)
 	tp := &tamper{}
 	store := storageDouble(t, mem, func(m *samlsp.MockStorage) {
 		m.EXPECT().LookupTransaction(mock.Anything, mock.Anything).
@@ -304,7 +303,7 @@ func TestCompleteLogin_TransactionKeyRotation(t *testing.T) {
 	k1 := []byte("first transaction key of 32 bytes or more")
 	k2 := []byte("second transaction key of 32 bytes or more")
 
-	store := memory.New()
+	store := newMemoryStore(atT0)
 	withKeys := func(e *env, keys ...[]byte) *samlsp.ServiceProvider {
 		sp, err := samlsp.New(samlsp.Config{
 			Connections: e.resolver, Transactions: store, ReplayCache: store, Now: e.clock.Now, TransactionKeys: keys,
@@ -362,7 +361,7 @@ func TestCompleteLogin_ConsumesWithThePresentedBinding(t *testing.T) {
 
 	// The store returns every record with the ID field of another
 	// transaction of the same browser (whose binding check would pass).
-	mem := memory.New()
+	mem := newMemoryStore(atT0)
 
 	var otherID string
 

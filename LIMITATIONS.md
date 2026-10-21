@@ -421,6 +421,10 @@ PKCE. Not supported, and refused where a provider could select them:
   idle connection is refreshed at its next login. A document that expires
   is refreshed at once but at most once per `RetryInterval`, so a document
   valid for less than that fails closed for the rest of the interval.
+  While refreshes fail, the last good document — and a key the IdP has
+  withdrawn since — is used for up to `MaxStale` (7 days by default, never
+  past its `validUntil`); lower it, down to `MaxRefresh`, to shorten that
+  window.
 - **Legal but ambiguous responses are refused** — several assertions,
   `SubjectConfirmation`s or `AuthnStatement`s, an assertion without
   `NameID`, a Response without `Issuer`. Configure the IdP to send one
@@ -445,6 +449,25 @@ PKCE. Not supported, and refused where a provider could select them:
   tried, the one that verified its last such signature first. Validity is
   checked at `now − ClockSkew`, so a certificate whose validity starts at
   the rollover is accepted only `ClockSkew` later.
+- **Metadata keys** — each imported certificate is trusted as a signing key
+  by itself (no chain building): a signing `KeyDescriptor` carrying several
+  certificates, such as the IdP's certificate chain, two `KeyInfo`
+  elements, or a `ds:KeyValue` / `dsig11:DEREncodedKeyValue` that is not
+  its certificate's key (EC and DSA key values cannot be compared and are
+  refused too), is refused (`ErrInvalidMetadata`). Identifier hints
+  (`KeyName`, `X509SubjectName`, `X509IssuerSerial`, `X509SKI`,
+  `X509Digest`) are neither verified nor used: the published certificate is
+  the key, whatever they name. An IdP that publishes its
+  chain cannot be followed through `FetchIdentityProviderMetadata` or
+  `MetadataSource` (each refresh fails; the last good document is served up
+  to `MaxStale`): import an edited copy keeping only the signing
+  certificate — never a CA certificate, which would become a signing key.
+  The SAML Metadata Interoperability Profile §2.6.1 is not followed where
+  it would accept more: the certificate, not only its key, is trusted (a
+  certificate re-issued over the same key must be imported first), its
+  validity window is enforced, and `ds:KeyValue`-only keys are not
+  imported. See
+  [docs/saml-sp.md](docs/saml-sp.md#34-metadata-trust).
 - **Clock skew cannot be zero** — `ClockSkew: 0` means the 3-minute
   default; one nanosecond is the strictest setting.
 - **XML attribute names** — an element of a response carrying two
@@ -460,6 +483,12 @@ PKCE. Not supported, and refused where a provider could select them:
   the user meant to start a login: the application must start logins only
   from a same-origin gesture (see
   [docs/saml-sp.md](docs/saml-sp.md#5-sessions-and-logout)).
+  `examples/saml-sp` refuses a login whose `Sec-Fetch-Site` is missing,
+  `cross-site` or `same-site`: browsers without Fetch Metadata (Safari and
+  iOS before 16.4) cannot sign in to it, it needs an https or loopback
+  origin, and `none` still admits a login forced through a link opened
+  from another application (a mail client); only a CSRF-protected POST
+  closes that.
 - **Login CSRF through a leaked in-flight request** — the IdP redirect URL
   carries the request ID and the RelayState handle. Whoever learns it
   while the login is pending (`TransactionTTL`) can sign the victim in as
@@ -483,9 +512,11 @@ PKCE. Not supported, and refused where a provider could select them:
   the ACS URL's host and reads no forwarding header: behind a proxy that
   rewrites `Host`, forward the original, or pass `CompleteLogin` a copy of
   the request whose `Host` comes from the trusted proxy's header.
-- **Stores** — `saml/sp/storage/memory` never purges anything (development
-  and tests only); `saml/sp/store/sql` ships no expiry job (its package
-  documentation gives the cleanup statements). CI runs the stores on
+- **Stores** — `saml/sp/storage/memory` (development and tests) sweeps its
+  expired records every 64 writes on its own clock (`memory.WithClock`) and
+  is otherwise unbounded: it holds the login rate times `TransactionTTL`.
+  `saml/sp/store/sql` ships no expiry job (its package documentation gives
+  the cleanup statements). CI runs the stores on
   SQLite and miniredis, and (`make test-backends`) their races,
   conformance suite and payload round trip on PostgreSQL 16.15, MySQL
   8.0.46 (end of life since April 2026) and Redis 7.4.11
@@ -498,7 +529,7 @@ PKCE. Not supported, and refused where a provider could select them:
   SP switches.
 - **Interoperability** — CI runs the SP against crewjam/saml's IdP and
   replays 15 pinned Keycloak responses (26.7.4 and 26.0.7). Live runs
-  against Keycloak 26.7.4 and the browser suite (Chrome 154) are opt-in;
+  against Keycloak 26.7.4 and the browser suite (Chrome 155) are opt-in;
   no other IdP (AD FS, Entra ID, Okta, Shibboleth) and no other browser
   engine is tested. See
   [docs/saml-sp.md](docs/saml-sp.md#interoperability-evidence).

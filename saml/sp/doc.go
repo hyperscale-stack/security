@@ -101,8 +101,12 @@
 //     P-256/384/521, and their certificate validity is enforced.
 //
 // The signatures are then verified by gosaml2 and goxmldsig, and every value
-// used afterwards (identity, times, audiences) comes from the verified
-// canonical bytes. The SAML processing rules follow: Destination (required
+// of the assertion used afterwards (identity, confirmation, conditions and
+// audiences, authentication statement, attributes) comes from the verified
+// canonical bytes. The Response envelope (Issuer, Destination,
+// InResponseTo, IssueInstant, Version) and the Status the pre-check read
+// are covered only when the Response is signed; unsigned, they only add
+// refusals. The SAML processing rules follow: Destination (required
 // when the Response is signed), Issuers, Recipient, InResponseTo, the time
 // bounds with [Config].ClockSkew, every AudienceRestriction, ForceAuthn, the
 // requested authentication context and the NameID format.

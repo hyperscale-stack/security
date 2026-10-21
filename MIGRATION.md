@@ -2557,3 +2557,91 @@ To migrate:
 
 1. Nothing for tokens of common issuers. An issuer whose headers exceed
    4 KiB — custom header members — must move that data to the claims.
+
+### `saml/sp`: one certificate per signing KeyDescriptor in IdP metadata
+
+`ParseIdentityProviderMetadata` — and so `FetchIdentityProviderMetadata`
+and `MetadataSource` — trusted every `X509Certificate` found anywhere under
+a signing `KeyDescriptor`. An IdP publishing its certificate chain there
+made the issuing CA's key a trusted SAML signing key: whoever held it could
+sign any user in. Each imported certificate is trusted as a signing key by
+itself (no chain is built), so a signing `KeyDescriptor` now holds one
+certificate (SAML V2.0 Metadata Interoperability Profile §2.5.1):
+
+| Signing (or use-less) `KeyDescriptor` | Before | After |
+| --- | --- | --- |
+| one `X509Certificate`, possibly repeated | imported | unchanged |
+| several different certificates (a chain, a CA next to the signing certificate, two certificates of one key), in one `X509Data` or several | each imported as a signing key | refused: `ErrInvalidMetadata` |
+| two `ds:KeyInfo` elements | their certificates imported | refused: `ErrInvalidMetadata` |
+| a `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to the certificate, of another key (the end entity's key next to its CA's certificate, say) | key value ignored, certificate imported | refused: `ErrInvalidMetadata` |
+| the same, of the certificate's own key (RSA, or DER-encoded of any type) | imported | unchanged |
+| an EC, DSA or unparsable `ds:KeyValue` next to a certificate | key value ignored, certificate imported | refused: `ErrInvalidMetadata` (cannot be compared) |
+| `KeyName`, `X509SubjectName`, `X509IssuerSerial`, `X509SKI`, `X509Digest` hints | not used | unchanged: neither verified nor used |
+| a certificate outside `ds:KeyInfo/ds:X509Data/ds:X509Certificate` (in `EncryptionMethod` content, under another element or namespace) | imported | ignored (never trusted) |
+| `use="encryption"` descriptors | ignored | unchanged (never read, whatever they carry) |
+| one key per `KeyDescriptor`, several descriptors (rollover) | imported | unchanged |
+
+To migrate:
+
+1. Re-import every administrator-provided metadata document once: an
+   `ErrInvalidMetadata` saying "a KeyDescriptor carries several
+   certificates" names the problem.
+2. Edit such a document to keep, in that `KeyDescriptor`, **only the
+   certificate the IdP signs with**. Delete the CA and intermediate
+   certificates. Do **not** move them to `KeyDescriptor`s of their own:
+   every listed certificate is trusted as a signing key, so that would
+   re-open the flaw. A second signing key (a rollover) gets its own
+   `KeyDescriptor`. A self-signed IdP certificate marked `CA:TRUE` is the
+   signing certificate: keep it. A `ds:KeyValue` refused as "not the key
+   of its certificate" goes too: keep the signing certificate alone.
+3. An IdP that *publishes* its chain at its metadata URL can no longer be
+   followed through `FetchIdentityProviderMetadata` or `MetadataSource`:
+   each refresh fails (watch the errors of the `samlsp.FetchMetadata` span,
+   class `invalid_metadata`), the last good document is served for at most
+   `MaxStale`, then logins fail with `ErrMetadataExpired`. Import an edited
+   copy with `ParseIdentityProviderMetadata` and follow the IdP's key
+   rollovers by hand, or have the IdP publish its signing certificate
+   alone.
+
+### `saml/sp`: blank NameIDs and sub-second `TransactionTTL`s are refused
+
+A NameID made only of white space (`" "`, a tab, a no-break space…) or of
+invisible characters (a zero-width space, a byte order mark, a soft hyphen —
+Unicode control and format characters) was accepted, while an empty one was
+refused; a misbehaving IdP could thereby collapse users onto one account. A
+`TransactionTTL` with a sub-second part passed `New`, then every
+`BeginLogin` failed, the stores keeping expiries to the second.
+
+| | Before | After |
+| --- | --- | --- |
+| NameID `""` | `ErrInvalidAssertion` | unchanged |
+| NameID made only of white space or invisible characters | accepted, as is | `ErrInvalidAssertion` |
+| NameID with visible characters and surrounding white space (`" alice "`) | accepted, untrimmed | unchanged |
+| `Config.TransactionTTL` such as `1500 * time.Millisecond` | `New` succeeds, every `BeginLogin` fails (`ErrInvalidStoreRecord`) | `New` fails with `ErrInvalidConfig` |
+
+To migrate:
+
+1. Give `TransactionTTL` in whole seconds.
+2. If logins of some users now fail with `ErrInvalidAssertion` ("missing or
+   empty NameID"), fix the IdP's NameID source for them: those users shared
+   one identity before.
+
+### `saml/sp/storage/memory`: expired records are swept
+
+The in-memory SAML store kept every transaction and replay mark for the
+process lifetime. It now deletes the expired ones every 64 writes, judging
+expiry on its own clock: `time.Now` unless `memory.WithClock` says
+otherwise. `memory.New()` keeps compiling (`New(opts ...Option)`).
+
+| | Before | After |
+| --- | --- | --- |
+| a transaction or replay mark past its expiry | kept | deleted at a later sweep: a lookup answers `ErrTransactionNotFound` instead of the record (which the SP refused as expired anyway) |
+| a ServiceProvider whose `Config.Now` is not `time.Now` (tests with a fixed clock) | no effect on the store | records the store's clock sees as expired are swept |
+
+To migrate:
+
+1. Nothing for an application whose SP clock is `time.Now`.
+2. Where `Config.Now` is another clock — typically a test clock fixed in
+   the past — build the store with the same clock:
+   `memory.New(memory.WithClock(cfg.Now))`. Otherwise a test that makes
+   more than 64 writes to one store can lose its live logins.

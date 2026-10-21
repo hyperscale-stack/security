@@ -66,21 +66,36 @@ Trust comes from the connection only: the pinned IdP entity ID and its 1 to
   Response is signed (`ErrInvalidSignature`: that signature covers it).
   Without `KeyInfo`, the three most recent valid certificates are tried,
   the one that verified the connection's last such signature first.
-- Every value is read from the verified, canonical bytes (gosaml2 and
+- Every value of the assertion — issuer, subject and `NameID`, bearer
+  confirmation, conditions and audiences, authentication statement,
+  attributes — is read from the verified, canonical bytes (gosaml2 and
   goxmldsig), never from the raw document. A comment injected into a
   `NameID` cannot truncate it; the corpus and the Keycloak wrapping tests
   check this on real Apache Santuario output.
+- The Response envelope (`Version`, `Issuer`, `Destination`,
+  `InResponseTo`, `IssueInstant`) is decoded by gosaml2 as well, but a
+  signature covers it only when the Response is signed. When only the
+  Assertion is signed, these values are unsigned: they only ever add
+  refusals, never grant anything.
+- Besides refusals, the SP takes from the raw document only: the
+  top-level `Status` (a non-Success one ends the login as a `*StatusError`,
+  whose fields are unsigned unless the Response is signed), the Response
+  `InResponseTo` (compared, refusal only), whether each signature has a
+  `KeyInfo` and whether it carries a certificate (certificate selection,
+  and the cut of a certificate-less `KeyInfo`), and whether a
+  `ProxyRestriction` has a `Count` attribute (its value is the verified
+  one).
 
 | Value | Read from | Must equal |
 | --- | --- | --- |
-| Response `Issuer` and Assertion `Issuer` (one each, required) | the verified response | the connection's IdP entity ID; the `Format`, if any, is `entity` |
+| Response `Issuer` and Assertion `Issuer` (one each, required) | the decoded response: the Assertion's verified, the Response's signed only when the Response is | the connection's IdP entity ID; the `Format`, if any, is `entity` |
 | `Destination` | Response (compared when present, required when the Response is signed) | the connection's ACS URL |
 | Received location | the HTTP request: escaped path, `r.Host`, query string | the ACS URL's path and host, without a query string (Core §3.2.2, Bindings §3.5.5.2) |
 | `Origin`, or `Referer` without `Origin` | the HTTP request, when `Connection.ResponseOrigins` is set | one of those origins |
 | `InResponseTo` | the bearer `SubjectConfirmationData` (required; absent means unsolicited) and, on a Success, the Response (required, Core §3.2.2) | the request ID of the browser's transaction |
 | `Recipient` | bearer `SubjectConfirmationData` | the connection's ACS URL |
 | `Audience` | every `AudienceRestriction` (at least one) | each names the connection's SP entity ID |
-| `NameID` | `Subject` (exactly one, never `BaseID`) | its format, when the connection requests one |
+| `NameID` | `Subject` (exactly one, never `BaseID`, never blank) | its format, when the connection requests one |
 
 ### 3.2 Algorithms and keys
 
@@ -107,7 +122,7 @@ and `skew` the clock skew:
 | `AuthnInstant` | `AuthnInstant ≤ now + skew`; with `ForceAuthn`, also `AuthnInstant ≥ request start − skew` |
 | `SessionNotOnOrAfter` | `now < SessionNotOnOrAfter + skew` |
 | IdP certificate validity | checked at `now − skew`: from `NotBefore + skew` to `NotAfter + skew` |
-| Transaction | `now` before the transaction's expiry (`TransactionTTL`, 10 minutes by default, 1 hour at most) |
+| Transaction | `now` before the transaction's expiry (`TransactionTTL`: whole seconds, 10 minutes by default, 1 hour at most) |
 
 A certificate whose validity starts when the IdP switches to it is refused
 for the first `ClockSkew`: import new certificates ahead of their use. The
@@ -126,6 +141,52 @@ Keycloak run hit this with a freshly generated realm key.
 - **No response content triggers a fetch.** A response signed by an
   unknown key is refused; it does not refresh the metadata, so an attacker
   cannot make the SP fetch.
+- **One certificate per signing `KeyDescriptor`.** The SP trusts each
+  imported certificate as a signing key by itself: it builds no chain and
+  reads no certificate extension. It reads the certificate of each
+  `KeyDescriptor` whose `use` is `signing` or absent at
+  `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only (namespaces, not
+  prefixes, are matched; a certificate anywhere else is never trusted). A
+  descriptor carrying two different certificates — typically the signing
+  certificate and its issuing CA — or two `KeyInfo` elements is refused
+  with `ErrInvalidMetadata` (Metadata Interoperability Profile §2.5.1: one
+  key, one certificate per `KeyDescriptor`; XML Signature 1.1 §4.5.4 gives
+  the certificates of an `X509Data` no order, so the SP cannot tell the end
+  entity apart). A `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to
+  the certificate must be that certificate's key (§2.5.1: "If both forms
+  are used, then they MUST represent the same key"): an RSA key value is
+  compared with the certificate's RSA key, a DER-encoded one with its
+  `SubjectPublicKeyInfo`, and any other (EC, DSA) or unparsable key value
+  is refused. The identifier hints — `KeyName`, `X509SubjectName`,
+  `X509IssuerSerial`, `X509SKI`, `dsig11:X509Digest` — are neither
+  verified nor used: the certificate alone is the key, so a CA certificate
+  published with the signing certificate's identifiers instead of that
+  certificate becomes a signing key. Keep only the certificate the IdP
+  signs with. **Never list
+  a CA or intermediate certificate, not even in a descriptor of its own**:
+  every listed certificate is a signing key, and whoever holds that CA's
+  key could then sign any user in. A self-signed IdP certificate marked
+  `CA:TRUE` (as `openssl req -x509` makes them) is fine: it is the signing
+  certificate. An IdP that *publishes* its chain cannot be followed through
+  `FetchIdentityProviderMetadata` or `MetadataSource`: every refresh fails
+  (`ErrInvalidMetadata` on the `samlsp.FetchMetadata` span), the last good
+  document is served up to `MaxStale`, then logins fail with
+  `ErrMetadataExpired`. Import an edited copy with
+  `ParseIdentityProviderMetadata` (and follow its rollovers by hand), or
+  have the IdP fixed.
+- **Deviations from the Metadata Interoperability Profile §2.6.1**, which
+  asks consumers to treat each published key as valid and nothing else. All
+  of them fail closed:
+  - the trust unit is the certificate, not its key: a signature's
+    `KeyInfo` certificate must equal an imported one byte for byte, so a
+    certificate re-issued over the same key is refused until it is
+    imported (goxmldsig selects certificates by equality);
+  - the certificate validity window is enforced at verification (see
+    [§3.3](#33-time)), which §2.6.1 forbids: an IdP signing under an
+    expired certificate is refused (§2.5.1 recommends unexpired
+    certificates);
+  - a key published only as `ds:KeyValue` is not imported: publish its
+    certificate.
 - **Refresh and failure** of a `MetadataSource`:
 
 | Setting | Default | Meaning |
@@ -133,7 +194,7 @@ Keycloak run hit this with a freshly generated realm key.
 | refresh interval | `cacheDuration`, or 1 hour when absent | clamped to `[MinRefresh, MaxRefresh]` (5 minutes, 24 hours); an explicit `PT0S` asks for `MinRefresh` |
 | early expiry | — | a document whose `validUntil` comes before its scheduled refresh is refreshed once it expires, at most once per `RetryInterval` |
 | `RetryInterval` | 1 minute | spacing of the attempts after a failure or an early expiry, whatever the traffic |
-| `MaxStale` | 7 days | how long the last good document is served while refreshes fail; never past its `validUntil` |
+| `MaxStale` | 7 days | how long the last good document is served while refreshes fail; never past its `validUntil`. A key the IdP withdrew meanwhile stays trusted that long: lower it (down to `MaxRefresh`) to shorten that window, at the cost of failing closed sooner during an outage of the metadata URL |
 | afterwards | — | `BeginLogin` and `CompleteLogin` fail closed with `ErrMetadataExpired` |
 
   A refresh starts at the first use after it is due and runs in the
@@ -165,9 +226,22 @@ Keycloak run hit this with a freshly generated realm key.
   assertion.
 - Retention is the last instant the assertion could be accepted, plus a
   one-minute margin: `min(SubjectConfirmationData NotOnOrAfter + skew,
-  rounded up to the second; transaction expiry) + 1 minute`.
+  rounded up to the second; transaction expiry) + 1 minute`. Profiles
+  §4.1.4.5 asks to keep the ID for as long as the assertion "would be
+  considered valid based on the NotOnOrAfter" of its bearer confirmation;
+  here it is considered valid only until its transaction expires too: the
+  signed `InResponseTo` must name the transaction's request, and the
+  expiry is covered by the transaction MAC and judged on the SP's clock.
+  Capping at that expiry therefore leaves no window — a replay is refused
+  by the replay cache before it and by the expiry after it, even by a store
+  that lost the consumption — and keeps an IdP's multi-year `NotOnOrAfter`
+  from growing the cache (`TestCompleteLogin_ReplayRetentionLeavesNoGap`).
 - Purging is per store:
-  - `saml/sp/storage/memory` never purges (development and tests only);
+  - `saml/sp/storage/memory` (development, tests and single-instance
+    demos) sweeps the expired records every 64 writes on its clock — give
+    it the SP's with `memory.WithClock` when that is not `time.Now`; it
+    holds the login rate times `TransactionTTL`, so rate-limit
+    `BeginLogin`;
   - `saml/sp/store/sql` ships no job, and its package documentation gives
     the cleanup statements;
   - `saml/sp/store/redis` uses key expiry, so Redis must run with
@@ -206,7 +280,11 @@ global name.
   chosen by a tenant.
 - An absent `NameQualifier` stands for the issuer, and an absent
   `SPNameQualifier` for the SP entity ID (`Identity.Audience`).
-- Values are compared exactly, with no trimming or case folding.
+- Values are compared exactly, with no trimming or case folding. A NameID
+  that is empty, or made only of white space and invisible characters
+  (Unicode control and format characters: zero-width spaces, byte order
+  mark, soft hyphen…), is refused with `ErrInvalidAssertion`: users whose
+  IdP-side source attribute is blank would share one account.
 - Encode the key without ambiguity: a connection ID or a value may contain
   any separator. Length-prefix each field, as `accountKey` in
   `examples/saml-sp` does (`<len>:<field>;` for each), or store the SHA-256
@@ -267,9 +345,10 @@ CREATE TABLE external_identity (
     login of a connection whose IdP signs her in as the attacker, typically
     the attacker's own tenant. `BeginLogin` cannot tell: the victim's
     browser started that login. **The application must start logins only
-    from a same-origin user gesture**: a GET whose `Sec-Fetch-Site` is
-    `same-origin` or `none` (a link of the site, the address bar), or a POST
-    carrying a CSRF token. Refuse `cross-site` and `same-site`.
+    from a same-origin user gesture**: a GET whose `Sec-Fetch-Site` (Fetch
+    Metadata §2.3) is `same-origin` or `none` (a link of the site, the
+    address bar), or a POST carrying a CSRF token. Refuse `cross-site`,
+    `same-site` and a missing header.
   - *A leaked in-flight request*: the IdP redirect URL carries the request
     ID and the RelayState handle. Whoever learns it while the login is
     pending (browser history, a proxy log) can sign in at the IdP as
@@ -282,19 +361,27 @@ CREATE TABLE external_identity (
     log full IdP redirect URLs, and show the signed-in account after a
     login.
 
-  `examples/saml-sp` gates its login this way and also accepts a request
-  without `Sec-Fetch-Site`, which browsers older than Fetch Metadata do not
-  send. That trade-off keeps those browsers working and leaves them open to
-  forced initiation. A strict deployment refuses a missing header too, or
-  starts logins with a CSRF-protected POST. The browser suite (BR8) shows
-  the example refusing a login forced from another site and from a sibling
-  host. It also shows a header-less forced login completing, because the
-  library leaves intent to the application.
+  `examples/saml-sp` gates its login this way and refuses a request
+  without `Sec-Fetch-Site` (403): it cannot be told from a login forced in
+  a browser that sends no Fetch Metadata. The gate has three consequences:
+  - browsers without Fetch Metadata — Safari and iOS web views before
+    16.4 — cannot sign in; serve them a CSRF-protected POST instead if
+    they matter;
+  - browsers send the header only to potentially trustworthy URLs (Fetch
+    Metadata §3): the site must be served over https (or http on a
+    loopback host), otherwise every login is refused;
+  - `none` also covers a navigation the user started outside any page,
+    such as a link opened from a mail client: a login forced through an
+    emailed link remains possible. Only a CSRF-protected POST closes it.
+
+  The browser suite (BR8) shows the example refusing a login forced from
+  another site, from a sibling host and from a browser without Fetch
+  Metadata, while a click on the site still signs in.
 
 ```go
 mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "none": // add "" to admit browsers without Fetch Metadata
+	case "same-origin", "none": // a missing header is refused: it may be a forced login
 	default:
 		http.Error(w, "start the sign-in from this site", http.StatusForbidden)
 		return
@@ -437,8 +524,9 @@ TAB payload lands on the attacker's site.
 
 ### IdP signing key
 
-1. The IdP publishes the new certificate next to the current one (errata
-   E68: any listed key may sign).
+1. The IdP publishes the new certificate next to the current one, in a
+   `KeyDescriptor` of its own (errata E68: any listed key may sign; one
+   certificate per descriptor, see [§3.4](#34-metadata-trust)).
 2. The SP learns it. With imported metadata, re-import the document on
    every instance. With a `MetadataSource`, wait one refresh interval
    (`MaxRefresh` at worst) plus the clock skew. Each instance refreshes on
@@ -517,8 +605,8 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | `ErrResponseTooLarge` | too many attributes or groups; an oversized body | filter what the IdP releases |
 | `ErrMalformedResponse`, `ErrInvalidAssertion`, `ErrMalformedRequest` | a response shape the SP refuses (several assertions, an unknown condition, a non-POST request) | configure the IdP to send one assertion with a persistent NameID |
 | `*StatusError` (`ErrResponseStatus`) | the IdP refused: `NoPassive` (an `IsPassive` login without a session), `AuthnFailed`, `RequestDenied`, `InvalidNameIDPolicy` | per status; its `AppState` and `ConnectionID` identify the login |
-| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; refreshes have failed for `MaxStale` | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID |
-| `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; the IdP wants signed requests and the SP has no key | configure the transaction keys; configure `SigningKey` and `SigningCertificate` |
+| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; a signing `KeyDescriptor` carrying several certificates (a chain), two `KeyInfo`, or a `KeyValue` that is not its certificate's key; refreshes have failed for `MaxStale` (watch the `samlsp.FetchMetadata` span errors) | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID; keep only the certificate the IdP signs with — never move a CA or intermediate certificate into a descriptor of its own (see [§3.4](#34-metadata-trust)) |
+| `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; a `TransactionTTL` with a sub-second part; the IdP wants signed requests and the SP has no key | configure the transaction keys; give `TransactionTTL` in whole seconds; configure `SigningKey` and `SigningCertificate` |
 
 ## 9. Testing your integration
 
@@ -591,20 +679,21 @@ to the cookie, login or ACS code of `saml/sp`.
 | BR5 | tampered, swapped, missing and URL RelayStates are refused, consume nothing and never leave the site |
 | BR6 | a login started on another host than the ACS fails |
 | BR7 | an IdP-initiated response is unsolicited |
-| BR8 | the example's `Sec-Fetch-Site` gate refuses a login forced from another site or from a sibling host, and a click on the site still signs in; without Fetch Metadata, a forced login completes |
+| BR8 | the example's `Sec-Fetch-Site` gate refuses a login forced from another site, from a sibling host, or from a browser without Fetch Metadata (no header), and a click on the site still signs in |
 | BE1 | logout is local: the next login is silent |
 | BE2 | twelve hostile return targets never leave the site |
 
 ### Interoperability evidence
 
 Recorded on 2026-10-12, re-run on 2026-10-13 after the security audit
-fixes:
+fixes; the browser suite was re-run on 2026-10-21 after the example's
+login gate changed:
 
 | Peer | Version | How | Result |
 | --- | --- | --- | --- |
 | crewjam/saml IdP | v0.5.1 | CI, in process | pass |
 | Keycloak (Apache Santuario) | 26.7.4 (`sha256:82a77884…`) | live, K1–K8 | 17/17 subtests pass |
-| Chrome | 154.0.8037.98 | Tales v0.1.0-rc.23, `make e2e` | 16 scenarios pass |
+| Chrome | 155.0.8059.85 | Tales v0.1.0-rc.23, `make e2e-saml` | 16 scenarios pass |
 | PostgreSQL | 16 (`sha256:ca0bd484…`) | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
 | MySQL | 8.0 (`sha256:7dcddc01…`), with and without `clientFoundRows`, and as a latin1 database under `sql_mode=''` | CI (`make test-backends`): conformance suite, races (10 rounds, 16 contenders, race detector) and a non-ASCII `AppState` round trip | pass |
 | Redis | 7.4 (`sha256:4fa24486…`), `noeviction` | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |

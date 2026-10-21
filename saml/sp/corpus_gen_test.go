@@ -197,7 +197,7 @@ func (g *corpusGen) begin(name, connID string, opts samlsp.LoginOptions, cookie,
 		},
 	}
 
-	store := &recordingStore{Store: memory.New()}
+	store := &recordingStore{Store: newMemoryStore(atT0)}
 
 	sp, err := samlsp.New(samlsp.Config{
 		TransactionKeys: corpusTransactionKeys,

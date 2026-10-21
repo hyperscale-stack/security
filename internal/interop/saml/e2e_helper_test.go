@@ -525,7 +525,8 @@ func (h *e2eHelper) serveSP(w http.ResponseWriter, r *http.Request, host string,
 	}
 
 	// A browser that predates Fetch Metadata sends no Sec-Fetch-* header:
-	// this entry point forwards to the example's login without them.
+	// this entry point forwards to the example's login without them (the
+	// example refuses it: such a request cannot be told from a forced one).
 	if r.URL.Path == "/_e2e/legacy-login" {
 		r.URL.Path = "/login"
 

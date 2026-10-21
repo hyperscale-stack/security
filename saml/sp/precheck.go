@@ -13,8 +13,11 @@ import (
 
 // rawResponse is what the structural pre-check learned from the raw tree.
 // Only C14N-invariant structure is read from it (element counts, attribute
-// presence and values); identity data is read exclusively from the verified
-// canonical form decoded by gosaml2.
+// presence and values); identity values are read exclusively from the
+// verified canonical form decoded by gosaml2 — of the identity, only the
+// presence of a ProxyRestriction Count comes from here. The Status and the
+// Response InResponseTo read here are signed only with the Response: they
+// only end or refuse a login.
 type rawResponse struct {
 	// data are the exact bytes checked here and verified by gosaml2.
 	data []byte

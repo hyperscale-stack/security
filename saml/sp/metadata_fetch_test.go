@@ -345,6 +345,8 @@ func TestFetchIdentityProviderMetadata_Document(t *testing.T) {
 		"another entity":  {idpMetadataSpec{entityID: "https://evil.example.com"}.render(t), samlsp.ErrInvalidMetadata},
 		"expired":         {idpMetadataSpec{entityExtra: ` validUntil="2026-10-12T09:00:00Z"`}.render(t), samlsp.ErrMetadataExpired},
 		"no signing keys": {idpMetadataSpec{keyDescriptors: keyDescriptor("encryption", keys(t).idpA.cert)}.render(t), samlsp.ErrInvalidMetadata},
+		// A published chain is refused on every fetch (audit F-13).
+		"certificate chain": {idpMetadataSpec{keyDescriptors: keyDescriptor("signing", testChain(t).leaf.cert, testChain(t).ca.cert)}.render(t), samlsp.ErrInvalidMetadata},
 	}
 
 	for name, tc := range cases {
@@ -766,8 +768,14 @@ func TestMetadataSource_KeyRollover(t *testing.T) {
 	t.Parallel()
 
 	k := keys(t)
+	// One KeyDescriptor per key (Metadata Interoperability Profile §2.5.1).
 	doc := func(certs ...*x509.Certificate) []byte {
-		return idpMetadataSpec{entityExtra: ` cacheDuration="PT1H"`, keyDescriptors: keyDescriptor("signing", certs...)}.render(t)
+		kds := ""
+		for _, c := range certs {
+			kds += keyDescriptor("signing", c)
+		}
+
+		return idpMetadataSpec{entityExtra: ` cacheDuration="PT1H"`, keyDescriptors: kds}.render(t)
 	}
 
 	m := newMetadataServer(t, serveMetadata(doc(k.idpA.cert)))
