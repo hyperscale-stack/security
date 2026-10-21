@@ -2435,3 +2435,21 @@ Google, Keycloak, Okta, Auth0, Amazon Cognito and Apple send none of them.
    `ErrIDTokenAlgorithm`.
 4. **Raising `jose.MaxRSAModulusBits`** in your application has no effect
    on these bounds.
+
+### `jwt`: HMAC tokens carry their `kid`
+
+HMAC signers wrote no `kid` header, so a verifier could not tell which of
+two HMAC keys signed a token (RFC 7515 §4.1.4, RFC 7517 §4.5), and a
+single-key verifier matched the token whatever the key's `KeyID`.
+
+| | Before | After |
+| --- | --- | --- |
+| HS256/384/512 token of a key with `KeyID` | no `kid` header | `"kid": KeyID` |
+| two HMAC verification keys (rotation) | every token refused (`ErrInvalidSignature`) | each token verified by its key |
+| single HMAC verification key whose `KeyID` differs from the signer's | verified | `ErrInvalidSignature`: no key for the token's `kid` |
+| RSA, ECDSA, EdDSA, opaque keys | `kid` written | unchanged |
+
+To migrate:
+
+1. Give each HMAC verification key (`PublicKey.KeyID`) the `KeyID` of the
+   signing key, or sign with a key without `KeyID`.

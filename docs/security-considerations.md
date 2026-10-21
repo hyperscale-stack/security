@@ -208,6 +208,8 @@ keys by `kid` against a JWKS provider (static or remote).
   error for a key unfit for its algorithm (RSA under 2048 or over 4096 bits,
   another curve, a public key, an HMAC secret shorter than its hash); KMS and
   HSM keys (`jose.OpaqueSigner`) are checked through their public half.
+  Every token carries its key's `KeyID` as `kid` (RFC 7515 §4.1.4) — HMAC
+  tokens included, so HMAC keys rotate like the others.
   `MarshalJWKS` refuses an RSA key over 4096 bits too. The 4096-bit cap is
   go-jose's since v4.1.6: a larger published key breaks its consumers — this
   library's remote key sets and `oidc/client` ignore it, go-jose's

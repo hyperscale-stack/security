@@ -958,6 +958,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   strict JSON everywhere and said that `jku`, `x5u`, `jwk` and `x5c` were
   ignored, when go-jose parsed `jwk` and `x5c`. The header is now decoded
   strictly, bounded to 4 KiB, before go-jose parses the token.
+- `jwt`: HMAC signers (HS256, HS384, HS512) wrote no `kid` header —
+  go-jose writes it from a key's public half, which a secret lacks —
+  although `Signer.KeyID` said verifiers select the key by it: with two
+  HMAC keys trusted during a rotation, every token was refused. Every
+  signer whose key has a `KeyID` now writes it (RFC 7515 §4.1.4); the
+  tokens of the other keys are unchanged.
 - `oidcclient.Client.StartLogin` capped the binding cookies at four by
   expiring the oldest cookies whose name started with the binding prefix —
   `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could

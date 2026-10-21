@@ -336,7 +336,9 @@ PKCE. Not supported, and refused where a provider could select them:
   `"sub"` next to `"Sub"`).
 - **Key identifiers** — a `kid` shared by several keys designates no key,
   even keys of different types that RFC 7517 §4.5 allows to share one; a
-  token without `kid` is verified against a single-key set only.
+  token without `kid` is verified against a single-key set only. Signers
+  write their key's `KeyID` as the `kid` of every token, HMAC included: a
+  verification key must carry the same `KeyID`.
 - **Remote JWK Set policy** — the TTL is configurable (`WithCacheTTL`); the
   minimum refresh interval (10 s), the back-off cap (5 minutes), the
   maximum staleness (24 h), the 100-key and 2048–4096-bit RSA bounds, the

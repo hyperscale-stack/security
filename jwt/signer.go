@@ -24,8 +24,9 @@ type Signer interface {
 	// Algorithm returns the JOSE alg used by this signer.
 	Algorithm() Algorithm
 
-	// KeyID returns the kid attached to the active key (if any). Verifiers
-	// rely on the header kid to select the right key from a JWKS.
+	// KeyID returns the kid of the active key (if any), which every token
+	// carries as its "kid" header — HMAC tokens included (RFC 7515
+	// §4.1.4): verifiers select the key of a multi-key set by it.
 	KeyID() string
 }
 
@@ -89,11 +90,9 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 		return "", fmt.Errorf("%w: %w", ErrUnsignableClaims, err)
 	}
 
-	jwk := s.key.toJOSE()
-
 	jws, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: s.key.Algorithm.joseAlg(), Key: jwk},
-		(&jose.SignerOptions{}).WithType(jose.ContentType(s.typ)),
+		jose.SigningKey{Algorithm: s.key.Algorithm.joseAlg(), Key: s.key.toJOSE()},
+		s.options(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("jwt: new signer: %w", err)
@@ -110,4 +109,17 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 	}
 
 	return out, nil
+}
+
+// options returns the JOSE header the signer writes besides alg: typ and,
+// when the key has a KeyID, kid (RFC 7515 §4.1.4) — written explicitly,
+// since go-jose writes it from a key's public half only and an HMAC secret
+// has none; for the other keys it is the value go-jose would write.
+func (s *signer) options() *jose.SignerOptions {
+	opts := (&jose.SignerOptions{}).WithType(jose.ContentType(s.typ))
+	if s.key.KeyID != "" {
+		opts = opts.WithHeader(jose.HeaderKey("kid"), s.key.KeyID)
+	}
+
+	return opts
 }
