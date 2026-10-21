@@ -30,6 +30,7 @@ type ErrorMapper interface {
 //	class                                       code              message
 //	invalid_request                             InvalidArgument   "invalid request"
 //	unavailable                                 Unavailable       "authentication unavailable"
+//	too_many_attempts                           ResourceExhausted "too many attempts"
 //	token_expired, token_not_found,
 //	client_secret_mismatch, invalid_credentials,
 //	authentication_required,
@@ -39,7 +40,9 @@ type ErrorMapper interface {
 //
 // gRPC clients commonly retry Unavailable: authenticators wrap
 // [security.ErrUnavailable] only for a transient dependency failure, and an
-// error wrapping no security sentinel is an internal error.
+// error wrapping no security sentinel is an internal error. A throttled
+// attempt ([security.ErrTooManyAttempts]) is ResourceExhausted — gRPC has
+// no standard field for its retry delay.
 func DefaultErrorMapper() ErrorMapper { return defaultErrorMapper{} }
 
 type defaultErrorMapper struct{}
@@ -58,6 +61,8 @@ func classify(class string) (codes.Code, string) {
 		return codes.InvalidArgument, "invalid request"
 	case security.ErrorClassUnavailable:
 		return codes.Unavailable, "authentication unavailable"
+	case security.ErrorClassTooManyAttempts:
+		return codes.ResourceExhausted, "too many attempts"
 	case security.ErrorClassTokenExpired, security.ErrorClassTokenNotFound,
 		security.ErrorClassClientSecretMismatch, security.ErrorClassInvalidCredentials,
 		security.ErrorClassAuthenticationRequired, security.ErrorClassUnsupportedCredential:
