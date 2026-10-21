@@ -1611,11 +1611,13 @@ span catalog.
 
 ## Toolchain and supply chain
 
-- **Go toolchain.** Every module requires Go 1.27.2 (its `go` line). The
+- **Go toolchain.** Every module requires Go 1.27.3 (its `go` line). The
   library cannot be built with a toolchain carrying the standard-library
-  advisories fixed up to go1.27.2: HTTP/2 server crashes and request
+  advisories fixed up to go1.27.3: HTTP/2 server crashes and request
   smuggling in `net/http`, `crypto/tls`, `encoding/asn1`, `net/url`,
-  `encoding/xml`. Build and ship with the latest Go patch release, and run
+  `encoding/xml`, and the distrust of compromised intermediate certificates
+  in `crypto/x509` (GO-2026-6809), which every TLS client path of the
+  library reaches. Build and ship with the latest Go patch release, and run
   `govulncheck` on your application: which advisories matter depends on the
   code you call.
 - **Vulnerability scanning.** The `govulncheck` workflow scans every module
@@ -1647,7 +1649,7 @@ span catalog.
 
 ## Operator checklist
 
-- [ ] Build with Go 1.27.2 or later, the latest patch release, and run
+- [ ] Build with Go 1.27.3 or later, the latest patch release, and run
       `govulncheck` on your application.
 - [ ] Pick a password hasher and review its cost against current hardware;
       raise its limits (`WithArgon2idLimits`, `WithBCryptMaxCost`) before

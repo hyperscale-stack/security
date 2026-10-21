@@ -821,22 +821,26 @@ To migrate:
    `code_challenge` now fails: send the matching `code_challenge` (S256) in
    its authorization requests, or stop sending the verifier.
 
-### Toolchain: every module requires Go 1.27.2
+### Toolchain: every module requires Go 1.27.3
 
-Every `go.mod`, and `go.work`, now declares `go 1.27.2`. Since Go 1.21 the
+Every `go.mod`, and `go.work`, now declares `go 1.27.3`. Since Go 1.21 the
 `go` line is a minimum: a module that requires one of ours must declare
-`go 1.27.2` or later, and building it needs a go1.27.2 or later toolchain.
+`go 1.27.3` or later, and building it needs a go1.27.3 or later toolchain.
 The modules used to declare `go 1.26.0` or `go 1.26.5`, and the toolchain CI
 tested with (go1.26.5) carries standard-library advisories reachable from
 the library's own call paths: HTTP/2 server crashes and request smuggling in
 `net/http`, `crypto/tls`, `encoding/asn1`, `net/url`, `encoding/xml`. All of
-them are fixed in go1.27.2, on which `govulncheck` reports none.
+them are fixed in go1.27.2. go1.27.2 itself still lacks the distrust of
+compromised intermediate certificates in `crypto/x509` (GO-2026-6809,
+CVE-2026-111943), reachable from every TLS client path of the library
+(`outbound`, the remote JWK Set of `jwtsec`); it is fixed in go1.27.3, on
+which `govulncheck` reports none.
 
 |                                            | Before                    | After                                                      |
 | ------------------------------------------ | ------------------------- | ---------------------------------------------------------- |
-| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.2`                                                |
-| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.2 or later (switched to under `GOTOOLCHAIN=auto`)   |
-| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.2, read from `go.work`                              |
+| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.3`                                                |
+| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.3 or later (switched to under `GOTOOLCHAIN=auto`)   |
+| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.3, read from `go.work`                              |
 
 Behaviour the Go 1.27 floor brings to every consumer (Go 1.27 release
 notes):
@@ -853,13 +857,13 @@ notes):
 
 To migrate:
 
-1. Set your module's `go` line to `1.27.2` or later: `go get` of one of our
-   modules does it, or run `go mod edit -go=1.27.2`.
-2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.2
+1. Set your module's `go` line to `1.27.3` or later: `go get` of one of our
+   modules does it, or run `go mod edit -go=1.27.3`.
+2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.3
    from the module proxy, verified by the checksum database. Where
    `GOTOOLCHAIN=local` (some Linux distributions, hermetic CI), install
-   go1.27.2 or later first: an older toolchain stops with
-   `go.mod requires go >= 1.27.2`.
+   go1.27.3 or later first: an older toolchain stops with
+   `go.mod requires go >= 1.27.3`.
 3. Build and ship with the latest Go patch release: the `go` line is a
    floor, not the toolchain to release with.
 

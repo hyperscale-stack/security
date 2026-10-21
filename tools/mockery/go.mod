@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/tools/mockery
 
-go 1.27.2
+go 1.27.3
 
 tool github.com/vektra/mockery/v3
 

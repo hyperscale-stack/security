@@ -636,11 +636,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ErrTransactionIntegrity`. `Config` and `*Client` now print and log
   without the client secret and the keys, whatever the `fmt` verb. The example
   reads `OIDC_TRANSACTION_KEYS`. See [MIGRATION.md](MIGRATION.md).
-- **Go 1.27.2 minimum** (breaking): every module and `go.work` declare
-  `go 1.27.2`, so no consumer can build the library with a toolchain that
-  carries the standard-library advisories of go1.26.5, the version CI tested
-  with until now (HTTP/2 crashes, request smuggling, `crypto/tls`,
-  `encoding/asn1`; govulncheck finds none on go1.27.2). CI runs the version
+- **Go 1.27.3 minimum** (breaking): every module, the tool modules and
+  `go.work` declare `go 1.27.3`, so no consumer can build the library with a
+  toolchain that carries the standard-library advisories of go1.26.5, the
+  version CI tested with until now (HTTP/2 crashes, request smuggling,
+  `crypto/tls`, `encoding/asn1`), or GO-2026-6809 of go1.27.2
+  (`crypto/x509`); govulncheck finds none on go1.27.3. CI runs the version
   `go.work` names. See [MIGRATION.md](MIGRATION.md).
 - **Store suites on real servers in CI**: a second job of the Go
   workflow, `Store suites (real backends)`, runs the real-backend tests of
@@ -1233,6 +1234,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     updates, and waits 7 days before proposing a version.
 - `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of
   v0.58.0: HTTP/2 advisories GO-2026-6603, -6610, -6611, -6612 and -6617.
+- Every module, the tool modules and CI move to Go 1.27.3: go1.27.2 lacks
+  the distrust of compromised intermediate certificates in `crypto/x509`
+  (GO-2026-6809, CVE-2026-111943), reachable from every TLS client path
+  (`outbound`, the remote JWK Set of `jwtsec`).
 - The OAuth2 token endpoint refuses a `code_verifier` presented for an
   authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
   §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is

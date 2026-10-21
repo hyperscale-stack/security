@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/internal/interop/oidcop
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
