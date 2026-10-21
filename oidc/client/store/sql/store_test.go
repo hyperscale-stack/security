@@ -242,3 +242,26 @@ func TestPurgeExpired(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n)
 }
+
+// TestConsumeValidatesKeysBeforeIO: on a closed database, a malformed key
+// is refused as invalid — the refusal comes before any I/O — while a
+// well-formed one reaches the database and fails there.
+func TestConsumeValidatesKeysBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	store, db := open(t, "file:"+filepath.Join(t.TempDir(), "closed.db"), 1)
+	require.NoError(t, db.Close())
+
+	now := time.Now()
+	good := hash("state")
+
+	_, err := store.Consume(t.Context(), strings.ToUpper(good), hash("binding"), now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed state hash")
+
+	_, err = store.Consume(t.Context(), good, "", now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed binding hash")
+
+	_, err = store.Consume(t.Context(), good, hash("binding"), now)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, oidcclient.ErrInvalidTransaction, "well-formed keys reach the closed database")
+}

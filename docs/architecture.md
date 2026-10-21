@@ -332,8 +332,10 @@ StartLogin / Begin                          HandleCallback / Complete
   completes a login; altering a transaction fails it, whoever runs it.
 - **`TransactionStore`** — `Save` never overwrites, `Consume` removes a
   transaction atomically in a pinned decision order (unknown, expired,
-  binding mismatch — which keeps it). In-memory, SQL and Redis
-  implementations pass `oidc/client/storetest`.
+  binding mismatch — which keeps it). Both refuse malformed input before
+  any I/O: `Save` what `Transaction.Validate` refuses, `Consume` keys
+  `ValidateStoreKey` refuses. In-memory, SQL and Redis implementations pass
+  `oidc/client/storetest`.
 - **ID Token validation** — OpenID Connect Core §3.1.3.7 on top of go-jose:
   asymmetric algorithms only, keys from the issuer's `jwks_uri` through a
   bounded, rate-limited cache, and every claim check including nonce,

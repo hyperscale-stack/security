@@ -113,8 +113,17 @@ func (s *Store) Save(ctx context.Context, tx *oidcclient.Transaction) error {
 }
 
 // Consume implements [oidcclient.TransactionStore] with one script run
-// (see [Store]).
+// (see [Store]), after refusing, before any I/O, keys
+// [oidcclient.ValidateStoreKey] refuses.
 func (s *Store) Consume(ctx context.Context, stateHash, bindingHash string, now time.Time) (*oidcclient.Transaction, error) {
+	if err := oidcclient.ValidateStoreKey(stateHash); err != nil {
+		return nil, fmt.Errorf("redisstore: consume transaction: state hash: %w", err)
+	}
+
+	if err := oidcclient.ValidateStoreKey(bindingHash); err != nil {
+		return nil, fmt.Errorf("redisstore: consume transaction: binding hash: %w", err)
+	}
+
 	res, err := consumeScript.Run(ctx, s.rdb, []string{s.key(stateHash)}, bindingHash, now.Unix(), rand.Text()).Text()
 
 	switch {

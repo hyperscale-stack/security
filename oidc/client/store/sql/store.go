@@ -92,8 +92,15 @@ func (s *Store) Save(ctx context.Context, tx *oidcclient.Transaction) error {
 	return fmt.Errorf("sqlstore: save transaction: %w", err)
 }
 
-// Consume implements [oidcclient.TransactionStore] (see [Store]).
+// Consume implements [oidcclient.TransactionStore] (see [Store]). It
+// refuses, before any I/O, keys [oidcclient.ValidateStoreKey] refuses: a
+// MySQL VARCHAR key compares under a case-insensitive, space-padding
+// collation, which would otherwise take a malformed key for a stored one.
 func (s *Store) Consume(ctx context.Context, stateHash, bindingHash string, now time.Time) (*oidcclient.Transaction, error) {
+	if err := validateKeys(stateHash, bindingHash); err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, s.dialect.txOptions())
 	if err != nil {
 		return nil, fmt.Errorf("sqlstore: begin: %w", err)
@@ -113,6 +120,19 @@ func (s *Store) Consume(ctx context.Context, stateHash, bindingHash string, now 
 	}
 
 	return record, err
+}
+
+// validateKeys refuses the keys oidcclient.ValidateStoreKey refuses.
+func validateKeys(stateHash, bindingHash string) error {
+	if err := oidcclient.ValidateStoreKey(stateHash); err != nil {
+		return fmt.Errorf("sqlstore: consume transaction: state hash: %w", err)
+	}
+
+	if err := oidcclient.ValidateStoreKey(bindingHash); err != nil {
+		return fmt.Errorf("sqlstore: consume transaction: binding hash: %w", err)
+	}
+
+	return nil
 }
 
 // take decides Consume within tx, in the order the contract pins.
