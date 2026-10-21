@@ -256,12 +256,13 @@ func (p *Provider) userInfoGrant(ctx context.Context, issuer, token string) (*oa
 }
 
 // checkTokenClient refuses a token whose client is no longer registered at
-// issuer — removed, or bound to other issuers (oauth2.IssuerBoundClient):
-// it holds no valid token here.
+// issuer — removed (the ClientStore answering (nil, nil) or
+// invalid_client), or bound to other issuers (oauth2.IssuerBoundClient):
+// it holds no valid token here. Any other store error is a failure.
 func (p *Provider) checkTokenClient(ctx context.Context, clientID, issuer string) error {
-	client, err := p.clients.LoadClient(ctx, clientID)
+	client, err := p.loadClient(ctx, clientID)
 	if err != nil {
-		return fmt.Errorf("oidcprovider: load the access token's client: %w", err)
+		return err
 	}
 
 	if client == nil || !oauth2.ClientAllowsIssuer(client, issuer) {

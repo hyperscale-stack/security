@@ -551,6 +551,25 @@ func TestUserInfoRefusesTokensOfClientsNotAtTheIssuer(t *testing.T) {
 	}
 }
 
+// TestUserInfoRefusesTokensOfClientsTheStoreAnswersInvalidClient: a
+// ClientStore may answer an unknown client with an invalid_client error
+// rather than (nil, nil) (oauth2.ClientStore): the token of such a client
+// is an invalid token (401), not a server failure.
+func TestUserInfoRefusesTokensOfClientsTheStoreAnswersInvalidClient(t *testing.T) {
+	t.Parallel()
+
+	lookups := &clientLookups{}
+	e := newEnv(t, withClientLookups(lookups))
+	at := e.flow(authorizeQuery()).AccessToken
+
+	lookups.answer(webClientID, nil, oauth2.ErrInvalidClient)
+
+	rec := e.userinfo(bearerGET(at))
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "invalid_token", challenge(t, rec)["error"])
+	assert.True(t, e.sink.contains(oauth2.ErrClientNotAtIssuer))
+}
+
 // TestUserInfoFailsClosedOnClientStoreErrors: a client store that cannot
 // answer is a server error, not a valid token.
 func TestUserInfoFailsClosedOnClientStoreErrors(t *testing.T) {
