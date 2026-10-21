@@ -230,8 +230,6 @@ type Provider struct {
 	// clients is the server's client store: UserInfo serves the tokens of
 	// clients still registered at the issuer only.
 	clients oauth2.ClientStore
-	// refresh reports that a refresh_token grant is registered.
-	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
 	claimsSupported []string
 	// names are the claims the provider knows, by claimKey.
@@ -282,6 +280,12 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	loopback := server.AllowInsecureLoopbackIssuer || cfg.AllowInsecureLoopbackIssuer
 	server.AllowInsecureLoopbackIssuer, cfg.AllowInsecureLoopbackIssuer = loopback, loopback
 
+	// Both metadata documents publish the JWK Set the provider serves at
+	// Paths.JWKS, and the same scopes: the OpenID Connect ones, then the
+	// server's own.
+	server.AdvertiseJWKSURI = true
+	server.ScopesSupported = scopesSupported(hasGrant(server.Grants, oauth2.GrantTypeRefreshToken), server.ScopesSupported)
+
 	p := &Provider{cfg: cfg, ttl: cfg.IDTokenTTL}
 	if p.ttl == 0 {
 		p.ttl = DefaultIDTokenTTL
@@ -296,7 +300,6 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 
 	sc := srv.Config()
 	p.server, p.now, p.hook, p.tokens, p.clients = srv, sc.Now, sc.OnError, sc.Storage, sc.ClientStore
-	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
 	p.names = newClaimNames(cfg.ClaimsSupported)
 

@@ -20,19 +20,34 @@ import (
 // issuer, if any (RFC 8414 §3). It answers GET and HEAD (RFC 8414 §3.1);
 // any other method gets 405 with Allow: GET, HEAD.
 //
-// The document is built for the issuer the request resolves to, from the
-// server itself, so adding a grant or changing the issuer is reflected:
+// The document is built for the issuer the request resolves to — a
+// validated one ([ErrInvalidIssuer]: a resolver failure or an invalid
+// issuer answers server_error) — from the server itself, so adding a grant
+// or changing the issuer is reflected:
 //
 //   - endpoint URLs are the issuer + [ServerConfig.RoutePrefix] +
 //     "/<name>", consistent with wherever the handlers are mounted;
-//   - jwks_uri is the issuer, a trailing "/" removed, followed by
-//     "/.well-known/jwks.json" — where oidc/provider mounts its key set;
-//     the oauth2 module alone serves none;
-//   - grant_types_supported lists the registered grants, sorted;
-//   - response_types_supported and response_modes_supported are "code" and
-//     "query" — plus "token", "fragment" and the "implicit" grant type once
-//     a [Server.AuthorizeHandler] enabling [AuthorizeConfig.AllowImplicit]
-//     was built: they reflect the handlers built so far;
+//     authorization_endpoint only when an authorization flow is served
+//     (RFC 8414 §2: "REQUIRED unless no grant types are supported that use
+//     the authorization endpoint");
+//   - jwks_uri, with [ServerConfig.AdvertiseJWKSURI] only, is the issuer, a
+//     trailing "/" removed, followed by "/.well-known/jwks.json" — where
+//     oidc/provider mounts its key set; the oauth2 module alone serves none;
+//   - scopes_supported is [ServerConfig.ScopesSupported], omitted when
+//     empty;
+//   - grant_types_supported lists the registered grants, sorted — [] when
+//     there is none, never null nor omitted;
+//   - response_types_supported is "code" when the authorization_code grant
+//     is registered (/authorize refuses it otherwise), plus "token" once a
+//     [Server.AuthorizeHandler] enabling [AuthorizeConfig.AllowImplicit] was
+//     built — with the "implicit" grant type: the flag is server-wide, it
+//     reflects the handlers built so far, mounted or not; []
+//     without either flow;
+//   - response_modes_supported is "query", plus "fragment" for the implicit
+//     flow — [] without an authorization flow;
+//   - code_challenge_methods_supported follows the profile, with the code
+//     flow only; authorization_response_iss_parameter_supported (RFC 9207
+//     §3) is true when an authorization flow is served;
 //   - token_endpoint_auth_methods_supported and
 //     revocation_endpoint_auth_methods_supported list the
 //     [ServerConfig.ClientAuth] methods, and
@@ -62,35 +77,27 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 	routes := base + s.cfg.RoutePrefix
 	methods := s.clientAuthMethods()
 
-	// response_modes_supported names the modes /authorize answers in:
-	// omitting it would mean ["query", "fragment"] (RFC 8414 §2), and the
-	// handler refuses fragment for the code flow.
 	doc := metadataDoc{
 		Issuer:                            issuer,
-		AuthorizationEndpoint:             routes + "/authorize",
 		TokenEndpoint:                     routes + "/token",
 		RevocationEndpoint:                routes + "/revoke",
 		IntrospectionEndpoint:             routes + "/introspect",
-		JWKSURI:                           base + "/.well-known/jwks.json",
+		ScopesSupported:                   s.cfg.ScopesSupported,
 		GrantTypesSupported:               s.grantTypes(),
-		ResponseTypesSupported:            []string{responseTypeCode},
-		ResponseModesSupported:            []string{responseModeQuery},
+		ResponseTypesSupported:            []string{},
+		ResponseModesSupported:            []string{},
 		TokenEndpointAuthMethodsSupported: methods,
 		// Omitted, the revocation list would mean client_secret_basic alone
 		// (RFC 8414 §2).
 		RevocationEndpointAuthMethodsSupported:    methods,
 		IntrospectionEndpointAuthMethodsSupported: confidentialMethods(methods),
-		CodeChallengeMethodsSupported:             s.pkceMethods(),
-		// Every authorization response names the issuer (RFC 9207 §2.3, §3).
-		AuthorizationResponseISSParameterSupported: true,
 	}
 
-	if s.implicit.Load() {
-		doc.ResponseTypesSupported = append(doc.ResponseTypesSupported, responseTypeToken)
-		doc.ResponseModesSupported = append(doc.ResponseModesSupported, responseModeFragment)
-		doc.GrantTypesSupported = append(doc.GrantTypesSupported, GrantTypeImplicit)
-		slices.Sort(doc.GrantTypesSupported)
+	if s.cfg.AdvertiseJWKSURI {
+		doc.JWKSURI = base + "/.well-known/jwks.json"
 	}
+
+	s.authorizationMetadata(&doc, routes)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "max-age=300")
@@ -98,6 +105,37 @@ func (s *Server) serveMetadata(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		_ = err
+	}
+}
+
+// authorizationMetadata fills the members of doc describing the
+// authorization endpoint, routes the endpoints' base: the code flow when
+// the authorization_code grant is registered, the implicit flow once a
+// handler enabling it was built, nothing without either. response_modes
+// names the modes /authorize answers in: omitting it would mean ["query",
+// "fragment"] (RFC 8414 §2), and the handler refuses fragment for the code
+// flow.
+func (s *Server) authorizationMetadata(doc *metadataDoc, routes string) {
+	code, implicit := s.codeFlowEnabled(), s.implicit.Load()
+	if !code && !implicit {
+		return
+	}
+
+	doc.AuthorizationEndpoint = routes + "/authorize"
+	doc.ResponseModesSupported = append(doc.ResponseModesSupported, responseModeQuery)
+	// Every authorization response names the issuer (RFC 9207 §2.3, §3).
+	doc.AuthorizationResponseISSParameterSupported = true
+
+	if code {
+		doc.ResponseTypesSupported = append(doc.ResponseTypesSupported, responseTypeCode)
+		doc.CodeChallengeMethodsSupported = s.pkceMethods()
+	}
+
+	if implicit {
+		doc.ResponseTypesSupported = append(doc.ResponseTypesSupported, responseTypeToken)
+		doc.ResponseModesSupported = append(doc.ResponseModesSupported, responseModeFragment)
+		doc.GrantTypesSupported = append(doc.GrantTypesSupported, GrantTypeImplicit)
+		slices.Sort(doc.GrantTypesSupported)
 	}
 }
 
@@ -110,6 +148,7 @@ type metadataDoc struct {
 	RevocationEndpoint                string   `json:"revocation_endpoint,omitempty"`
 	IntrospectionEndpoint             string   `json:"introspection_endpoint,omitempty"`
 	JWKSURI                           string   `json:"jwks_uri,omitempty"`
+	ScopesSupported                   []string `json:"scopes_supported,omitempty"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	ResponseModesSupported            []string `json:"response_modes_supported"`
@@ -125,9 +164,11 @@ type metadataDoc struct {
 }
 
 // grantTypes lists the registered grant types, sorted: map order would
-// change from one response to the next.
+// change from one response to the next. Never nil: no grant encodes as []
+// — an omitted or null member would mean ["authorization_code",
+// "implicit"] (RFC 8414 §2).
 func (s *Server) grantTypes() []string {
-	return slices.Sorted(maps.Keys(s.dispatch))
+	return append([]string{}, slices.Sorted(maps.Keys(s.dispatch))...)
 }
 
 func (s *Server) clientAuthMethods() []string {

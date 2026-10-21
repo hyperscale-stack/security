@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
+
+	"github.com/hyperscale-stack/security/oauth2/internal/scopes"
 )
 
 // ClientAuthenticator is the contract the [Server] consumes for client
@@ -50,6 +53,22 @@ type ServerConfig struct {
 	// when its own Config.AllowInsecureLoopbackIssuer is set, and the
 	// reverse: the core and the provider validate the same issuers.
 	AllowInsecureLoopbackIssuer bool
+	// ScopesSupported, when set, is published as the RFC 8414 §2
+	// scopes_supported member (RECOMMENDED): the scope values clients may
+	// request — a server MAY leave some out. Each value MUST be one RFC 6749
+	// §3.3 scope token, listed once: NewServer refuses anything else and
+	// keeps its own copy. Optional: nil publishes none. oidcprovider.New
+	// adds the OpenID Connect scopes it serves.
+	ScopesSupported []string
+	// AdvertiseJWKSURI publishes jwks_uri in the RFC 8414 metadata: the
+	// issuer, a trailing "/" removed, followed by /.well-known/jwks.json
+	// (RFC 8414 §2: the URL of the server's JWK Set). Set it only when the
+	// issuer's JWK Set is served exactly there — oidc/provider's
+	// JWKSHandler (oidcprovider.New sets it), or the keys of JWT access
+	// tokens published with jwtsec.MarshalJWKS, which resource servers find
+	// through it (RFC 9068 §4). The oauth2 module serves none: off, the
+	// metadata advertises none.
+	AdvertiseJWKSURI bool
 	// Grants lists the grant_type handlers active on /token. The Server
 	// builds a dispatch map keyed on Grant.Type(). Grants implementing
 	// [ProfileValidator] are checked against Profile at construction.
@@ -72,8 +91,9 @@ type ServerConfig struct {
 	// trimmed ("/" yields a root mount). The .well-known documents are not
 	// affected: the metadata document lives at
 	// /.well-known/oauth-authorization-server followed by the issuer's path
-	// (RFC 8414 §3), and the jwks_uri it advertises is the issuer followed
-	// by /.well-known/jwks.json (see [Server.MetadataHandler]).
+	// (RFC 8414 §3), and the jwks_uri it advertises with
+	// [ServerConfig.AdvertiseJWKSURI] is the issuer followed by
+	// /.well-known/jwks.json (see [Server.MetadataHandler]).
 	RoutePrefix string
 	// Now is the clock used to stamp issuance / expiry, and to compute the
 	// expires_in the /token response advertises. Defaults to time.Now
@@ -163,6 +183,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	cfg.RoutePrefix = normalizeRoutePrefix(cfg.RoutePrefix)
 
+	// What is checked is what is served: the caller's slice is not kept.
+	cfg.ScopesSupported = slices.Clone(cfg.ScopesSupported)
+	if err := checkScopesSupported(cfg.ScopesSupported); err != nil {
+		return nil, err
+	}
+
 	s := &Server{cfg: cfg, dispatch: make(map[string]Grant, len(cfg.Grants))}
 	for _, g := range cfg.Grants {
 		if _, dup := s.dispatch[g.Type()]; dup {
@@ -180,8 +206,35 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 }
 
 // Config returns the configuration the server was constructed with. Useful
-// for endpoints (metadata, jwks) that need to introspect it.
-func (s *Server) Config() ServerConfig { return s.cfg }
+// for endpoints (metadata, jwks) that need to introspect it. Its
+// ScopesSupported is a copy: changing it changes nothing the server serves.
+func (s *Server) Config() ServerConfig {
+	cfg := s.cfg
+	cfg.ScopesSupported = slices.Clone(cfg.ScopesSupported)
+
+	return cfg
+}
+
+// checkScopesSupported reports why supported cannot be published as
+// scopes_supported: a value that is not exactly one RFC 6749 §3.3 scope
+// token, or a value listed twice.
+func checkScopesSupported(supported []string) error {
+	seen := make(map[string]struct{}, len(supported))
+
+	for _, scope := range supported {
+		if tokens, err := scopes.Parse(scope); err != nil || len(tokens) != 1 || tokens[0] != scope {
+			return errors.New("oauth2: NewServer: ScopesSupported holds a value that is not one RFC 6749 §3.3 scope token")
+		}
+
+		if _, dup := seen[scope]; dup {
+			return errors.New("oauth2: NewServer: ScopesSupported lists a scope twice")
+		}
+
+		seen[scope] = struct{}{}
+	}
+
+	return nil
+}
 
 // notifyError hands err to the configured [ErrorHook], if any. It is a
 // no-op when no hook is registered or when err is nil, so call sites stay

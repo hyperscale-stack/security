@@ -33,8 +33,11 @@ var protocolClaims = []string{
 //   - request_parameter_supported and request_uri_parameter_supported
 //     false (omitted, the latter would mean true), claims_parameter_supported
 //     true, authorization_response_iss_parameter_supported true (RFC 9207);
-//   - offline_access among the scopes only when a refresh_token grant is
-//     registered; acr_values_supported only when configured;
+//   - scopes_supported: openid, the claim scopes (Core §5.4), offline_access
+//     only when a refresh_token grant is registered, then the server's own
+//     ServerConfig.ScopesSupported — the list New gives the server, so the
+//     oauth2 RFC 8414 document publishes it too; acr_values_supported only
+//     when configured;
 //   - grant_types_supported sorted; token_endpoint_auth_methods_supported
 //     and revocation_endpoint_auth_methods_supported (omitted, it would
 //     mean client_secret_basic alone, RFC 8414 §2) the server's ClientAuth
@@ -133,7 +136,7 @@ func (p *Provider) discoveryDocument(issuer string, snap *keySnapshot) discovery
 		JWKSURI:                                    base + jwksSuffix,
 		RevocationEndpoint:                         routes + "/revoke",
 		IntrospectionEndpoint:                      routes + "/introspect",
-		ScopesSupported:                            p.scopesSupported(),
+		ScopesSupported:                            sc.ScopesSupported,
 		ResponseTypesSupported:                     []string{responseTypeCode},
 		ResponseModesSupported:                     []string{"query"},
 		GrantTypesSupported:                        grantTypes(sc.Grants),
@@ -153,14 +156,15 @@ func (p *Provider) discoveryDocument(issuer string, snap *keySnapshot) discovery
 }
 
 // scopesSupported lists openid, the claim scopes (Core §5.4) and, when a
-// refresh_token grant can honor it, offline_access (Core §11).
-func (p *Provider) scopesSupported() []string {
+// refresh_token grant can honor it, offline_access (Core §11), then the
+// deployment's own scopes — each once.
+func scopesSupported(refresh bool, own []string) []string {
 	scopes := []string{ScopeOpenID, ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone}
-	if p.refresh {
+	if refresh {
 		scopes = append(scopes, ScopeOfflineAccess)
 	}
 
-	return scopes
+	return appendUnique(scopes, own...)
 }
 
 // grantTypes lists the registered grant types, sorted — the oauth2

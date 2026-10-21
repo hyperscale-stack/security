@@ -440,7 +440,7 @@ func TestMetadataEndpoint(t *testing.T) {
 	t.Run("advertises configuration", func(t *testing.T) {
 		t.Parallel()
 
-		srv, _ := newTestServer(t)
+		srv := newAuthorizeServer(t, oauth2.Profile20BCP)
 		rec := httptest.NewRecorder()
 		srv.MetadataHandler().ServeHTTP(rec,
 			httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
@@ -508,12 +508,15 @@ func TestMetadataRoutePrefix(t *testing.T) {
 	build := func(t *testing.T, prefix string) *oauth2.Server {
 		t.Helper()
 
+		store := memory.New()
 		srv, err := oauth2.NewServer(oauth2.ServerConfig{
-			Storage:        memory.New(),
-			ClientStore:    &staticClientStore{},
-			IssuerResolver: oauth2.StaticIssuer(issuer, "api"),
-			ClientAuth:     []oauth2.ClientAuthenticator{clientauth.NewBasic()},
-			RoutePrefix:    prefix,
+			Storage:          store,
+			ClientStore:      &staticClientStore{},
+			IssuerResolver:   oauth2.StaticIssuer(issuer, "api"),
+			Grants:           []oauth2.Grant{codeGrant(store)},
+			ClientAuth:       []oauth2.ClientAuthenticator{clientauth.NewBasic()},
+			RoutePrefix:      prefix,
+			AdvertiseJWKSURI: true,
 		})
 		require.NoError(t, err)
 
@@ -563,7 +566,8 @@ func TestMetadataRoutePrefix(t *testing.T) {
 			assert.Equal(t, routes+"/introspect", body["introspection_endpoint"])
 			assert.Equal(t, routes+"/authorize", body["authorization_endpoint"])
 
-			// jwks_uri keeps the host-root .well-known location regardless.
+			// jwks_uri, when advertised, keeps the host-root .well-known
+			// location regardless.
 			assert.Equal(t, issuer+"/.well-known/jwks.json", body["jwks_uri"])
 		})
 	}
