@@ -792,7 +792,8 @@ To migrate:
    (`openssl rand -hex 32`). It is a secret like a session key: keep it in
    your secret store, never in code or logs.
 2. Give the same keys to every instance that may serve a callback, and set
-   `Config.TransactionKeys: [][]byte{key}` on every `oidcclient.Client`
+   `Config.TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))}`
+   on every `oidcclient.Client`
    (`examples/oidc-client` reads `OIDC_TRANSACTION_KEYS`, hex keys separated
    by commas).
 3. Deploy knowing that the logins in progress at that moment fail once with
@@ -918,7 +919,7 @@ like `Config`:
 | `Config` | an error (`json: unsupported type: func…`) | `{"ConnectionID":…,"Issuer":…,"ClientID":…,"ClientSecret":"REDACTED","AuthMethod":…,"RedirectURL":…,"ResponseMode":…,"TransactionKeys":<count>}` |
 | a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written; when another type embedded at the same depth also has a `MarshalJSON`, neither is promoted and the exported fields are written, the secrets excluded |
 | `json.Unmarshal` into `AuthRequest`, `Callback` | every field read | `AuthRequest.Binding` and `Callback`'s `URL`, `Params` and `Binding` are tagged `json:"-"`: never read nor written by a reflective encoding |
-| `Identity`, `Tokens` | tokens and claims | unchanged, deliberately: JSON is how applications persist them |
+| `Identity`, `Tokens` | tokens and claims | claims unchanged; tokens `REDACTED` since they are `oidcclient.Secret` values (see "every secret is an `oidcclient.Secret`" below) |
 | `UserInfo` | its claims | unchanged; `fmt` now prints its subject only |
 | `*Client` | `{}` | unchanged |
 
@@ -934,10 +935,11 @@ To migrate:
    another embedded type with a `MarshalJSON`, as flattened fields without
    the secrets: name the field (`Login oidcclient.AuthRequest`) instead of
    embedding it.
-4. Other reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML)
-   still write the binding secret: do not use them on these types.
-5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
-   in another logged value, `slog`'s JSON handler writes their tokens.
+4. Other reflection-based encoders never write the binding secret either:
+   it is an `oidcclient.Secret`, which `encoding/gob` refuses and
+   `encoding/xml` writes empty.
+5. Keep logging an `Identity` as an attribute of its own: nested in another
+   logged value, `slog`'s JSON handler writes its claims (personal data).
 
 ### `oidc/client`: an authorization request never repeats a parameter
 
@@ -1831,6 +1833,7 @@ separator, and the three hint lists are bounded:
 To migrate: nothing for clients sending ordinary values. A client sending
 more than 2048 bytes in one of these hints sends fewer: they never fail a
 request (OIDC Core §3.1.2.1, §15.1).
+
 ### `oauth2`: request sizes and parameters are bounded
 
 The endpoints parsed requests of any size up to the 10 MB `net/http` form
@@ -3012,3 +3015,213 @@ To migrate:
    keys through the metadata (RFC 9068 §4), lose them.
 2. List the scopes clients may request in `ServerConfig.ScopesSupported`
    (optional, RECOMMENDED by RFC 8414 §2).
+
+### `oidc/client`: every secret is an `oidcclient.Secret`
+
+`fmt` prints a value it reaches through an unexported field of another
+value by reflection, without calling any of its methods: an application
+struct holding an `oidcclient.Config`, `AuthRequest`, `Callback`,
+`Identity` or `Tokens` in an unexported field — or a dereferenced
+`*Client` (`fmt.Sprintf("%+v", *client)`) — printed the client secret, the
+transaction keys, the binding secret or the tokens, and so did `slog`'s
+text handler, which prints such a struct with `fmt`. Every secret of the
+package's API is now an `oidcclient.Secret`: `NewSecret(s)` builds one,
+`Reveal()` returns its value, every `fmt` verb, `slog` and `encoding/json`
+show `REDACTED` (`""` when empty), and `fmt` prints an address for a
+`Secret` it reaches through an unexported field, whose value sits behind a
+pointer. `encoding/gob` refuses any value holding a `Secret`, YAML and
+`encoding/xml` write it empty, and a `Secret` does not decode from JSON —
+values persisted with those encoders break, see the table. A reflection
+dumper that follows pointers without calling methods (testify's failure
+diffs) still prints the value.
+
+| Field | Before | After |
+| --- | --- | --- |
+| `Config.ClientSecret` | `string` | `Secret` — `oidcclient.NewSecret(secret)` |
+| `Config.TransactionKeys` | `[][]byte` | `[]Secret` — `oidcclient.NewSecret(string(key))` per key |
+| `AuthRequest.Binding` | `string` | `Secret` — `ar.Binding.Reveal()` to hand it to the user agent |
+| `Callback.Binding` | `string` | `Secret` — `oidcclient.NewSecret(cookie.Value)` |
+| `Tokens.AccessToken`, `RefreshToken`, `IDToken` | `string` | `Secret` — `Reveal()` to call an API or store them |
+| `AuthOptions.IDTokenHint` | `string` | `Secret` — `IDTokenHint: id.Tokens.IDToken` needs no conversion |
+| `json.Marshal` of an `Identity` or `Tokens` | tokens written, for persistence | tokens `"REDACTED"`; `json.Unmarshal` of such a document into an `Identity` fails |
+| `json.Unmarshal` into an `Identity` or `Tokens` of a document written before the upgrade (string tokens) | decoded | fails: `cannot unmarshal string into … oidcclient.Secret` |
+| `encoding/gob` of any value holding an `Identity`, `Tokens`, `Config`, `AuthRequest` or `Callback` — gob-encoded sessions (gorilla/sessions, scs) | encoded, secrets included | fails: `gob: type oidcclient.Secret has no exported fields`; gob data written before the upgrade no longer decodes either |
+| YAML (`go.yaml.in/yaml/v3`) of such a value | tokens written | each `Secret` written `{}`, without error; a string does not decode into a `Secret` |
+| Configuration decoded into an `oidcclient.Config` (YAML, envconfig, mapstructure, viper) | `ClientSecret`, `TransactionKeys` filled | not filled: decode into strings, then `NewSecret` |
+| `fmt` of a `Config`, `AuthRequest`, `Callback`, `Identity`, `Tokens` or `Client` reached through an unexported field, `%+v` of `*client` | secrets printed | secrets printed as an address |
+
+To migrate:
+
+1. Wrap the configured secrets: `ClientSecret: oidcclient.NewSecret(secret)`
+   and `TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))}`.
+   A public client leaves `ClientSecret` zero (`oidcclient.Secret{}`).
+2. With `Begin`/`Complete` instead of the net/http helpers, put
+   `ar.Binding.Reveal()` in the user agent's cookie and pass
+   `oidcclient.NewSecret(cookie.Value)` as `Callback.Binding`.
+3. Read the tokens with `Reveal()` where they are used (`Authorization:
+   Bearer`, a refresh request) and pass `id.Tokens.IDToken` as
+   `AuthOptions.IDTokenHint` unchanged.
+4. An application persisting an `Identity` or its `Tokens` — in a session
+   (gob, JSON), a database, a cache — stores the identifiers and the
+   revealed tokens in a struct of its own, of strings, in storage fit for
+   credentials:
+
+   ```go
+   type storedLogin struct {
+   	ConnectionID, Issuer, Subject string
+   	AccessToken, RefreshToken, IDToken string
+   	Expiry time.Time
+   }
+
+   s := storedLogin{
+   	ConnectionID: id.ConnectionID, Issuer: id.Issuer, Subject: id.Subject,
+   	AccessToken: id.Tokens.AccessToken.Reveal(), RefreshToken: id.Tokens.RefreshToken.Reveal(),
+   	IDToken: id.Tokens.IDToken.Reveal(), Expiry: id.Tokens.Expiry,
+   }
+   ```
+
+   Read back, wrap the tokens again with `oidcclient.NewSecret` where an
+   `oidcclient` API takes them (`AuthOptions.IDTokenHint`).
+5. Expect the sessions that hold an `Identity` or `Tokens`, written before
+   the upgrade, to fail to decode at deploy: drop them, and their users
+   sign in again.
+6. Decode configuration (YAML, environment) into strings and build the
+   `Config` with `NewSecret`.
+7. Compare two `Secret`s with `crypto/subtle.ConstantTimeCompare` on their
+   revealed values, never with `==` (which compares their identity).
+
+### `oidc/client`: `InsecureCookies` only with a loopback http redirect URI
+
+`Config.InsecureCookies` sets the binding cookie without the `__Host-`
+prefix and the `Secure` attribute, for local development over plain http.
+It was accepted with an https `RedirectURL` too, where it removes the
+protection of the cookie against a sibling subdomain or a network attacker
+planting one (login CSRF, RFC 9700 §4.7; rfc6265bis §4.1.3.2).
+
+| `InsecureCookies: true` with | Before | After |
+| --- | --- | --- |
+| an http `RedirectURL` (loopback host: `localhost`, `127.0.0.1`, `[::1]`) | accepted | unchanged |
+| an https `RedirectURL`, loopback host included | accepted; plain `oidc-…` cookie without `Secure` | `New` fails with `ErrInvalidConfig` |
+| `ResponseMode: form_post` | `ErrInvalidConfig` | unchanged |
+
+To migrate:
+
+1. Set `InsecureCookies` only where the application is served over plain
+   http on the loopback interface (`examples/oidc-client` sets it when
+   `BASE_URL` is http).
+2. Over https — including `https://localhost` — drop it: the `__Host-`
+   cookie works on any https origin.
+
+### `oidc/client`: ID Tokens are expected in RS256 unless `Config.Algorithms` says otherwise
+
+OpenID Connect Core §3.1.3.7 step 7: "The alg value SHOULD be the default
+of RS256 or the algorithm sent by the Client in the
+id_token_signed_response_alg parameter during Registration". An empty
+`Config.Algorithms` used to accept every asymmetric algorithm the provider
+listed; it now means RS256, which every provider supports (Discovery §3).
+
+| Provider signing ID Tokens with | `Config.Algorithms` | Before | After |
+| --- | --- | --- | --- |
+| RS256 | empty | logins succeed | unchanged |
+| ES256, PS256, EdDSA, RS384… | empty | logins succeed | every login fails with `ErrIDTokenAlgorithm` (`New` fails with `ErrInvalidMetadata` when the provider does not list RS256) |
+| any | the algorithm(s) listed | only those | unchanged |
+
+To migrate:
+
+1. Find the algorithm each provider signs your client's ID Tokens with —
+   the `id_token_signed_response_alg` of its registration, or the `alg` of
+   an ID Token it issued.
+2. For any algorithm but RS256, set `Config.Algorithms` to it, for example
+   `[]oidcclient.Algorithm{oidcclient.ES256}`. List two only while the
+   provider moves from one to the other.
+
+### `oidc/client`: the RFC 9207 `iss` policy and `Config.RequireIssParameter`
+
+RFC 9207 §2.4: "Clients SHOULD discard authorization responses with the iss
+parameter from authorization servers that do not indicate their support for
+the parameter", and they "MUST reject authorization responses without the
+iss parameter from authorization servers that do support the parameter
+according to the client's configuration". The client accepted a matching
+`iss` from a provider that did not advertise
+`authorization_response_iss_parameter_supported`, and had no configuration
+saying that a provider sends `iss`.
+
+| Authorization response | Provider advertises RFC 9207 | `RequireIssParameter` | Before | After |
+| --- | --- | --- | --- | --- |
+| `iss` = issuer | yes | — | accepted | unchanged |
+| `iss` = issuer | no | false (default) | accepted | `ErrIssuerParameter` |
+| `iss` = issuer | no | true | — | accepted |
+| no `iss` | yes | — | `ErrIssuerParameter` | unchanged |
+| no `iss` | no | false (default) | accepted | unchanged |
+| no `iss` | no | true | — | `ErrIssuerParameter` |
+| `iss` ≠ issuer | any | any | `ErrIssuerParameter` | unchanged |
+
+To migrate:
+
+1. Nothing for a provider that advertises RFC 9207, or that sends no `iss`.
+2. Symptom: every login of a connection fails with `ErrIssuerParameter`
+   and the text "iss from a provider that does not advertise
+   authorization_response_iss_parameter_supported": the provider sends
+   `iss` without advertising it. Set `RequireIssParameter: true` on that
+   connection.
+3. An application whose tenants configure providers sets
+   `RequireIssParameter: true` on every tenant connection — its own
+   setting, never one the tenant chooses — to close the mix-up residual of
+   RFC 9700 §4.4.2.2; it then works only with providers that send `iss`.
+
+### `oidc/client/storage/memory`: bounded by default
+
+Login starts are unauthenticated, and `memory.New()` kept every pending
+login until it expired: a flood of starts grew the store until the process
+ran out of memory, unless the application passed `memory.WithCapacity`. A
+store built without it now keeps at most `memory.DefaultCapacity`
+transactions.
+
+| `memory.New(…)` | Before | After |
+| --- | --- | --- |
+| without `WithCapacity` | unbounded | at most `DefaultCapacity` (10 000) live transactions; the next `Save` fails with `memory.ErrFull` after dropping the expired ones |
+| `WithCapacity(n)` | at most `n` | unchanged |
+
+To migrate:
+
+1. Nothing below 10 000 pending logins — about 16 login starts a second
+   over the default 10-minute `TransactionTTL`.
+2. Above, pass `memory.WithCapacity(n)` sized from the login rate and the
+   TTL (about 0.5 KB per transaction plus its `AppState`), map
+   `memory.ErrFull` to `503 Service Unavailable` (as `examples/oidc-client`
+   does), and rate-limit login starts — or use the SQL or Redis store.
+
+### `oidc/client`: the provider's JWK Set is cached five minutes
+
+A key the provider withdrew — a leaked one — kept verifying ID Tokens until
+the client's cached JWK Set was an hour old. The cache now lives five
+minutes, like the `jwt` module's remote key sets (`DefaultCacheTTL`).
+
+| Event | Before | After |
+| --- | --- | --- |
+| A withdrawn key keeps verifying | up to one hour | up to five minutes |
+| A newly published key is learned without an unknown-`kid` refetch | within one hour | within five minutes |
+| JWK Set requests | one per hour and `Client`, plus unknown-`kid` refetches | one per five minutes and `Client` with logins, plus unknown-`kid` refetches |
+| Cached keys while fetches fail | up to 24 hours | unchanged |
+
+To migrate:
+
+1. Nothing in the application.
+2. A provider with a strict rate limit on its `jwks_uri` sees up to twelve
+   requests an hour per `Client` instead of one.
+
+### `oidc/client`: PS* salts and Ed25519 keys are checked strictly
+
+| ID Token or key | Before | After |
+| --- | --- | --- |
+| PS256/384/512 signature with a salt as long as the hash (RFC 7518 §3.5) | verified | unchanged |
+| PS* signature with another salt length (the maximum, as `crypto/rsa` signs with `PSSSaltLengthAuto`, some older OpenSSL defaults) | verified | `ErrIDTokenSignature` |
+| JWK Set Ed25519 key encoded non-canonically (y ≥ p) or of small order | used (small-order ones already refused by go-jose) | ignored: an ID Token naming it fails with `ErrUnknownSigningKey` |
+
+To migrate:
+
+1. Nothing for providers signing with RS*, ES* or EdDSA, or with PS* and a
+   hash-size salt (key management services do).
+2. A provider whose PS* ID Tokens now fail with `ErrIDTokenSignature` must
+   sign with a salt as long as the hash (RFC 7518 §3.5), or the client use
+   another algorithm it offers (`Config.Algorithms`).

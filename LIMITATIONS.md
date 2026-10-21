@@ -295,6 +295,36 @@ PKCE. Not supported, and refused where a provider could select them:
   run time. One exception: a public client (`none`) requires the provider
   to advertise S256 in `code_challenge_methods_supported`, which some
   providers omit although they support it.
+- **A withdrawn provider key stays trusted for a while** — the provider's
+  JWK Set is cached five minutes: a key the provider withdrew (a leaked
+  one) keeps verifying ID Tokens until the next refresh. While the JWK Set
+  fetches fail, the cached keys serve for up to 24 hours, so an attacker
+  holding a withdrawn key and able to make those fetches fail (a network
+  position, a denial of service on the `jwks_uri`) keeps it trusted that
+  long — the availability trade-off of the `jwt` module's remote key sets.
+  Rebuilding the `Client` drops the cache at once (OpenID Connect Core
+  §10.1.1 sets no bound).
+- **A leaked state burns the pending login** — an authorization response is
+  not authenticated: any request to the callback carrying the state,
+  through the victim's own browser (which presents the binding cookie on a
+  top-level navigation), expires the binding cookie — and, with an error
+  or a bogus code, consumes the transaction — so the genuine response
+  fails and the user starts over. It cannot complete a login for the
+  attacker. `AuthRequest` prints and logs without the state; its JSON
+  encoding, the hand-off to a front end, keeps it.
+- **RFC 9207 `iss` policy** — a response carrying `iss` from a provider
+  that does not advertise `authorization_response_iss_parameter_supported`
+  is discarded (`ErrIssuerParameter`, RFC 9207 §2.4) unless
+  `Config.RequireIssParameter` declares that the provider sends it. Without
+  `RequireIssParameter` on every connection, distinct redirect URIs remain
+  the only mix-up defense against a provider that sends no `iss`, with the
+  gap RFC 9700 §4.4.2.2 names (docs/oidc-client.md, "Connections and
+  redirect URIs").
+- **ID Tokens are expected in RS256** — the default of OpenID Connect Core
+  §3.1.3.7 step 7: a provider signing with another algorithm fails every
+  login (`ErrIDTokenAlgorithm`, or `ErrInvalidMetadata` at `New` when it
+  does not list RS256) until `Config.Algorithms` names the algorithm
+  registered for the client.
 - **`acr_values` makes `acr` required** — when sent, the ID Token must
   carry one of the requested values; list every acceptable level.
 - **No OpenTelemetry spans** — `oidc/client` and `outbound` return errors
@@ -312,10 +342,11 @@ PKCE. Not supported, and refused where a provider could select them:
   logins. Removing a transaction key before `TransactionTTL` has elapsed
   fails the logins it protected. `oidc/client/storage/memory` keeps
   transactions in the process: use the SQL or Redis store when several instances serve
-  callbacks. It is unbounded unless built with `memory.WithCapacity(n)`:
-  login starts are unauthenticated, so size it — about 0.5 KB per pending
-  login plus its `AppState` (up to 4 KiB), kept for `TransactionTTL` — and
-  rate-limit login starts, since a full store refuses every new login
+  callbacks. It keeps at most `memory.DefaultCapacity` (10 000) pending
+  logins, or the bound of `memory.WithCapacity(n)`: login starts are
+  unauthenticated, so size it — about 0.5 KB per pending login plus its
+  `AppState` (up to 4 KiB), kept for `TransactionTTL` — and rate-limit
+  login starts, since a full store refuses every new login
   (`memory.ErrFull`) until transactions expire or are consumed.
   `oidc/client/store/sql` ships `PurgeExpired`, a single
   unbatched `DELETE` the operator schedules (index `expires_at`, see its
@@ -683,10 +714,9 @@ PKCE. Not supported, and refused where a provider could select them:
 ## Logging
 
 - **What `fmt` cannot redact** — the types that hold secrets
-  (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
-  keys, signers and key sets, `session.Codec` and `session.Session`, the
-  `basic`, `bearer` and `session` authentications, `security.AttemptKey`…)
-  print redacted with
+  (`oauth2.DefaultClient`, the `jwtsec` keys, signers and key sets,
+  `session.Codec` and `session.Session`, the `basic`, `bearer` and
+  `session` authentications, `security.AttemptKey`…) print redacted with
   every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without
@@ -694,15 +724,31 @@ PKCE. Not supported, and refused where a provider could select them:
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
   Log these types directly or through exported fields, with `%v`.
+  `oidc/client` holds every credential in an `oidcclient.Secret`, which
+  `fmt` prints as an address there; what such a path still prints of its
+  values is not a `Secret`: a `Callback`'s parameters (the authorization
+  code, useless without the PKCE verifier derived from the binding secret,
+  and the state), an `AuthRequest`'s URL — every request parameter in
+  clear: the state, the `login_hint` (personal data) and the
+  `id_token_hint` (an ID Token) — and an `Identity`'s claims.
+- **Reflection dumpers** — a dumper that walks unexported fields and
+  dereferences pointers without calling methods prints every value it
+  reaches, an `oidcclient.Secret`'s included: go-spew with
+  `DisableMethods`, which testify's failure diffs use. Dump these values
+  that way in tests only, and mind that test output lands in CI logs. A
+  struct embedding an `oidcclient.Secret` is promoted its methods and
+  prints and encodes as `REDACTED` as a whole: name the field.
 - **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
   only: a value nested in another one (a struct field, a map) is encoded
-  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`,
-  and `session.Session`, encode without their secrets, but
-  `oidcclient.Identity` and `Tokens` encode their tokens — deliberately, so
-  that applications can persist them — and `UserInfo` its claims: log these
-  as attributes of their own. Other reflection-based encoders
-  (`encoding/gob`, `encoding/xml`, YAML) write every exported field, an
-  `AuthRequest`'s binding secret included.
+  with `encoding/json`. `oidcclient` values and `session.Session` encode
+  without their secrets — an `oidcclient.Secret` encodes `REDACTED` — but
+  `oidcclient.Identity` encodes its claims and `UserInfo` its claims
+  (personal data): log these as attributes of their own. Other
+  reflection-based encoders write every exported field: `encoding/gob`
+  refuses any value holding an `oidcclient.Secret` (a gob-encoded session
+  holding an `Identity` fails to save), and `encoding/xml` and YAML write
+  it empty. Persist the identifiers and the revealed tokens in a struct of
+  your own.
 - **Credentials and tokens in flight are not redacted yet** — the `oauth2`
   records (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the
   `GrantResponse` holding them) print the raw code and tokens they carry

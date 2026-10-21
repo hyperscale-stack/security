@@ -1401,30 +1401,45 @@ are attacker-influenced.
   browser. The store is trusted for availability and single consumption
   only. The transaction keys are secrets like a session key: 32 bytes or
   more from a cryptographic source, shared by every instance serving
-  callbacks, never logged (`Config` and `*Client` redact them with every
-  `fmt` verb and in `slog`). Rotate them in three steps — add the new key last on every
+  callbacks, never logged (they are `oidcclient.Secret` values, which never
+  print, log nor encode). Rotate them in three steps — add the new key last on every
   instance, move it first, remove the old one once `TransactionTTL` has
   elapsed: the first key protects new transactions, every key is accepted.
 - **Single use** — `TransactionStore.Consume` removes the transaction
   atomically, unknown first, then expired whatever the binding, then a
   binding mismatch, which keeps the transaction so that a leaked state
-  cannot burn the victim's login. A replayed callback finds nothing and
-  never reaches the token endpoint.
+  presented from another browser cannot burn the victim's login. A
+  replayed callback finds nothing and never reaches the token endpoint.
+  An authorization response is not authenticated, though: whoever learns
+  the state can send the victim's own browser — which presents the
+  binding cookie on a top-level navigation — to the callback with it, and
+  that request expires the cookie (and, with an error or a bogus code,
+  consumes the transaction): the login fails and the user starts over. Keep
+  the state out of logs — `AuthRequest` prints and logs without it.
 - **Mix-up attacks** (RFC 9700 §4.4) — give every connection its own
   redirect URI, distinct from every other connection's (by scheme, host,
   port, path or query parameter): `Complete` refuses a response received on
   another URL than the connection's redirect URI, and a transaction of
   another connection, issuer, client, redirect URI or response mode. A
-  provider advertising RFC 9207 must also send the `iss` parameter,
-  compared with its issuer. Never route callbacks by the state value.
+  provider advertising RFC 9207 — or declared to send it with
+  `Config.RequireIssParameter` — must also send the `iss` parameter,
+  compared with its issuer; a response carrying `iss` from another provider
+  is discarded (RFC 9207 §2.4). Never route callbacks by the state value.
   Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names — an
   attacker registering, at the honest provider, a client with the redirect
-  URI of its own connection; RFC 9207 closes it, so prefer providers that
-  support it. Behind a reverse proxy, `HandleCallback` compares the Host
+  URI of its own connection, so that the honest response lands on the
+  attacker's connection. `RequireIssParameter` closes it on the connection
+  that receives the response: set it on every connection a tenant
+  configures (the application's setting, never the tenant's), and work only
+  with providers that send `iss`. Behind a reverse proxy, `HandleCallback` compares the Host
   header the proxy forwards: preserve it, or give `Complete` the public
   URL.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
-  is returned: asymmetric algorithms only (HMAC and `none` refused), `typ`
+  is returned: RS256 — or the algorithm registered for the client, named in
+  `Config.Algorithms` (OpenID Connect Core §3.1.3.7 step 7) — asymmetric
+  algorithms only (HMAC and `none` refused; PS256/384/512 with a salt as
+  long as the hash, RFC 7518 §3.5; Ed25519 keys canonical and not of small
+  order, RFC 8032 §5.1.3, RFC 8725 §3.4), `typ`
   absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from
   the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk` and `x5c`
   are refused, see below) through a bounded cache that refetches once, rate
@@ -1466,8 +1481,9 @@ are attacker-influenced.
   sharing the prefix. SameSite is Lax for the `query` response mode — the callback
   is a top-level GET — and None for `form_post`, whose cross-site POST
   carries no Lax cookie; an opt-in headless-Chrome test checks both.
-  `InsecureCookies` drops Secure for local http development only, and is
-  refused with `form_post`.
+  `InsecureCookies` drops the prefix and Secure for local http development
+  only: `New` refuses it unless the redirect URI is http — on a loopback
+  host, the only http redirect URI accepted — and with `form_post`.
 - **CSRF** — exempt the callback route from CSRF middleware in `form_post`
   mode: the cross-site POST is the protocol, the binding cookie its
   defense. Start logins on a user action from the application's own
@@ -1505,13 +1521,14 @@ are attacker-influenced.
   (discovery and JWK Set requests only within the origin requested);
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
-  their `sub` is the identity's. Every `fmt` verb and `slog` redact
-  secrets (`%p` of a non-pointer value excepted: fmt prints the fields
-  before any method), and so does `encoding/json` for `Config`,
-  `AuthRequest` and `Callback` — which matters to `slog`'s JSON handler,
-  which encodes a nested value with `encoding/json`. `Identity` and
-  `Tokens` deliberately encode their tokens (applications persist them),
-  `UserInfo` its claims: never log them nested in another value.
+  their `sub` is the identity's. Every credential is an
+  `oidcclient.Secret`: every `fmt` verb, `slog` and `encoding/json` render
+  it `REDACTED` — also when fmt reaches it by reflection through an
+  unexported field, where it prints as an address — and `Reveal()` is the
+  only way to its value; a reflection dumper that follows pointers without
+  calling methods (testify's failure diffs) prints it, and `encoding/gob`
+  refuses any value holding one. `Identity` encodes its claims and `UserInfo` its
+  claims (personal data): never log them nested in another value.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:
@@ -2002,9 +2019,11 @@ span catalog.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only
       the `form_post` callback routes from CSRF middleware.
 - [ ] Rotate an OpenID Provider's keys on its relying parties' timetable:
-      publish the next key at least an hour before it signs; after a leak,
-      withdraw the key and ask relying parties to rebuild their clients
-      (`oidc/client` keeps a withdrawn key for up to an hour).
+      publish the next key at least five minutes before it signs (more for
+      relying parties caching longer); after a leak, withdraw the key and
+      ask relying parties to rebuild their clients (`oidc/client` keeps a
+      withdrawn key for up to five minutes, up to 24 hours while its JWK
+      Set fetches fail).
 - [ ] Prefer providers that send the RFC 9207 `iss` parameter; never
       register a connection's redirect URI at another provider.
 - [ ] Serialize the refreshes of one grant across instances: providers

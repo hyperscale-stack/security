@@ -32,8 +32,10 @@ through the OAuth2 error hook described below.
 The OpenID Connect client (`oidc/client`, its stores) and the core's
 `outbound` package open no spans either: every failure is returned to the
 caller as a sentinel error (`errors.Is`) that carries no secret.
-`Config`, `*Client`, `Callback`, `AuthRequest`, `Identity` and `Tokens`
-redact their secrets with every `fmt` verb and in `slog` output, and
+Every credential of `oidc/client` is an `oidcclient.Secret`, which prints,
+logs and encodes as `REDACTED` — an address when `fmt` reaches it through
+an unexported field; a reflection dumper that follows pointers without
+calling methods (testify's failure diffs) prints its value — and
 `Identity` and `UserInfo` log their identifiers only (`LogValue`). Log the error of `Complete` or
 `HandleCallback`.
 

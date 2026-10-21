@@ -56,7 +56,7 @@ func (c *Client) StartLogin(w http.ResponseWriter, r *http.Request, opts AuthOpt
 	}
 
 	c.expireOldCookies(w, r)
-	http.SetCookie(w, c.bindingCookie(c.cookieName(ar.State), ar.Binding, int(c.cfg.TransactionTTL/time.Second)))
+	http.SetCookie(w, c.bindingCookie(c.cookieName(ar.State), ar.Binding.Reveal(), int(c.cfg.TransactionTTL/time.Second)))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.Redirect(w, r, ar.URL, http.StatusSeeOther)
@@ -93,13 +93,13 @@ func (c *Client) HandleCallback(w http.ResponseWriter, r *http.Request) (*Identi
 		return nil, err
 	}
 
-	var binding string
+	var binding Secret
 
 	if states := params[paramState]; len(states) == 1 {
 		if _, ok := decodeSecret(states[0]); ok {
 			name := c.cookieName(states[0])
 			if ck, err := r.Cookie(name); err == nil {
-				binding = ck.Value
+				binding = NewSecret(ck.Value)
 			}
 
 			http.SetCookie(w, c.bindingCookie(name, "", -1))
@@ -187,7 +187,7 @@ func (c *Client) bindingCookie(name, value string, maxAge int) *http.Cookie {
 		sameSite = http.SameSiteNoneMode
 	}
 
-	return &http.Cookie{ //nolint:gosec // G124: Secure is false only with Config.InsecureCookies, the explicit local-development opt-in
+	return &http.Cookie{ //nolint:gosec // G124: Secure is false only with Config.InsecureCookies, which New admits for a loopback http RedirectURL only
 		Name:     name,
 		Value:    value,
 		Path:     "/",

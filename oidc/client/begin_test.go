@@ -117,7 +117,7 @@ func TestBeginParameters(t *testing.T) {
 			assert.Regexp(t, b64url43, q.Get("state"))
 			assert.Regexp(t, b64url43, q.Get("nonce"))
 			assert.Regexp(t, b64url43, q.Get("code_challenge"))
-			assert.Regexp(t, b64url43, ar.Binding)
+			assert.Regexp(t, b64url43, ar.Binding.Reveal())
 			assert.NotContains(t, ar.URL, ar.Binding, "the binding secret never leaves the RP and the user agent")
 		})
 	}
@@ -140,7 +140,7 @@ func TestBeginValuesAreUnique(t *testing.T) {
 		u, err := url.Parse(ar.URL)
 		require.NoError(t, err)
 
-		for _, v := range []string{ar.State, ar.Binding, u.Query().Get("nonce"), u.Query().Get("code_challenge")} {
+		for _, v := range []string{ar.State, ar.Binding.Reveal(), u.Query().Get("nonce"), u.Query().Get("code_challenge")} {
 			require.False(t, seen[v], "value reused")
 			seen[v] = true
 		}
@@ -171,7 +171,7 @@ func TestBeginPersistsTransaction(t *testing.T) {
 	tx := store.last(t)
 	assert.Equal(t, sha256Hex(ar.State), tx.StateHash)
 	assert.Regexp(t, `^[0-9a-f]{64}$`, tx.BindingHash)
-	assert.NotEqual(t, sha256Hex(ar.Binding), tx.BindingHash, "a keyed hash, not a plain digest of the secret")
+	assert.NotEqual(t, sha256Hex(ar.Binding.Reveal()), tx.BindingHash, "a keyed hash, not a plain digest of the secret")
 	assert.Equal(t, testConnection, tx.ConnectionID)
 	assert.Equal(t, op.issuer, tx.Issuer)
 	assert.Equal(t, testClientID, tx.ClientID)
@@ -186,7 +186,7 @@ func TestBeginPersistsTransaction(t *testing.T) {
 
 	assert.Regexp(t, `^[0-9a-f]{64}$`, tx.Integrity)
 
-	for _, secret := range []string{ar.Binding, ar.State} {
+	for _, secret := range []string{ar.Binding.Reveal(), ar.State} {
 		assert.NotContains(t, tx.BindingHash+tx.StateHash+tx.AppState+tx.ACRValues+tx.Integrity, secret)
 	}
 
@@ -258,7 +258,7 @@ func TestBeginHints(t *testing.T) {
 		want map[string]string
 	}{
 		{"login hint", oidcclient.AuthOptions{LoginHint: "jane@example.com"}, map[string]string{"login_hint": "jane@example.com"}},
-		{"id token hint", oidcclient.AuthOptions{IDTokenHint: "eyJ.x.y"}, map[string]string{"id_token_hint": "eyJ.x.y"}},
+		{"id token hint", oidcclient.AuthOptions{IDTokenHint: oidcclient.NewSecret("eyJ.x.y")}, map[string]string{"id_token_hint": "eyJ.x.y"}},
 		{"prompt", oidcclient.AuthOptions{Prompt: []string{"login", "consent"}}, map[string]string{"prompt": "login consent"}},
 		{"prompt none", oidcclient.AuthOptions{Prompt: []string{"none"}}, map[string]string{"prompt": "none"}},
 		{"max age zero", oidcclient.AuthOptions{MaxAge: &zero}, map[string]string{"max_age": "0"}},
@@ -307,7 +307,7 @@ func TestBeginRefusesInvalidOptions(t *testing.T) {
 		"display with space":      {Display: "pop up"},
 		"login hint too long":     {LoginHint: strings.Repeat("a", 1025)},
 		"login hint with control": {LoginHint: "jane\r\n@example.com"},
-		"id token hint too long":  {IDTokenHint: strings.Repeat("a", 65537)},
+		"id token hint too long":  {IDTokenHint: oidcclient.NewSecret(strings.Repeat("a", 65537))},
 		"app state too long":      {AppState: strings.Repeat("a", 4097)},
 		"app state invalid UTF-8": {AppState: "\xff"},
 		"extra param empty name":  {ExtraParams: map[string]string{"": "x"}},

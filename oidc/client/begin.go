@@ -36,8 +36,11 @@ type AuthOptions struct {
 	// LoginHint is passed as login_hint (at most 1024 bytes of UTF-8,
 	// without control characters).
 	LoginHint string
-	// IDTokenHint is passed as id_token_hint.
-	IDTokenHint string
+	// IDTokenHint is passed as id_token_hint: an ID Token the provider
+	// issued earlier, such as Identity.Tokens.IDToken. AuthOptions prints,
+	// logs and encodes without it (see Secret), but the request must carry
+	// it to the provider: AuthRequest.URL holds it in clear.
+	IDTokenHint Secret
 	// Prompt values are passed space-separated as prompt; "none" cannot
 	// be combined with another value.
 	Prompt []string
@@ -72,43 +75,67 @@ type AuthOptions struct {
 	AppState string
 }
 
-// AuthRequest is a started login. It prints, logs and encodes to JSON
-// without its binding secret (String, LogValue, MarshalJSON).
+// AuthRequest is a started login. It prints and logs (String, GoString,
+// Format, LogValue) without its binding secret, its state nor the query of
+// its URL — with a leaked state, a request to the callback through the
+// victim's own browser burns the pending login. It encodes to JSON
+// (MarshalJSON), the hand-off of the request to a front end, with its URL
+// and state but without its binding secret: never log it nested in another
+// value under log/slog's JSON handler.
 type AuthRequest struct {
-	// URL is the authorization request: send the user agent to it.
+	// URL is the authorization request: send the user agent to it. It
+	// carries every request parameter in clear — the state, the
+	// login_hint (personal data), the id_token_hint (an ID Token) — which
+	// the provider must receive: the renderings of AuthRequest leave out
+	// its query, but its JSON encoding writes it, and so does fmt when it
+	// reaches an AuthRequest through an unexported field of another value.
 	URL string
 	// State is the state parameter, also carried by URL.
 	State string
 	// Binding is the browser-binding secret of the login. The user agent
 	// that started the login MUST keep it — the net/http helpers put it in
 	// an HttpOnly __Host- cookie — and present it at the callback. It never
-	// leaves the Relying Party and the user agent: never log it. fmt,
-	// log/slog and encoding/json leave it out — it is tagged json:"-" for
-	// the encodings that do not go through MarshalJSON — but other
-	// reflection-based encoders (encoding/gob, encoding/xml, YAML) write
-	// it: persist it explicitly, only where a secret belongs.
-	Binding string `json:"-"`
+	// leaves the Relying Party and the user agent: it is a Secret, which
+	// never prints, logs nor encodes; Reveal it only to hand it to the user
+	// agent.
+	Binding Secret `json:"-"`
 	// ExpiresAt is when the login expires.
 	ExpiresAt time.Time
 }
 
-// String implements fmt.Stringer without the binding secret.
+// String implements fmt.Stringer without the binding secret, the state
+// nor the URL's query.
 func (r AuthRequest) String() string {
-	return fmt.Sprintf("oidcclient.AuthRequest{URL: %q, ExpiresAt: %s, Binding: REDACTED}", r.URL, r.ExpiresAt.Format(time.RFC3339))
+	return fmt.Sprintf("oidcclient.AuthRequest{URL: %q, State: REDACTED, ExpiresAt: %s, Binding: REDACTED}",
+		requestURLForLogs(r.URL), r.ExpiresAt.Format(time.RFC3339))
 }
 
-// GoString implements fmt.GoStringer without the binding secret.
+// GoString implements fmt.GoStringer like String.
 func (r AuthRequest) GoString() string { return r.String() }
 
-// LogValue implements slog.LogValuer without the binding secret.
+// LogValue implements slog.LogValuer like String.
 func (r AuthRequest) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
+	return slog.GroupValue(slog.String("url", requestURLForLogs(r.URL)), slog.String("state", redactedMark),
+		slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
 }
 
-// MarshalJSON implements json.Marshaler without the binding secret, which
-// the default encoding would write — and log/slog's JSON handler encodes
-// a value nested in another one (a struct field, a map) with
-// encoding/json, LogValue applying to attribute values only. A struct
+// requestURLForLogs renders an authorization request URL without its query
+// — state, nonce, hints — nor fragment or userinfo; REDACTED when it does
+// not parse.
+func requestURLForLogs(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return redactedMark
+	}
+
+	return withoutQuery(u)
+}
+
+// MarshalJSON implements json.Marshaler with the URL and the state — the
+// encoding hands the request to a front end — but without the binding
+// secret. log/slog's JSON handler encodes a value nested in another one (a
+// struct field, a map) with encoding/json, LogValue applying to attribute
+// values only: log an AuthRequest as an attribute of its own. A struct
 // embedding AuthRequest is promoted this method and encodes as the
 // AuthRequest alone — or, when another type embedded at the same depth
 // also has a MarshalJSON, neither is promoted and encoding/json writes the
@@ -154,7 +181,7 @@ func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, err
 		CreatedAt:    created,
 		ExpiresAt:    created.Add(c.cfg.TransactionTTL),
 	}
-	tx.Integrity = integrityFor(c.cfg.TransactionKeys[0], secret, tx)
+	tx.Integrity = integrityFor([]byte(c.cfg.TransactionKeys[0].Reveal()), secret, tx)
 
 	if err := c.cfg.Store.Save(ctx, tx); err != nil {
 		return nil, fmt.Errorf("oidcclient: save login transaction: %w", err)
@@ -163,7 +190,7 @@ func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, err
 	return &AuthRequest{
 		URL:       c.authorizationURL(state, secret, opts),
 		State:     state,
-		Binding:   binding,
+		Binding:   NewSecret(binding),
 		ExpiresAt: tx.ExpiresAt,
 	}, nil
 }
@@ -195,7 +222,7 @@ func (c *Client) authorizationURL(state string, secret []byte, opts AuthOptions)
 	}
 
 	setNonEmpty(params, "login_hint", opts.LoginHint)
-	setNonEmpty(params, "id_token_hint", opts.IDTokenHint)
+	setNonEmpty(params, "id_token_hint", opts.IDTokenHint.Reveal())
 	setNonEmpty(params, "prompt", strings.Join(opts.Prompt, " "))
 	setNonEmpty(params, "acr_values", strings.Join(opts.ACRValues, " "))
 	setNonEmpty(params, "ui_locales", strings.Join(opts.UILocales, " "))
@@ -248,7 +275,7 @@ func (o AuthOptions) validate(endpointParams map[string]struct{}) error {
 		return fmt.Errorf("%w: LoginHint must be at most 1024 bytes of UTF-8 without control characters", ErrInvalidAuthRequest)
 	}
 
-	if o.IDTokenHint != "" && !isASCII(o.IDTokenHint, visibleASCII, maxIDTokenHintLength) {
+	if hint := o.IDTokenHint.Reveal(); hint != "" && !isASCII(hint, visibleASCII, maxIDTokenHintLength) {
 		return fmt.Errorf("%w: IDTokenHint must be a compact JWT", ErrInvalidAuthRequest)
 	}
 

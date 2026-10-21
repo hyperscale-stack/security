@@ -159,17 +159,17 @@ func corpusConfig(issuer string, p clientProfile, policy outbound.Policy) oidccl
 		ConnectionID:    "corpus",
 		Issuer:          issuer,
 		ClientID:        "rp",
-		ClientSecret:    "rp-secret",
+		ClientSecret:    oidcclient.NewSecret("rp-secret"),
 		AuthMethod:      p.method,
 		RedirectURL:     "https://rp.example.com/oidc/corpus/callback",
 		ResponseMode:    p.mode,
 		Store:           memory.New(),
-		TransactionKeys: [][]byte{transactionKey},
+		TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(transactionKey))},
 		Outbound:        policy,
 	}
 
 	if p.method == oidcclient.AuthMethodNone {
-		cfg.ClientSecret = ""
+		cfg.ClientSecret = oidcclient.Secret{}
 	}
 
 	return cfg

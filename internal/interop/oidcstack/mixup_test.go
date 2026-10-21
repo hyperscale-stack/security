@@ -141,20 +141,24 @@ func (o *op) enduserRequests() int {
 //     connection — ErrTransactionMismatch;
 //   - (c) A registered its own client at H with its connection's callback
 //     (§4.4.2.2's residual risk): the response lands on A's callback with
-//     iss = H — ErrIssuerParameter (RFC 9207).
+//     iss = H — ErrIssuerParameter (RFC 9207 §2.4): compared with A's
+//     issuer when A advertises RFC 9207, discarded as an iss A never
+//     announced when it does not.
 func TestMixUpWithAnAttackerProvider(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		clientID string
-		redirect string
-		deliver  string // the connection whose callback receives the response; "" when H refuses
-		want     error
+		name      string
+		clientID  string
+		redirect  string
+		deliver   string // the connection whose callback receives the response; "" when H refuses
+		want      error
+		attackIss bool // A advertises RFC 9207
 	}{
-		{"(a) honest registration, attacker's redirect URI", basicID, callback("attacker"), "", nil},
-		{"(b) honest registration and redirect URI", basicID, callback("basic"), "basic", oidcclient.ErrTransactionMismatch},
-		{"(c) attacker's registration at the honest provider", "attacker-x", callback("attacker"), "attacker", oidcclient.ErrIssuerParameter},
+		{"(a) honest registration, attacker's redirect URI", basicID, callback("attacker"), "", nil, false},
+		{"(b) honest registration and redirect URI", basicID, callback("basic"), "basic", oidcclient.ErrTransactionMismatch, false},
+		{"(c) attacker's registration at the honest provider, A advertising RFC 9207", "attacker-x", callback("attacker"), "attacker", oidcclient.ErrIssuerParameter, true},
+		{"(c) attacker's registration at the honest provider, A silent on RFC 9207", "attacker-x", callback("attacker"), "attacker", oidcclient.ErrIssuerParameter, false},
 	}
 
 	for _, tc := range cases {
@@ -164,7 +168,7 @@ func TestMixUpWithAnAttackerProvider(t *testing.T) {
 			o := newOP(t)
 			o.clients.add(registration{id: "attacker-x", secret: secret, method: "client_secret_basic", issuers: []string{o.base}, redirects: []string{callback("attacker")}})
 
-			a := newAttackerAS(t, func(q url.Values) string {
+			a := newAttackerASAdvertising(t, tc.attackIss, func(q url.Values) string {
 				q.Set("client_id", tc.clientID)
 				q.Set("redirect_uri", tc.redirect)
 
@@ -214,7 +218,9 @@ func TestMixUpWithAnAttackerProvider(t *testing.T) {
 // response came from H — the honest code reaches the attacker's token
 // endpoint. Never register a connection's redirect URI at another provider;
 // with providers that do not send iss, distinct redirect URIs are the only
-// mix-up defense.
+// mix-up defense — Config.RequireIssParameter on the receiving connection
+// closes the gap, for applications that work only with providers sending
+// iss (TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual).
 func TestMixUpResidualWithoutRFC9207(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +256,52 @@ func TestMixUpResidualWithoutRFC9207(t *testing.T) {
 	_, err = attacker.Complete(t.Context(), callbackOf(loc, ar.Binding))
 	require.ErrorIs(t, err, oidcclient.ErrTokenEndpoint, "the attacker's token endpoint answered")
 	assert.Equal(t, []string{loc.Query().Get("code")}, a.received(), "the honest code leaked to the attacker")
+}
+
+// TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual closes
+// the residual of TestMixUpResidualWithoutRFC9207: the same attack — H
+// without iss, the attacker's client registered at H with the attacker
+// connection's callback — against an attacker connection configured with
+// Config.RequireIssParameter, as an application sets it on every tenant
+// connection. The response without iss is refused there (RFC 9207 §2.4),
+// before any token request: the honest code never reaches the attacker.
+func TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual(t *testing.T) {
+	t.Parallel()
+
+	o := newOP(t)
+	o.clients.add(registration{id: "attacker-x", secret: secret, method: "client_secret_basic", issuers: []string{o.base}, redirects: []string{callback("attacker")}})
+
+	o.faults.set(o.paths(o.base).Authorize, rule{location: func(u *url.URL) {
+		q := u.Query()
+		q.Del("iss")
+		u.RawQuery = q.Encode()
+	}})
+
+	a := newAttackerAS(t, func(q url.Values) string {
+		q.Set("client_id", "attacker-x")
+
+		return o.base + o.paths(o.base).Authorize + "?" + q.Encode()
+	})
+
+	attacker := o.rp(t, conn("attacker", a.srv.URL, "rp-at-attacker", secret, oidcclient.AuthMethodClientSecretBasic),
+		func(cfg *oidcclient.Config) { cfg.RequireIssParameter = true })
+
+	ar, err := attacker.Begin(t.Context(), oidcclient.AuthOptions{})
+	require.NoError(t, err)
+
+	resp, err := o.browser().Get(ar.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	loc := redirected(t, o.authorize(t, redirected(t, resp).String()))
+	require.NotEmpty(t, loc.Query().Get("code"))
+	require.Empty(t, loc.Query().Get("iss"))
+
+	id, err := attacker.Complete(t.Context(), callbackOf(loc, ar.Binding))
+	require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
+	assert.Nil(t, id)
+	assert.Empty(t, a.received(), "the honest code never reaches the attacker's token endpoint")
+	assert.Zero(t, o.hits(o.paths(o.base).Token))
 }
 
 // TestMixUpBetweenIssuersOfOneProvider: the victim's request to tenant-a is

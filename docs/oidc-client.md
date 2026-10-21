@@ -51,8 +51,8 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | No parameter twice                  | RFC 6749 §3.1                       | The authorization endpoint's query is kept; `ExtraParams` may not repeat a parameter the client sends, one of that query or each other — names compared case-insensitively, `.` read as `_` (servers such as ASP.NET and PHP read them so); `New` refuses an endpoint query that does | `TestBeginSendsEveryParameterOnce`, `TestBeginRefusesOtherSpellingsOfReservedParams`, `TestBeginRefusesParamsOfTheEndpointQuery`, `TestEndpointURLs` |
 | `acr_values`                        | Core §3.1.2.1, §2                   | Sent as given; the ID Token's `acr` must then be one of them (a provider ignoring them fails the login)                                                                 | `TestIDTokenACR`, stack: `TestACRValuesThroughTheClient`, rp: `TestZitadelACRValues`                     |
 | Authorization errors                | RFC 6749 §4.1.2.1, Core §3.1.2.6    | `AuthorizationError` with the provider's code; nothing redeemed                                                                                                         | `TestCompleteAuthorizationError`, stack: `TestPromptNoneThroughTheClient`, `TestConsentDeniedThroughTheClient` |
-| RFC 9207 `iss`                      | RFC 9207                            | Compared when present; required when the provider advertises it                                                                                                        | `TestCompleteIssParameter`, stack: `TestMixUpBetweenIssuersOfOneProvider`                                |
-| Mix-up defense                      | RFC 9700 §4.4                       | The response must arrive on the connection's own redirect URI, for a transaction of that connection, issuer, client, redirect URI and response mode                      | `TestCompleteMixUp`, `TestCompleteTransactionMismatch`, stack: `TestMixUpWithAnAttackerProvider`, `TestMixUpResidualWithoutRFC9207` |
+| RFC 9207 `iss`                      | RFC 9207 §2.4                       | Required and compared when the provider advertises it or `Config.RequireIssParameter` is set; from another provider a response carrying `iss` is discarded             | `TestCompleteIssParameter`, stack: `TestMixUpBetweenIssuersOfOneProvider`                                |
+| Mix-up defense                      | RFC 9700 §4.4                       | The response must arrive on the connection's own redirect URI, for a transaction of that connection, issuer, client, redirect URI and response mode; `RequireIssParameter` closes the §4.4.2.2 residual | `TestCompleteMixUp`, `TestCompleteTransactionMismatch`, stack: `TestMixUpWithAnAttackerProvider`, `TestMixUpResidualWithoutRFC9207`, `TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual` |
 | Implicit and hybrid flows, PAR, request objects, `claims` parameter | Core §3.2, §3.3, §6, §5.5; RFC 9126 | Not supported                                                                                                       | —                                                                                                        |
 
 ### Tokens and claims
@@ -62,7 +62,7 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | Client authentication            | Core §9, RFC 6749 §2.3.1                 | `client_secret_basic` (form-urlencoded first), `client_secret_post`, `none`; `private_key_jwt`, `client_secret_jwt`, mTLS not supported                      | `TestTokenClientAuthentication`, stack: `TestCodeFlowAgainstOurProvider`                                     |
 | Token response                   | RFC 6749 §5.1, Core §3.1.3.3             | Parsed strictly; error bodies of 400 and 401 answers become `TokenError`; redirects never followed                                                           | `TestTokenResponse`, `TestTokenRedirectNotFollowed`, stack: `TestTokenResponseSubstitution`                  |
 | ID Token validation              | Core §3.1.3.7, RFC 8725                  | Signature, `iss`, `sub`, `aud` (further audiences only when trusted), `azp`, `exp`, `iat`, `nbf`, `nonce`, `auth_time`, `acr`, `at_hash` when present, `typ` absent or `JWT`; before go-jose parses it, the JOSE header is strict JSON of at most 4 KiB without `jwk`, `x5c`, `jku` or `x5u` (Core §2) | `TestIDTokenKeyBearingHeaders`, `TestIDTokenHeaderStrict`, `TestCheckRawHeaderRefusesBeforeParsing`, `TestIDTokenIssuerAndSubject`, `TestIDTokenAudience`, `TestIDTokenTimes`, `TestIDTokenAccessTokenHash`, `TestIDTokenHeader`, stack: `TestResignedIDTokensAreRefused` |
-| Signing algorithms               | Core §15.1, RFC 8725 §3.1                | RS256/384/512, PS256/384/512, ES256/384/512, EdDSA (Ed25519); HMAC and `none` refused                                                                       | `TestIDTokenAlgorithms`, stack: `TestCodeFlowSigningAlgorithms`                                             |
+| Signing algorithms               | Core §15.1, §3.1.3.7 step 7, RFC 8725 §3.1 | RS256 by default; RS384/512, PS256/384/512, ES256/384/512, EdDSA (Ed25519) once `Config.Algorithms` names the client's registered algorithm; HMAC and `none` refused; PS* with a hash-size salt (RFC 7518 §3.5); Ed25519 keys canonical and not of small order | `TestDefaultIDTokenAlgorithmIsRS256`, `TestIDTokenAlgorithms`, `TestIDTokenPSSSaltLength`, `TestIDTokenEd25519KeyValidation`, stack: `TestCodeFlowSigningAlgorithms` |
 | Token confusion                  | RFC 9068 §5, RFC 8725 §3.11              | An `at+jwt` access token is never accepted as an ID Token                                                                                                     | `TestAccessTokenNotAcceptedAsIDToken`, stack: `TestIDTokenUsedAsAnotherToken`                               |
 | Encrypted ID Tokens              | Core §10.2                               | Not supported, refused                                                                                                                                        | `TestIDTokenSerialization`                                                                                  |
 | UserInfo                         | Core §5.3, RFC 6750 §2.1                 | Bearer token in the `Authorization` header, to the connection's endpoint only; `sub` must equal the ID Token's                                               | `TestUserInfo`, `TestUserInfoRefusesForeignIdentity`, stack: `TestUserInfoSubstitution`                      |
@@ -75,7 +75,7 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | Capability                   | Spec                       | Status                                                                                                                                                       | Tests                                                                                                 |
 | ---------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | Discovery                    | Discovery §4               | Required; the metadata issuer must equal the configured one byte for byte; templated multi-tenant issuers refused; WebFinger and static metadata not supported | `TestDiscoveryURL`, `TestIssuerMismatch`, `TestRequiredMetadata`, `TestStrictMetadataJSON`, rp: `TestProviderMetadataCorpus` |
-| JWK Set                      | Core §10.1.1, RFC 7517     | Cached one hour; an unknown `kid` refetches at most every 10 s; stale keys serve at most 24 h while the endpoint fails; never refetched on a bad signature | `TestKeySetTTL`, `TestUnknownKidIsRateLimited`, `TestKeySetStaleOnFailure`, `TestNoRefetchOnBadSignature`, stack: `TestDocumentedRotationIsInvisibleToTheClient`, `TestKeyWithdrawalWindow` |
+| JWK Set                      | Core §10.1.1, RFC 7517     | Cached five minutes; an unknown `kid` refetches at most every 10 s; stale keys serve at most 24 h while the endpoint fails; never refetched on a bad signature | `TestKeySetTTL`, `TestUnknownKidIsRateLimited`, `TestKeySetStaleOnFailure`, `TestNoRefetchOnBadSignature`, stack: `TestDocumentedRotationIsInvisibleToTheClient`, `TestKeyWithdrawalWindow` |
 | Outbound requests            | Discovery §4.1, §7.2       | Through `outbound`: https, public destinations, bounded time and size; no redirects for token and UserInfo; discovery and JWK Set redirects only with `MaxRedirects`, and never to another origin than the one requested | `TestDiscoveryHTTP`, `TestUserInfoTransport`, `TestDiscoveryRedirectStaysOnTheIssuerOrigin`, `TestKeySetRedirectStaysOnTheJWKSOrigin` |
 | Transaction stores           | —                          | `storage/memory`, `store/sql`, `store/redis`; atomic single consumption; integrity keyed by `Config.TransactionKeys`                                         | `TestMemoryStoreConformance`, `TestStoreWriterCannotForgeIntegrity`, `TestTransactionKeyRotation`, stack: `TestConcurrentCallbacksAcrossReplicas`, `TestRealBackendCallbackRace` |
 | Failures                     | RFC 9700 §4.5.3.2          | Fail closed: no identity, no token of a failed login                                                                                                         | stack: `TestProviderStorageFailuresReachTheClient`, `TestTokenResponseLostAfterCommit`, `TestJWKSOutage`, `TestDiscoveryOutage` |
@@ -90,12 +90,13 @@ client, err := oidcclient.New(ctx, oidcclient.Config{
 	ConnectionID:    "acme",
 	Issuer:          "https://login.acme.example",
 	ClientID:        "my-client",
-	ClientSecret:    secret,
+	ClientSecret:    oidcclient.NewSecret(secret),
 	AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
 	RedirectURL:     "https://app.example/oidc/acme/callback",
 	Scopes:          []string{"profile", "email"},
-	Store:           store,          // sqlstore or redisstore with several instances
-	TransactionKeys: [][]byte{key},  // 32+ secret bytes, shared by every instance
+	Store:           store, // sqlstore or redisstore with several instances
+	// 32+ secret bytes, shared by every instance
+	TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))},
 })
 
 mux.HandleFunc("POST /login/acme", func(w http.ResponseWriter, r *http.Request) {
@@ -114,8 +115,9 @@ mux.HandleFunc("GET /oidc/acme/callback", func(w http.ResponseWriter, r *http.Re
 - Start logins on a user action from the application's own origin (a POST
   behind `http.CrossOriginProtection` or a CSRF token) and rate limit them:
   each start writes a transaction, and non-browser clients pass
-  `CrossOriginProtection`. With `storage/memory`, bound what a flood can
-  hold with `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
+  `CrossOriginProtection`. `storage/memory` keeps at most
+  `memory.DefaultCapacity` (10 000) pending logins, or the bound of
+  `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
   `examples/oidc-client` maps it to 503 and rate-limits starts per client
   and per network — an IPv4 /24, an IPv6 /48 — so that one network cannot
   fill it). The capacity bounds memory, not availability: a flood from
@@ -137,25 +139,54 @@ connection's — this is the mix-up defense (RFC 9700 §4.4.2): `Complete`
 refuses a response received on another URL, or carrying a transaction of
 another connection, issuer or client (`ErrTransactionMismatch`). Never route
 callbacks by the state value. A provider advertising RFC 9207 is
-additionally checked on `iss` (`ErrIssuerParameter`). One gap remains, the
-one RFC 9700 §4.4.2.2 names: when the honest provider does not send `iss`
-and an attacker registered, at that provider, a client whose redirect URI is
-the attacker connection's callback, nothing tells the responses apart —
-`stack: TestMixUpResidualWithoutRFC9207` shows the honest code reaching the
-attacker's token endpoint. Prefer providers that support RFC 9207, never
-register a connection's redirect URI at another provider, and on a
-multi-tenant provider use the tenant's own issuer (one registration valid
-at several issuers defeats the distinct redirect URIs).
+additionally checked on `iss` (`ErrIssuerParameter`); a response carrying
+`iss` from a provider that does not advertise it is discarded (RFC 9207
+§2.4), unless `Config.RequireIssParameter` declares that the provider sends
+it. Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names: when the
+honest provider does not send `iss` and an attacker registered, at that
+provider, a client whose redirect URI is the attacker connection's
+callback, the response lands on the attacker connection and nothing tells
+it apart — `stack: TestMixUpResidualWithoutRFC9207` shows the honest code
+reaching the attacker's token endpoint. `Config.RequireIssParameter` closes
+it on the connection that receives the response
+(`stack: TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual`):
+an application whose tenants configure providers sets it on every tenant
+connection — its own setting, never the tenant's — and then works only with
+providers that send `iss`. Otherwise, never register a connection's
+redirect URI at another provider, and on a multi-tenant provider use the
+tenant's own issuer (one registration valid at several issuers defeats the
+distinct redirect URIs).
 
 ### Callback and session
 
 - In `form_post` mode exempt the callback route from CSRF middleware: the
   cross-site POST is the protocol, the binding cookie its defense. Leave
   the body unread before `HandleCallback`, or let it reuse `r.PostForm`.
+- A leaked state lets anyone burn the pending login: any request to the
+  callback carrying it, through the victim's browser, expires the binding
+  cookie (`TestLeakedStateBurnsThePendingLoginThroughTheVictimBrowser`).
+  The user starts over; keep the state and the authorization URL out of
+  logs (`AuthRequest` prints and logs without them).
 - Behind a reverse proxy, preserve the Host header (`HandleCallback`
   compares the URL the browser used) or call `Complete` with the public URL.
 - After a successful callback, create a fresh session (a new ID) and
   answer 303 to a clean URL, so the code leaves the browser history.
+- Every credential — client secret, transaction keys, binding secret,
+  tokens — is an `oidcclient.Secret`: every `fmt` verb, `slog` and
+  `encoding/json` render it `REDACTED`, `fmt` an address when it reaches
+  it through an unexported field (`TestSecretsNeverPrint`), and `Reveal()`
+  returns it where it is used. `encoding/gob` refuses any value holding
+  one: a gob-encoded session holding an `Identity` fails to save. An
+  application persisting tokens reveals them into its own struct of
+  strings: `Identity` and `Tokens` encode them `REDACTED`. A reflection
+  dumper that follows pointers without calling methods (go-spew with
+  `DisableMethods`, testify's failure diffs) prints a `Secret`'s value.
+- `AuthRequest.URL` is the whole authorization request: the state, the
+  `login_hint` (personal data) and the `id_token_hint` (an ID Token) are
+  in it, in clear — it must carry them to the provider. `AuthRequest`
+  prints and logs it without its query, but its JSON hand-off writes it,
+  and `fmt` prints it when it reaches an `AuthRequest` through an
+  unexported field.
 - Show users a generic message on failure: `AuthorizationError` and
   `TokenError` carry the provider's untrusted text, and errors of `New` may
   name an allowed destination's address. Provider-controlled text an error
@@ -179,17 +210,17 @@ a transaction altered in it fails its login (`ErrTransactionIntegrity`).
 
 ### Provider keys and rotation
 
-The client caches the provider's JWK Set for one hour, refetches it at most
+The client caches the provider's JWK Set for five minutes, refetches it at most
 every 10 seconds when an ID Token names an unknown `kid`, and keeps using the
 cached keys for at most 24 hours while the JWK Set endpoint fails. What it
 means for the provider's operators:
 
 | Event                                   | Effect on this client                                                                                          |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| A key is published before it signs      | Learned at the next refresh (at most one hour), or at the first ID Token naming it — rotation is invisible      |
+| A key is published before it signs      | Learned at the next refresh (at most five minutes), or at the first ID Token naming it — rotation is invisible  |
 | A key signs right after being published | Logins within 10 s of the previous refetch fail closed (`ErrUnknownSigningKey`), the next ones succeed          |
-| A key is withdrawn (leaked)             | ID Tokens it signs keep verifying until the cached set is an hour old; rebuild the `Client` to drop it at once |
-| The JWK Set endpoint is down            | Cached keys keep verifying for up to 24 hours; a key the cache lacks cannot be learned                          |
+| A key is withdrawn (leaked)             | ID Tokens it signs keep verifying until the cached set is five minutes old; rebuild the `Client` to drop it at once |
+| The JWK Set endpoint is down            | Cached keys keep verifying for up to 24 hours — a withdrawn key too, so an attacker holding it and able to make the fetches fail keeps it trusted that long; a key the cache lacks cannot be learned |
 
 `stack: TestDocumentedRotationIsInvisibleToTheClient`,
 `TestAbruptRotationWithinTheRefreshInterval` and `TestKeyWithdrawalWindow`

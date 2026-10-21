@@ -30,65 +30,74 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 	})
 
 	cases := map[string]func(*oidcclient.Config){
-		"empty connection":              func(c *oidcclient.Config) { c.ConnectionID = "" },
-		"connection with space":         func(c *oidcclient.Config) { c.ConnectionID = "acme okta" },
-		"connection too long":           func(c *oidcclient.Config) { c.ConnectionID = strings.Repeat("c", 256) },
-		"empty issuer":                  func(c *oidcclient.Config) { c.Issuer = "" },
-		"http issuer":                   func(c *oidcclient.Config) { c.Issuer = strings.Replace(c.Issuer, "https://", "http://", 1) },
-		"relative issuer":               func(c *oidcclient.Config) { c.Issuer = "/tenants/acme" },
-		"issuer with query":             func(c *oidcclient.Config) { c.Issuer += "?tenant=acme" },
-		"issuer with empty query":       func(c *oidcclient.Config) { c.Issuer += "?" },
-		"issuer with fragment":          func(c *oidcclient.Config) { c.Issuer += "#x" },
-		"issuer with userinfo":          func(c *oidcclient.Config) { c.Issuer = strings.Replace(c.Issuer, "https://", "https://u:p@", 1) },
-		"issuer non-ASCII":              func(c *oidcclient.Config) { c.Issuer += "/é" },
-		"issuer unparsable":             func(c *oidcclient.Config) { c.Issuer = "https://[::1" },
-		"issuer opaque":                 func(c *oidcclient.Config) { c.Issuer = "https:idp.example.com" },
-		"redirect unparsable":           func(c *oidcclient.Config) { c.RedirectURL = "https://[::1/cb" },
-		"redirect opaque":               func(c *oidcclient.Config) { c.RedirectURL = "https:rp.example.com/cb" },
-		"redirect malformed query":      func(c *oidcclient.Config) { c.RedirectURL += "?a=%zz" },
-		"empty client":                  func(c *oidcclient.Config) { c.ClientID = "" },
-		"client with control":           func(c *oidcclient.Config) { c.ClientID = "client\n1" },
-		"no auth method":                func(c *oidcclient.Config) { c.AuthMethod = "" },
-		"unsupported auth method":       func(c *oidcclient.Config) { c.AuthMethod = "private_key_jwt" },
-		"basic without secret":          func(c *oidcclient.Config) { c.ClientSecret = "" },
-		"post without secret":           func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost; c.ClientSecret = "" },
-		"none with secret":              func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone },
-		"empty redirect":                func(c *oidcclient.Config) { c.RedirectURL = "" },
-		"relative redirect":             func(c *oidcclient.Config) { c.RedirectURL = testCallbackPath },
-		"http redirect":                 func(c *oidcclient.Config) { c.RedirectURL = "http://rp.example.com" + testCallbackPath },
-		"redirect with fragment":        func(c *oidcclient.Config) { c.RedirectURL += "#x" },
-		"redirect with userinfo":        func(c *oidcclient.Config) { c.RedirectURL = "https://u@rp.example.com/cb" },
-		"redirect query with state":     func(c *oidcclient.Config) { c.RedirectURL += "?state=x" },
-		"redirect query with code":      func(c *oidcclient.Config) { c.RedirectURL += "?code=x" },
-		"redirect query with iss":       func(c *oidcclient.Config) { c.RedirectURL += "?iss=x" },
-		"redirect query with error":     func(c *oidcclient.Config) { c.RedirectURL += "?error=x" },
-		"redirect too long":             func(c *oidcclient.Config) { c.RedirectURL += strings.Repeat("a", 2048) },
-		"scope with space":              func(c *oidcclient.Config) { c.Scopes = []string{"openid profile"} },
-		"scope with quote":              func(c *oidcclient.Config) { c.Scopes = []string{`pro"file`} },
-		"empty scope":                   func(c *oidcclient.Config) { c.Scopes = []string{""} },
-		"fragment mode":                 func(c *oidcclient.Config) { c.ResponseMode = "fragment" },
-		"unknown mode":                  func(c *oidcclient.Config) { c.ResponseMode = "web_message" },
-		"no store":                      func(c *oidcclient.Config) { c.Store = nil },
-		"negative ttl":                  func(c *oidcclient.Config) { c.TransactionTTL = -time.Second },
-		"ttl over an hour":              func(c *oidcclient.Config) { c.TransactionTTL = time.Hour + time.Second },
-		"sub-second ttl":                func(c *oidcclient.Config) { c.TransactionTTL = 1500 * time.Millisecond },
-		"HS256 allowed":                 func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"HS256"} },
-		"none allowed":                  func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"none"} },
-		"unknown algorithm":             func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"RS1"} },
-		"empty trusted audience":        func(c *oidcclient.Config) { c.TrustedAudiences = []string{""} },
-		"negative skew":                 func(c *oidcclient.Config) { c.ClockSkew = -time.Second },
-		"skew over five minutes":        func(c *oidcclient.Config) { c.ClockSkew = 5*time.Minute + time.Second },
-		"insecure cookies in form_post": func(c *oidcclient.Config) { c.InsecureCookies = true; c.ResponseMode = oidcclient.ResponseModeFormPost },
-		"invalid outbound policy":       func(c *oidcclient.Config) { c.Outbound.MaxRedirects = -1 },
-		"no transaction key":            func(c *oidcclient.Config) { c.TransactionKeys = nil },
+		"empty connection":         func(c *oidcclient.Config) { c.ConnectionID = "" },
+		"connection with space":    func(c *oidcclient.Config) { c.ConnectionID = "acme okta" },
+		"connection too long":      func(c *oidcclient.Config) { c.ConnectionID = strings.Repeat("c", 256) },
+		"empty issuer":             func(c *oidcclient.Config) { c.Issuer = "" },
+		"http issuer":              func(c *oidcclient.Config) { c.Issuer = strings.Replace(c.Issuer, "https://", "http://", 1) },
+		"relative issuer":          func(c *oidcclient.Config) { c.Issuer = "/tenants/acme" },
+		"issuer with query":        func(c *oidcclient.Config) { c.Issuer += "?tenant=acme" },
+		"issuer with empty query":  func(c *oidcclient.Config) { c.Issuer += "?" },
+		"issuer with fragment":     func(c *oidcclient.Config) { c.Issuer += "#x" },
+		"issuer with userinfo":     func(c *oidcclient.Config) { c.Issuer = strings.Replace(c.Issuer, "https://", "https://u:p@", 1) },
+		"issuer non-ASCII":         func(c *oidcclient.Config) { c.Issuer += "/é" },
+		"issuer unparsable":        func(c *oidcclient.Config) { c.Issuer = "https://[::1" },
+		"issuer opaque":            func(c *oidcclient.Config) { c.Issuer = "https:idp.example.com" },
+		"redirect unparsable":      func(c *oidcclient.Config) { c.RedirectURL = "https://[::1/cb" },
+		"redirect opaque":          func(c *oidcclient.Config) { c.RedirectURL = "https:rp.example.com/cb" },
+		"redirect malformed query": func(c *oidcclient.Config) { c.RedirectURL += "?a=%zz" },
+		"empty client":             func(c *oidcclient.Config) { c.ClientID = "" },
+		"client with control":      func(c *oidcclient.Config) { c.ClientID = "client\n1" },
+		"no auth method":           func(c *oidcclient.Config) { c.AuthMethod = "" },
+		"unsupported auth method":  func(c *oidcclient.Config) { c.AuthMethod = "private_key_jwt" },
+		"basic without secret":     func(c *oidcclient.Config) { c.ClientSecret = oidcclient.Secret{} },
+		"post without secret": func(c *oidcclient.Config) {
+			c.AuthMethod = oidcclient.AuthMethodClientSecretPost
+			c.ClientSecret = oidcclient.Secret{}
+		},
+		"none with secret":          func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone },
+		"empty redirect":            func(c *oidcclient.Config) { c.RedirectURL = "" },
+		"relative redirect":         func(c *oidcclient.Config) { c.RedirectURL = testCallbackPath },
+		"http redirect":             func(c *oidcclient.Config) { c.RedirectURL = "http://rp.example.com" + testCallbackPath },
+		"redirect with fragment":    func(c *oidcclient.Config) { c.RedirectURL += "#x" },
+		"redirect with userinfo":    func(c *oidcclient.Config) { c.RedirectURL = "https://u@rp.example.com/cb" },
+		"redirect query with state": func(c *oidcclient.Config) { c.RedirectURL += "?state=x" },
+		"redirect query with code":  func(c *oidcclient.Config) { c.RedirectURL += "?code=x" },
+		"redirect query with iss":   func(c *oidcclient.Config) { c.RedirectURL += "?iss=x" },
+		"redirect query with error": func(c *oidcclient.Config) { c.RedirectURL += "?error=x" },
+		"redirect too long":         func(c *oidcclient.Config) { c.RedirectURL += strings.Repeat("a", 2048) },
+		"scope with space":          func(c *oidcclient.Config) { c.Scopes = []string{"openid profile"} },
+		"scope with quote":          func(c *oidcclient.Config) { c.Scopes = []string{`pro"file`} },
+		"empty scope":               func(c *oidcclient.Config) { c.Scopes = []string{""} },
+		"fragment mode":             func(c *oidcclient.Config) { c.ResponseMode = "fragment" },
+		"unknown mode":              func(c *oidcclient.Config) { c.ResponseMode = "web_message" },
+		"no store":                  func(c *oidcclient.Config) { c.Store = nil },
+		"negative ttl":              func(c *oidcclient.Config) { c.TransactionTTL = -time.Second },
+		"ttl over an hour":          func(c *oidcclient.Config) { c.TransactionTTL = time.Hour + time.Second },
+		"sub-second ttl":            func(c *oidcclient.Config) { c.TransactionTTL = 1500 * time.Millisecond },
+		"HS256 allowed":             func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"HS256"} },
+		"none allowed":              func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"none"} },
+		"unknown algorithm":         func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{"RS1"} },
+		"empty trusted audience":    func(c *oidcclient.Config) { c.TrustedAudiences = []string{""} },
+		"negative skew":             func(c *oidcclient.Config) { c.ClockSkew = -time.Second },
+		"skew over five minutes":    func(c *oidcclient.Config) { c.ClockSkew = 5*time.Minute + time.Second },
+		"insecure cookies in form_post": func(c *oidcclient.Config) {
+			c.InsecureCookies, c.RedirectURL, c.ResponseMode = true, testLocalRedirectURL, oidcclient.ResponseModeFormPost
+		},
+		"insecure cookies with an https redirect": func(c *oidcclient.Config) { c.InsecureCookies = true },
+		"insecure cookies with an https loopback redirect": func(c *oidcclient.Config) {
+			c.InsecureCookies, c.RedirectURL = true, "https://localhost:8443/cb"
+		},
+		"invalid outbound policy": func(c *oidcclient.Config) { c.Outbound.MaxRedirects = -1 },
+		"no transaction key":      func(c *oidcclient.Config) { c.TransactionKeys = nil },
 		"short transaction key": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{make([]byte, oidcclient.MinTransactionKeySize-1)}
+			c.TransactionKeys = secretKeys(make([]byte, oidcclient.MinTransactionKeySize-1))
 		},
 		"empty transaction key after a valid one": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, nil}
+			c.TransactionKeys = secretKeys(testTransactionKey, nil)
 		},
 		"too many transaction keys": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+			c.TransactionKeys = secretKeys(testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey)
 		},
 	}
 
@@ -116,18 +125,25 @@ func TestNewAcceptsBoundaries(t *testing.T) {
 		"redirect with app query":     func(c *oidcclient.Config) { c.RedirectURL += "?tenant=acme" },
 		"one hour ttl":                func(c *oidcclient.Config) { c.TransactionTTL = time.Hour },
 		"five minutes skew":           func(c *oidcclient.Config) { c.ClockSkew = 5 * time.Minute },
-		"public client":               func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
-		"post client":                 func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost },
-		"form post":                   func(c *oidcclient.Config) { c.ResponseMode = oidcclient.ResponseModeFormPost },
-		"single algorithm":            func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} },
-		"insecure cookies query mode": func(c *oidcclient.Config) { c.InsecureCookies = true },
-		"no explicit scopes":          func(c *oidcclient.Config) { c.Scopes = nil },
-		"duplicated scopes":           func(c *oidcclient.Config) { c.Scopes = []string{"email", "openid", "email"} },
-		"trusted audience":            func(c *oidcclient.Config) { c.TrustedAudiences = []string{"https://api.example.com"} },
-		"four transaction keys": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+		"public client": func(c *oidcclient.Config) {
+			c.AuthMethod = oidcclient.AuthMethodNone
+			c.ClientSecret = oidcclient.Secret{}
 		},
-		"long transaction key": func(c *oidcclient.Config) { c.TransactionKeys = [][]byte{make([]byte, 64)} },
+		"post client":                   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost },
+		"form post":                     func(c *oidcclient.Config) { c.ResponseMode = oidcclient.ResponseModeFormPost },
+		"single algorithm":              func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} },
+		"insecure cookies on localhost": func(c *oidcclient.Config) { c.InsecureCookies, c.RedirectURL = true, testLocalRedirectURL },
+		"insecure cookies on 127.0.0.1": func(c *oidcclient.Config) {
+			c.InsecureCookies, c.RedirectURL = true, "http://127.0.0.1:8080/cb"
+		},
+		"insecure cookies on ::1": func(c *oidcclient.Config) { c.InsecureCookies, c.RedirectURL = true, "http://[::1]:8080/cb" },
+		"no explicit scopes":      func(c *oidcclient.Config) { c.Scopes = nil },
+		"duplicated scopes":       func(c *oidcclient.Config) { c.Scopes = []string{"email", "openid", "email"} },
+		"trusted audience":        func(c *oidcclient.Config) { c.TrustedAudiences = []string{"https://api.example.com"} },
+		"four transaction keys": func(c *oidcclient.Config) {
+			c.TransactionKeys = secretKeys(testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey)
+		},
+		"long transaction key": func(c *oidcclient.Config) { c.TransactionKeys = secretKeys(make([]byte, 64)) },
 	}
 
 	for name, tweak := range cases {
@@ -170,12 +186,12 @@ func TestNewCopiesConfigSlices(t *testing.T) {
 
 	plain := newFakeOP(t)
 	key := bytes.Clone(testTransactionKey)
-	keys := [][]byte{key}
+	keys := secretKeys(key)
 	keyed := plain.client(t, func(cfg *oidcclient.Config) { cfg.TransactionKeys = keys })
 	ar, code := plain.begin(t, keyed, oidcclient.AuthOptions{})
 
-	key[0] ^= 0xff
-	keys[0] = bytes.Repeat([]byte{0x33}, oidcclient.MinTransactionKeySize)
+	key[0] ^= 0xff // a Secret holds its own copy of the key bytes
+	keys[0] = oidcclient.NewSecret(string(bytes.Repeat([]byte{0x33}, oidcclient.MinTransactionKeySize)))
 
 	_, err = keyed.Complete(context.Background(), callbackFor(ar, code))
 	require.NoError(t, err, "the Client kept its own copy of TransactionKeys and of their bytes")

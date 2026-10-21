@@ -110,6 +110,32 @@ func TestCapacity(t *testing.T) {
 	assert.Equal(t, 3, s.Len())
 }
 
+// TestStoreIsBoundedByDefault checks that a Store built without
+// WithCapacity keeps at most DefaultCapacity live transactions: login
+// starts are unauthenticated, so an unbounded default would let a flood of
+// them exhaust the process's memory.
+func TestStoreIsBoundedByDefault(t *testing.T) {
+	t.Parallel()
+
+	const capacity = 10_000
+
+	require.Equal(t, capacity, memory.DefaultCapacity)
+
+	s := memory.New()
+	now := time.Unix(1_800_000_000, 0).UTC()
+
+	for i := range capacity {
+		require.NoError(t, s.Save(context.Background(), transaction("live-"+strconv.Itoa(i), now, 10*time.Minute)))
+	}
+
+	require.ErrorIs(t, s.Save(context.Background(), transaction("refused", now, 10*time.Minute)), memory.ErrFull)
+	assert.Equal(t, capacity, s.Len())
+
+	require.NoError(t, s.Save(context.Background(), transaction("later", now.Add(10*time.Minute), 10*time.Minute)),
+		"once the transactions expire, the store takes new ones")
+	assert.Equal(t, 1, s.Len())
+}
+
 // TestCapacityDropsExpiredFirst checks that a full store drops its expired
 // transactions before refusing — without waiting for the periodic sweep.
 func TestCapacityDropsExpiredFirst(t *testing.T) {

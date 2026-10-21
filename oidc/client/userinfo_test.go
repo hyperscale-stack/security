@@ -159,7 +159,7 @@ func TestUserInfoRefusesForeignIdentity(t *testing.T) {
 		"other connection": func(id *oidcclient.Identity) { id.ConnectionID = "other" },
 		"other issuer":     func(id *oidcclient.Identity) { id.Issuer = "https://other.example.com" },
 		"no subject":       func(id *oidcclient.Identity) { id.Subject = "" },
-		"no access token":  func(id *oidcclient.Identity) { id.Tokens.AccessToken = "" },
+		"no access token":  func(id *oidcclient.Identity) { id.Tokens.AccessToken = oidcclient.Secret{} },
 	}
 
 	for name, mutate := range cases {

@@ -238,11 +238,11 @@ func TestOIDCClientExample(t *testing.T) {
 	handler, err := newServer(t.Context(), config{
 		BaseURL: base,
 		Connections: []connectionConfig{
-			{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: "acme-secret"},
-			{ID: "globex", Issuer: globex.issuer(), ClientID: "rp-globex", ClientSecret: "globex-secret"},
+			{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: oidcclient.NewSecret("acme-secret")},
+			{ID: "globex", Issuer: globex.issuer(), ClientID: "rp-globex", ClientSecret: oidcclient.NewSecret("globex-secret")},
 		},
 		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
-		TransactionKeys: [][]byte{[]byte("an example transaction key of 32+ bytes")},
+		TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret("an example transaction key of 32+ bytes")},
 	})
 	require.NoError(t, err)
 
@@ -372,11 +372,11 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:8083", cfg.BaseURL)
 	assert.Equal(t, []connectionConfig{
-		{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"},
+		{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: oidcclient.NewSecret("s3cr3t")},
 		{ID: "globex", Issuer: "https://globex.example.com", ClientID: "rp-public", ResponseMode: "form_post"},
 	}, cfg.Connections)
 	require.Len(t, cfg.TransactionKeys, 1, "a random development key when none is configured")
-	assert.Len(t, cfg.TransactionKeys[0], 32)
+	assert.Len(t, cfg.TransactionKeys[0].Reveal(), 32)
 
 	other, err := loadConfig()
 	require.NoError(t, err)
@@ -387,7 +387,9 @@ func TestLoadConfig(t *testing.T) {
 
 	cfg, err = loadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, [][]byte{bytes.Repeat([]byte{0xab}, 32), bytes.Repeat([]byte{0xcd}, 48)}, cfg.TransactionKeys)
+	require.Len(t, cfg.TransactionKeys, 2)
+	assert.Equal(t, string(bytes.Repeat([]byte{0xab}, 32)), cfg.TransactionKeys[0].Reveal())
+	assert.Equal(t, string(bytes.Repeat([]byte{0xcd}, 48)), cfg.TransactionKeys[1].Reveal())
 
 	// A malformed key is reported by its position: the decoder's error would
 	// echo one of its characters into the log.
@@ -405,8 +407,8 @@ func TestNewServerRefusesShortTransactionKeys(t *testing.T) {
 
 	_, err := newServer(t.Context(), config{
 		BaseURL:         "http://localhost:8083",
-		Connections:     []connectionConfig{{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: "s3cr3t"}},
-		TransactionKeys: [][]byte{[]byte("too short")},
+		Connections:     []connectionConfig{{ID: "acme", Issuer: "https://acme.example.com", ClientID: "rp", ClientSecret: oidcclient.NewSecret("s3cr3t")}},
+		TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret("too short")},
 	})
 	require.ErrorIs(t, err, oidcclient.ErrInvalidConfig)
 }

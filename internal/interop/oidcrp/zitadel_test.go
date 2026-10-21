@@ -103,12 +103,12 @@ func (p *provider) relyingParty(t *testing.T, connection string, mutators ...fun
 		ConnectionID:    connection,
 		Issuer:          p.issuer,
 		ClientID:        clientID,
-		ClientSecret:    clientSecret,
+		ClientSecret:    oidcclient.NewSecret(clientSecret),
 		AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
 		RedirectURL:     redirectURL(connection),
 		Scopes:          []string{"openid", "profile", "email"},
 		Store:           memory.New(),
-		TransactionKeys: [][]byte{transactionKey},
+		TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(transactionKey))},
 		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: p.pool},
 	}
 
@@ -282,7 +282,7 @@ func TestZitadelCodeFlow(t *testing.T) {
 				cfg.AuthMethod = tc.method
 
 				if tc.method == oidcclient.AuthMethodNone {
-					cfg.ClientSecret = ""
+					cfg.ClientSecret = oidcclient.Secret{}
 				}
 			})
 
@@ -292,8 +292,8 @@ func TestZitadelCodeFlow(t *testing.T) {
 			assert.Equal(t, p.issuer, id.Issuer)
 			assert.Equal(t, userID, id.Subject)
 			assert.Equal(t, []string{clientID}, id.Audience)
-			assert.NotEmpty(t, id.Tokens.AccessToken)
-			assert.Contains(t, claimsOf(t, id.Tokens.IDToken), "at_hash", "at_hash was verified")
+			assert.NotEmpty(t, id.Tokens.AccessToken.Reveal())
+			assert.Contains(t, claimsOf(t, id.Tokens.IDToken.Reveal()), "at_hash", "at_hash was verified")
 
 			var claims struct {
 				Email string `json:"email"`

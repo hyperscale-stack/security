@@ -61,7 +61,7 @@ func TestCodeFlowAgainstOurProvider(t *testing.T) {
 			assert.Equal(t, []string{"pwd"}, id.AMR)
 			assert.WithinDuration(t, o.clock.now(), id.AuthTime, 2*time.Second)
 
-			_, claims := jwsParts(t, id.Tokens.IDToken)
+			_, claims := jwsParts(t, id.Tokens.IDToken.Reveal())
 			assert.Contains(t, claims, "at_hash", "the client verified at_hash")
 			assert.Contains(t, claims, "nonce")
 
@@ -83,8 +83,9 @@ func TestCodeFlowAgainstOurProvider(t *testing.T) {
 
 // TestCodeFlowSigningAlgorithms checks every ID Token algorithm a client
 // may register (Registration §2 id_token_signed_response_alg): our provider
-// signs with the issuer's key of that algorithm, our client verifies the
-// signature and the at_hash computed with the algorithm's hash (Core
+// signs with the issuer's key of that algorithm, our client — configured
+// with that algorithm (Config.Algorithms, Core §3.1.3.7 step 7) — verifies
+// the signature and the at_hash computed with the algorithm's hash (Core
 // §3.1.3.6).
 func TestCodeFlowSigningAlgorithms(t *testing.T) {
 	t.Parallel()
@@ -99,12 +100,13 @@ func TestCodeFlowSigningAlgorithms(t *testing.T) {
 			t.Parallel()
 
 			name := strings.ToLower(string(alg))
-			c := o.rp(t, conn(name, o.base, "rp-"+name, secret, oidcclient.AuthMethodClientSecretBasic))
+			c := o.rp(t, conn(name, o.base, "rp-"+name, secret, oidcclient.AuthMethodClientSecretBasic),
+				func(cfg *oidcclient.Config) { cfg.Algorithms = []oidcclient.Algorithm{oidcclient.Algorithm(alg)} })
 
 			id, err := o.login(t, c, oidcclient.AuthOptions{})
 			require.NoError(t, err)
 
-			header, _ := jwsParts(t, id.Tokens.IDToken)
+			header, _ := jwsParts(t, id.Tokens.IDToken.Reveal())
 			assert.Equal(t, string(alg), header["alg"])
 			assert.Equal(t, "root-"+name, header["kid"])
 		})
@@ -349,15 +351,15 @@ func TestRefreshOfAClientLogin(t *testing.T) {
 
 	id, err := o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err)
-	assert.Empty(t, id.Tokens.RefreshToken, "no consent dialog, no offline access")
+	assert.Empty(t, id.Tokens.RefreshToken.Reveal(), "no consent dialog, no offline access")
 
 	id, err = o.login(t, c, oidcclient.AuthOptions{Prompt: []string{"consent"}})
 	require.NoError(t, err)
-	require.NotEmpty(t, id.Tokens.RefreshToken)
+	require.NotEmpty(t, id.Tokens.RefreshToken.Reveal())
 
 	o.clock.advance(time.Minute)
 
-	refreshed := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken)
+	refreshed := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken.Reveal())
 	require.Equal(t, http.StatusOK, refreshed.status, refreshed.body)
 
 	raw, ok := refreshed.json["id_token"].(string)
@@ -367,7 +369,7 @@ func TestRefreshOfAClientLogin(t *testing.T) {
 	require.NoError(t, err)
 
 	var before, after map[string]any
-	_, before = jwsParts(t, id.Tokens.IDToken)
+	_, before = jwsParts(t, id.Tokens.IDToken.Reveal())
 	require.NoError(t, json.Unmarshal(verified.Payload, &after))
 
 	for _, claim := range []string{"iss", "sub", "aud", "auth_time", "amr"} {

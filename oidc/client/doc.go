@@ -27,9 +27,10 @@
 // Supported: response modes query and form_post; client authentication
 // client_secret_basic (identifier and secret form-urlencoded first, RFC 6749
 // §2.3.1), client_secret_post and none (public clients, which require the
-// provider to advertise S256); ID Tokens signed with RS256/384/512,
-// PS256/384/512, ES256/384/512 or EdDSA (Ed25519); RFC 9207 authorization
-// response issuer identification; JWK Set rollover.
+// provider to advertise S256); ID Tokens signed with RS256 — the default
+// (OpenID Connect Core §3.1.3.7 step 7) — or, once Config.Algorithms names
+// it, RS384/512, PS256/384/512, ES256/384/512 or EdDSA (Ed25519); RFC 9207
+// authorization response issuer identification; JWK Set rollover.
 //
 // Not supported, and refused: implicit and hybrid flows, the fragment
 // response mode, HMAC-signed (HS256/384/512) or unsigned ID Tokens,
@@ -68,10 +69,19 @@
 //     redirect URI — distinct from every other connection's by scheme,
 //     host, port, path or query parameter — and Complete refuses a response
 //     received on another URL than the connection's. Providers that
-//     advertise RFC 9207 are additionally checked on the iss parameter.
-//     Never route callbacks by the state value.
+//     advertise RFC 9207, or that Config.RequireIssParameter declares, are
+//     additionally checked on the iss parameter, which closes the residual
+//     of distinct redirect URIs (RFC 9700 §4.4.2.2) on the connection that
+//     receives the response; an iss from another provider is discarded
+//     (RFC 9207 §2.4). Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
+//   - Every credential — the client secret, the transaction keys, the
+//     binding secret, the tokens — is a [Secret]: it prints, logs and
+//     encodes as REDACTED with every fmt verb, log/slog and encoding/json —
+//     an address when fmt reaches it through an unexported field of another
+//     value — and Secret.Reveal is the only way to its value (see Secret
+//     for the reflection dumpers it cannot cover).
 //   - JSON — the ID Token's JOSE header included — is parsed strictly:
 //     duplicate member names, two names that differ only by case, invalid
 //     UTF-8 and unpaired surrogate escapes are refused at every nesting

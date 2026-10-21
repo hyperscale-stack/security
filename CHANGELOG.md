@@ -228,7 +228,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   audiences only if trusted), azp, exp/iat/nbf with a bounded skew, nonce,
   auth_time against `max_age`, acr against the requested `acr_values`, and
   at_hash. Keys come from the issuer's `jwks_uri` only, through a bounded
-  cache (1 h TTL, one rate-limited refresh for an unknown `kid`,
+  cache (5 min TTL, one rate-limited refresh for an unknown `kid`,
   single-flight, 24 h stale limit). Every JSON document is parsed strictly
   (duplicate or case-variant member names refused at every level). Token
   and UserInfo requests never follow redirects. `UserInfo` returns claims
@@ -559,6 +559,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   receives the value of every security-pipeline panic the interceptors
   recover (the value may hold a credential: it is the application's to
   log or report); a panic of the handler is ignored.
+    the error classes sees the new `too_many_attempts` class.
+- **`oidcclient.Config.RequireIssParameter`**: declares that the provider
+  sends the RFC 9207 `iss` parameter in every authorization response
+  (RFC 9207 §2.4, "according to the client's configuration"): a response
+  without it is refused (`ErrIssuerParameter`). Set on every connection a
+  tenant configures, it closes the mix-up that distinct redirect URIs
+  leave open (RFC 9700 §4.4.2.2) for applications working only with
+  providers that send `iss`; it also admits a provider that sends `iss`
+  without advertising it.
 
 - `oauth2.ServerConfig.AllowInsecureLoopbackIssuer` (development only: an
   http issuer on localhost or a loopback IP address), the
@@ -1027,6 +1036,56 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   every 64 writes instead of keeping them for the process lifetime.
   `memory.New` takes options; `memory.WithClock` gives it the
   ServiceProvider's clock (`time.Now` by default).
+- **`oidcclient.Secret`** (breaking): every secret of the `oidc/client`
+  API — `Config.ClientSecret`, `Config.TransactionKeys` (now `[]Secret`),
+  `AuthRequest.Binding`, `Callback.Binding`, `Tokens.AccessToken`,
+  `RefreshToken` and `IDToken`, `AuthOptions.IDTokenHint` — is a `Secret`:
+  `NewSecret(s)` builds one, `Reveal()` reads it, and every `fmt` verb,
+  `slog` and `encoding/json` render it `REDACTED` (`fmt` an address when it
+  reaches it through an unexported field): `Identity` and `Tokens` no
+  longer encode their tokens, which applications persist by revealing
+  them. `encoding/gob` refuses any value holding a `Secret` (a gob session
+  holding an `Identity` fails to save), YAML writes it empty, and documents
+  persisted before the upgrade no longer decode (see MIGRATION.md).
+- `oidcclient.Config.InsecureCookies` is refused (`ErrInvalidConfig`)
+  unless `RedirectURL` is plain http, which is accepted on a loopback host
+  only (breaking for a configuration combining it with an https redirect
+  URI; see MIGRATION.md).
+- `oidc/client` expects ID Tokens signed with RS256 unless
+  `Config.Algorithms` names another algorithm (breaking): an empty
+  `Algorithms` used to accept every asymmetric algorithm the provider
+  listed. OpenID Connect Core §3.1.3.7 step 7: the algorithm "SHOULD be the
+  default of RS256 or the algorithm sent by the Client in the
+  id_token_signed_response_alg parameter during Registration". A provider
+  signing with ES256, PS256, EdDSA… needs `Config.Algorithms` set to that
+  algorithm; the errors say so.
+- `oidc/client` discards an authorization response carrying `iss` from a
+  provider that does not advertise
+  `authorization_response_iss_parameter_supported` (`ErrIssuerParameter`,
+  RFC 9207 §2.4: "Clients SHOULD discard…"); a matching `iss` used to be
+  accepted. Breaking for a provider that sends `iss` without advertising
+  it: set `Config.RequireIssParameter` (see MIGRATION.md).
+- `oidc/client/storage/memory` is bounded by default: `New()` keeps at most
+  `memory.DefaultCapacity` (10 000) pending logins and refuses the next
+  with `memory.ErrFull`; it used to grow without bound unless built with
+  `memory.WithCapacity`, while login starts are unauthenticated (breaking
+  above 10 000 pending logins; see MIGRATION.md).
+- `oidcclient.AuthRequest` prints and logs (`String`, `GoString`, `Format`,
+  `LogValue`) without its state nor the query of its URL — hints included —
+  with a leaked state, a request to the callback through the victim's own
+  browser burns the pending login. Its JSON encoding, the hand-off of the
+  request to a front end, is unchanged.
+- `oidc/client` caches the provider's JWK Set for five minutes instead of
+  one hour — the TTL of the `jwt` module's remote key sets — so a key the
+  provider withdraws stops verifying ID Tokens within five minutes while
+  the JWK Set endpoint answers; the 24-hour staleness limit while fetches
+  fail is unchanged.
+- `oidc/client` verifies PS256/384/512 ID Tokens only with a salt as long
+  as the hash output (RFC 7518 §3.5), and ignores JWK Set Ed25519 keys that
+  are not canonically encoded (RFC 8032 §5.1.3) or of small order (RFC 8725
+  §3.4) — the rules of the `jwt` module. A provider signing PS* tokens with
+  another salt length (the maximum, say) now fails with
+  `ErrIDTokenSignature` (see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in
@@ -1536,8 +1595,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   redacted, transaction keys counted), whose encoding used to fail on its
   `func` fields only by accident. `UserInfo` printed its claims (personal
   data) with `%s` and `%q`; it now prints and logs its subject only.
-  `Identity` and `Tokens` still encode their tokens, deliberately, so that
-  applications can persist them (see MIGRATION.md).
+  `Identity` and `Tokens` encoded their tokens, for persistence, until they
+  became `oidcclient.Secret` values (see Changed).
 - `oidcclient.AuthOptions.ExtraParams` compared its names with the
   reserved parameters exactly: `Request`, `STATE`, `Nonce`, `request.uri`…
   passed, and a provider that ignores case (ASP.NET) or rewrites `.` as `_`
@@ -2214,3 +2273,25 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   servers could not tell it from the client's `client_credentials` token
   (RFC 9068 §2.2, RFC 9700 §4.15). It now answers `server_error` (cause
   `oauth2.ErrSubjectIsClient`), nothing minted or persisted.
+- `oidc/client` secrets printed in clear through `fmt` when an `oidcclient`
+  value sat in an unexported field of another value, or when a `Client` was
+  dereferenced (`%+v` of `*client`): fmt prints such values by reflection,
+  without calling their redacting methods, so a `Config`'s client secret
+  and transaction keys, an `AuthRequest`'s or `Callback`'s binding secret
+  and the tokens of an `Identity` reached logs — `slog`'s text handler
+  included. They are now `oidcclient.Secret` values (see Changed), which
+  print as an address there and `REDACTED` everywhere else, with every verb.
+- `oidcclient.Config.InsecureCookies`, documented for local development,
+  was accepted with a public https `RedirectURL`: the binding cookie then
+  lost its `__Host-` prefix and `Secure` attribute, so a sibling subdomain
+  or a network attacker answering for the site's http origin could plant
+  the binding cookie of a login it started itself and send the victim to
+  the callback with its own code — signing the victim in as the attacker
+  (login CSRF, RFC 9700 §4.7; rfc6265bis §4.1.3.2). `New` now refuses it
+  unless the redirect URI is http on a loopback host.
+- `oidc/client` verified ID Tokens through go-jose directly, which accepts
+  an RSASSA-PSS signature of any salt length (RFC 7518 §3.5 requires the
+  hash size) and checks an Ed25519 JWK only against a list of weak
+  encodings, so a non-canonical encoding (y ≥ p, whose decoding RFC 8032
+  §5.1.3 makes fail) was used as a key. PS* signatures are now verified with
+  a hash-size salt and such keys are ignored, as in the `jwt` module.

@@ -9,11 +9,13 @@
 // MUST use a shared store (oidc/client/store/sql or oidc/client/store/redis).
 //
 // Expired transactions — abandoned logins — are swept every 64 operations
-// once one may have expired, so the store stays bounded by the login rate
-// times the transaction TTL. Login starts are unauthenticated: without
-// WithCapacity, a flood of them grows the store until it is rate limited
-// or the process runs out of memory. One mutex serializes every operation;
-// it is the linearization point of the single-consumption guarantee.
+// once one may have expired. Login starts are unauthenticated: the store
+// keeps at most DefaultCapacity live transactions — WithCapacity sets
+// another bound — and refuses the next with ErrFull, so that a flood of
+// starts cannot exhaust the process's memory; rate-limit them too, since a
+// full store fails every new login until transactions expire. One mutex
+// serializes every operation; it is the linearization point of the
+// single-consumption guarantee.
 package memory
 
 import (
@@ -28,16 +30,23 @@ import (
 )
 
 // ErrFull reports a Save refused because the store holds its capacity of
-// transactions (WithCapacity): the login fails to start; no pending login
-// is evicted to make room.
+// transactions (DefaultCapacity, or WithCapacity): the login fails to
+// start; no pending login is evicted to make room.
 var ErrFull = errors.New("memory: transaction store full")
+
+// DefaultCapacity is the number of live transactions a Store built without
+// WithCapacity keeps: 10 000 pending logins — about 16 login starts a
+// second over the default 10-minute TransactionTTL, 2.8 over the maximum
+// of one hour — about 46 MB with 4 KiB AppStates, more with long
+// acr_values (up to about 66 MB).
+const DefaultCapacity = 10_000
 
 // Option configures a Store.
 type Option func(*Store)
 
-// WithCapacity bounds the transactions the store retains to n, at least 1:
-// it panics otherwise, so that a bound computed as zero never silently
-// disables itself. At capacity, Save first drops the expired transactions,
+// WithCapacity bounds the transactions the store retains to n instead of
+// DefaultCapacity, at least 1: it panics otherwise, so that a bound
+// computed as zero never silently disables itself. At capacity, Save first drops the expired transactions,
 // then refuses with ErrFull; a pending login is never evicted. A full store
 // refuses in constant time — it walks its transactions at most once per
 // expiry, not once per refused login. Size it from the login rate and the
@@ -59,7 +68,7 @@ const sweepEvery = 64
 // Store is an in-memory oidcclient.TransactionStore, safe for concurrent
 // use. The zero value is unusable; build one with New.
 type Store struct {
-	capacity int // 0: no bound
+	capacity int
 
 	mu  sync.Mutex
 	txs map[string]oidcclient.Transaction
@@ -71,9 +80,10 @@ type Store struct {
 	sweeps     int // the walks of txs, for the tests
 }
 
-// New returns an empty Store, unbounded unless WithCapacity says otherwise.
+// New returns an empty Store keeping at most DefaultCapacity transactions,
+// unless WithCapacity says otherwise.
 func New(opts ...Option) *Store {
-	s := &Store{txs: make(map[string]oidcclient.Transaction)}
+	s := &Store{capacity: DefaultCapacity, txs: make(map[string]oidcclient.Transaction)}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -98,7 +108,7 @@ func (s *Store) Save(_ context.Context, tx *oidcclient.Transaction) error {
 		return oidcclient.ErrTransactionExists
 	}
 
-	if s.capacity > 0 && len(s.txs) >= s.capacity {
+	if len(s.txs) >= s.capacity {
 		s.sweepExpired(tx.CreatedAt)
 
 		if len(s.txs) >= s.capacity {

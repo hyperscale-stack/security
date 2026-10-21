@@ -43,12 +43,12 @@ func TestCompleteQuery(t *testing.T) {
 	assert.Equal(t, testNow.Add(5*time.Minute), id.ExpiresAt)
 	assert.True(t, id.AuthTime.IsZero())
 	assert.Equal(t, "return=/home", id.AppState)
-	assert.Equal(t, testAccessToken, id.Tokens.AccessToken)
+	assert.Equal(t, testAccessToken, id.Tokens.AccessToken.Reveal())
 	assert.Equal(t, "Bearer", id.Tokens.TokenType)
-	assert.Equal(t, "rt-1", id.Tokens.RefreshToken)
+	assert.Equal(t, "rt-1", id.Tokens.RefreshToken.Reveal())
 	assert.Equal(t, "openid profile", id.Tokens.Scope)
 	assert.Equal(t, testNow.Add(time.Hour), id.Tokens.Expiry)
-	assert.NotEmpty(t, id.Tokens.IDToken)
+	assert.NotEmpty(t, id.Tokens.IDToken.Reveal())
 
 	var claims struct {
 		Email string `json:"email"`
@@ -109,10 +109,10 @@ func TestCompleteBinding(t *testing.T) {
 
 	cases := map[string]func(victim, attacker *oidcclient.AuthRequest) string{
 		"missing":                 func(*oidcclient.AuthRequest, *oidcclient.AuthRequest) string { return "" },
-		"malformed":               func(v, _ *oidcclient.AuthRequest) string { return v.Binding[:42] },
-		"padded":                  func(v, _ *oidcclient.AuthRequest) string { return v.Binding + "=" },
-		"non-canonical encoding":  func(v, _ *oidcclient.AuthRequest) string { return nonCanonical(v.Binding) },
-		"another login's binding": func(_, a *oidcclient.AuthRequest) string { return a.Binding },
+		"malformed":               func(v, _ *oidcclient.AuthRequest) string { return v.Binding.Reveal()[:42] },
+		"padded":                  func(v, _ *oidcclient.AuthRequest) string { return v.Binding.Reveal() + "=" },
+		"non-canonical encoding":  func(v, _ *oidcclient.AuthRequest) string { return nonCanonical(v.Binding.Reveal()) },
+		"another login's binding": func(_, a *oidcclient.AuthRequest) string { return a.Binding.Reveal() },
 	}
 
 	for name, bindingOf := range cases {
@@ -127,7 +127,7 @@ func TestCompleteBinding(t *testing.T) {
 			attacker, _ := op.begin(t, c, oidcclient.AuthOptions{})
 
 			cb := callbackFor(victim, code)
-			cb.Binding = bindingOf(victim, attacker)
+			cb.Binding = oidcclient.NewSecret(bindingOf(victim, attacker))
 
 			id, err := c.Complete(context.Background(), cb)
 			require.ErrorIs(t, err, oidcclient.ErrBindingMismatch)
@@ -812,21 +812,33 @@ func TestCompleteRefusesMalformedCallbacks(t *testing.T) {
 func TestCompleteIssParameter(t *testing.T) {
 	t.Parallel()
 
+	equal := func(op *fakeOP) []string { return []string{op.issuer} }
+	absent := func(*fakeOP) []string { return nil }
+	empty := func(*fakeOP) []string { return []string{""} }
+	other := func(*fakeOP) []string { return []string{"https://other.example.com"} }
+
 	cases := []struct {
 		name       string
 		advertised bool
+		required   bool // Config.RequireIssParameter
 		iss        func(op *fakeOP) []string
 		ok         bool
 	}{
-		{"advertised and equal", true, func(op *fakeOP) []string { return []string{op.issuer} }, true},
-		{"advertised and missing", true, func(*fakeOP) []string { return nil }, false},
-		{"advertised and empty", true, func(*fakeOP) []string { return []string{""} }, false},
-		{"advertised and different", true, func(*fakeOP) []string { return []string{"https://other.example.com"} }, false},
-		{"advertised, trailing slash", true, func(op *fakeOP) []string { return []string{op.issuer + "/"} }, false},
-		{"not advertised and absent", false, func(*fakeOP) []string { return nil }, true},
-		{"not advertised and empty", false, func(*fakeOP) []string { return []string{""} }, true},
-		{"not advertised and equal", false, func(op *fakeOP) []string { return []string{op.issuer} }, true},
-		{"not advertised and different", false, func(*fakeOP) []string { return []string{"https://other.example.com"} }, false},
+		{"advertised and equal", true, false, equal, true},
+		{"advertised and missing", true, false, absent, false},
+		{"advertised and empty", true, false, empty, false},
+		{"advertised and different", true, false, other, false},
+		{"advertised, trailing slash", true, false, func(op *fakeOP) []string { return []string{op.issuer + "/"} }, false},
+		{"not advertised and absent", false, false, absent, true},
+		{"not advertised and empty", false, false, empty, true},
+		{"not advertised and equal: discarded (RFC 9207 §2.4)", false, false, equal, false},
+		{"not advertised and different", false, false, other, false},
+		{"required, not advertised, equal", false, true, equal, true},
+		{"required, not advertised, absent", false, true, absent, false},
+		{"required, not advertised, empty", false, true, empty, false},
+		{"required, not advertised, different", false, true, other, false},
+		{"required and advertised, equal", true, true, equal, true},
+		{"required and advertised, absent", true, true, absent, false},
 	}
 
 	for _, tc := range cases {
@@ -835,7 +847,7 @@ func TestCompleteIssParameter(t *testing.T) {
 
 			op := newFakeOP(t)
 			op.set(func(op *fakeOP) { op.metadata["authorization_response_iss_parameter_supported"] = tc.advertised })
-			c := op.client(t)
+			c := op.client(t, func(cfg *oidcclient.Config) { cfg.RequireIssParameter = tc.required })
 			ar, code := op.begin(t, c, oidcclient.AuthOptions{})
 
 			cb := callbackFor(ar, code)
@@ -843,7 +855,7 @@ func TestCompleteIssParameter(t *testing.T) {
 				cb.Params["iss"] = iss
 			}
 
-			_, err := c.Complete(context.Background(), cb)
+			id, err := c.Complete(context.Background(), cb)
 			if tc.ok {
 				require.NoError(t, err)
 
@@ -851,8 +863,33 @@ func TestCompleteIssParameter(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
+			assert.Nil(t, id)
 			assert.Zero(t, op.hitCount("/token"))
 		})
+	}
+
+	t.Run("the refusal of an unadvertised iss names the option", func(t *testing.T) {
+		t.Parallel()
+
+		op := newFakeOP(t)
+		c := op.client(t)
+		ar, code := op.begin(t, c, oidcclient.AuthOptions{})
+
+		cb := callbackFor(ar, code)
+		cb.Params["iss"] = []string{op.issuer}
+
+		_, err := c.Complete(context.Background(), cb)
+		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
+		assert.ErrorContains(t, err, "RequireIssParameter")
+	})
+
+	errorResponse := func(ar *oidcclient.AuthRequest, iss ...string) oidcclient.Callback {
+		params := url.Values{"error": {"access_denied"}, "state": {ar.State}}
+		if len(iss) > 0 {
+			params["iss"] = iss
+		}
+
+		return oidcclient.Callback{Mode: oidcclient.ResponseModeQuery, URL: receivedOn(testRedirectURL), Binding: ar.Binding, Params: params}
 	}
 
 	t.Run("error response without iss when advertised", func(t *testing.T) {
@@ -863,11 +900,32 @@ func TestCompleteIssParameter(t *testing.T) {
 		c := op.client(t)
 		ar, _ := op.begin(t, c, oidcclient.AuthOptions{})
 
-		_, err := c.Complete(context.Background(), oidcclient.Callback{
-			Mode: oidcclient.ResponseModeQuery, URL: receivedOn(testRedirectURL), Binding: ar.Binding,
-			Params: url.Values{"error": {"access_denied"}, "state": {ar.State}},
-		})
+		_, err := c.Complete(context.Background(), errorResponse(ar))
 		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter, "RFC 9207 §2.4: an error is not trusted either")
+	})
+
+	t.Run("error response without iss when required", func(t *testing.T) {
+		t.Parallel()
+
+		op := newFakeOP(t)
+		c := op.client(t, func(cfg *oidcclient.Config) { cfg.RequireIssParameter = true })
+		ar, _ := op.begin(t, c, oidcclient.AuthOptions{})
+
+		_, err := c.Complete(context.Background(), errorResponse(ar))
+		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
+		assert.NotErrorIs(t, err, oidcclient.ErrAuthorizationFailed)
+	})
+
+	t.Run("error response with an unadvertised matching iss", func(t *testing.T) {
+		t.Parallel()
+
+		op := newFakeOP(t)
+		c := op.client(t)
+		ar, _ := op.begin(t, c, oidcclient.AuthOptions{})
+
+		_, err := c.Complete(context.Background(), errorResponse(ar, op.issuer))
+		require.ErrorIs(t, err, oidcclient.ErrIssuerParameter, "the iss check comes before the error response")
+		assert.NotErrorIs(t, err, oidcclient.ErrAuthorizationFailed)
 	})
 }
 

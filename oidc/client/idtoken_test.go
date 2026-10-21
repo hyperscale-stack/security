@@ -111,6 +111,21 @@ func baseClaims(op *fakeOP, g *grant) string {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
+// onlyAlgorithm configures alg as the client's registered ID Token
+// algorithm (Config.Algorithms).
+func onlyAlgorithm(alg jose.SignatureAlgorithm) func(*oidcclient.Config) {
+	return func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.Algorithm(alg)} }
+}
+
+// everyAlgorithm configures every supported algorithm, for the tests of
+// key selection across key types.
+func everyAlgorithm(c *oidcclient.Config) {
+	c.Algorithms = []oidcclient.Algorithm{
+		oidcclient.RS256, oidcclient.RS384, oidcclient.RS512, oidcclient.PS256, oidcclient.PS384, oidcclient.PS512,
+		oidcclient.ES256, oidcclient.ES384, oidcclient.ES512, oidcclient.EdDSA,
+	}
+}
+
 func signWith(key signingKey) func(op *fakeOP) {
 	return func(op *fakeOP) {
 		op.signer = key
@@ -118,20 +133,41 @@ func signWith(key signingKey) func(op *fakeOP) {
 	}
 }
 
+// TestDefaultIDTokenAlgorithmIsRS256 checks the default of
+// Config.Algorithms: RS256 only (OpenID Connect Core §3.1.3.7 step 7, "The
+// alg value SHOULD be the default of RS256 or the algorithm sent by the
+// Client in the id_token_signed_response_alg parameter during
+// Registration"), even from a provider listing every algorithm and
+// publishing the keys; another algorithm verifies once configured.
+func TestDefaultIDTokenAlgorithmIsRS256(t *testing.T) {
+	t.Parallel()
+
+	es256 := func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} }
+
+	runIDCases(t, []idCase{
+		{name: "RS256 by default", setup: signWith(keyRSA(jose.RS256, "k"))},
+		{name: "ES256 refused by default", setup: signWith(keyEC(jose.ES256, "k")), err: oidcclient.ErrIDTokenAlgorithm},
+		{name: "PS256 refused by default", setup: signWith(keyRSA(jose.PS256, "k")), err: oidcclient.ErrIDTokenAlgorithm},
+		{name: "EdDSA refused by default", setup: signWith(keyEd("k")), err: oidcclient.ErrIDTokenAlgorithm},
+		{name: "ES256 once configured", setup: signWith(keyEC(jose.ES256, "k")), config: es256},
+		{name: "RS256 refused once ES256 is configured", setup: signWith(keyRSA(jose.RS256, "k")), config: es256, err: oidcclient.ErrIDTokenAlgorithm},
+	})
+}
+
 func TestIDTokenAlgorithms(t *testing.T) {
 	t.Parallel()
 
 	runIDCases(t, []idCase{
 		{name: "RS256", setup: signWith(keyRSA(jose.RS256, "k"))},
-		{name: "RS384", setup: signWith(keyRSA(jose.RS384, "k"))},
-		{name: "RS512", setup: signWith(keyRSA(jose.RS512, "k"))},
-		{name: "PS256", setup: signWith(keyRSA(jose.PS256, "k"))},
-		{name: "PS384", setup: signWith(keyRSA(jose.PS384, "k"))},
-		{name: "PS512", setup: signWith(keyRSA(jose.PS512, "k"))},
-		{name: "ES256", setup: signWith(keyEC(jose.ES256, "k"))},
-		{name: "ES384", setup: signWith(keyEC(jose.ES384, "k"))},
-		{name: "ES512", setup: signWith(keyEC(jose.ES512, "k"))},
-		{name: "EdDSA", setup: signWith(keyEd("k"))},
+		{name: "RS384", setup: signWith(keyRSA(jose.RS384, "k")), config: onlyAlgorithm(jose.RS384)},
+		{name: "RS512", setup: signWith(keyRSA(jose.RS512, "k")), config: onlyAlgorithm(jose.RS512)},
+		{name: "PS256", setup: signWith(keyRSA(jose.PS256, "k")), config: onlyAlgorithm(jose.PS256)},
+		{name: "PS384", setup: signWith(keyRSA(jose.PS384, "k")), config: onlyAlgorithm(jose.PS384)},
+		{name: "PS512", setup: signWith(keyRSA(jose.PS512, "k")), config: onlyAlgorithm(jose.PS512)},
+		{name: "ES256", setup: signWith(keyEC(jose.ES256, "k")), config: onlyAlgorithm(jose.ES256)},
+		{name: "ES384", setup: signWith(keyEC(jose.ES384, "k")), config: onlyAlgorithm(jose.ES384)},
+		{name: "ES512", setup: signWith(keyEC(jose.ES512, "k")), config: onlyAlgorithm(jose.ES512)},
+		{name: "EdDSA", setup: signWith(keyEd("k")), config: onlyAlgorithm(jose.EdDSA)},
 		{
 			name: "alg none", err: oidcclient.ErrIDTokenAlgorithm,
 			setup: func(op *fakeOP) {
@@ -162,7 +198,8 @@ func TestIDTokenAlgorithms(t *testing.T) {
 		},
 		{
 			name: "algorithm not advertised", err: oidcclient.ErrIDTokenAlgorithm,
-			setup: func(op *fakeOP) { op.metadata["id_token_signing_alg_values_supported"] = []string{"ES256"} },
+			setup:  func(op *fakeOP) { op.metadata["id_token_signing_alg_values_supported"] = []string{"ES256"} },
+			config: func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.RS256, oidcclient.ES256} },
 		},
 		{
 			name: "algorithm not configured", err: oidcclient.ErrIDTokenAlgorithm,
@@ -311,7 +348,7 @@ func TestIDTokenKeySelection(t *testing.T) {
 		{name: "JWK alg differs from header alg", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) {
 			op.jwks = []jose.JSONWebKey{keyRSA(jose.RS384, "rsa-1").jwk()}
 		}},
-		{name: "JWK declaring an alg its key cannot verify", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) {
+		{name: "JWK declaring an alg its key cannot verify", err: oidcclient.ErrUnknownSigningKey, config: everyAlgorithm, setup: func(op *fakeOP) {
 			op.signer = keyEC(jose.ES256, "rsa-1")
 			k := keyRSA(jose.RS256, "rsa-1").jwk()
 			k.Algorithm = string(jose.ES256)
@@ -320,11 +357,11 @@ func TestIDTokenKeySelection(t *testing.T) {
 		{name: "key type does not fit the alg", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) {
 			op.jwks = []jose.JSONWebKey{keyEC(jose.ES256, "rsa-1").bareJWK()}
 		}},
-		{name: "curve does not fit the alg", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) {
+		{name: "curve does not fit the alg", err: oidcclient.ErrUnknownSigningKey, config: everyAlgorithm, setup: func(op *fakeOP) {
 			op.signer = keyEC(jose.ES384, "ec")
 			op.jwks = []jose.JSONWebKey{keyEC(jose.ES256, "ec").bareJWK()}
 		}},
-		{name: "alg-less RSA key is RS256 only", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) {
+		{name: "alg-less RSA key is RS256 only", err: oidcclient.ErrUnknownSigningKey, config: everyAlgorithm, setup: func(op *fakeOP) {
 			op.signer = keyRSA(jose.PS256, "rsa-1")
 			op.jwks = []jose.JSONWebKey{op.signer.bareJWK()}
 		}},
@@ -354,7 +391,7 @@ func TestIDTokenKeySelection(t *testing.T) {
 				op.jwks = []jose.JSONWebKey{op.signer.bareJWK()}
 			},
 		},
-		{name: "alg-less EC key bound by its curve", setup: func(op *fakeOP) {
+		{name: "alg-less EC key bound by its curve", config: everyAlgorithm, setup: func(op *fakeOP) {
 			op.signer = keyEC(jose.ES384, "ec")
 			op.jwks = []jose.JSONWebKey{op.signer.bareJWK()}
 		}},
@@ -685,9 +722,9 @@ func TestIDTokenAccessTokenHash(t *testing.T) {
 			op.claimsHook = func(_ *grant, claims map[string]any) { claims["at_hash"] = leftHalfHash(jose.RS256, testAccessToken) }
 			op.accessToken = "attacker-access-token"
 		}},
-		{name: "ES384 uses SHA-384", setup: signWith(keyEC(jose.ES384, "k"))},
-		{name: "EdDSA uses SHA-512", setup: signWith(keyEd("k"))},
-		{name: "EdDSA with a SHA-256 at_hash", err: oidcclient.ErrAccessTokenHash, setup: func(op *fakeOP) {
+		{name: "ES384 uses SHA-384", setup: signWith(keyEC(jose.ES384, "k")), config: onlyAlgorithm(jose.ES384)},
+		{name: "EdDSA uses SHA-512", setup: signWith(keyEd("k")), config: onlyAlgorithm(jose.EdDSA)},
+		{name: "EdDSA with a SHA-256 at_hash", err: oidcclient.ErrAccessTokenHash, config: onlyAlgorithm(jose.EdDSA), setup: func(op *fakeOP) {
 			signWith(keyEd("k"))(op)
 			op.claimsHook = func(_ *grant, claims map[string]any) { claims["at_hash"] = leftHalfHash(jose.RS256, testAccessToken) }
 		}},

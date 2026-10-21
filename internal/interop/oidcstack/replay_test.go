@@ -216,20 +216,21 @@ func TestRefreshReuseRevokesTheClientsTokens(t *testing.T) {
 
 	id, err := o.login(t, c, oidcclient.AuthOptions{Prompt: []string{"consent"}})
 	require.NoError(t, err)
-	require.NotEmpty(t, id.Tokens.RefreshToken)
+	require.NotEmpty(t, id.Tokens.RefreshToken.Reveal())
 
 	o.clock.advance(time.Second)
 
-	rotated := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken)
+	rotated := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken.Reveal())
 	require.Equal(t, http.StatusOK, rotated.status, rotated.body)
 
 	newest := *id
-	newest.Tokens.AccessToken, _ = rotated.json["access_token"].(string)
+	accessToken, _ := rotated.json["access_token"].(string)
+	newest.Tokens.AccessToken = oidcclient.NewSecret(accessToken)
 
 	_, err = c.UserInfo(t.Context(), &newest)
 	require.NoError(t, err, "the rotated access token works")
 
-	reuse := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken)
+	reuse := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken.Reveal())
 	assert.True(t, reuse.isCode("invalid_grant"), reuse.body)
 
 	_, err = c.UserInfo(t.Context(), &newest)

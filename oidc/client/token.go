@@ -59,7 +59,7 @@ func (c *Client) exchange(ctx context.Context, code, verifier string) (Tokens, e
 	switch c.cfg.AuthMethod {
 	case AuthMethodClientSecretPost:
 		form.Set(paramClientID, c.cfg.ClientID)
-		form.Set(paramClientSecret, c.cfg.ClientSecret)
+		form.Set(paramClientSecret, c.cfg.ClientSecret.Reveal())
 	case AuthMethodNone:
 		form.Set(paramClientID, c.cfg.ClientID)
 	case AuthMethodClientSecretBasic:
@@ -76,7 +76,7 @@ func (c *Client) exchange(ctx context.Context, code, verifier string) (Tokens, e
 	if c.cfg.AuthMethod == AuthMethodClientSecretBasic {
 		// RFC 6749 §2.3.1: identifier and secret are form-urlencoded
 		// (Appendix B) before the Basic encoding.
-		req.SetBasicAuth(url.QueryEscape(c.cfg.ClientID), url.QueryEscape(c.cfg.ClientSecret))
+		req.SetBasicAuth(url.QueryEscape(c.cfg.ClientID), url.QueryEscape(c.cfg.ClientSecret.Reveal()))
 	}
 
 	resp, err := c.send.Do(req) //nolint:gosec // G107/G704: endpoint from validated metadata, outbound policy enforced
@@ -153,10 +153,10 @@ func parseTokenResponse(body []byte, now time.Time) (Tokens, error) {
 	}
 
 	tokens := Tokens{
-		AccessToken:  r.AccessToken,
+		AccessToken:  NewSecret(r.AccessToken),
 		TokenType:    r.TokenType,
-		RefreshToken: r.RefreshToken,
-		IDToken:      r.IDToken,
+		RefreshToken: NewSecret(r.RefreshToken),
+		IDToken:      NewSecret(r.IDToken),
 	}
 
 	seconds, present, err := parseExpiresIn(r.ExpiresIn)

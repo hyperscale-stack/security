@@ -94,7 +94,7 @@ func TestConcurrentCallbacksAcrossReplicas(t *testing.T) {
 		store := clientmemory.New()
 		starting := o.rp(t, o.basic(), func(cfg *oidcclient.Config) { cfg.Store = store })
 		completing := o.rp(t, o.basic(), func(cfg *oidcclient.Config) {
-			cfg.Store, cfg.TransactionKeys = store, [][]byte{[]byte("another replica's transaction key!!")}
+			cfg.Store, cfg.TransactionKeys = store, []oidcclient.Secret{oidcclient.NewSecret("another replica's transaction key!!")}
 		})
 
 		ar, loc := o.begin(t, starting, oidcclient.AuthOptions{})

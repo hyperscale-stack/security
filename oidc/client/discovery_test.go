@@ -336,20 +336,37 @@ func TestCapabilities(t *testing.T) {
 		"confidential, no pkce": {metadata: func(m map[string]any) { delete(m, "code_challenge_methods_supported") }, ok: true},
 		"public client, no pkce": {
 			metadata: func(m map[string]any) { delete(m, "code_challenge_methods_supported") },
-			config:   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
 		},
 		"public client, plain only": {
 			metadata: func(m map[string]any) { m["code_challenge_methods_supported"] = []string{"plain"} },
-			config:   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
 		},
 		"public client with S256": {
-			config: func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
-			ok:     true,
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
+			ok: true,
 		},
 		"only HMAC advertised": {metadata: func(m map[string]any) { m["id_token_signing_alg_values_supported"] = []string{"HS256", "none"} }},
 		"no common algorithm": {
 			metadata: func(m map[string]any) { m["id_token_signing_alg_values_supported"] = []string{"RS256"} },
 			config:   func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} },
+		},
+		"ES256 only, RS256 by default": {
+			metadata: func(m map[string]any) { m["id_token_signing_alg_values_supported"] = []string{"ES256"} },
+		},
+		"ES256 only, ES256 configured": {
+			metadata: func(m map[string]any) { m["id_token_signing_alg_values_supported"] = []string{"ES256"} },
+			config:   func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} },
+			ok:       true,
 		},
 		"iss parameter flag wrong type": {metadata: func(m map[string]any) { m["authorization_response_iss_parameter_supported"] = "true" }},
 		"response modes wrong type":     {metadata: func(m map[string]any) { m["response_modes_supported"] = "query" }},

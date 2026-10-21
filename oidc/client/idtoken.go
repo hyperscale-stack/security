@@ -69,7 +69,7 @@ type verifiedTimes struct {
 
 // verifyLogin validates the ID Token of tokens and builds the Identity.
 func (c *Client) verifyLogin(ctx context.Context, tokens Tokens, tx *Transaction, nonce string) (*Identity, error) {
-	alg, payload, err := c.verifyIDToken(ctx, tokens.IDToken)
+	alg, payload, err := c.verifyIDToken(ctx, tokens.IDToken.Reveal())
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (c *Client) verifyLogin(ctx context.Context, tokens Tokens, tx *Transaction
 		return nil, err
 	}
 
-	if claims.ATHash != nil && subtle.ConstantTimeCompare([]byte(*claims.ATHash), []byte(accessTokenHash(alg, tokens.AccessToken))) != 1 {
+	if claims.ATHash != nil && subtle.ConstantTimeCompare([]byte(*claims.ATHash), []byte(accessTokenHash(alg, tokens.AccessToken.Reveal()))) != 1 {
 		return nil, ErrAccessTokenHash
 	}
 
@@ -231,7 +231,7 @@ func (c *Client) verifySignature(ctx context.Context, jws *jose.JSONWebSignature
 		return nil, err
 	}
 
-	payload, outcome := verifyWith(jws, candidates(keys, kid, alg, c.algs))
+	payload, outcome := verifyWith(jws, alg, candidates(keys, kid, alg, c.algs))
 
 	switch {
 	case outcome == verified:
@@ -246,7 +246,7 @@ func (c *Client) verifySignature(ctx context.Context, jws *jose.JSONWebSignature
 		return nil, err
 	}
 
-	payload, outcome = verifyWith(jws, candidates(c.keys.snapshot(), kid, alg, c.algs))
+	payload, outcome = verifyWith(jws, alg, candidates(c.keys.snapshot(), kid, alg, c.algs))
 
 	switch outcome {
 	case verified:
@@ -259,7 +259,8 @@ func (c *Client) verifySignature(ctx context.Context, jws *jose.JSONWebSignature
 	return nil, ErrUnknownSigningKey
 }
 
-func verifyWith(jws *jose.JSONWebSignature, keys []verificationKey) ([]byte, verification) {
+// verifyWith verifies jws, signed with alg, with the single key of keys.
+func verifyWith(jws *jose.JSONWebSignature, alg Algorithm, keys []verificationKey) ([]byte, verification) {
 	switch len(keys) {
 	case 0:
 		return nil, noKey
@@ -268,7 +269,7 @@ func verifyWith(jws *jose.JSONWebSignature, keys []verificationKey) ([]byte, ver
 		return nil, ambiguousKey
 	}
 
-	payload, err := jws.Verify(keys[0].key)
+	payload, err := jws.Verify(keys[0].verifier(alg))
 	if err != nil {
 		return nil, badSignature
 	}

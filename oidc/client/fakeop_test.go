@@ -42,14 +42,27 @@ var testNow = time.Unix(1_800_000_000, 0).UTC()
 // Clients (Config.TransactionKeys).
 var testTransactionKey = []byte("0123456789abcdef0123456789abcdef")
 
+// secretKeys returns keys as Config.TransactionKeys.
+func secretKeys(keys ...[]byte) []oidcclient.Secret {
+	out := make([]oidcclient.Secret, len(keys))
+	for i, key := range keys {
+		out[i] = oidcclient.NewSecret(string(key))
+	}
+
+	return out
+}
+
 const (
 	testClientID     = "client-1"
 	testClientSecret = "s3cr3t-with-enough-entropy-for-hs256"
 	testConnection   = "acme"
 	testCallbackPath = "/oidc/acme/callback"
 	testRedirectURL  = "https://rp.example.com" + testCallbackPath
-	testSubject      = "248289761001"
-	testAccessToken  = "at-1"
+	// testLocalRedirectURL is a plain-http loopback redirect URI, the only
+	// kind Config.InsecureCookies accepts.
+	testLocalRedirectURL = "http://localhost" + testCallbackPath
+	testSubject          = "248289761001"
+	testAccessToken      = "at-1"
 )
 
 // testClock is a settable clock shared by a fake OP and its clients.
@@ -692,12 +705,12 @@ func (op *fakeOP) config(mutators ...func(*oidcclient.Config)) oidcclient.Config
 		ConnectionID:    testConnection,
 		Issuer:          op.issuer,
 		ClientID:        testClientID,
-		ClientSecret:    testClientSecret,
+		ClientSecret:    oidcclient.NewSecret(testClientSecret),
 		AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
 		RedirectURL:     testRedirectURL,
 		Scopes:          []string{"openid", "profile"},
 		Store:           memory.New(),
-		TransactionKeys: [][]byte{testTransactionKey},
+		TransactionKeys: secretKeys(testTransactionKey),
 		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: op.pool()},
 		Now:             op.clock.Now,
 	}

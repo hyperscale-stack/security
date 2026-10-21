@@ -57,7 +57,7 @@ func TestZitadelMaxAge(t *testing.T) {
 	maxAge := time.Minute
 	id, _, err := p.loginWith(t, rp, oidcclient.AuthOptions{MaxAge: &maxAge})
 	require.NoError(t, err)
-	assert.Contains(t, claimsOf(t, id.Tokens.IDToken), "auth_time")
+	assert.Contains(t, claimsOf(t, id.Tokens.IDToken.Reveal()), "auth_time")
 	assert.WithinDuration(t, time.Now(), id.AuthTime, time.Minute)
 }
 
@@ -79,6 +79,6 @@ func TestZitadelACRValues(t *testing.T) {
 
 	id, _, err = p.login(t, rp)
 	require.NoError(t, err)
-	assert.NotContains(t, claimsOf(t, id.Tokens.IDToken), "acr", "the provider emits no acr")
+	assert.NotContains(t, claimsOf(t, id.Tokens.IDToken.Reveal()), "acr", "the provider emits no acr")
 	assert.Empty(t, id.ACR)
 }

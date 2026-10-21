@@ -79,7 +79,8 @@ func (c *Client) String() string {
 func (c *Client) GoString() string { return c.String() }
 
 // Format implements fmt.Formatter like String, for every verb: without it,
-// fmt prints the unexported fields of a *Client, secrets included.
+// fmt prints the unexported fields of a *Client (its secrets are Secrets,
+// which print as an address there).
 func (c *Client) Format(f fmt.State, verb rune) { formatRedacted(f, verb, c) }
 
 // LogValue implements slog.LogValuer with the Client's configuration, its

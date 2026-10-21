@@ -16,14 +16,18 @@ import (
 // JWK Set cache policy.
 const (
 	// keySetTTL is the age after which the next use fetches the set again:
-	// it bounds how long a key the provider withdrew stays accepted.
-	keySetTTL = time.Hour
+	// it bounds how long a key the provider withdrew stays accepted while
+	// the JWK Set endpoint answers — the DefaultCacheTTL of the jwt
+	// module's remote key sets.
+	keySetTTL = 5 * time.Minute
 	// keySetMinRefresh is the minimum time between two fetch attempts: a
 	// stream of unknown kids — a hostile tenant-configured provider —
 	// cannot make the Client fetch more often.
 	keySetMinRefresh = 10 * time.Second
 	// keySetMaxStale is the age after which a cached set is no longer used
-	// while fetches fail: verification then fails closed.
+	// while fetches fail: verification then fails closed. Until then, an
+	// attacker holding a key the provider withdrew and able to make the
+	// fetches fail keeps it trusted; rebuilding the Client drops it.
 	keySetMaxStale = 24 * time.Hour
 )
 

@@ -594,12 +594,12 @@ func (o *op) config(c connection, mutators ...func(*oidcclient.Config)) oidcclie
 		ConnectionID:    c.name,
 		Issuer:          c.issuer,
 		ClientID:        c.clientID,
-		ClientSecret:    c.secret,
+		ClientSecret:    oidcclient.NewSecret(c.secret),
 		AuthMethod:      c.method,
 		RedirectURL:     callback(c.name),
 		Scopes:          []string{"openid", "profile", "email"},
 		Store:           clientmemory.New(),
-		TransactionKeys: [][]byte{transactionKey},
+		TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(transactionKey))},
 		Outbound:        outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: o.pool(), Timeout: 2 * time.Second},
 		Now:             o.clock.now,
 	}
@@ -654,7 +654,7 @@ func redirected(t *testing.T, resp *http.Response) *url.URL {
 
 // callbackOf is the callback the user agent delivers for the response at
 // loc, presenting binding.
-func callbackOf(loc *url.URL, binding string) oidcclient.Callback {
+func callbackOf(loc *url.URL, binding oidcclient.Secret) oidcclient.Callback {
 	return oidcclient.Callback{Mode: oidcclient.ResponseModeQuery, URL: loc, Params: loc.Query(), Binding: binding}
 }
 

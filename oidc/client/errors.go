@@ -71,8 +71,10 @@ var (
 	// ErrTransactionExpired reports a transaction past its expiry.
 	ErrTransactionExpired = fmt.Errorf("oidcclient: login transaction expired: %w", security.ErrInvalidCredentials)
 	// ErrIssuerParameter reports an authorization response whose RFC 9207
-	// iss parameter is missing while the provider advertises it, or does
-	// not equal the provider's issuer.
+	// iss parameter (§2.4) is missing while the provider advertises it or
+	// Config.RequireIssParameter is set, does not equal the provider's
+	// issuer, or comes from a provider that does not advertise it without
+	// Config.RequireIssParameter.
 	ErrIssuerParameter = fmt.Errorf("oidcclient: authorization response issuer mismatch: %w", security.ErrInvalidCredentials)
 	// ErrAuthorizationFailed is matched by every *AuthorizationError: the
 	// provider answered the authorization request with an error.
@@ -97,8 +99,10 @@ var (
 	// x5u member (refused before the token is parsed).
 	ErrIDTokenMalformed = idTokenError("malformed")
 	// ErrIDTokenAlgorithm reports a signature algorithm outside the
-	// effective allow-list ("none" and HMAC algorithms are never allowed).
-	ErrIDTokenAlgorithm = idTokenError("algorithm not allowed")
+	// effective allow-list ("none" and HMAC algorithms are never allowed):
+	// Config.Algorithms, RS256 by default — a provider signing with another
+	// algorithm needs it set to the algorithm registered for the client.
+	ErrIDTokenAlgorithm = idTokenError("algorithm not allowed (Config.Algorithms)")
 	// ErrIDTokenType reports a JOSE header naming another kind of token
 	// (typ, e.g. an RFC 9068 at+jwt access token), a nested JWT (cty) or an
 	// extension (crit, b64).
