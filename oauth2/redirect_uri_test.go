@@ -46,7 +46,7 @@ func TestValidateRedirectURI(t *testing.T) {
 	}
 
 	for _, uri := range valid {
-		assert.NoError(t, oauth2.ValidateRedirectURI(uri), uri)
+		assert.NoError(t, oauth2.ValidateRedirectURI(oauth2.Profile20, uri), uri)
 	}
 
 	const (
@@ -111,7 +111,7 @@ func TestValidateRedirectURI(t *testing.T) {
 	}
 
 	for _, tc := range invalid {
-		err := oauth2.ValidateRedirectURI(tc.uri)
+		err := oauth2.ValidateRedirectURI(oauth2.Profile20, tc.uri)
 		assert.ErrorIs(t, err, oauth2.ErrInvalidRedirectURI, tc.uri)
 		assert.ErrorContains(t, err, tc.reason, tc.uri)
 	}

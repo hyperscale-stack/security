@@ -109,7 +109,7 @@ func FuzzAuthorizeRedirectTarget(f *testing.F) {
 	want := url.Values{paramCode: {"C"}, paramState: {"S"}, "iss": {"I"}}
 
 	f.Fuzz(func(t *testing.T, uri string) {
-		if ValidateRedirectURI(uri) != nil {
+		if ValidateRedirectURI(Profile20, uri) != nil {
 			return
 		}
 

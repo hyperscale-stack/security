@@ -5,9 +5,10 @@
 #
 # Runs the Tales end-to-end suite of the OpenID Connect examples: builds
 # examples/oidc-provider and examples/oidc-client, starts them on the
-# loopback interface — the provider at http://127.0.0.1:8083, the relying
-# party at http://localhost:9000, two sites for the browser — and runs the
-# scenarios. Opt-in, never part of `make test` or CI.
+# loopback interface — the provider at http://localhost:8083, the relying
+# party at http://127.0.0.1:9000, two sites for the browser; the redirect
+# URI is a loopback IP literal, the only http one the provider's
+# Profile20BCP accepts (RFC 9700 §2.6) — and runs the scenarios. Opt-in, never part of `make test` or CI.
 #
 # Prerequisites: Go, curl, openssl, Chrome (or CHROME_PATH) and Tales
 # v0.1.0-rc.23:
@@ -25,8 +26,8 @@ suite=$root/e2e/oidc
 out=$root/build/e2e-oidc
 op_port=${OIDC_E2E_OP_PORT:-8083}
 rp_port=${OIDC_E2E_RP_PORT:-9000}
-issuer=http://127.0.0.1:$op_port
-rp_url=http://localhost:$rp_port
+issuer=http://localhost:$op_port
+rp_url=http://127.0.0.1:$rp_port
 
 for tool in go curl openssl tales; do
 	command -v "$tool" >/dev/null 2>&1 || {
@@ -68,13 +69,13 @@ wait_for() {
 
 # start launches fresh servers: in-memory state, new keys.
 start() {
-	OIDC_PROVIDER_ISSUER=$issuer OIDC_PROVIDER_ADDR=127.0.0.1:$op_port \
+	OIDC_PROVIDER_ISSUER=$issuer OIDC_PROVIDER_ADDR=localhost:$op_port \
 		OIDC_PROVIDER_REDIRECT_URI=$rp_url/oidc/demo/callback \
 		"$out/bin/oidc-provider" >>"$out/oidc-provider.log" 2>&1 &
 	op_pid=$!
 	wait_for "$issuer/.well-known/openid-configuration"
 
-	BASE_URL=$rp_url ADDR=localhost:$rp_port OIDC_DEV_ALLOW_LOOPBACK=1 \
+	BASE_URL=$rp_url ADDR=127.0.0.1:$rp_port OIDC_DEV_ALLOW_LOOPBACK=1 \
 		OIDC_CONNECTIONS=demo OIDC_DEMO_ISSUER=$issuer \
 		OIDC_DEMO_CLIENT_ID=demo-rp OIDC_DEMO_CLIENT_SECRET=demo-rp-secret \
 		OIDC_TRANSACTION_KEYS=$(openssl rand -hex 32) \

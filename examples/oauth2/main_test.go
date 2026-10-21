@@ -106,7 +106,7 @@ func TestExampleOAuth2AuthorizationCodeFlow(t *testing.T) {
 	authz := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {demoClientID},
-		"redirect_uri":          {"http://localhost:1337/callback"},
+		"redirect_uri":          {"http://127.0.0.1:1337/callback"},
 		"scope":                 {"api:read"},
 		"state":                 {"demo-state"},
 		"code_challenge":        {pkceChallenge},
@@ -139,7 +139,7 @@ func TestExampleOAuth2AuthorizationCodeFlow(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
-		"redirect_uri":  {"http://localhost:1337/callback"},
+		"redirect_uri":  {"http://127.0.0.1:1337/callback"},
 		"code_verifier": {pkceVerifier},
 	}
 
@@ -212,7 +212,7 @@ func TestExampleConsentIsProtected(t *testing.T) {
 	authz := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {demoClientID},
-		"redirect_uri":          {"http://localhost:1337/callback"},
+		"redirect_uri":          {"http://127.0.0.1:1337/callback"},
 		"scope":                 {"api:read"},
 		"state":                 {"demo-state"},
 		"code_challenge":        {pkceChallenge},
@@ -285,7 +285,7 @@ func TestExampleConsentKeepsABodyPostedRequest(t *testing.T) {
 	authz := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {demoClientID},
-		"redirect_uri":          {"http://localhost:1337/callback"},
+		"redirect_uri":          {"http://127.0.0.1:1337/callback"},
 		"scope":                 {"api:read"},
 		"state":                 {"demo-state"},
 		"code_challenge":        {pkceChallenge},

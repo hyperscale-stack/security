@@ -144,9 +144,10 @@ client, the provider and `oauth2`): every mutant is detected.
 
 `e2e/oidc` is a Tales suite (opt-in, `make e2e-oidc`, never in CI) against
 the real example binaries: `examples/oidc-provider` at
-`http://127.0.0.1:8083` and `examples/oidc-client` at
-`http://localhost:9000` — two sites, so the browser applies SameSite to the
-relying party's cookies. `e2e/oidc/run.sh` builds and starts them, runs the
+`http://localhost:8083` and `examples/oidc-client` at
+`http://127.0.0.1:9000` — two sites, so the browser applies SameSite to the
+relying party's cookies; the redirect URI is a loopback IP literal, the
+only http one the provider's `Profile20BCP` accepts (RFC 9700 §2.6). `e2e/oidc/run.sh` builds and starts them, runs the
 provider scenarios (tag `provider`) in parallel against one pair of servers,
 then each relying-party and browser file on fresh servers.
 

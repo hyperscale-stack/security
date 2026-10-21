@@ -25,18 +25,34 @@ var ErrInvalidRedirectURI = errors.New("oauth2: invalid redirect URI")
 // 6749 §3.1).
 var reservedRedirectParameters = []string{paramCode, paramState, "iss", "error", "error_description", "error_uri"}
 
+// The URI schemes of the web (RFC 9110 §4.2), as url.Parse returns them:
+// lower-case.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // ValidateRedirectURI reports whether uri may be registered as a redirect
-// URI, wrapping [ErrInvalidRedirectURI] with the reason when it may not.
-// Call it when registering a client; [Server.AuthorizeHandler] applies it to
-// the registered URI a request resolves to as well. The rules:
+// URI of a server running profile p, wrapping [ErrInvalidRedirectURI] with
+// the reason when it may not. Call it, with the server's profile, when
+// registering a client; [Server.AuthorizeHandler] applies it to the
+// registered URI a request resolves to as well. The rules:
 //
 //   - an absolute URI (RFC 6749 §3.1.2: "MUST be an absolute URI", RFC 3986
 //     §4.3) made of RFC 3986 characters, its percent-encodings valid;
 //   - no fragment, not even an empty one (RFC 6749 §3.1.2: "MUST NOT include
 //     a fragment component");
 //   - for http and https, a host, no userinfo and, when present, a port
-//     within 1–65535 — TLS is not required (RFC 6749 §3.1.2.1 SHOULD;
-//     http://localhost serves development);
+//     within 1–65535;
+//   - under [Profile20BCP] and [Profile21Draft] — and any profile but
+//     [Profile20] — no http but the loopback IP literal redirect URIs of
+//     native apps, http://127.0.0.1 and http://[::1] with an optional port
+//     (RFC 9700 §2.6: "authorization servers MUST NOT allow redirection URIs
+//     that use the http scheme except for native clients that use loopback
+//     interface redirection as described in Section 7.3 of [RFC8252]";
+//     OAuth 2.1 §1.5): not localhost (RFC 8252 §8.3), nor another loopback
+//     address or spelling of these two. [Profile20] accepts any http host
+//     (RFC 6749 §3.1.2.1: TLS SHOULD be required);
 //   - for any other scheme — the private-use scheme of a native app — a
 //     scheme holding a "." (RFC 8252 §7.1: a reverse domain name; §8.4:
 //     "any private-use URI scheme that doesn't contain a period character
@@ -46,7 +62,7 @@ var reservedRedirectParameters = []string{paramCode, paramState, "iss", "error",
 //     §3.1.2), naming — split on "&" and ";" — none of the parameters the
 //     server adds: code, state, iss, error, error_description, error_uri
 //     (RFC 6749 §3.1: no parameter twice).
-func ValidateRedirectURI(uri string) error {
+func ValidateRedirectURI(p Profile, uri string) error {
 	if reason := redirectURISyntax(uri); reason != "" {
 		return fmt.Errorf("%w: %s", ErrInvalidRedirectURI, reason)
 	}
@@ -58,6 +74,14 @@ func ValidateRedirectURI(uri string) error {
 
 	if reason := redirectURIParts(u); reason != "" {
 		return fmt.Errorf("%w: %s", ErrInvalidRedirectURI, reason)
+	}
+
+	if u.Scheme == schemeHTTP && !p.allowsPlainHTTPRedirects() {
+		// The loopback IP literal redirect URIs whose port a request may
+		// change (loopbackRedirect): one definition for both rules.
+		if _, _, ok := loopbackParts(uri); !ok {
+			return fmt.Errorf("%w: http outside a loopback IP literal (RFC 9700 §2.6)", ErrInvalidRedirectURI)
+		}
 	}
 
 	return nil
@@ -95,7 +119,7 @@ func redirectURIParts(u *url.URL) string {
 	switch u.Scheme {
 	case "":
 		return "not an absolute URI"
-	case "http", "https":
+	case schemeHTTP, schemeHTTPS:
 		// Hostname, not Host: "http://:80/cb" has an authority, no host
 		// (RFC 9110 §4.2.1: such a URI MUST be rejected as invalid).
 		if u.Hostname() == "" {
@@ -161,7 +185,7 @@ var errUnregisteredRedirectURI = errors.New("oauth2: missing or unregistered red
 // port (RFC 8252 §7.3), or the sole registered URI when the request omitted
 // the parameter. The registered URI it rests on must pass
 // [ValidateRedirectURI]: an invalid one is never redirected to.
-func resolveRedirectURI(client Client, requested string) (string, error) {
+func resolveRedirectURI(p Profile, client Client, requested string) (string, error) {
 	registered := client.RedirectURIs()
 
 	var used, resolved string
@@ -184,7 +208,7 @@ func resolveRedirectURI(client Client, requested string) (string, error) {
 		used, resolved = registered[i], requested
 	}
 
-	if err := ValidateRedirectURI(used); err != nil {
+	if err := ValidateRedirectURI(p, used); err != nil {
 		return "", err
 	}
 

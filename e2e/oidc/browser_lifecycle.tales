@@ -1,7 +1,7 @@
 version = 1
 
 # The two examples through a real browser: the relying party at
-# http://localhost:9000, the provider at http://127.0.0.1:8083 — two sites,
+# http://127.0.0.1:9000, the provider at http://localhost:8083 — two sites,
 # so the browser applies SameSite to the relying party's binding cookie
 # when the provider sends it back (a cross-site top-level GET, which Lax
 # allows). One ordered scenario on fresh servers (e2e/oidc/run.sh).

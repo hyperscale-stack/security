@@ -59,9 +59,10 @@ type Client interface {
 	// Type reports whether the client is confidential or public.
 	Type() ClientType
 	// RedirectURIs lists the redirect URIs registered by the client — each
-	// one valid for [ValidateRedirectURI], which the authorization endpoint
-	// applies to the URI a request resolves to (an invalid one is answered
-	// with a bare 400, never redirected to). A request's redirect_uri MUST
+	// one valid for [ValidateRedirectURI] under the server's [Profile] (no
+	// http but http://127.0.0.1 and http://[::1] outside [Profile20]), which
+	// the authorization endpoint applies to the URI a request resolves to (an
+	// invalid one is answered with a bare 400, never redirected to). A request's redirect_uri MUST
 	// match one exactly (RFC 6749 §3.1.2.3, RFC 9700 §2.1), but for the port
 	// of a loopback IP redirect URI (http://127.0.0.1 or http://[::1], RFC
 	// 8252 §7.3), which the request may set freely.

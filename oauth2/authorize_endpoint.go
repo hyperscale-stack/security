@@ -314,7 +314,9 @@ type AuthorizeConfig struct {
 //
 // The redirect URI is a registered one, exactly matched (RFC 6749
 // §3.1.2.3) but for the port of a loopback IP redirect URI (RFC 8252 §7.3),
-// and valid for [ValidateRedirectURI]. Responses keep its query as
+// and valid for [ValidateRedirectURI] under the server's profile — under
+// [Profile20BCP] and [Profile21Draft], no http but a loopback IP literal
+// (RFC 9700 §2.6). Responses keep its query as
 // registered, byte for byte (RFC 6749 §3.1.2).
 //
 // Errors that occur before the redirect URI is trusted (a client unknown
@@ -427,7 +429,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 		return
 	}
 
-	redirectURI, err := resolveRedirectURI(client, params.Get(paramRedirectURI))
+	redirectURI, err := resolveRedirectURI(s.cfg.Profile, client, params.Get(paramRedirectURI))
 	if err != nil {
 		s.refuseRedirectURI(w, r, err)
 

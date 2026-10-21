@@ -15,15 +15,15 @@
 //
 //	curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
 //	    -d 'grant_type=client_credentials&scope=api:read' \
-//	    http://localhost:1337/oauth2/token
+//	    http://127.0.0.1:1337/oauth2/token
 //
 // Probe — call the protected resource with the issued token:
 //
 //	TOKEN=...  # from the previous response
-//	curl -i -H "Authorization: Bearer $TOKEN" http://localhost:1337/protected
+//	curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:1337/protected
 //
 // Probe — the authorization-code flow is browser-driven: open
-// http://localhost:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://localhost:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
+// http://127.0.0.1:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://127.0.0.1:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
 // then approve — the browser lands on /callback with the code.
 package main
 
@@ -116,12 +116,15 @@ func buildServer() (http.Handler, error) {
 
 	// Seed a demo confidential client. The redirect URI points back at this
 	// same binary so the authorization-code flow is observable end to end.
+	// Under Profile20BCP an http redirect URI must be a loopback IP literal
+	// (RFC 9700 §2.6, RFC 8252 §7.3) — never localhost: register https ones
+	// in production.
 	clients := &staticClientStore{clients: map[string]oauth2.Client{
 		demoClientID: &oauth2.DefaultClient{
 			IDValue:           demoClientID,
 			Secret:            demoClientSecret,
 			TypeValue:         oauth2.ClientConfidential,
-			RedirectURIValues: []string{"http://localhost:1337/callback"},
+			RedirectURIValues: []string{"http://127.0.0.1:1337/callback"},
 			// A client may use only the grant types and request only the
 			// scopes it declares: an empty list allows none.
 			GrantTypeValues: []string{
@@ -148,7 +151,7 @@ func buildServer() (http.Handler, error) {
 		Profile:        oauth2.Profile20BCP,
 		Storage:        store,
 		ClientStore:    clients,
-		IssuerResolver: oauth2.StaticIssuer("http://localhost:1337", "api"),
+		IssuerResolver: oauth2.StaticIssuer("http://127.0.0.1:1337", "api"),
 		Grants: []oauth2.Grant{
 			grant.NewAuthorizationCode(gcfg),
 			grant.NewClientCredentials(gcfg),
