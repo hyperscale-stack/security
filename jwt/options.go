@@ -90,8 +90,10 @@ func WithClockSkew(d time.Duration) Option {
 // DefaultMaxTokenSize is the largest token, in bytes of its compact
 // serialization, a [Verifier] and [VerifySignature] accept by default:
 // 16 KiB. A token over the bound is refused with [ErrMalformedToken]
-// before anything is decoded — without it, a header of small members made
-// go-jose allocate about 100 times the token's size before any check.
+// before anything is decoded. The JOSE header has its own bound, 4 KiB
+// decoded, whatever the token bound: go-jose decodes it into maps — 70 to
+// 260 times its size — before any check, which caps the cost of a token
+// nobody signed at about 1 MiB and 1 ms.
 //
 // The bound holds the largest tokens in common use — an Entra ID token
 // carrying its maximum of 200 group IDs is 11–13 KB, Keycloak tokens with
@@ -103,8 +105,9 @@ const DefaultMaxTokenSize = 16 << 10
 
 // WithMaxTokenSize sets the largest token, in bytes of its compact
 // serialization, a [Verifier] parses (default [DefaultMaxTokenSize]); a
-// longer token is refused with [ErrMalformedToken] before any decoding.
-// Signers ignore it. n < 1 panics.
+// longer token is refused with [ErrMalformedToken] before any decoding. A
+// JOSE header over 4 KiB decoded is refused whatever n. Signers ignore it.
+// n < 1 panics.
 func WithMaxTokenSize(n int) Option {
 	if n < 1 {
 		panic("jwtsec.WithMaxTokenSize: the bound must be positive")

@@ -13,14 +13,14 @@
 //     explicit opt-in via WithAllowedAlgorithms, to avoid key confusion. An
 //     algorithm outside the list is refused with ErrAlgorithmNotAllowed.
 //   - Parsing is bounded and strict: a token over DefaultMaxTokenSize
-//     (16 KiB, WithMaxTokenSize) is refused before any decoding; only the
-//     canonical compact serialization is accepted (unpadded base64url, no
-//     whitespace, zero pad bits); the header is strict JSON and may not use
-//     the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797) nor the jwk,
-//     x5c, jku or x5u members, refused before go-jose parses the header —
-//     a local policy: keys come from the configured key set only (RFC 9068
-//     §4, RFC 8725 §3.10); values taken from a token are clipped in errors
-//     and spans.
+//     (16 KiB, WithMaxTokenSize) or a JOSE header over 4 KiB decoded is
+//     refused before any decoding; only the canonical compact serialization
+//     is accepted (unpadded base64url, no whitespace, zero pad bits); the
+//     header is strict JSON and may not use the crit or b64 extensions (RFC
+//     7515 §4.1.11, RFC 7797) nor the jwk, x5c, jku or x5u members, refused
+//     before go-jose parses the header — a local policy: keys come from the
+//     configured key set only (RFC 9068 §4, RFC 8725 §3.10); values taken
+//     from a token are clipped in errors and spans.
 //   - Claims are decoded case-sensitively (RFC 7519 §7.3, §10.1.1): a claims
 //     set whose member names repeat — exactly, through an escape, or under
 //     Unicode case folding — at any depth is refused, as are invalid UTF-8,

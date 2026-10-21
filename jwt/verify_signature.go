@@ -35,7 +35,8 @@ type VerifiedToken struct {
 // set, equals the token's alg (RFC 8725 §3.1: one key, one algorithm).
 // The token is parsed under the rules of [Verifier]: at most
 // [DefaultMaxTokenSize] bytes of canonical base64url, a strict JSON header
-// without the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797).
+// of at most 4 KiB without the crit or b64 extensions (RFC 7515 §4.1.11,
+// RFC 7797).
 //
 // IT VALIDATES NO CLAIM — not exp, nbf, iat, iss nor aud — and returns the
 // payload undecoded. It is the building block of a caller that validates

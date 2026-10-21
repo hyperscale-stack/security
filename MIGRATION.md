@@ -2524,3 +2524,20 @@ To migrate:
    `Subject()`.
 3. If clients can choose their ID, keep it out of the user-subject
    namespace (a prefix, a separate ID space; RFC 9700 §4.15.1).
+
+### `jwt`: JOSE headers are bounded to 4 KiB
+
+A token's header, not its payload, drives the cost of a token nobody
+signed: go-jose decodes it into maps before any check. The header now has
+its own bound, independent of `WithMaxTokenSize`.
+
+| | Before | After |
+| --- | --- | --- |
+| JOSE header that decodes to more than 4096 bytes | parsed (within the token bound) | `ErrMalformedToken`, before decoding |
+| `WithMaxTokenSize(n)` | bounded the whole pre-authentication cost | bounds the token; the header bound applies whatever `n` |
+| headers in common use (`alg`, `kid`, `typ`, `x5t`: a few hundred bytes) | accepted | accepted |
+
+To migrate:
+
+1. Nothing for tokens of common issuers. An issuer whose headers exceed
+   4 KiB — custom header members — must move that data to the claims.

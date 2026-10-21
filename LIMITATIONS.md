@@ -384,7 +384,8 @@ PKCE. Not supported, and refused where a provider could select them:
   `NewStaticJWKS` have no upper bound.
 - **Size bound** — tokens over 16 KiB are refused by default
   (`WithMaxTokenSize` on a `Verifier`); `VerifySignature` always applies
-  the default bound.
+  the default bound. A JOSE header over 4 KiB decoded is refused whatever
+  the token bound, with no option.
 
 ## Outbound requests
 

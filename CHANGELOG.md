@@ -1226,6 +1226,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- `jwt`: go-jose decodes a token's JOSE header into maps — 70 to 260 times
+  its size — before it checks the algorithm, so the pre-authentication cost
+  of a hostile header grew with the token bound: about 16 MB and 15 ms per
+  token under `WithMaxTokenSize(64 KiB)`, about 125 MB under 1 MiB. The
+  decoded header is now bounded to 4 KiB, checked on its encoded length
+  before anything decodes it, by `Verifier`, `VerifySignature` and
+  `BearerVerifier` alike: at most about 1 MiB and 1 ms per token, whatever
+  the token bound.
 - **go-jose v4.1.6** (GHSA-mgcc-cww5-fp2q, not yet in the Go vulnerability
   database): go-jose ≤ v4.1.5 parsed a JWS header's `jwk` member before any
   check and validated an embedded RSA private key at a cost cubic in the

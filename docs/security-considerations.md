@@ -141,8 +141,12 @@ protections.
   not-before check.
 - **Oversized and malformed tokens** — a token over
   `DefaultMaxTokenSize` (16 KiB, `WithMaxTokenSize`) is refused before any
-  decoding (go-jose decodes a header at about 100 times its size before
-  checking the algorithm); only the canonical compact serialization is
+  decoding, and so is a JOSE header that decodes to more than 4 KiB,
+  whatever the token bound: go-jose decodes the header into maps, 70 to 260
+  times its size depending on its shape, before checking the algorithm
+  (about 1 MiB and 1 ms at the bound, `BenchmarkVerifyHostileHeader`), and
+  the payload is only base64-decoded before the signature is verified;
+  only the canonical compact serialization is
   accepted (unpadded base64url, no whitespace, zero pad bits), with a strict
   JSON header that uses neither `crit` nor `b64` (RFC 7515 §4.1.11, RFC 7797
   §7: a JWT never uses `b64: false`). Values copied from a token into errors

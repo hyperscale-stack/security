@@ -356,11 +356,13 @@ func TestVerifyClipsHeaderValuesInErrorsAndSpans(t *testing.T) {
 	other, _ := genECDSA(t)
 	v := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
 	payload := fmt.Sprintf(`{"sub":"alice","exp":%d}`, in(time.Hour))
-	longKid := strings.Repeat("k", 10<<10)
-	longAlg := strings.Repeat("A", 5<<10)
-	// An unknown header member holding an 11 000-digit number: valid JSON,
+	// The values stay under the 4 KiB header bound, so that they reach the
+	// key lookup, the algorithm check and go-jose.
+	longKid := strings.Repeat("k", 3<<10)
+	longAlg := strings.Repeat("A", 3<<10)
+	// An unknown header member holding a 3 500-digit number: valid JSON,
 	// which go-jose refuses — it decodes unknown header values into float64.
-	longNumber := forge(t, jwtsec.ES256, other.Key, `{"alg":"ES256","kid":"ec-1","x":1`+strings.Repeat("0", 11_000)+`}`, payload)
+	longNumber := forge(t, jwtsec.ES256, other.Key, `{"alg":"ES256","kid":"ec-1","x":1`+strings.Repeat("0", 3_500)+`}`, payload)
 
 	var errKid, errAlg, errNumber, errNumberSig error
 
@@ -400,14 +402,15 @@ func TestVerifyClipsHeaderValuesInErrorsAndSpans(t *testing.T) {
 	}
 }
 
-// BenchmarkVerifyHostileHeader documents the pre-authentication cost of
-// the worst header within the default bound (JWT-02: ~1 MB cost ~100 MiB
-// before the bound).
+// BenchmarkVerifyHostileHeader documents the pre-authentication cost of a
+// hostile header of small members: up to the 4 KiB header bound (audit
+// I-13), then over it — refused before decoding, whatever the token bound
+// (JWT-02: ~1 MB cost ~100 MiB before any bound).
 func BenchmarkVerifyHostileHeader(b *testing.B) {
 	_, pub := genECDSA(b)
-	v := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}))
+	v := jwtsec.NewVerifier(jwtsec.NewStaticJWKS([]jwtsec.PublicKey{pub}), jwtsec.WithMaxTokenSize(1<<20))
 
-	for _, size := range []int{1 << 10, jwtsec.DefaultMaxTokenSize * 3 / 4, 1 << 20} {
+	for _, size := range []int{1 << 10, 4<<10 - 16, 64 << 10, 1 << 20} {
 		tok := hostileHeader(size)
 
 		b.Run(strconv.Itoa(len(tok)), func(b *testing.B) {
