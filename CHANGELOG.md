@@ -1062,6 +1062,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   RFC 9207 §2.4: "Clients SHOULD discard…"); a matching `iss` used to be
   accepted. Breaking for a provider that sends `iss` without advertising
   it: set `Config.RequireIssParameter` (see MIGRATION.md).
+- `oidc/client/storage/memory` is bounded by default: `New()` keeps at most
+  `memory.DefaultCapacity` (10 000) pending logins and refuses the next
+  with `memory.ErrFull`; it used to grow without bound unless built with
+  `memory.WithCapacity`, while login starts are unauthenticated (breaking
+  above 10 000 pending logins; see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in

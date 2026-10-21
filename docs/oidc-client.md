@@ -115,8 +115,9 @@ mux.HandleFunc("GET /oidc/acme/callback", func(w http.ResponseWriter, r *http.Re
 - Start logins on a user action from the application's own origin (a POST
   behind `http.CrossOriginProtection` or a CSRF token) and rate limit them:
   each start writes a transaction, and non-browser clients pass
-  `CrossOriginProtection`. With `storage/memory`, bound what a flood can
-  hold with `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
+  `CrossOriginProtection`. `storage/memory` keeps at most
+  `memory.DefaultCapacity` (10 000) pending logins, or the bound of
+  `memory.WithCapacity(n)` (a full store answers `memory.ErrFull`;
   `examples/oidc-client` maps it to 503 and rate-limits starts per client
   and per network — an IPv4 /24, an IPv6 /48 — so that one network cannot
   fill it). The capacity bounds memory, not availability: a flood from

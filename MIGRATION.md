@@ -3138,3 +3138,25 @@ To migrate:
    `RequireIssParameter: true` on every tenant connection — its own
    setting, never one the tenant chooses — to close the mix-up residual of
    RFC 9700 §4.4.2.2; it then works only with providers that send `iss`.
+
+### `oidc/client/storage/memory`: bounded by default
+
+Login starts are unauthenticated, and `memory.New()` kept every pending
+login until it expired: a flood of starts grew the store until the process
+ran out of memory, unless the application passed `memory.WithCapacity`. A
+store built without it now keeps at most `memory.DefaultCapacity`
+transactions.
+
+| `memory.New(…)` | Before | After |
+| --- | --- | --- |
+| without `WithCapacity` | unbounded | at most `DefaultCapacity` (10 000) live transactions; the next `Save` fails with `memory.ErrFull` after dropping the expired ones |
+| `WithCapacity(n)` | at most `n` | unchanged |
+
+To migrate:
+
+1. Nothing below 10 000 pending logins — about 16 login starts a second
+   over the default 10-minute `TransactionTTL`.
+2. Above, pass `memory.WithCapacity(n)` sized from the login rate and the
+   TTL (about 0.5 KB per transaction plus its `AppState`), map
+   `memory.ErrFull` to `503 Service Unavailable` (as `examples/oidc-client`
+   does), and rate-limit login starts — or use the SQL or Redis store.
