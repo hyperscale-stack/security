@@ -22,9 +22,6 @@ const (
 	// maxJWKSKeys bounds the number of keys of a JWK Set: a larger set is
 	// a failed fetch.
 	maxJWKSKeys = 100
-	// maxRSABits bounds the RSA keys of a remote set: it caps the
-	// verification cost a JWK Set chosen by a tenant can impose.
-	maxRSABits = 8192
 )
 
 // privateMembers are the JWK members that carry private or symmetric key
@@ -76,7 +73,8 @@ func parseJWKS(data []byte) ([]PublicKey, int, error) {
 // parseJWK returns the verification key raw describes, false when it is
 // unusable: private or symmetric material, a use other than sig or
 // key_ops without verify (RFC 7517 §4.2, §4.3), a key type or curve go-jose
-// does not parse, RSA outside 2048–8192 bits, an alg the key cannot verify
+// does not parse, RSA outside 2048–4096 bits (maxRSABits, whatever
+// jose.MaxRSAModulusBits), an alg the key cannot verify
 // (PublicKey.Validate). A key without alg gets the algorithm its curve
 // implies — EC, Ed25519 — and an RSA key without alg is marked for the
 // verifier to bind (see boundAlgorithm). A panic of the JWK parser on a

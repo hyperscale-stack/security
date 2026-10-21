@@ -67,8 +67,9 @@ type KeyRing struct {
 //   - a key without kid, or a kid used twice across both lists (RFC 7517
 //     §4.5, Core §10.1: the kid selects the key);
 //   - a key unfit for its algorithm (jwtsec PrivateKey.Validate and
-//     PublicKey.Validate: RSA under 2048 bits, another curve, an HMAC
-//     secret, a private key in Published);
+//     PublicKey.Validate: RSA under 2048 bits, an RSA signing key over 4096
+//     bits — go-jose ≥ v4.1.6 relying parties ignore it in the JWK Set —
+//     another curve, an HMAC secret, a private key in Published);
 //   - one key material under two entries — RFC 8725 §3.1: a key is used
 //     with exactly one algorithm.
 func (r KeyRing) Validate() error {

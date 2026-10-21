@@ -89,7 +89,7 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 
 	secret := []byte(strings.Repeat("s", 32))
 
-	// RSA moduli of 8200 and exactly 8192 bits (no private key needed:
+	// RSA moduli of 4104 and exactly 4096 bits (no private key needed:
 	// they never verify a token here).
 	rsaOfBits := func(kid string, bits uint) string {
 		n := new(big.Int).Lsh(big.NewInt(1), bits-1)
@@ -97,7 +97,7 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 
 		return `{"kty":"RSA","kid":"` + kid + `","alg":"RS256","use":"sig","n":"` + base64.RawURLEncoding.EncodeToString(n.Bytes()) + `","e":"AQAB"}`
 	}
-	bigRSA := rsaOfBits("big", 8200)
+	bigRSA := rsaOfBits("big", 4104)
 
 	rsaKid := func(kid, alg string, pub any) string {
 		return jwkOf(t, jose.JSONWebKey{Key: pub, KeyID: kid, Algorithm: alg, Use: "sig"})
@@ -123,8 +123,8 @@ func TestRemoteJWKSValidatesEachKey(t *testing.T) {
 			[]jwtsec.Algorithm{jwtsec.ES256, jwtsec.HS256}, []tokenCase{{jwtsec.HS256, secret, false}}},
 		{"RSA-1024", []string{rsaKid("x", "RS256", &rsa1024.PublicKey)}, "x", false, nil,
 			[]tokenCase{{jwtsec.RS256, rsa1024, false}}},
-		{"RSA over 8192 bits", []string{bigRSA}, "big", false, nil, nil},
-		{"RSA of exactly 8192 bits", []string{rsaOfBits("max", 8192)}, "max", true, nil, nil},
+		{"RSA over 4096 bits", []string{bigRSA}, "big", false, nil, nil},
+		{"RSA of exactly 4096 bits", []string{rsaOfBits("max", 4096)}, "max", true, nil, nil},
 		{"EC key declaring RS256", []string{rsaKid("x", "RS256", &p256.PublicKey)}, "x", false, nil,
 			[]tokenCase{{jwtsec.ES256, p256, false}}},
 		{"RSA key bound to RS256, token PS512", []string{rsaKid("x", "RS256", &rsa2048.PublicKey)}, "x", true, nil,
