@@ -240,8 +240,10 @@ keys by `kid` against a JWKS provider (static or remote).
   `IssuerResolver` must return a non-empty audience for JWT access tokens.
 - **Token strings are not unique** — an ECDSA signature has a second valid
   form (RFC 7518 §3.4 has no low-S rule; refusing it would refuse half of
-  the legitimate tokens): never key a cache, replay check or deny-list on
-  the token string — use `jti`.
+  the legitimate tokens, and normalising this package's own signatures
+  would not remove the twin anyone can compute): never key a cache, replay
+  check or deny-list on the token string — use `jti`, or accept only the
+  string the store holds (`WithActiveTokenCheck`).
 
 ## OAuth2
 

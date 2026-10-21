@@ -268,3 +268,28 @@ func TestVerifyCustomClaimsUnmarshal(t *testing.T) {
 	assert.Equal(t, "alice", got.Subject)
 	assert.Equal(t, "acme", got.Tenant)
 }
+
+// TestECDSASignatureTwinVerifies pins the documented limitation D-15: an
+// ECDSA signature (r, s) has a second valid form (r, n − s) — RFC 7518
+// §3.4 sets no low-S rule and other signers do not normalise — so a token
+// string is not unique: both forms verify, with the same claims and jti.
+// Never key a cache, replay check or deny-list on the token string.
+func TestECDSASignatureTwinVerifies(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	tok := accessToken(t, priv)
+	tv := jwtsec.BearerVerifier(rsVerifier(pub), nil)
+
+	v := rsVerifier(pub)
+
+	std, err := v.Verify(context.Background(), tok, nil)
+	require.NoError(t, err)
+
+	twin, err := v.Verify(context.Background(), ecdsaTwin(t, tok), nil)
+	require.NoError(t, err, "the twin verifies")
+	assert.Equal(t, std, twin, "same claims, same jti")
+
+	_, err = tv.Verify(context.Background(), ecdsaTwin(t, tok))
+	require.NoError(t, err)
+}

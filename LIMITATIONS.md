@@ -324,9 +324,12 @@ PKCE. Not supported, and refused where a provider could select them:
 ## JWT (`jwtsec`)
 
 - **Token strings are not unique** — an ECDSA signature has a second valid
-  form (s and n − s): the verifier accepts both, since refusing the "high"
-  one would refuse half of the legitimate tokens of other signers. Never key
-  a cache, replay check or deny-list on the token string; use `jti`.
+  form (s and n − s): the verifier accepts both, since RFC 7518 §3.4 sets no
+  low-S rule and refusing the "high" one would refuse half of the legitimate
+  tokens of other signers. Never key a cache, replay check or deny-list on
+  the token string; use `jti`. An `ActiveTokenCheck` looking tokens up in
+  the store accepts only the string the server issued, and so refuses the
+  twin.
 - **Untyped access tokens** — `BearerVerifier` accepts only access tokens
   typed `at+jwt` (RFC 9068 §4), or the type named by `WithAccessTokenType`.
   An authorization server that sends no `typ` cannot be served by it: wrap
