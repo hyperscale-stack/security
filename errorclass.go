@@ -18,6 +18,7 @@ import (
 //	class                                   HTTP  gRPC / Connect
 //	invalid_request                         400   InvalidArgument
 //	unavailable                             503   Unavailable
+//	too_many_attempts                       429   ResourceExhausted
 //	token_expired, token_not_found,
 //	client_secret_mismatch,
 //	invalid_credentials                     401   Unauthenticated
@@ -30,6 +31,8 @@ const (
 	ErrorClassInvalidRequest = "invalid_request"
 	// ErrorClassUnavailable is the class of [ErrUnavailable].
 	ErrorClassUnavailable = "unavailable"
+	// ErrorClassTooManyAttempts is the class of [ErrTooManyAttempts].
+	ErrorClassTooManyAttempts = "too_many_attempts"
 	// ErrorClassTokenExpired is the class of [ErrTokenExpired].
 	ErrorClassTokenExpired = "token_expired"
 	// ErrorClassTokenNotFound is the class of [ErrTokenNotFound].
@@ -61,6 +64,8 @@ const (
 //   - An unavailable dependency comes before any verdict on the credentials:
 //     joined with another authenticator's refusal, it must not tell the
 //     client to drop credentials that could be valid.
+//   - A throttled attempt comes next, for the same reason: its credentials
+//     were not checked, and the client must back off.
 //   - A verdict on the credentials comes before an absence of credentials
 //     or a bail-out, so one authenticator's refusal is never masked by
 //     another one's lack of support.
@@ -73,6 +78,7 @@ var errorClasses = []struct {
 }{
 	{ErrInvalidRequest, ErrorClassInvalidRequest},
 	{ErrUnavailable, ErrorClassUnavailable},
+	{ErrTooManyAttempts, ErrorClassTooManyAttempts},
 	{ErrTokenExpired, ErrorClassTokenExpired},
 	{ErrTokenNotFound, ErrorClassTokenNotFound},
 	{ErrClientSecretMismatch, ErrorClassClientSecretMismatch},

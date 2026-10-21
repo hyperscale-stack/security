@@ -43,9 +43,10 @@ type Engine interface {
 // an engine that accepts a cookie session authenticates requests an
 // attacker's page can trigger — protect state-changing endpoints reached
 // with a cookie session against CSRF, and prefer one engine per audience
-// (browser pages, APIs). Per-username throttling or lockout belongs in an
-// [Authenticator] wrapper: the Engine never returns the attempted
-// credentials.
+// (browser pages, APIs). Attempt limiting belongs in the [Authenticator],
+// which knows the claimed identity: an [AttemptLimiter] keyed on it and on
+// the client address ([ClientAddrFromContext]) — the Engine never returns
+// the attempted credentials.
 //
 // NewEngine panics if m or one of the extractors is nil: these are
 // programming errors that would otherwise surface as a nil dereference on
