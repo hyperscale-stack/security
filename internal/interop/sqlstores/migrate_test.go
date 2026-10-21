@@ -34,6 +34,12 @@ type sqlStore struct {
 	tables []string
 	// migrate runs the store's Migrate on db.
 	migrate func(ctx context.Context, db *sql.DB, e engine) error
+	// check runs the store's CheckDeployment on db.
+	check func(ctx context.Context, db *sql.DB, e engine) error
+	// schema is the store's Schema for e.
+	schema func(e engine) []string
+	// requirement is the store's ErrDeploymentRequirement.
+	requirement error
 	// use writes and reads a record, proving the tables serve the store.
 	use func(t *testing.T, db *sql.DB, e engine)
 }
@@ -51,7 +57,17 @@ var sqlStores = []sqlStore{
 
 			return s.Migrate(ctx)
 		},
-		use: useOAuth2,
+		check: func(ctx context.Context, db *sql.DB, e engine) error {
+			s, err := oauth2sql.New(db, oauth2Dialect(e))
+			if err != nil {
+				return err
+			}
+
+			return s.CheckDeployment(ctx)
+		},
+		schema:      func(e engine) []string { return oauth2sql.Schema(oauth2Dialect(e)) },
+		requirement: oauth2sql.ErrDeploymentRequirement,
+		use:         useOAuth2,
 	},
 	{
 		name:   "oidc",
@@ -65,7 +81,17 @@ var sqlStores = []sqlStore{
 
 			return s.Migrate(ctx)
 		},
-		use: useOIDC,
+		check: func(ctx context.Context, db *sql.DB, e engine) error {
+			s, err := oidcsql.New(db, oidcDialect(e))
+			if err != nil {
+				return err
+			}
+
+			return s.CheckDeployment(ctx)
+		},
+		schema:      func(e engine) []string { return oidcsql.Schema(oidcDialect(e)) },
+		requirement: oidcsql.ErrDeploymentRequirement,
+		use:         useOIDC,
 	},
 	{
 		name:   "saml",
@@ -79,7 +105,17 @@ var sqlStores = []sqlStore{
 
 			return s.Migrate(ctx)
 		},
-		use: useSAML,
+		check: func(ctx context.Context, db *sql.DB, e engine) error {
+			s, err := samlsql.New(db, samlDialect(e))
+			if err != nil {
+				return err
+			}
+
+			return s.CheckDeployment(ctx)
+		},
+		schema:      func(e engine) []string { return samlsql.Schema(samlDialect(e)) },
+		requirement: samlsql.ErrDeploymentRequirement,
+		use:         useSAML,
 	},
 }
 

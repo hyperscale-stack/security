@@ -5,6 +5,7 @@
 package sqlstore
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -41,6 +42,13 @@ type Dialect interface {
 	// bytes — a code or token hash, a token-family ID: the only columns
 	// the statements compare. It must compare them byte for byte.
 	keyType(length int) string
+	// tableOptions follows the column list of every CREATE TABLE of
+	// [Schema]: the storage engine and character set the dialect needs,
+	// "" when it needs none.
+	tableOptions() string
+	// checkDeployment verifies the requirements of the package
+	// documentation the database reports (see [Store.CheckDeployment]).
+	checkDeployment(ctx context.Context, db *sql.DB) error
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -70,8 +78,10 @@ const (
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The tables must be
-// InnoDB: the store relies on its row locks. Its key columns are
-// VARBINARY (see [Schema]).
+// InnoDB — the store relies on its transactions and row locks — and
+// [Schema] creates them so (ENGINE=InnoDB DEFAULT CHARSET=utf8mb4); their
+// key columns are VARBINARY. [Store.CheckDeployment] verifies both, and
+// a strict sql_mode.
 var MySQL Dialect = mysql{}
 
 // SQLite is the SQLite dialect (? placeholders). SQLite has no row locks:
@@ -131,6 +141,14 @@ func (postgres) migrationLock() string {
 // hashes are 64 characters.
 func (postgres) keyType(length int) string { return varchar(length) }
 
+func (postgres) tableOptions() string { return "" }
+
+// checkDeployment checks nothing: the store pins READ COMMITTED itself,
+// and synchronous_commit — off, it can lose an acknowledged revocation in a
+// crash — can be set per role, session or transaction, so the value one
+// pooled connection reports proves nothing about the others.
+func (postgres) checkDeployment(context.Context, *sql.DB) error { return nil }
+
 type mysql struct{}
 
 func (mysql) Name() string           { return "mysql" }
@@ -152,6 +170,13 @@ func (mysql) keyType(length int) string { return "VARBINARY(" + strconv.Itoa(len
 func (mysql) lockFamily() string  { return lockFamilyForUpdate }
 func (mysql) lockRefresh() string { return lockRefreshForUpdate }
 
+// tableOptions names the engine and the character set: a table created
+// with the server's default engine would be MyISAM on a server configured
+// so, without transactions or row locks.
+func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" }
+
+func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
+
 func (mysql) txOptions() *sql.TxOptions { return nil }
 
 // migrationLock is empty: MySQL commits every DDL statement on its own,
@@ -171,6 +196,12 @@ func (sqlite) insertFamily() string { return insertFamilyOnConflict }
 // keyType is VARCHAR: SQLite compares text byte for byte under its default
 // BINARY collation.
 func (sqlite) keyType(length int) string { return varchar(length) }
+
+func (sqlite) tableOptions() string { return "" }
+
+// checkDeployment checks nothing: SQLite has one engine, and a missing busy
+// timeout fails operations closed (SQLITE_BUSY).
+func (sqlite) checkDeployment(context.Context, *sql.DB) error { return nil }
 
 // varchar is the VARCHAR(length) column type.
 func varchar(length int) string { return "VARCHAR(" + strconv.Itoa(length) + ")" }

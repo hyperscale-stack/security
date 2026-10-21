@@ -24,7 +24,9 @@
 //
 //   - PostgreSQL: Consume runs at READ COMMITTED whatever the server
 //     default (see [Postgres]).
-//   - MySQL: the table must use InnoDB (row locks); utf8mb4 is not
+//   - MySQL: the table must use InnoDB (row locks, crash safety) —
+//     [Schema] names it, and [Store.CheckDeployment], which
+//     [Store.Migrate] runs, refuses another engine; utf8mb4 is not
 //     required — every column holds ASCII. Nor is a binary collation: the
 //     keys are 64 lowercase hex digits — validated by Save and by Consume
 //     (oidcclient.ValidateStoreKey), and the binding hash is compared in

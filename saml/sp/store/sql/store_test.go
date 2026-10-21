@@ -82,9 +82,20 @@ func TestDialects(t *testing.T) {
 func TestSchemaIsPortable(t *testing.T) {
 	t.Parallel()
 
-	for _, d := range []sqlstore.Dialect{sqlstore.Postgres, sqlstore.MySQL, sqlstore.SQLite} {
+	portable := sqlstore.Schema(sqlstore.SQLite)
+	require.Equal(t, portable, sqlstore.Schema(nil))
+
+	mysql := sqlstore.Schema(sqlstore.MySQL)
+	require.Len(t, mysql, len(portable))
+
+	for i, stmt := range mysql {
+		assert.Equal(t, portable[i]+" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", stmt, "MySQL names the engine")
+		assert.NotContains(t, portable[i], "ENGINE")
+	}
+
+	for _, d := range []sqlstore.Dialect{sqlstore.Postgres, sqlstore.SQLite} {
 		stmts := sqlstore.Schema(d)
-		require.Equal(t, sqlstore.Schema(sqlstore.SQLite), stmts, "same DDL for %s", d.Name())
+		require.Equal(t, portable, stmts, "same DDL for %s", d.Name())
 
 		for _, s := range stmts {
 			upper := strings.ToUpper(s)

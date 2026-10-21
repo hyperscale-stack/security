@@ -18,15 +18,22 @@ import (
 // holds a secret (see oidcclient.Transaction).
 //
 // The DDL sticks to the subset every supported engine accepts, so it is
-// the same for every [Dialect]: the argument is accepted for API stability
-// and ignored. It creates no index — MySQL has no CREATE INDEX IF NOT
-// EXISTS — see the package documentation for the one on expires_at.
+// the same for every [Dialect] but for the table options of MySQL:
+// ENGINE=InnoDB DEFAULT CHARSET=utf8mb4, since a server whose default
+// engine is MyISAM would otherwise create a table without row locks or
+// crash safety. A nil Dialect gets the PostgreSQL / SQLite DDL. It creates
+// no index — MySQL has no CREATE INDEX IF NOT EXISTS — see the package
+// documentation for the one on expires_at.
 //
 // The statement is idempotent (CREATE TABLE IF NOT EXISTS) and valid
 // inside a PostgreSQL transaction block, where [Store.Migrate] runs it.
 // Production deployments typically run it through a migration tool rather
 // than via Migrate.
-func Schema(_ Dialect) []string {
+func Schema(d Dialect) []string {
+	if d == nil {
+		d = sqlite{}
+	}
+
 	return []string{
 		`CREATE TABLE IF NOT EXISTS oidc_client_transactions (
 			state_hash    VARCHAR(64)  PRIMARY KEY,
@@ -42,12 +49,14 @@ func Schema(_ Dialect) []string {
 			created_at    BIGINT       NOT NULL,
 			expires_at    BIGINT       NOT NULL,
 			integrity     VARCHAR(64)  NOT NULL
-		)`,
+		)` + d.tableOptions(),
 	}
 }
 
 // Migrate applies [Schema] to the store's database: it creates the table
-// when missing and never alters it.
+// when missing and never alters it. It then runs [Store.CheckDeployment],
+// and fails with its error: a table that exists already keeps its engine,
+// so a deployment that does not meet the requirements is refused at boot.
 //
 // It is safe to call repeatedly, and concurrently — every instance of a
 // deployment starting at once. On PostgreSQL, where concurrent CREATE
@@ -65,6 +74,16 @@ func Schema(_ Dialect) []string {
 // package documentation requires, without which a concurrent call fails
 // with SQLITE_BUSY.
 func (s *Store) Migrate(ctx context.Context) error {
+	if err := s.createTable(ctx); err != nil {
+		return err
+	}
+
+	return s.CheckDeployment(ctx)
+}
+
+// createTable applies [Schema]: under the dialect's migration lock when it
+// has one, on its own otherwise.
+func (s *Store) createTable(ctx context.Context) error {
 	if lock := s.dialect.migrationLock(); lock != "" {
 		return s.migrateLocked(ctx, lock)
 	}

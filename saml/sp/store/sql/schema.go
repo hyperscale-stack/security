@@ -22,11 +22,19 @@ import (
 //
 // No secret is stored: keys and binding values are SHA-256 digests, and
 // the MAC's key never reaches the database. Every column holds ASCII. The DDL
-// is the same for every Dialect (portable types, no BOOLEAN, no index);
-// the argument is accepted for API stability. The statements are
-// idempotent (CREATE TABLE IF NOT EXISTS) and valid inside a PostgreSQL
-// transaction block, where Migrate runs them.
-func Schema(_ Dialect) []string {
+// is the same for every Dialect (portable types, no BOOLEAN, no index) but
+// for the table options of MySQL: ENGINE=InnoDB DEFAULT CHARSET=utf8mb4,
+// since a server whose default engine is MyISAM would otherwise create
+// tables without crash safety. A nil Dialect gets the PostgreSQL / SQLite
+// DDL. The statements are idempotent (CREATE TABLE IF NOT EXISTS) and valid
+// inside a PostgreSQL transaction block, where Migrate runs them.
+func Schema(d Dialect) []string {
+	if d == nil {
+		d = sqlite{}
+	}
+
+	options := d.tableOptions()
+
 	return []string{
 		`CREATE TABLE IF NOT EXISTS samlsp_transactions (
 			id           VARCHAR(64) PRIMARY KEY,
@@ -35,16 +43,18 @@ func Schema(_ Dialect) []string {
 			consumed     SMALLINT    NOT NULL DEFAULT 0,
 			expires_at   BIGINT      NOT NULL,
 			integrity    VARCHAR(64) NOT NULL
-		)`,
+		)` + options,
 		`CREATE TABLE IF NOT EXISTS samlsp_used_assertions (
 			assertion_key VARCHAR(64) PRIMARY KEY,
 			expires_at    BIGINT      NOT NULL
-		)`,
+		)` + options,
 	}
 }
 
 // Migrate applies Schema: it creates the missing tables and never alters
-// an existing one.
+// an existing one. It then runs CheckDeployment, and fails with its error:
+// a table that exists already keeps its engine, so a deployment that does
+// not meet the requirements is refused at boot.
 //
 // It is safe to call repeatedly, and concurrently — every instance of a
 // deployment starting at once. On PostgreSQL, where concurrent CREATE
@@ -62,6 +72,16 @@ func Schema(_ Dialect) []string {
 // package documentation requires, without which a concurrent call fails
 // with SQLITE_BUSY: there each statement runs on its own.
 func (s *Store) Migrate(ctx context.Context) error {
+	if err := s.createTables(ctx); err != nil {
+		return err
+	}
+
+	return s.CheckDeployment(ctx)
+}
+
+// createTables applies Schema: under the dialect's migration lock when it
+// has one, statement by statement otherwise.
+func (s *Store) createTables(ctx context.Context) error {
 	if lock := s.dialect.migrationLock(); lock != "" {
 		return s.migrateLocked(ctx, lock)
 	}

@@ -7,8 +7,6 @@ package sqlstores_test
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -168,21 +166,21 @@ const upgradeSection = "### `oauth2/store/sql`: MySQL compares keys byte for byt
 var sqlBlock = regexp.MustCompile("(?s)```sql\n(.*?)```")
 
 // upgradeBlocks returns the SQL blocks of the upgrade section of
-// MIGRATION.md, each as its statements: comment lines dropped, split at
-// the semicolons ending a line.
+// MIGRATION.md, each as its statements.
 func upgradeBlocks(t *testing.T) [][]string {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "MIGRATION.md"))
-	require.NoError(t, err)
+	return sectionBlocks(t, upgradeSection)
+}
 
-	doc := string(raw)
-	start := strings.Index(doc, "\n"+upgradeSection+"\n")
-	require.GreaterOrEqual(t, start, 0, "MIGRATION.md has no section %q", upgradeSection)
+// sqlBlocks returns the SQL blocks of section — MIGRATION.md from the
+// heading on, up to the next heading of its level — each as its
+// statements: comment lines dropped, split at the semicolons ending a line.
+func sqlBlocks(t *testing.T, section, heading string) [][]string {
+	t.Helper()
 
-	section := doc[start+1:]
-	if end := strings.Index(section[len(upgradeSection):], "\n### "); end >= 0 {
-		section = section[:len(upgradeSection)+end]
+	if end := strings.Index(section[len(heading):], "\n### "); end >= 0 {
+		section = section[:len(heading)+end]
 	}
 
 	var blocks [][]string

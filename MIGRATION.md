@@ -3225,3 +3225,76 @@ To migrate:
 2. A provider whose PS* ID Tokens now fail with `ErrIDTokenSignature` must
    sign with a salt as long as the hash (RFC 7518 §3.5), or the client use
    another algorithm it offers (`Config.Algorithms`).
+
+### SQL stores: MySQL tables are InnoDB, checked at boot
+
+`Schema(sqlstore.MySQL)` of `oauth2/store/sql`, `oidc/client/store/sql` and
+`saml/sp/store/sql` named no storage engine: on a server whose default
+engine is MyISAM (`default_storage_engine`), `Migrate` created tables
+without transactions or row locks. The oauth2 store then lost the atomic
+writes its contract promises (I3): a rotation cut short — a context
+cancelled, a lost connection — left the presented refresh token consumed
+without its replacement. MyISAM is not crash safe either: a consumption
+acknowledged before a crash could be lost. The DDL now names
+`ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`, and every SQL store gains
+`CheckDeployment`, which `Migrate` runs once the tables exist.
+
+|                                                     | Before                               | After                                                                 |
+| --------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------- |
+| MySQL `CREATE TABLE` of the three SQL stores        | the server's default engine and charset | `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`                            |
+| `Migrate` on MySQL with a MyISAM (or missing) table | succeeds                             | fails with `ErrDeploymentRequirement`, naming the table               |
+| `oauth2/store/sql` `Migrate` with legacy `VARCHAR` key columns | succeeds                  | fails with `ErrDeploymentRequirement`, naming each column             |
+| `oauth2/store/sql` `Migrate` on a non-strict `sql_mode` | succeeds (over-long values truncated) | fails with `ErrDeploymentRequirement`                              |
+| `Store.CheckDeployment(ctx)`                        | —                                    | new, on the three SQL stores (no-op on PostgreSQL and SQLite)         |
+| PostgreSQL and SQLite                               | —                                    | unchanged                                                             |
+
+`Migrate` still never alters a table. To migrate (MySQL and MariaDB only):
+
+1. **Find the tables to convert**:
+
+   ```sql
+   SELECT TABLE_NAME, ENGINE, TABLE_COLLATION FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (
+     'oauth2_auth_codes', 'oauth2_access_tokens', 'oauth2_refresh_tokens', 'oauth2_token_families',
+     'oidc_client_transactions', 'samlsp_transactions', 'samlsp_used_assertions');
+   ```
+
+2. **Convert every table that is not InnoDB** — keep the lines of the
+   tables the query listed:
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes        ENGINE=InnoDB;
+   ALTER TABLE oauth2_access_tokens     ENGINE=InnoDB;
+   ALTER TABLE oauth2_refresh_tokens    ENGINE=InnoDB;
+   ALTER TABLE oauth2_token_families    ENGINE=InnoDB;
+   ALTER TABLE oidc_client_transactions ENGINE=InnoDB;
+   ALTER TABLE samlsp_transactions      ENGINE=InnoDB;
+   ALTER TABLE samlsp_used_assertions   ENGINE=InnoDB;
+   ```
+
+3. **Optionally, convert the oauth2 tables to utf8mb4** when the query
+   listed another character set: subjects, scopes and extension data are
+   UTF-8. The OIDC and SAML tables hold ASCII only. `CONVERT TO` turns a
+   `TEXT` column into `MEDIUMTEXT`, which changes nothing for the store;
+   the binary key columns are left as they are.
+
+   ```sql
+   ALTER TABLE oauth2_auth_codes     CONVERT TO CHARACTER SET utf8mb4;
+   ALTER TABLE oauth2_access_tokens  CONVERT TO CHARACTER SET utf8mb4;
+   ALTER TABLE oauth2_refresh_tokens CONVERT TO CHARACTER SET utf8mb4;
+   ALTER TABLE oauth2_token_families CONVERT TO CHARACTER SET utf8mb4;
+   ```
+
+4. **Plan the window.** Each `ALTER` copies its table under a metadata
+   lock: run it at a quiet time, or with an online schema-change tool.
+5. **Make `sql_mode` strict** for the oauth2 store's connections —
+   `STRICT_TRANS_TABLES` or `STRICT_ALL_TABLES`, the default of MySQL 8 and
+   MariaDB — in the server's configuration or the DSN
+   (`?sql_mode='STRICT_TRANS_TABLES'` with go-sql-driver/mysql). A
+   database still on `VARCHAR` key columns first needs the upgrade of the
+   section "`oauth2/store/sql`: MySQL compares keys byte for byte".
+6. **Check at boot.** `Migrate` now fails, with an error matching the
+   store's `ErrDeploymentRequirement`, until the deployment meets the
+   requirements; it lists every one it finds unmet. When you apply
+   `Schema` with your own migration tool, call `store.CheckDeployment(ctx)`
+   at boot, before serving traffic.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -58,6 +59,8 @@ func lockingStore(t *testing.T, lock string) (*Store, *sql.DB) {
 
 	d := NewMockDialect(t)
 	d.EXPECT().migrationLock().Return(lock)
+	d.EXPECT().tableOptions().Return("").Maybe()
+	d.EXPECT().checkDeployment(mock.Anything, db).Return(nil).Maybe()
 
 	return &Store{db: db, dialect: d}, db
 }
@@ -189,4 +192,58 @@ func TestMigrateReportsAFailedBegin(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	require.ErrorContains(t, store.Migrate(t.Context()), "sqlstore: migrate: begin: ")
+}
+
+// TestMigrateEndsWithTheDeploymentCheck: once the tables exist, Migrate
+// runs the dialect's deployment check and fails with what it reports.
+func TestMigrateEndsWithTheDeploymentCheck(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "check.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	unmet := checkEngines(map[string]string{})
+
+	d := NewMockDialect(t)
+	d.EXPECT().migrationLock().Return("")
+	d.EXPECT().tableOptions().Return("")
+	d.EXPECT().checkDeployment(mock.Anything, db).Return(unmet).Once()
+
+	require.ErrorIs(t, (&Store{db: db, dialect: d}).Migrate(t.Context()), unmet)
+}
+
+func TestCheckEngines(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, checkEngines(map[string]string{"samlsp_transactions": "InnoDB", "samlsp_used_assertions": "innodb"}))
+
+	err := checkEngines(map[string]string{"samlsp_used_assertions": "MyISAM"})
+	require.ErrorIs(t, err, ErrDeploymentRequirement)
+	assert.Equal(t, "sqlstore: deployment requirement not met: table samlsp_transactions not found in the connection's database\n"+
+		"sqlstore: deployment requirement not met: table samlsp_used_assertions uses the MyISAM engine, not InnoDB", err.Error())
+}
+
+// TestCheckDeploymentPerDialect: PostgreSQL and SQLite report nothing the
+// store checks; MySQL's check reaches the database, whose failure is
+// returned as such, not as a requirement found unmet.
+func TestCheckDeploymentPerDialect(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	for _, d := range []Dialect{Postgres, SQLite} {
+		store, err := New(db, d)
+		require.NoError(t, err)
+		require.NoError(t, store.CheckDeployment(t.Context()), d.Name())
+	}
+
+	store, err := New(db, MySQL)
+	require.NoError(t, err)
+
+	err = store.CheckDeployment(t.Context())
+	require.ErrorContains(t, err, "sqlstore: check deployment: storage engines: ")
+	require.NotErrorIs(t, err, ErrDeploymentRequirement)
 }

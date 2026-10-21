@@ -24,10 +24,13 @@ import (
 // and token hashes and the token-family IDs, the only columns the
 // statements compare: VARCHAR on PostgreSQL and SQLite, which compare it
 // byte for byte, VARBINARY on MySQL, whose text comparisons follow a
-// collation that may ignore case, accents or trailing spaces. A nil
-// Dialect gets the PostgreSQL / SQLite DDL. A MySQL database created
-// before the key columns were binary is upgraded with the statements
-// MIGRATION.md lists.
+// collation that may ignore case, accents or trailing spaces — and for the
+// table options of MySQL: ENGINE=InnoDB DEFAULT CHARSET=utf8mb4, since a
+// server whose default engine is MyISAM would otherwise create tables
+// without transactions or row locks, losing the atomic writes (I3) of
+// [oauth2.Storage]. A nil Dialect gets the PostgreSQL / SQLite DDL. A MySQL
+// database created before the key columns were binary, or with MyISAM
+// tables, is upgraded with the statements MIGRATION.md lists.
 //
 // The issuer and extension_data columns of codes and tokens — the realm a
 // grant is bound to and the opaque state an oauth2.Extension recorded for
@@ -52,7 +55,7 @@ func Schema(d Dialect) []string {
 	}
 
 	// 64: oauth2.MaxFamilyIDLength, in bytes.
-	hash, family := d.keyType(128), d.keyType(64)
+	hash, family, options := d.keyType(128), d.keyType(64), d.tableOptions()
 
 	return []string{
 		`CREATE TABLE IF NOT EXISTS oauth2_auth_codes (
@@ -70,7 +73,7 @@ func Schema(d Dialect) []string {
 			issuer                TEXT,
 			extension_data        TEXT,
 			redirect_uri_omitted  SMALLINT     NOT NULL DEFAULT 0
-		)`,
+		)` + options,
 		`CREATE TABLE IF NOT EXISTS oauth2_access_tokens (
 			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
@@ -82,7 +85,7 @@ func Schema(d Dialect) []string {
 			expires_at BIGINT       NOT NULL,
 			issuer         TEXT,
 			extension_data TEXT
-		)`,
+		)` + options,
 		`CREATE TABLE IF NOT EXISTS oauth2_refresh_tokens (
 			token_hash ` + hash + ` PRIMARY KEY,
 			client_id  VARCHAR(255) NOT NULL,
@@ -95,19 +98,22 @@ func Schema(d Dialect) []string {
 			issuer         TEXT,
 			extension_data TEXT,
 			family_issued_at BIGINT NOT NULL DEFAULT 0
-		)`,
+		)` + options,
 		`CREATE TABLE IF NOT EXISTS oauth2_token_families (
 			family_id  ` + family + `  PRIMARY KEY,
 			revoked_at BIGINT       NOT NULL DEFAULT 0,
 			expires_at BIGINT       NOT NULL
-		)`,
+		)` + options,
 	}
 }
 
 // Migrate applies [Schema] to the store's database: it creates the missing
 // tables and never alters an existing one — the columns a release adds to
 // an existing table are added with the statements MIGRATION.md lists,
-// through your migration tool, before the release serves traffic.
+// through your migration tool, before the release serves traffic. It then
+// runs [Store.CheckDeployment], and fails with its error: a table that
+// exists already keeps its engine and its column types, so a deployment
+// that does not meet the requirements is refused at boot.
 //
 // It is safe to call repeatedly, and concurrently — every instance of a
 // deployment starting at once. On PostgreSQL, where concurrent CREATE
@@ -125,6 +131,16 @@ func Schema(d Dialect) []string {
 // package documentation requires, without which a concurrent call fails
 // with SQLITE_BUSY: there each statement runs on its own.
 func (s *Store) Migrate(ctx context.Context) error {
+	if err := s.createTables(ctx); err != nil {
+		return err
+	}
+
+	return s.CheckDeployment(ctx)
+}
+
+// createTables applies [Schema]: under the dialect's migration lock when it
+// has one, statement by statement otherwise.
+func (s *Store) createTables(ctx context.Context) error {
 	if lock := s.dialect.migrationLock(); lock != "" {
 		return s.migrateLocked(ctx, lock)
 	}

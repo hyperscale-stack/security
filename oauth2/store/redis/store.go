@@ -55,10 +55,18 @@ func WithKeyPrefix(prefix string) Option {
 }
 
 // New returns a [Store] bound to the given Redis client. The caller owns
-// the client's lifecycle.
+// the client's lifecycle. It refuses, with an error matching
+// [ErrDeploymentRequirement], a *redis.ClusterClient or a *redis.Ring: the
+// scripts touch keys those clients would spread over several hash slots or
+// shards. A standalone server, or the primary of a Sentinel deployment
+// (redis.NewFailoverClient), is served by a *redis.Client.
 func New(rdb redis.UniversalClient, opts ...Option) (*Store, error) {
 	if rdb == nil {
 		return nil, errors.New("redisstore: New: nil redis client")
+	}
+
+	if err := shardedClient(rdb); err != nil {
+		return nil, fmt.Errorf("redisstore: New: %w", err)
 	}
 
 	s := &Store{rdb: rdb, prefix: "oauth2:"}

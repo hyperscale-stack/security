@@ -5,6 +5,7 @@
 package sqlstore
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -30,6 +31,13 @@ type Dialect interface {
 	// "" when the engine serializes the creation of a table itself and
 	// Migrate runs its statement on its own.
 	migrationLock() string
+	// tableOptions follows the column list of the CREATE TABLE of
+	// [Schema]: the storage engine and character set the dialect needs,
+	// "" when it needs none.
+	tableOptions() string
+	// checkDeployment verifies the requirements of the package
+	// documentation the database reports (see [Store.CheckDeployment]).
+	checkDeployment(ctx context.Context, db *sql.DB) error
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -54,7 +62,9 @@ const selectTransaction = `SELECT state_hash, binding_hash, connection_id, issue
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The table must be
-// InnoDB: Consume relies on its row locks.
+// InnoDB — Consume relies on its row locks — and [Schema] creates it so
+// (ENGINE=InnoDB DEFAULT CHARSET=utf8mb4); [Store.CheckDeployment]
+// verifies it.
 var MySQL Dialect = mysql{}
 
 // SQLite is the SQLite dialect (? placeholders). SQLite has no row locks:
@@ -105,6 +115,11 @@ func (postgres) migrationLock() string {
 	return "SELECT pg_advisory_xact_lock(" + migrationLockKey + ")"
 }
 
+func (postgres) tableOptions() string { return "" }
+
+// checkDeployment checks nothing: the store pins READ COMMITTED itself.
+func (postgres) checkDeployment(context.Context, *sql.DB) error { return nil }
+
 type mysql struct{}
 
 func (mysql) Name() string              { return "mysql" }
@@ -115,6 +130,13 @@ func (mysql) txOptions() *sql.TxOptions { return nil }
 // migrationLock is empty: MySQL commits every DDL statement on its own,
 // and serializes the creation of a table on the metadata lock of its name.
 func (mysql) migrationLock() string { return "" }
+
+// tableOptions names the engine and the character set: a table created
+// with the server's default engine would be MyISAM on a server configured
+// so, without transactions, row locks or crash safety.
+func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" }
+
+func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
 
 type sqlite struct{}
 
@@ -131,3 +153,8 @@ func (sqlite) txOptions() *sql.TxOptions { return nil }
 // of the table, and a statement prepared before a concurrent change of the
 // schema is prepared again.
 func (sqlite) migrationLock() string { return "" }
+
+func (sqlite) tableOptions() string { return "" }
+
+// checkDeployment checks nothing: SQLite has one engine.
+func (sqlite) checkDeployment(context.Context, *sql.DB) error { return nil }

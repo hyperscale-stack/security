@@ -32,7 +32,8 @@
 //   - Every instance uses the same database, reaching the primary: a read
 //     replica could report a consumed transaction or a recorded assertion as
 //     absent.
-//   - MySQL tables must use InnoDB.
+//   - MySQL tables must use InnoDB (crash safety): Schema names it, and
+//     CheckDeployment, which Migrate runs, refuses another engine.
 //   - SQLite: one writer at a time; set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option).
 //   - Every column holds ASCII (hex digests, ASCII-only JSON, integers): no
