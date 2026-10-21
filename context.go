@@ -60,7 +60,10 @@ func WithClientAddr(ctx context.Context, addr netip.Addr) context.Context {
 
 // ClientAddrFromContext returns the client address stored in ctx by
 // [WithClientAddr], and whether one was stored. A stored zero Addr means
-// the address is unknown.
+// the address is unknown. Code outside the transport adapters — an OAuth
+// 2.0 endpoint — reads the client address the same way, so that one
+// middleware serves every verifier: from the context first, then from its
+// transport peer ([ParseClientAddr] of r.RemoteAddr).
 func ClientAddrFromContext(ctx context.Context) (netip.Addr, bool) {
 	addr, ok := ctx.Value(clientAddrCtxKey{}).(netip.Addr)
 

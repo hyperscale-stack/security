@@ -19,10 +19,12 @@ import (
 // brute-force protection RFC 6749 §2.3.1 and §4.3.2 require of OAuth 2.0
 // endpoints that check a secret.
 //
-// A verifier calls Allow before it checks the credentials. When Allow
-// admits the attempt, the verifier checks them, then calls Record exactly
-// once with the same key and the outcome. When Allow returns an error, the
-// verifier checks nothing and does not call Record.
+// A verifier calls Allow once per attempt, with one key, before it checks
+// the credentials: the limiter charges every budget it keeps for that key
+// (per subject, per source…) — a second key per attempt would charge twice.
+// When Allow admits the attempt, the verifier checks the credentials, then
+// calls Record exactly once with the same key and the outcome. When Allow
+// returns an error, the verifier checks nothing and does not call Record.
 //
 // Allow reserves the attempt: it counts as failed until Record settles it,
 // so concurrent attempts against one key never exceed its allowance — N

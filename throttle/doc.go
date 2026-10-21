@@ -29,7 +29,11 @@
 // passwords keep the three budgets; OAuth 2.0 client authentication, whose
 // client identifiers are public and whose secrets are high-entropy, turns
 // the per-subject budget off — Limit{Failures: Unlimited} — so that nobody
-// can lock a client out from other sources.
+// can lock a client out from other sources. An attempt from an unknown
+// source meets only the per-subject budget; with that budget off, no budget
+// applies and Allow refuses it as unavailable (503): supply the client
+// address. Call Allow once per attempt — every budget, the per-source one
+// included, is charged by that one call.
 //
 // MemoryLimiter is a throttle, not the lock-out of NIST SP 800-63B-4
 // §3.2.2 ("no more than 100 [consecutive failed attempts] by disabling

@@ -705,3 +705,63 @@ func TestEveryBudgetCanBeDisabled(t *testing.T) {
 		fail(t, l, key("alice", "192.0.2.1"))
 	}
 }
+
+// Review M1, Axel's decision UD-A: with the per-subject budget off — the
+// configuration of OAuth 2.0 client authentication — an attempt from an
+// unknown source met no budget and was admitted without limit. When budgets
+// are configured but none applies to the key, Allow now refuses with an
+// error wrapping ErrUnavailable: fail closed, and loud until the source is
+// configured.
+func TestNoApplicableBudgetFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	clientAuth := throttle.NewMemoryLimiter(only(newClock(), func(c *throttle.Config) {
+		c.PerSubjectSource = throttle.Limit{Failures: 10, Window: 15 * time.Minute}
+		c.PerSource = throttle.Limit{Failures: 100, Window: 15 * time.Minute}
+	}))
+
+	for range 3 {
+		err := clientAuth.Allow(context.Background(), key("client-1", ""))
+		require.ErrorIs(t, err, security.ErrUnavailable)
+		assert.NotErrorIs(t, err, security.ErrTooManyAttempts)
+		assert.Equal(t, security.ErrorClassUnavailable, security.ErrorClass(err))
+	}
+
+	// A Record without reservation changes nothing, and a known source is
+	// limited as usual.
+	clientAuth.Record(context.Background(), key("client-1", ""), security.AttemptFailed)
+	fail(t, clientAuth, key("client-1", "192.0.2.1"))
+
+	// Nothing configured at all: nothing is limited, as without a limiter.
+	none := throttle.NewMemoryLimiter(only(newClock(), func(*throttle.Config) {}))
+	require.NoError(t, none.Allow(context.Background(), key("client-1", "")))
+}
+
+// Review m1 (mutant R19): charging extends an entry's TAT, which is only
+// right once Allow has purged the entries whose charges all expired — an
+// idle key gets one burst, not more.
+func TestAnIdleKeyGetsOneBurstOnly(t *testing.T) {
+	t.Parallel()
+
+	clock := newClock()
+	l := throttle.NewMemoryLimiter(only(clock, func(c *throttle.Config) {
+		c.PerSubjectSource = throttle.Limit{Failures: 10, Window: 15 * time.Minute}
+	}))
+	k := key("alice", "192.0.2.1")
+
+	for range 10 {
+		fail(t, l, k)
+	}
+
+	clock.Advance(time.Hour)
+
+	admitted := 0
+
+	for range 200 {
+		if l.Allow(context.Background(), k) == nil {
+			admitted++
+		}
+	}
+
+	assert.Equal(t, 10, admitted, "unsettled reservations after an idle hour")
+}

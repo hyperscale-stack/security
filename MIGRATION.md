@@ -41,9 +41,9 @@ standalone module): it ships the in-memory `oauth2.Storage` used for dev
 and tests. Likewise `outbound` is a sub-package of the core module: the
 SSRF-safe `*http.Client` factory the federation modules use to fetch
 configuration-supplied URLs. It depends on the standard library only and
-is the only networking code of the core. `throttle` is another one: the
-bounded, in-memory `security.AttemptLimiter` (standard library and core
-only). `oidc/client/storage/memory`
+is the only networking code of the core. `throttle` is another
+sub-package of the core module: the bounded, in-memory
+`security.AttemptLimiter` (standard library and core only). `oidc/client/storage/memory`
 (in-memory transaction store) and `oidc/client/storetest` (the conformance
 suite every transaction store passes) are sub-packages of the
 `oidc/client` module, as `saml/sp/storage/memory` (the in-memory

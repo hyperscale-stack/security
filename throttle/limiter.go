@@ -50,15 +50,25 @@ type Limit struct {
 
 // Config configures [NewMemoryLimiter]. Its zero value is the default
 // configuration.
+//
+// Sources count per IPv4 address and per IPv6 /56: clients behind one
+// IPv4 address (a NAT, a proxy) or in one /56 (providers numbering
+// customers inside one /56, a NAT64 or SIIT translator mapping every IPv4
+// client into one prefix) share the per-source budgets. Behind such a
+// translator, store the embedded IPv4 address with
+// [security.WithClientAddr].
 type Config struct {
 	// PerSubjectSource bounds the attempts of one subject from one source.
 	// Default: 10 per 15 minutes.
 	PerSubjectSource Limit
 	// PerSubject bounds the attempts of one subject from every source —
-	// the per-account limit of NIST SP 800-63B-4 §3.2.2. A distributed
+	// the per-account limit of NIST SP 800-63B-4 §3.2.2 — and is the only
+	// budget an attempt from an unknown source meets. A distributed
 	// attacker exhausting it locks the account out while the attack
 	// lasts: turn it off (Unlimited) for credentials that cannot be
-	// guessed, such as OAuth 2.0 client secrets. Default: 100 per hour.
+	// guessed, such as OAuth 2.0 client secrets; an attempt from an
+	// unknown source is then refused as unavailable. Default: 100 per
+	// hour.
 	PerSubject Limit
 	// PerSource bounds the attempts of one source against every subject
 	// (password spraying, and the entries one source can create). Clients
@@ -82,9 +92,11 @@ type Config struct {
 // table holds MaxKeys entries, the one closest to recovery — the least
 // throttled — is forgotten to make room, never an entry of the attempt
 // being charged, so a flood of fresh keys forgets a throttled key only
-// after MaxKeys more throttled keys. Allow never returns an error wrapping
-// [security.ErrUnavailable].
+// after MaxKeys more throttled keys. Allow returns an error wrapping
+// [security.ErrUnavailable] only when no configured budget applies to the
+// key (see Allow).
 //
+// Create it with NewMemoryLimiter: the zero value is not usable.
 // MemoryLimiter is safe for concurrent use.
 type MemoryLimiter struct {
 	budgets [budgetCount]budget
@@ -133,6 +145,20 @@ func NewMemoryLimiter(cfg Config) *MemoryLimiter {
 	return l
 }
 
+// errNoBudget refuses an attempt no configured budget applies to.
+var errNoBudget = fmt.Errorf("throttle: no budget applies to an attempt from an unknown source: %w", security.ErrUnavailable)
+
+// limits reports whether at least one budget is configured.
+func (l *MemoryLimiter) limits() bool {
+	for _, b := range l.budgets {
+		if b.enabled {
+			return true
+		}
+	}
+
+	return false
+}
+
 // orDefault returns v, or def when v is zero.
 func orDefault(v, def int) int {
 	if v == 0 {
@@ -146,9 +172,17 @@ func orDefault(v, def int) int {
 // charges it to every applicable budget when they all have room, and
 // otherwise refuses it with a [*security.TooManyAttemptsError] whose
 // RetryAfter is the longest wait among the refusing budgets — charging
-// nothing. A zero Source skips the two source budgets.
+// nothing. A zero Source skips the two source budgets; when budgets are
+// configured but none applies to the key — an unknown source with the
+// per-subject budget off, as for OAuth 2.0 client authentication — the
+// attempt cannot be limited and is refused with an error wrapping
+// [security.ErrUnavailable] (503): fail closed until the client address is
+// supplied ([security.WithClientAddr]).
 func (l *MemoryLimiter) Allow(_ context.Context, key security.AttemptKey) error {
 	slots := l.slots(key)
+	if len(slots) == 0 && l.limits() {
+		return errNoBudget
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -177,15 +211,18 @@ func (l *MemoryLimiter) Allow(_ context.Context, key security.AttemptKey) error 
 	return nil
 }
 
-// Record implements [security.AttemptLimiter]. It settles one reservation
-// Allow made: AttemptFailed keeps its charges; AttemptSucceeded forgets
-// the failures of its (subject, source) entry and refunds its charge to
-// the subject and source budgets — it does not reset them, so that an
-// account in use does not clear what other sources spent; and
-// AttemptInconclusive refunds every charge. Any other outcome counts as
-// failed. A Record without an outstanding reservation — a second one, or
-// one whose entries expired or were forgotten — changes nothing: it never
-// creates credit.
+// Record implements [security.AttemptLimiter]. It settles one outstanding
+// reservation of the key: AttemptFailed keeps its charges;
+// AttemptSucceeded forgets the failures of its (subject, source) entry and
+// refunds its charge to the subject and source budgets — it does not reset
+// them, so that an account in use does not clear what other sources spent;
+// and AttemptInconclusive refunds every charge. Any other outcome counts as
+// failed. Reservations are counted per key, not told apart: a Record
+// without an outstanding reservation — a second one, or one whose entries
+// expired or were forgotten — changes nothing, but a late Record arriving
+// after its own entry expired may settle a newer reservation of the same
+// key. A burst can then exceed Failures by the number of such late
+// settlements; the long-run rate is never exceeded.
 func (l *MemoryLimiter) Record(_ context.Context, key security.AttemptKey, outcome security.AttemptOutcome) {
 	slots := l.slots(key)
 

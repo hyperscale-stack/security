@@ -516,7 +516,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     error class (ranked after `unavailable`) and `RetryAfterSeconds`;
   - core: the client address — `WithClientAddr`, `ClientAddrFromContext`,
     `ParseClientAddr`;
-  - `throttle` (a stdlib-only sub-package of the core):
+  - `throttle` (a sub-package of the core module, on the standard library
+    and the core only):
     `NewMemoryLimiter`, a bounded, in-memory `AttemptLimiter` with three
     budgets — per subject and source (10 per 15 minutes), per subject (100
     per hour) and per source (100 per 15 minutes) —, IPv6 sources counted

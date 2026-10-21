@@ -514,13 +514,23 @@ PKCE. Not supported, and refused where a provider could select them:
 - **Lock-out and shared addresses** — the per-subject budget lets a
   distributed attacker lock an account out for as long as the attack lasts
   (turn it off, `Unlimited`, for credentials that cannot be guessed, such as
-  OAuth 2.0 client secrets); the per-source budget is shared by every client
-  behind one address (a NAT, a proxy whose forwarded address the
-  application does not store). An unknown source (the zero address) skips
-  both source budgets: only the per-subject one applies.
+  OAuth 2.0 client secrets); the per-source budgets are shared by every
+  client behind one IPv4 address or inside one IPv6 /56 — a NAT, a proxy
+  whose forwarded address the application does not store, providers that
+  number customers inside one /56, a NAT64 or SIIT translator mapping every
+  IPv4 client into one prefix (store the embedded IPv4 address with
+  `security.WithClientAddr`).
+- **Unknown sources** — an attempt whose source is unknown (the zero
+  address: a Unix-socket listener, an unparsable forwarded address) skips
+  both source budgets and meets only the per-subject one; with that budget
+  off, no budget applies and `Allow` refuses the attempt as unavailable
+  (503) until the client address is supplied.
 - **Reservations count** — an attempt counts as failed until it is settled:
   more concurrent attempts against one key than its allowance are refused,
-  legitimate ones included.
+  legitimate ones included. Reservations are counted per key: a settlement
+  arriving after its own charges expired may settle a newer reservation of
+  the key, letting a burst exceed its allowance by that many attempts
+  (never the long-run rate).
 - **No limit across subjects and sources** — a password-spraying campaign
   from many sources against many accounts is bounded only per source and
   per account: rate-limit at the edge.
@@ -586,7 +596,8 @@ PKCE. Not supported, and refused where a provider could select them:
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
   keys, signers and key sets, `session.Codec` and `session.Session`, the
-  `basic`, `bearer` and `session` authentications…) print redacted with
+  `basic`, `bearer` and `session` authentications, `security.AttemptKey`…)
+  print redacted with
   every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without

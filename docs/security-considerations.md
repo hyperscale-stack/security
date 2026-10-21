@@ -1528,7 +1528,9 @@ require of the OAuth 2.0 endpoints that check a secret. A verifier calls
 `Allow` before it checks the credentials and `Record` with the outcome
 after:
 
-- **Reserve, then settle.** `Allow` counts the attempt as failed until
+- **Reserve, then settle — once per attempt.** One `Allow` per attempt,
+  with one key: the limiter charges every budget it keeps for that key, the
+  per-source one included. `Allow` counts the attempt as failed until
   `Record` settles it, so a burst of concurrent guesses cannot all pass the
   check before the first failure is known. Concurrent legitimate attempts
   hold reservations too: size the allowance above a client's concurrency,
@@ -1552,8 +1554,10 @@ after:
   or interceptor that runs before the adapter — taken from the hop your
   trusted proxy appended (the right-most `X-Forwarded-For` entry it wrote,
   or RFC 7239 `Forwarded`), never the left-most entry, which the client
-  chooses. Outside the adapters (a form login calling `Authenticate`), put
-  the address in the context yourself.
+  chooses. Outside the adapters (a form login calling `Authenticate`, an
+  OAuth 2.0 endpoint), read the address the same way: from the context
+  first (`security.ClientAddrFromContext`), then from the transport peer
+  (`security.ParseClientAddr(r.RemoteAddr)`).
 
 `throttle.MemoryLimiter` charges every attempt to three budgets, checked
 and charged together, a refusal charging none: per subject and source (10
@@ -1574,7 +1578,12 @@ Trade-offs to choose knowingly:
   per-account limit); turn it off (`Limit{Failures: throttle.Unlimited}`)
   for credentials that cannot be guessed, such as OAuth 2.0 client secrets,
   whose client identifiers are public. Use one limiter per credential type.
-- The per-source budget is shared by every client behind one address.
+- The per-source budgets are shared by every client behind one IPv4
+  address or inside one IPv6 /56: a NAT, a proxy, providers that number
+  customers inside one /56, a NAT64 or SIIT translator (store the embedded
+  IPv4 address with `security.WithClientAddr`).
+- An unknown source meets only the per-subject budget: with it off, `Allow`
+  refuses the attempt as unavailable (503) — supply the client address.
 - It is a throttle, not the lock-out of NIST §3.2.2 ("no more than 100 …
   by disabling that authenticator"), and it lives in one process. A global
   or permanent limit needs an `AttemptLimiter` over a shared store, or an
