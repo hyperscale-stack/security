@@ -233,7 +233,7 @@ func implicitRSAAlgorithm(effective []Algorithm) Algorithm {
 func (k verificationKey) verifier(alg Algorithm) any {
 	if pub, ok := k.key.(*rsa.PublicKey); ok {
 		if _, pss := pssHashes[jose.SignatureAlgorithm(alg)]; pss {
-			return pssVerifier{pub: pub}
+			return pssVerifier{pub: pub, alg: jose.SignatureAlgorithm(alg)}
 		}
 	}
 

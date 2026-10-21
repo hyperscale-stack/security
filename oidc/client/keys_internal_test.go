@@ -5,11 +5,13 @@
 package oidcclient
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/hex"
 	"testing"
 
@@ -86,8 +88,9 @@ func TestCanonicalY(t *testing.T) {
 	}
 }
 
-// TestPSSVerifier checks the verifier selection and the defensive branch of
-// pssVerifier: PS* keys get the strict verifier, other algorithms their key.
+// TestPSSVerifier checks the verifier selection and the defensive branches
+// of pssVerifier: PS* keys get the strict verifier bound to the algorithm
+// it was chosen for, other algorithms their key.
 func TestPSSVerifier(t *testing.T) {
 	t.Parallel()
 
@@ -100,7 +103,7 @@ func TestPSSVerifier(t *testing.T) {
 	rsaPub := verificationKey{kind: kindRSA, key: &rsaKey.PublicKey}
 
 	for _, alg := range []Algorithm{PS256, PS384, PS512} {
-		assert.Equal(t, pssVerifier{pub: &rsaKey.PublicKey}, rsaPub.verifier(alg), alg)
+		assert.Equal(t, pssVerifier{pub: &rsaKey.PublicKey, alg: jose.SignatureAlgorithm(alg)}, rsaPub.verifier(alg), alg)
 	}
 
 	for _, alg := range []Algorithm{RS256, RS384, RS512} {
@@ -109,6 +112,16 @@ func TestPSSVerifier(t *testing.T) {
 
 	assert.Same(t, &ecKey.PublicKey, verificationKey{kind: kindEC, key: &ecKey.PublicKey}.verifier(ES256))
 
-	err = pssVerifier{pub: &rsaKey.PublicKey}.VerifyPayload([]byte("input"), make([]byte, 256), jose.RS256)
-	require.ErrorIs(t, err, errNotPSS)
+	err = pssVerifier{pub: &rsaKey.PublicKey, alg: jose.RS256}.VerifyPayload([]byte("input"), make([]byte, 256), jose.RS256)
+	require.ErrorIs(t, err, errNotPSS, "not a PSS algorithm")
+
+	// A valid PS256 signature, offered for PS384 to a verifier bound to
+	// PS256 — or for PS256 to one bound to PS384 — is refused.
+	digest := sha256.Sum256([]byte("input"))
+	sig, err := rsa.SignPSS(rand.Reader, rsaKey, crypto.SHA256, digest[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
+	require.NoError(t, err)
+
+	require.NoError(t, pssVerifier{pub: &rsaKey.PublicKey, alg: jose.PS256}.VerifyPayload([]byte("input"), sig, jose.PS256))
+	require.ErrorIs(t, pssVerifier{pub: &rsaKey.PublicKey, alg: jose.PS256}.VerifyPayload([]byte("input"), sig, jose.PS384), errNotPSS)
+	require.ErrorIs(t, pssVerifier{pub: &rsaKey.PublicKey, alg: jose.PS384}.VerifyPayload([]byte("input"), sig, jose.PS256), errNotPSS)
 }

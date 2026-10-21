@@ -13,7 +13,7 @@ import (
 )
 
 // errNotPSS reports a pssVerifier asked to verify another algorithm than
-// PS256, PS384 or PS512.
+// the PS256, PS384 or PS512 it is bound to.
 var errNotPSS = errors.New("not an RSASSA-PSS algorithm")
 
 // pssHashes are the hash functions of the RSASSA-PSS algorithms (RFC 7518
@@ -29,15 +29,17 @@ var pssHashes = map[jose.SignatureAlgorithm]crypto.Hash{
 // value is the same size as the hash function output"): go-jose verifies
 // them with rsa.PSSSaltLengthAuto, any salt length. It implements
 // jose.OpaqueVerifier, so go-jose still parses the JWS and hands over its
-// signing input.
+// signing input. It is bound to one algorithm, the one its key verifies
+// (RFC 8725 §3.1), and refuses any other.
 type pssVerifier struct {
 	pub *rsa.PublicKey
+	alg jose.SignatureAlgorithm
 }
 
 // VerifyPayload implements jose.OpaqueVerifier.
 func (v pssVerifier) VerifyPayload(payload, signature []byte, alg jose.SignatureAlgorithm) error {
 	hash, ok := pssHashes[alg]
-	if !ok {
+	if !ok || alg != v.alg {
 		return errNotPSS
 	}
 
