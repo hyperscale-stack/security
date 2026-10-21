@@ -49,6 +49,8 @@ func refusalParams(t *testing.T, implicit bool, consent oauth2.ConsentFunc) (url
 
 	loc := mustLocation(t, rec)
 	if !implicit {
+		require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_ (RFC 9700 §4.1.3)")
+
 		return loc.Query(), store, sink
 	}
 
@@ -324,6 +326,7 @@ func TestAuthorizeIssuanceFailuresAreServerErrors(t *testing.T) {
 			sink := &errorSink{}
 			srv, err := oauth2.NewServer(oauth2.ServerConfig{
 				Profile: oauth2.Profile20, Storage: failingCodeStore{memory.New()},
+				Grants:         []oauth2.Grant{codeGrant(memory.New())},
 				IssuerResolver: oauth2.StaticIssuer("https://auth.example", "api"),
 				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
 					testClientID: &oauth2.DefaultClient{
@@ -350,6 +353,8 @@ func TestAuthorizeIssuanceFailuresAreServerErrors(t *testing.T) {
 			if tc.implicit {
 				params, err = url.ParseQuery(loc.Fragment)
 				require.NoError(t, err)
+			} else {
+				assert.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
 			}
 
 			assert.Equal(t, oauth2.CodeServerError, params.Get("error"))

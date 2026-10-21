@@ -325,12 +325,12 @@ func TestMixUpBetweenIssuersOfOneProvider(t *testing.T) {
 	})
 }
 
-// TestIssuerResolverFailureReachesTheClientWithoutIss pins a documented
-// edge: when the provider's IssuerResolver fails at the authorization
-// endpoint, the redirected server_error cannot name an issuer, so an RFC
-// 9207 client refuses it as an unidentified response (ErrIssuerParameter)
-// rather than an authorization error.
-func TestIssuerResolverFailureReachesTheClientWithoutIss(t *testing.T) {
+// TestIssuerResolverFailureNeverReachesTheClient pins RFC 9207 §2 at the
+// provider: when its IssuerResolver fails at the authorization endpoint, no
+// response could name the issuer, so none is sent — the user agent gets a
+// bare 500, never a redirect to the relying party, and nothing is
+// exchanged.
+func TestIssuerResolverFailureNeverReachesTheClient(t *testing.T) {
 	t.Parallel()
 
 	o := newOP(t)
@@ -338,15 +338,13 @@ func TestIssuerResolverFailureReachesTheClientWithoutIss(t *testing.T) {
 
 	o.resolver.failAuthorize.Store(true)
 
-	ar, loc := o.begin(t, c, oidcclient.AuthOptions{})
-	assert.Equal(t, "server_error", loc.Query().Get("error"))
-	assert.Empty(t, loc.Query().Get("iss"))
+	ar, err := c.Begin(t.Context(), oidcclient.AuthOptions{})
+	require.NoError(t, err)
 
-	_, err := c.Complete(t.Context(), callbackOf(loc, ar.Binding))
-	require.ErrorIs(t, err, oidcclient.ErrIssuerParameter)
-
-	var authErr *oidcclient.AuthorizationError
-	assert.NotErrorAs(t, err, &authErr)
+	resp := o.authorize(t, ar.URL)
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Location"), "never redirected")
+	assert.Zero(t, o.hits(o.paths(o.base).Token))
 }
 
 // TestRefusalsRevealNoSession: a session of another realm, of another

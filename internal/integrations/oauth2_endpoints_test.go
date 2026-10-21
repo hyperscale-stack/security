@@ -104,8 +104,11 @@ func TestMetadataEndpointAdvertisesConfiguration(t *testing.T) {
 	assert.Contains(t, methods, "client_secret_basic")
 	assert.Contains(t, methods, "client_secret_post")
 
-	pkce, _ := body["code_challenge_methods_supported"].([]any)
-	assert.Equal(t, []any{"S256"}, pkce, "BCP profile mandates S256-only PKCE")
+	// No authorization_code grant: no authorization endpoint, hence no
+	// PKCE methods, is advertised (RFC 8414 §2).
+	assert.NotContains(t, body, "authorization_endpoint")
+	assert.NotContains(t, body, "code_challenge_methods_supported")
+	assert.Equal(t, []any{}, body["response_types_supported"])
 }
 
 func TestRevokeEndpointAlwaysReturns200(t *testing.T) {

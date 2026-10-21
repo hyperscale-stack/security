@@ -270,7 +270,8 @@ type authResult struct {
 // deprecates the implicit grant, and the discovery document advertises
 // response_type code alone: AuthorizeHandler panics when cfg enables the
 // implicit flow (AllowImplicit), before the server records it, as the
-// server panics on its own misconfigurations. A handler built from
+// server panics on its own misconfigurations — a CodeTTL beyond 10
+// minutes among them (oauth2.AuthorizeConfig.CodeTTL). A handler built from
 // Server().AuthorizeHandler is not checked: never enable the implicit flow
 // there either (see [Provider.Server]).
 func (p *Provider) AuthorizeHandler(cfg oauth2.AuthorizeConfig) http.Handler {

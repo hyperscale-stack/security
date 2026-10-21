@@ -25,13 +25,13 @@ The server listens on `:1337`.
 ## Probe — public
 
 ```sh
-curl -i http://localhost:1337/
+curl -i http://127.0.0.1:1337/
 ```
 
 ## Probe — protected without token → `401 Unauthorized`
 
 ```sh
-curl -i http://localhost:1337/protected
+curl -i http://127.0.0.1:1337/protected
 ```
 
 ## Probe — mint a client_credentials token
@@ -39,7 +39,7 @@ curl -i http://localhost:1337/protected
 ```sh
 curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
     -d 'grant_type=client_credentials&scope=api:read' \
-    http://localhost:1337/oauth2/token
+    http://127.0.0.1:1337/oauth2/token
 ```
 
 Response body shape (RFC 6749 §5.1):
@@ -53,14 +53,14 @@ Response body shape (RFC 6749 §5.1):
 ```sh
 TOKEN=$(curl -s -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
     -d 'grant_type=client_credentials&scope=api:read' \
-    http://localhost:1337/oauth2/token | jq -r .access_token)
-curl -i -H "Authorization: Bearer $TOKEN" http://localhost:1337/protected
+    http://127.0.0.1:1337/oauth2/token | jq -r .access_token)
+curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:1337/protected
 ```
 
 ## Probe — discovery document (RFC 8414)
 
 ```sh
-curl -s http://localhost:1337/.well-known/oauth-authorization-server | jq
+curl -s http://127.0.0.1:1337/.well-known/oauth-authorization-server | jq
 ```
 
 ## Probe — the authorization-code flow (browser)
@@ -68,7 +68,7 @@ curl -s http://localhost:1337/.well-known/oauth-authorization-server | jq
 Open this URL in a browser — it carries an RFC 7636 sample PKCE challenge:
 
 ```
-http://localhost:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://localhost:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
+http://127.0.0.1:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://127.0.0.1:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
 ```
 
 Approve on the consent page; the browser lands on `/callback?code=…`.
@@ -76,8 +76,8 @@ Exchange that code (the verifier is `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk
 
 ```sh
 curl -i -u 5cc06c3b-5755-4229-958c-a515a245aaeb:WTvuAztPD2XBauomleRzGFYuZawS07Ym \
-    -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:1337/callback&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk' \
-    http://localhost:1337/oauth2/token
+    -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://127.0.0.1:1337/callback&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk' \
+    http://127.0.0.1:1337/oauth2/token
 ```
 
 A code is single-use: running the same exchange again is refused with
@@ -102,7 +102,7 @@ A code is single-use: running the same exchange again is refused with
 
 ```sh
 curl -i -X POST -H 'Sec-Fetch-Site: cross-site' -d 'decision=approve' \
-    'http://localhost:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://localhost:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
+    'http://127.0.0.1:1337/oauth2/authorize?response_type=code&client_id=5cc06c3b-5755-4229-958c-a515a245aaeb&redirect_uri=http://127.0.0.1:1337/callback&scope=api:read&state=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
 # → 403 Forbidden
 ```
 

@@ -15,25 +15,28 @@
 // a relying party at the issuer http://localhost:8083 with the confidential
 // client demo-rp / demo-rp-secret (client_secret_basic) or the public
 // client demo-spa (PKCE only), both registered with the redirect URI
-// http://localhost:9000/oidc/demo/callback — the callback of the "demo"
-// connection of examples/oidc-client served at http://localhost:9000 — and
-// sign in as alice / alice-secret. A refresh token comes with
-// offline_access when the end-user ticks "Keep access while I am away" on
-// the consent page, which offers it to plain OAuth 2.0 requests and to
-// OpenID requests with prompt=consent.
+// http://127.0.0.1:9000/oidc/demo/callback — the callback of the "demo"
+// connection of examples/oidc-client served at http://127.0.0.1:9000 — and
+// sign in as alice / alice-secret. The provider runs Profile20BCP, which
+// accepts no http redirect URI but the loopback IP literals 127.0.0.1 and
+// [::1] (RFC 9700 §2.6, RFC 8252 §7.3) — not localhost. A refresh token
+// comes with offline_access when the end-user ticks "Keep access while I am
+// away" on the consent page, which offers it to plain OAuth 2.0 requests
+// and to OpenID requests with prompt=consent.
 //
 // The environment overrides the defaults: OIDC_PROVIDER_ISSUER (https, or
 // http on a loopback host), OIDC_PROVIDER_ADDR (the listen address) and
-// OIDC_PROVIDER_REDIRECT_URI (the redirect URI of both clients). With
-// examples/oidc-client, from the examples directory:
+// OIDC_PROVIDER_REDIRECT_URI (the redirect URI of both clients, checked by
+// oauth2.ValidateRedirectURI). With examples/oidc-client, from the examples
+// directory:
 //
 //	go run ./oidc-provider &
-//	BASE_URL=http://localhost:9000 ADDR=localhost:9000 OIDC_DEV_ALLOW_LOOPBACK=1 \
+//	BASE_URL=http://127.0.0.1:9000 ADDR=127.0.0.1:9000 OIDC_DEV_ALLOW_LOOPBACK=1 \
 //	OIDC_CONNECTIONS=demo OIDC_DEMO_ISSUER=http://localhost:8083 \
 //	OIDC_DEMO_CLIENT_ID=demo-rp OIDC_DEMO_CLIENT_SECRET=demo-rp-secret \
 //	go run ./oidc-client
 //
-// then open http://localhost:9000. make e2e-oidc runs both the same way
+// then open http://127.0.0.1:9000. make e2e-oidc runs both the same way
 // (e2e/oidc), through a browser.
 //
 // The demo cuts corners a deployment must not: an http issuer
@@ -82,12 +85,16 @@ import (
 const (
 	defaultIssuer      = "http://localhost:8083"
 	defaultAddr        = "localhost:8083"
-	defaultRedirectURI = "http://localhost:9000/oidc/demo/callback"
+	defaultRedirectURI = "http://127.0.0.1:9000/oidc/demo/callback"
 	rpClientID         = "demo-rp"
 	rpClientSecret     = "demo-rp-secret" //nolint:gosec // demo credential
 	spaClientID        = "demo-spa"
 	apiAudience        = "demo-api"
 )
+
+// profile is the security baseline of the demo's authorization server: the
+// OAuth 2.0 Security BCP (RFC 9700).
+const profile = oauth2.Profile20BCP
 
 // config is the demo's configuration.
 type config struct {
@@ -118,10 +125,10 @@ func loadConfig() (config, error) {
 		RedirectURI: envOr("OIDC_PROVIDER_REDIRECT_URI", defaultRedirectURI),
 	}
 
-	// A redirection URI is absolute and has no fragment (RFC 6749 §3.1.2).
-	u, err := url.Parse(cfg.RedirectURI)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.Contains(cfg.RedirectURI, "#") {
-		return config{}, fmt.Errorf("OIDC_PROVIDER_REDIRECT_URI: an absolute http(s) URL without fragment is required, got %q", cfg.RedirectURI)
+	// The registration-time check of the provider's profile (RFC 6749
+	// §3.1.2, RFC 9700 §2.6): /authorize would refuse any other URI.
+	if err := oauth2.ValidateRedirectURI(profile, cfg.RedirectURI); err != nil {
+		return config{}, fmt.Errorf("OIDC_PROVIDER_REDIRECT_URI: %w", err)
 	}
 
 	return cfg, nil
@@ -234,6 +241,7 @@ func buildServer(cfg config, now func() time.Time) (http.Handler, *app, error) {
 	}
 
 	op, err := oidcprovider.New(oauth2.ServerConfig{
+		Profile:        profile,
 		Storage:        store,
 		ClientStore:    demoClients(cfg.RedirectURI),
 		IssuerResolver: oauth2.StaticIssuer(issuer, apiAudience),

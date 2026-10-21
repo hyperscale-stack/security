@@ -109,7 +109,7 @@ func FuzzAuthorizeRedirectTarget(f *testing.F) {
 	want := url.Values{paramCode: {"C"}, paramState: {"S"}, "iss": {"I"}}
 
 	f.Fuzz(func(t *testing.T, uri string) {
-		if ValidateRedirectURI(uri) != nil {
+		if ValidateRedirectURI(Profile20, uri) != nil {
 			return
 		}
 
@@ -121,6 +121,10 @@ func FuzzAuthorizeRedirectTarget(f *testing.F) {
 		u, err := url.Parse(target)
 		if err != nil {
 			t.Fatalf("%q -> unparsable %q: %v", uri, target, err)
+		}
+
+		if u.Fragment != "_" || strings.Count(target, "#") != 1 {
+			t.Fatalf("%q -> %q: the fragment is not reset to _ (RFC 9700 §4.1.3)", uri, target)
 		}
 
 		// The error reports a registered ";" pair, skipped: not one of ours.

@@ -13,13 +13,13 @@ version = 1
 
 config {
   # The provider under test.
-  issuer = env("OIDC_E2E_ISSUER", "http://127.0.0.1:8083")
+  issuer = env("OIDC_E2E_ISSUER", "http://localhost:8083")
 
   # The relying party (examples/oidc-client) and its connection to the
   # provider. The redirect URI is registered for both clients.
-  rp_url        = env("OIDC_E2E_RP_URL", "http://localhost:9000")
+  rp_url        = env("OIDC_E2E_RP_URL", "http://127.0.0.1:9000")
   rp_connection = env("OIDC_E2E_RP_CONNECTION", "demo")
-  redirect_uri  = env("OIDC_E2E_REDIRECT_URI", "http://localhost:9000/oidc/demo/callback")
+  redirect_uri  = env("OIDC_E2E_REDIRECT_URI", "http://127.0.0.1:9000/oidc/demo/callback")
 
   # The clients and the end-user registered at the provider: the demo
   # values of examples/oidc-provider.

@@ -665,7 +665,10 @@ func (o *op) begin(t *testing.T, c *oidcclient.Client, opts oidcclient.AuthOptio
 	ar, err := c.Begin(t.Context(), opts)
 	require.NoError(t, err)
 
-	return ar, redirected(t, o.authorize(t, ar.URL))
+	loc := redirected(t, o.authorize(t, ar.URL))
+	require.Equal(t, "_", loc.Fragment, "the provider's query-mode responses end with #_ (RFC 9700 §4.1.3)")
+
+	return ar, loc
 }
 
 // login runs a whole login of c.

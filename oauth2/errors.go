@@ -208,6 +208,19 @@ var ErrNoScopesDeclared = errors.New("oauth2: the client declares no scope")
 // wire: the client reads as unknown there.
 var ErrClientNotAtIssuer = errors.New("oauth2: client not registered at the request's issuer")
 
+// ErrSubjectIsClient is the cause of the server_error the implicit flow of
+// [Server.AuthorizeHandler] answers when the resource owner the
+// [ConsentFunc] approved for has the client's ID as subject: a
+// client_credentials token names the client in sub (RFC 9068 §2.2), so a
+// resource-owner token with the same sub would make a client registered
+// under a user's subject pass for that user (RFC 9700 §4.15). Nothing is
+// minted nor persisted, and sub == client_id marks a token without
+// resource owner exactly; the resource-owner grants of /token refuse the
+// same tokens. It means the namespaces of the client IDs and of the
+// subjects overlap — keep them disjoint (RFC 9700 §4.15.1). A plain
+// sentinel that never reaches the wire; match it with errors.Is.
+var ErrSubjectIsClient = errors.New("oauth2: the resource owner's subject is the client's ID")
+
 // CodeReplayError is the error an [AuthorizationCodeStore] returns for a
 // code it consumed before and still retains: a replay (RFC 6749 §4.1.2).
 // It reads and matches as [ErrCodeAlreadyUsed] — errors.Is, [IsCode] and

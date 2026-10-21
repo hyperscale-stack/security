@@ -59,12 +59,14 @@ type Client interface {
 	// Type reports whether the client is confidential or public.
 	Type() ClientType
 	// RedirectURIs lists the redirect URIs registered by the client — each
-	// one valid for [ValidateRedirectURI], which the authorization endpoint
-	// applies to the URI a request resolves to (an invalid one is answered
-	// with a bare 400, never redirected to). A request's redirect_uri MUST
-	// match one exactly (RFC 6749 §3.1.2.3, RFC 9700 §2.1), but for the port
-	// of a loopback IP redirect URI (http://127.0.0.1 or http://[::1], RFC
-	// 8252 §7.3), which the request may set freely.
+	// one valid for [ValidateRedirectURI] under the server's [Profile] (no
+	// http but http://127.0.0.1 and http://[::1] outside [Profile20]), which
+	// the authorization endpoint applies to the URI a request resolves to
+	// (an invalid one is answered with a bare 400, never redirected to). A
+	// request's redirect_uri MUST match one exactly (RFC 6749 §3.1.2.3, RFC
+	// 9700 §2.1), but for the port of a loopback IP redirect URI
+	// (http://127.0.0.1 or http://[::1], RFC 8252 §7.3), which the request
+	// may set freely.
 	RedirectURIs() []string
 	// GrantTypes lists the grant types the client may use, compared exactly
 	// with RFC 7591 §2 values — the GrantType constants
@@ -145,9 +147,10 @@ type ClientStore interface {
 // the secret presented — so another realm's clients can be neither enumerated
 // nor their secrets checked. unauthorized_client is not used: it would
 // confirm an authenticated, existing client. The [ErrorHook] gets
-// [ErrClientNotAtIssuer] as the cause. A server whose IssuerResolver fails
-// cannot check it: the request then fails with server_error, nothing
-// issued.
+// [ErrClientNotAtIssuer] as the cause. When the IssuerResolver fails, or
+// returns an issuer the server cannot use, no client is loaded at all: the
+// request fails as an outage — a bare 500 at /authorize, never redirected —
+// nothing issued.
 type IssuerBoundClient interface {
 	// AllowsIssuer reports whether the client is registered at issuer, the
 	// identifier the IssuerResolver returned — compared exactly (OpenID

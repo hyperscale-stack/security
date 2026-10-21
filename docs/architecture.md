@@ -266,7 +266,7 @@ The `oauth2` module is an authorization server, not just a provider:
   OIDC or JOSE:
 
   ```
-  /authorize  core checks ─► issuer ─► Extension.ValidateAuthorizeRequest ─► ConsentFunc
+  /authorize  issuer ─► core checks ─► Extension.ValidateAuthorizeRequest ─► ConsentFunc
               ─► Extension.CompleteAuthorization(Consent.ExtensionResult) ─► code {Issuer, ExtensionData}
   /token      grant checks (client, issuer, redirect_uri, PKCE) ─► mint tokens (context copied)
               ─► Extension.ExtendTokenResponse ─► one atomic write ─► {…, id_token}

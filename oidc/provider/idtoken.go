@@ -239,10 +239,8 @@ func (p *Provider) offlinePolicy(gc grantContext, iss oauth2.TokenIssuance) erro
 func (p *Provider) signIDToken(ctx context.Context, iss oauth2.TokenIssuance, gc grantContext, claims map[string]any) (string, error) {
 	clientID := iss.Client.ID()
 
-	if _, err := p.parseIssuer(iss.Access.Issuer); err != nil {
-		return "", err
-	}
-
+	// The issuer is valid: the server refuses at /token any issuer it
+	// cannot use (oauth2.ErrInvalidIssuer) before a grant runs.
 	snap, err := p.keys(ctx, iss.Access.Issuer)
 	if err != nil {
 		return "", err

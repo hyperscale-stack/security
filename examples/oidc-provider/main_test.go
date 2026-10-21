@@ -173,6 +173,7 @@ func redirected(t *testing.T, resp *http.Response) url.Values {
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(loc.String(), defaultRedirectURI+"?"), loc.String())
+	require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_ (RFC 9700 §4.1.3)")
 
 	return loc.Query()
 }
@@ -471,8 +472,10 @@ func TestAdvertisedURLsAreServed(t *testing.T) {
 }
 
 // TestLoadConfig: the defaults pair the example with examples/oidc-client;
-// the environment overrides them; a redirect URI that is not an absolute
-// http(s) URL, or has a fragment, is refused (RFC 6749 §3.1.2).
+// the environment overrides them; a redirect URI the provider's profile
+// refuses — not absolute, with a fragment (RFC 6749 §3.1.2), or http but on
+// a loopback IP literal (RFC 9700 §2.6: localhost included) — is refused at
+// startup.
 func TestLoadConfig(t *testing.T) {
 	t.Setenv("OIDC_PROVIDER_ISSUER", "")
 	t.Setenv("OIDC_PROVIDER_ADDR", "")
@@ -481,22 +484,23 @@ func TestLoadConfig(t *testing.T) {
 	cfg, err := loadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, config{
-		Issuer: "http://localhost:8083", Addr: "localhost:8083", RedirectURI: "http://localhost:9000/oidc/demo/callback",
+		Issuer: "http://localhost:8083", Addr: "localhost:8083", RedirectURI: "http://127.0.0.1:9000/oidc/demo/callback",
 	}, cfg)
 
 	t.Setenv("OIDC_PROVIDER_ISSUER", "http://127.0.0.1:8083")
 	t.Setenv("OIDC_PROVIDER_ADDR", "127.0.0.1:8083")
-	t.Setenv("OIDC_PROVIDER_REDIRECT_URI", "http://localhost:9000/oidc/e2e/callback")
+	t.Setenv("OIDC_PROVIDER_REDIRECT_URI", "http://[::1]:9000/oidc/e2e/callback")
 
 	cfg, err = loadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, config{
-		Issuer: "http://127.0.0.1:8083", Addr: "127.0.0.1:8083", RedirectURI: "http://localhost:9000/oidc/e2e/callback",
+		Issuer: "http://127.0.0.1:8083", Addr: "127.0.0.1:8083", RedirectURI: "http://[::1]:9000/oidc/e2e/callback",
 	}, cfg)
 
 	for _, bad := range []string{
 		"/oidc/demo/callback", "http:///oidc/demo/callback", "ftp://localhost/cb",
-		"http://localhost:9000/cb#fragment", "http://localhost:9000/cb#", "%zz",
+		"http://127.0.0.1:9000/cb#fragment", "http://127.0.0.1:9000/cb#", "%zz",
+		"http://localhost:9000/oidc/demo/callback", "http://rp.example/oidc/demo/callback",
 	} {
 		t.Setenv("OIDC_PROVIDER_REDIRECT_URI", bad)
 

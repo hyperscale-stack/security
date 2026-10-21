@@ -482,7 +482,7 @@ issuer, and a rotation never changes the context it carries.
 
 | Before | After |
 | ------ | ----- |
-| `/authorize` resolved no issuer for the code flow (the implicit flow did, after the consent) | resolves it right after the redirect URI is trusted, for both flows: a resolver failure answers a redirected `server_error`, before the `ConsentFunc` runs; `AuthorizeRequest.Issuer` exposes it |
+| `/authorize` resolved no issuer for the code flow (the implicit flow did, after the consent) | resolves it right after the redirect URI is trusted, for both flows: a resolver failure answers a redirected `server_error`, before the `ConsentFunc` runs; `AuthorizeRequest.Issuer` exposes it — since a bare `500`, never redirected, no client loaded: see "the issuer is validated" below |
 | a code or refresh token redeemed at any issuer | `invalid_grant` (`authorization code issued by another issuer`, `refresh_token issued by another issuer`); a refused refresh consumes nothing, a code replayed at another issuer revokes nothing |
 | `AuthorizationCode`, `AccessToken`, `RefreshToken` | gain `Issuer` and `ExtensionData` (strings every store persists byte-exact); `IntrospectedToken` gains `Issuer` |
 | codes and refresh tokens written before the upgrade | carry no issuer: refused with `invalid_grant` unless your resolver returns an empty issuer — fail closed |
@@ -676,7 +676,7 @@ resolved to (RFC 9207 §2), and the RFC 8414 metadata publishes
 | code (query)                                          | `code`, `state`         | `code`, `state`, `iss`                  |
 | implicit (fragment)                                   | token members, `state`  | token members, `state`, `iss`           |
 | redirected error (consent, extension, core checks)    | `error`…, `state`       | `error`…, `state`, `iss`                |
-| `server_error` when the `IssuerResolver` fails        | `error`, `state`        | unchanged (no issuer is known)          |
+| `server_error` when the `IssuerResolver` fails        | `error`, `state`        | unchanged (no issuer is known); since a bare `500`, never redirected — see "the issuer is validated" below |
 | bare 400 answers (client, redirect URI, response mode) | not redirected          | unchanged                               |
 
 To migrate:
@@ -752,7 +752,7 @@ The server now resolves the issuer of a request before it loads its client:
 
 | Endpoint | Before | After |
 | -------- | ------ | ----- |
-| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted |
+| `/authorize` | the `IssuerResolver` ran once the redirect URI was trusted | it runs first; a failure is still answered with a redirected `server_error` without `iss` once the redirect URI is trusted — since a bare `500`, never redirected, no client loaded: see "the issuer is validated" below |
 | `/token` | client authentication and `grant_type` checks before the resolver | the resolver first: when it fails, `server_error` wins over every other error |
 | `/revoke`, `/introspect` | no `IssuerResolver` call | the resolver runs before client authentication; a failure answers `500 server_error` |
 
@@ -2913,3 +2913,102 @@ To migrate: pass the reporting of your recovery interceptor to
 `grpcsec.WithPanicHandler` — log the value and a stack
 (`runtime/debug.Stack()`) there, keeping in mind that the value may hold a
 credential the panicking code had at hand.
+
+### `oauth2`: http redirect URIs are loopback IP literals under the BCP and 2.1 profiles; `ValidateRedirectURI` takes the profile
+
+RFC 9700 §2.6: "authorization servers MUST NOT allow redirection URIs that
+use the http scheme except for native clients that use loopback interface
+redirection as described in Section 7.3 of [RFC8252]" (OAuth 2.1 §1.5 says
+the same). `ValidateRedirectURI` applied the same rules to http and https, so
+the profiles claiming RFC 9700 sent codes, `state` and `iss` over plain http.
+
+| | Before | After |
+|---|---|---|
+| `ValidateRedirectURI` | `ValidateRedirectURI(uri)` | `ValidateRedirectURI(profile, uri)` |
+| registered `http://app.example/cb`, `http://10.0.0.5/cb`, `http://localhost:1337/cb` under `Profile20BCP` / `Profile21Draft` (or an unknown profile) | code redirected over http | refused by `ValidateRedirectURI`; `/authorize` answers a bare `400` "oauth2: invalid redirect_uri", never redirected |
+| `http://127.0.0.1[:port]/…`, `http://[::1][:port]/…` | accepted, any port at the request | unchanged |
+| `http://127.0.0.2`, `http://127.1`, `http://[::ffff:127.0.0.1]`, `HTTP://127.0.0.1`, `http://127.0.0.1:080` under BCP / 2.1 | accepted | refused: not the RFC 8252 §7.3 literal |
+| any http redirect URI under `Profile20` | accepted | unchanged (RFC 6749 §3.1.2.1: TLS SHOULD) |
+
+To migrate:
+
+1. Replace `oauth2.ValidateRedirectURI(uri)` with
+   `oauth2.ValidateRedirectURI(server.Config().Profile, uri)` — the profile
+   the server runs — wherever you register clients, and run it over the
+   redirect URIs already registered.
+2. Move web clients to https redirect URIs; native apps to
+   `http://127.0.0.1:{port}/…` or `http://[::1]:{port}/…` (the port may vary
+   per request) or a private-use scheme (`com.example.app:/cb`).
+3. For local development, register `http://127.0.0.1:{port}/…` instead of
+   `http://localhost:{port}/…` (the examples and `e2e/oidc` do).
+
+### `oauth2`: the issuer is validated; an `IssuerResolver` failure at `/authorize` is a bare 500
+
+RFC 8414 §2 and RFC 9207 §2 require the issuer to be "a URL that uses the
+https scheme" without query or fragment, and every authorization response —
+errors included — to carry it. The core published whatever the resolver
+returned, and an `IssuerResolver` failure at `/authorize` loaded the client
+without checking its issuer binding and redirected an `iss`-less
+`server_error` to it.
+
+| | Before | After |
+|---|---|---|
+| `StaticIssuer` with `""`, `http://…`, a query, a fragment, user info, an empty or invalid port, a non-canonical form | accepted | `NewServer` fails, wrapping `oauth2.ErrInvalidIssuer` |
+| a custom `IssuerResolver` returning such an issuer | published and sent as `iss` (an empty one dropped `iss`) | the request fails as on a resolver error: bare `500` at `/authorize`, `server_error` at `/token`, `/introspect` and the metadata, `503` at `/revoke`; cause `oauth2.ErrInvalidIssuer` |
+| `http://localhost…` / `http://127.0.0.1…` issuer | accepted | needs `ServerConfig.AllowInsecureLoopbackIssuer` (development only) |
+| `IssuerResolver` error at `/authorize` | client loaded, binding unchecked, `server_error` redirected without `iss` | bare `500` "oauth2: server error", never redirected, no client loaded |
+| `oidcprovider.Config.AllowInsecureLoopbackIssuer` | the provider's checks only | one setting: `oidcprovider.New` sets it on both configurations |
+| `oidcprovider.ErrInvalidIssuer` | its own sentinel | wraps `oauth2.ErrInvalidIssuer` |
+
+To migrate:
+
+1. Make every issuer an https URL with a host, without user info, query or
+   fragment, written as `url.Parse(issuer).String()` writes it — and in the
+   RFC 3986 §6.2.2 normal form (lower-case host, no default port, no dot
+   segment), which the server does not enforce but relying parties
+   comparing `iss` after normalizing the URL need.
+2. For local development over http, set
+   `ServerConfig.AllowInsecureLoopbackIssuer` (or the provider's flag) and
+   use a loopback host.
+3. Match `oauth2.ErrInvalidIssuer` in `OnError`; expect a bare 500 at
+   `/authorize`, not a redirect, when the resolver fails.
+
+### `oauth2`: `/authorize` — a missing `response_type`, the code flow without its grant, the code lifetime, the `#_` fragment, implicit tokens naming their client
+
+| | Before | After |
+|---|---|---|
+| no `response_type` (or an empty one) | `unsupported_response_type` | `invalid_request` (RFC 6749 §4.1.1, §4.1.2.1) |
+| `response_type=code` on a server without the `authorization_code` grant | code minted, never redeemable | `unsupported_response_type`, "the authorization_code grant is not enabled" |
+| `AuthorizeConfig.CodeTTL` over 10 minutes | accepted | `AuthorizeHandler` panics (RFC 6749 §4.1.2) |
+| query-mode response (code, error, 303) | `…&state=xyz` | `…&state=xyz#_` (RFC 9700 §4.1.3) |
+| implicit approval whose `Consent.Subject` is the client's ID | token minted | redirected `server_error`, cause `oauth2.ErrSubjectIsClient`, nothing persisted |
+
+To migrate:
+
+1. Clients parsing the redirect as a URL (RFC 3986) are unaffected by `#_`;
+   one splitting the raw `Location` text would read `state=xyz#_` and fail
+   closed; a single-page app routing on the hash of its redirect page sees
+   a `_` route: route it to the callback, or read the query only.
+2. Lower a `CodeTTL` above 10 minutes; codes are redeemed right after the
+   redirect.
+3. Register the `authorization_code` grant on every server whose
+   `/authorize` must serve the code flow.
+4. Keep client IDs and resource-owner subjects disjoint (RFC 9700 §4.15.1).
+
+### `oauth2`: the RFC 8414 metadata advertises `jwks_uri` on request, `scopes_supported`, and no authorization endpoint without a flow
+
+| | Before | After |
+|---|---|---|
+| `jwks_uri` | always `{issuer}/.well-known/jwks.json`, though `oauth2` serves none | only with `ServerConfig.AdvertiseJWKSURI` (`oidcprovider.New` sets it) |
+| `scopes_supported` | never | `ServerConfig.ScopesSupported` when set (one RFC 6749 §3.3 token per value, no duplicate — `NewServer` refuses others); oidc/provider: its OpenID Connect scopes, then yours |
+| server without the `authorization_code` grant | `authorization_endpoint`, `response_types_supported: ["code"]`, PKCE methods | no `authorization_endpoint`, `response_types_supported: []`, `response_modes_supported: []`, no PKCE methods, `authorization_response_iss_parameter_supported: false` (unless an implicit handler is built: `["token"]`) |
+| no grant at all | `grant_types_supported: null` | `grant_types_supported: []` |
+
+To migrate:
+
+1. A plain `oauth2` deployment serving the JWK Set of its JWT access tokens
+   at `{issuer}/.well-known/jwks.json` (`jwtsec.MarshalJWKS`) sets
+   `ServerConfig.AdvertiseJWKSURI`, or its resource servers, which find the
+   keys through the metadata (RFC 9068 §4), lose them.
+2. List the scopes clients may request in `ServerConfig.ScopesSupported`
+   (optional, RECOMMENDED by RFC 8414 §2).

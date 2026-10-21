@@ -230,6 +230,9 @@ func TestDiscoveryConsistentWithRFC8414Metadata(t *testing.T) {
 		"default routes":      {},
 		"route prefix":        {opts: []envOption{withRoutePrefix("/connect")}},
 		"public clients only": {opts: []envOption{withClientAuth(clientauth.NewNone())}},
+		"deployment scopes": {opts: []envOption{func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) {
+			s.ScopesSupported = []string{"api:read", "openid"}
+		}}},
 		"implicit flow attempted (Profile20)": {
 			opts: []envOption{withProfile(oauth2.Profile20)}, setup: attemptImplicit,
 		},
@@ -254,10 +257,38 @@ func TestDiscoveryConsistentWithRFC8414Metadata(t *testing.T) {
 			assert.Equal(t, v, oidc[member], "%s: %s", name, member)
 		}
 
+		// The provider serves its JWK Set and its scopes: the RFC 8414
+		// document publishes them too.
+		for _, member := range []string{"jwks_uri", "scopes_supported"} {
+			assert.Contains(t, rfc8414, member, "%s: %s", name, member)
+		}
+
 		for _, member := range []string{"revocation_endpoint_auth_methods_supported", "introspection_endpoint_auth_methods_supported"} {
 			_, inOIDC := oidc[member]
 			_, inRFC8414 := rfc8414[member]
 			assert.Equal(t, inRFC8414, inOIDC, "%s: %s published alike", name, member)
 		}
 	}
+}
+
+// TestDiscoveryPublishesTheDeploymentScopes: scopes_supported (Discovery
+// §3, RFC 8414 §2) lists the OpenID Connect scopes the provider serves,
+// then the server's own ServerConfig.ScopesSupported, each once — in both
+// metadata documents.
+func TestDiscoveryPublishesTheDeploymentScopes(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) {
+		s.ScopesSupported = []string{"api:read", "openid"}
+	})
+
+	want := []any{"openid", "profile", "email", "address", "phone", "offline_access", "api:read"}
+	assert.Equal(t, want, discovery(t, e, get("/.well-known/openid-configuration"))["scopes_supported"])
+
+	rec := serve(e.op.Server().MetadataHandler(), get("/.well-known/oauth-authorization-server"))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var rfc8414 map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rfc8414))
+	assert.Equal(t, want, rfc8414["scopes_supported"])
 }

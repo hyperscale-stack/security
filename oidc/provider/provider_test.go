@@ -234,6 +234,50 @@ func TestPaths(t *testing.T) {
 	}
 }
 
+// TestLoopbackIssuerSettingIsShared: Config.AllowInsecureLoopbackIssuer and
+// the server's are one setting — set on either side, an http loopback issuer
+// passes the core's /authorize and the provider's discovery alike; set on
+// neither, both refuse it, and the provider's ErrInvalidIssuer is the
+// core's too.
+func TestLoopbackIssuerSettingIsShared(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "http://127.0.0.1:8080"
+
+	cases := map[string]envOption{
+		"provider setting": withConfig(func(c *oidcprovider.Config) { c.AllowInsecureLoopbackIssuer = true }),
+		"server setting": func(s *oauth2.ServerConfig, _ *grant.Config, _ *oidcprovider.Config) {
+			s.AllowInsecureLoopbackIssuer = true
+		},
+	}
+
+	for name, opt := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t, opt, withResolver(fixedIssuer{issuer: issuer}))
+			assert.True(t, e.op.Server().Config().AllowInsecureLoopbackIssuer)
+
+			params := redirect(t, e.authorize(authorizeQuery()))
+			assert.NotEmpty(t, params.Get("code"))
+			assert.Equal(t, issuer, params.Get("iss"))
+			assert.Equal(t, issuer, discovery(t, e, get("/.well-known/openid-configuration"))["issuer"])
+		})
+	}
+
+	t.Run("neither", func(t *testing.T) {
+		t.Parallel()
+
+		e := newEnv(t, withResolver(fixedIssuer{issuer: issuer}))
+		assert.Equal(t, http.StatusInternalServerError, e.authorize(authorizeQuery()).Code)
+		assert.Equal(t, http.StatusInternalServerError, serve(e.op.DiscoveryHandler(), get("/.well-known/openid-configuration")).Code)
+
+		_, err := e.op.Paths(issuer)
+		require.ErrorIs(t, err, oidcprovider.ErrInvalidIssuer)
+		require.ErrorIs(t, err, oauth2.ErrInvalidIssuer)
+	})
+}
+
 // TestIssuerValidation pins OIDC Core §2 and Discovery §3: an issuer is an
 // https URL with a host and no query, fragment or user info, kept verbatim
 // (compared exactly, so its canonical form is required); http only for a

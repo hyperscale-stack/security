@@ -4,7 +4,12 @@
 
 package oidcprovider
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/hyperscale-stack/security/oauth2"
+)
 
 var (
 	// ErrUnknownSubject is what a [ClaimsSource] returns — wrapped with %w,
@@ -24,6 +29,8 @@ var (
 	// ErrInvalidIssuer reports an issuer identifier that is not an https URL
 	// with a host and without query, fragment or user info, in canonical
 	// form (OpenID Connect Core §2, Discovery §3) — or an http URL without
-	// [Config.AllowInsecureLoopbackIssuer] and a loopback host.
-	ErrInvalidIssuer = errors.New("oidcprovider: invalid issuer identifier")
+	// [Config.AllowInsecureLoopbackIssuer] and a loopback host. It wraps
+	// [oauth2.ErrInvalidIssuer], what the core's endpoints report for the
+	// same issuers: errors.Is(err, oauth2.ErrInvalidIssuer) matches both.
+	ErrInvalidIssuer = fmt.Errorf("oidcprovider: invalid issuer identifier: %w", oauth2.ErrInvalidIssuer)
 )

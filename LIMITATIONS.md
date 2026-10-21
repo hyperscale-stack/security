@@ -30,11 +30,11 @@ future refactor phases.
   §2.1) and reports the failure to `OnError`: the resource server cannot
   tell an outage from a revoked token, and refuses the request either way.
 - **`/.well-known/jwks.json` endpoint** — the `oauth2` module alone serves
-  none, although its RFC 8414 metadata advertises `jwks_uri` (the issuer
-  followed by `/.well-known/jwks.json`): mount the
-  `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
-  publish your own with `jwtsec.MarshalJWKS` (it refuses private and
-  symmetric keys).
+  none, so its RFC 8414 metadata advertises `jwks_uri` (the issuer followed
+  by `/.well-known/jwks.json`) only with `ServerConfig.AdvertiseJWKSURI`:
+  mount the `oidc/provider` `JWKSHandler` (`oidcprovider.New` sets the flag),
+  which serves the issuer's public keys, or publish your own with
+  `jwtsec.MarshalJWKS` (it refuses private and symmetric keys) and set it.
 - **Client and user subjects share `sub`** — a `client_credentials`
   token's `sub` is its client ID (RFC 9068 §2.2): a resource server tells
   it from a resource owner's token with
@@ -87,27 +87,27 @@ future refactor phases.
 - **Every registered client is trusted to receive error redirects** — an
   error `/authorize` detects before the resource owner authenticated is
   redirected to the client's registered redirect URI unless
-  `AuthorizeConfig.TrustedRedirect` says the client is not trusted (RFC
-  9700 §4.11.2); set it when clients are registered by third parties. An
-  explicit denial after authentication (`access_denied`) is redirected to
-  every client — RFC 9700 §4.11.2's second attack: a `ConsentFunc` may warn
-  the resource owner about a client it does not trust.
-- **RFC 9207 `iss` needs a resolved issuer** — every authorization response
-  names its issuer, except the `server_error` redirected when the
-  `IssuerResolver` itself fails: no issuer is known then, so it travels
-  without `iss`, and an RFC 9207 client rejects it (RFC 9207 §2.4) — the
-  outcome a failed request has anyway. This deviates from RFC 9207 §2
-  ("including error responses") on purpose; a bare 500 was the reviewed
-  alternative (see
-  [docs/security-considerations.md](docs/security-considerations.md)).
-- **The issuer is not validated by the core** — `iss` carries what the
-  `IssuerResolver` returns; RFC 9207 §2 wants an https URL without query or
-  fragment. `oidc/provider` refuses any other issuer (`server_error`), but
-  that refusal still names it.
+  `AuthorizeConfig.TrustedRedirect` says the client is not trusted: by
+  default — under `Profile20BCP` and `Profile21Draft` too — a deviation from
+  the RFC 9700 §4.11.2 MUST ("The authorization server MUST always
+  authenticate the user first … before redirecting the user"), which the
+  hook closes; set it when clients are registered by third parties. It is
+  deliberate: the library has no dynamic client registration (RFC 7591, the
+  attacker's path in §4.11.2), so every client comes from the deployment's
+  own registry, and OpenID Connect Core §3.1.2.6 expects `prompt=none`
+  refusals to be redirected — a fail-closed default would turn them, and
+  every other pre-authentication error, into bare pages for every
+  deployment. An explicit denial after authentication (`access_denied`) is
+  redirected to every client — RFC 9700 §4.11.2's second attack: a
+  `ConsentFunc` may warn the resource owner about a client it does not
+  trust.
 - **Clients span every issuer by default** — with one `ClientStore` behind
   several issuers, a client is known at every issuer unless it implements
   `IssuerBoundClient` (`DefaultClient.IssuerValues`) or the store is scoped
-  by issuer.
+  by issuer. Deliberate: the realms a client belongs to are data only the
+  deployment has, a single-tenant server (`StaticIssuer`) has one realm, and
+  codes and tokens are bound to their issuer whatever the client — one
+  realm's authorization is never redeemed at another.
 - **`/introspect` returns no `iss`** — an active token is always of the
   issuer the request resolved to; the token's issuer reaches an
   `IntrospectionPolicy` (`IntrospectedToken.Issuer`), not the response body.
@@ -117,7 +117,10 @@ future refactor phases.
   §4.2.2), and the `client_credentials` and `password` grants never call it.
   Response modes: `query` for the code flow, and `fragment` only for an
   enabled implicit flow — which the metadata advertises once an
-  `AuthorizeHandler` enabling it is built; `form_post` is refused.
+  `AuthorizeHandler` enabling it is built, mounted or not: the server cannot
+  observe which handler is mounted, so build only the handlers you mount (a
+  request for a flow the mounted handler refuses gets
+  `unsupported_response_type`); `form_post` is refused.
 
 ## OpenID Provider
 

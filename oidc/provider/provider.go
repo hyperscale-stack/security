@@ -73,7 +73,10 @@ type Config struct {
 	AllowRefreshWithoutOfflineAccess bool
 	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
 	// localhost or a loopback IP address — for development only: OpenID
-	// Connect Core §2 requires an https issuer.
+	// Connect Core §2 requires an https issuer. It and the server's
+	// [oauth2.ServerConfig.AllowInsecureLoopbackIssuer] are one setting: New
+	// sets both when either is set, so the core and the provider validate
+	// the same issuers.
 	AllowInsecureLoopbackIssuer bool
 }
 
@@ -227,8 +230,6 @@ type Provider struct {
 	// clients is the server's client store: UserInfo serves the tokens of
 	// clients still registered at the issuer only.
 	clients oauth2.ClientStore
-	// refresh reports that a refresh_token grant is registered.
-	refresh bool
 	// claimsSupported is the Discovery claims_supported list.
 	claimsSupported []string
 	// names are the claims the provider knows, by claimKey.
@@ -274,6 +275,17 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 		return nil, errors.New("oidcprovider: New: the server needs the authorization_code grant")
 	}
 
+	// One loopback-issuer setting: the core and the provider validate the
+	// issuers the resolver returns alike.
+	loopback := server.AllowInsecureLoopbackIssuer || cfg.AllowInsecureLoopbackIssuer
+	server.AllowInsecureLoopbackIssuer, cfg.AllowInsecureLoopbackIssuer = loopback, loopback
+
+	// Both metadata documents publish the JWK Set the provider serves at
+	// Paths.JWKS, and the same scopes: the OpenID Connect ones, then the
+	// server's own.
+	server.AdvertiseJWKSURI = true
+	server.ScopesSupported = scopesSupported(hasGrant(server.Grants, oauth2.GrantTypeRefreshToken), server.ScopesSupported)
+
 	p := &Provider{cfg: cfg, ttl: cfg.IDTokenTTL}
 	if p.ttl == 0 {
 		p.ttl = DefaultIDTokenTTL
@@ -288,7 +300,6 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 
 	sc := srv.Config()
 	p.server, p.now, p.hook, p.tokens, p.clients = srv, sc.Now, sc.OnError, sc.Storage, sc.ClientStore
-	p.refresh = hasGrant(sc.Grants, oauth2.GrantTypeRefreshToken)
 	p.claimsSupported = appendUnique(slices.Clone(protocolClaims), cfg.ClaimsSupported...)
 	p.names = newClaimNames(cfg.ClaimsSupported)
 

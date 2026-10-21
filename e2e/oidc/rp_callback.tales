@@ -57,7 +57,7 @@ scenario "Relying party: the callback is bound to the browser" {
       cookie   = result.sign_in.cookie
       decision = "allow"
       offline  = false
-      location = "^${config.redirect_uri}\\?code=[^&]+&iss=${url_encode(config.issuer)}&state=[A-Za-z0-9_-]+$"
+      location = "^${config.redirect_uri}\\?code=[^&]+&iss=${url_encode(config.issuer)}&state=[A-Za-z0-9_-]+#_$"
     }
   }
 

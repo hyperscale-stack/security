@@ -51,8 +51,14 @@
 //     authorization_code and refresh_token grants refuse them at another
 //     issuer, /introspect answers them inactive and /revoke leaves them
 //     untouched there. Every authorization response names that issuer in its iss
-//     parameter (RFC 9207), errors included. A client implementing
-//     IssuerBoundClient is unknown at the issuers it is not registered at.
+//     parameter (RFC 9207), errors included; the issuer is validated on every
+//     request (ErrInvalidIssuer), and a request whose issuer is unknown is an
+//     outage — at /authorize a bare 500, never redirected. A client
+//     implementing IssuerBoundClient is unknown at the issuers it is not
+//     registered at.
+//   - Redirect URIs follow the profile: under Profile20BCP and
+//     Profile21Draft, no http but the loopback IP literals of native apps
+//     (RFC 9700 §2.6, ValidateRedirectURI).
 //   - ServerConfig.Extension plugs an optional protocol extension — the
 //     oidc/provider module's OpenID Provider — into the authorization-code
 //     flow: it validates its own /authorize parameters after the core

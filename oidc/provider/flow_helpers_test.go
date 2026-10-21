@@ -70,12 +70,9 @@ func redirect(t *testing.T, rec *httptest.ResponseRecorder) url.Values {
 	loc, err := url.Parse(rec.Header().Get("Location"))
 	require.NoError(t, err)
 
-	if loc.Fragment != "" {
-		params, err := url.ParseQuery(loc.Fragment)
-		require.NoError(t, err)
-
-		return params
-	}
+	// The provider answers in the query only, the fragment reset (RFC 9700
+	// §4.1.3).
+	require.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
 
 	return loc.Query()
 }

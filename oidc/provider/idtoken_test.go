@@ -140,10 +140,11 @@ func TestClientWithoutAnAlgorithmGetsRS256(t *testing.T) {
 	assert.Equal(t, string(jwtsec.RS256), header["alg"])
 }
 
-// TestIDTokenIssuerIsCheckedAtTheExchange: an issuer the provider no longer
-// accepts — an http loopback issuer once the opt-in is gone — gets no ID
-// Token (server_error), even for a code issued before.
-func TestIDTokenIssuerIsCheckedAtTheExchange(t *testing.T) {
+// TestExchangeAtARefusedIssuerIssuesNoIDToken: an issuer the deployment no
+// longer accepts — an http loopback issuer once the opt-in is gone — gets
+// no ID Token, even for a code issued before: the server refuses the issuer
+// at /token (server_error, oauth2.ErrInvalidIssuer) before the grant runs.
+func TestExchangeAtARefusedIssuerIssuesNoIDToken(t *testing.T) {
 	t.Parallel()
 
 	loopback := withResolver(fixedIssuer{issuer: "http://127.0.0.1:8080"})
@@ -155,6 +156,7 @@ func TestIDTokenIssuerIsCheckedAtTheExchange(t *testing.T) {
 	rec := strict.exchange(code)
 	assert.Equal(t, oauth2.CodeServerError, oauthError(t, rec))
 	assert.NotContains(t, rec.Body.String(), "id_token")
+	assert.True(t, strict.sink.contains(oauth2.ErrInvalidIssuer))
 }
 
 // TestClientAlgorithmWithoutAKey: a client registered for an algorithm no
@@ -351,7 +353,9 @@ func TestValueConstraintsMatchScalarsOnly(t *testing.T) {
 }
 
 // TestAuthorizationFailsClosedOnServerSideErrors: a key source or an issuer
-// the provider cannot use answers server_error before any interaction.
+// the provider cannot use fails the request before any interaction — a
+// redirected server_error for the keys, and for an issuer the core already
+// refuses, a bare 500 that names no issuer (oauth2.ErrInvalidIssuer).
 func TestAuthorizationFailsClosedOnServerSideErrors(t *testing.T) {
 	t.Parallel()
 
@@ -360,7 +364,10 @@ func TestAuthorizationFailsClosedOnServerSideErrors(t *testing.T) {
 	assert.Equal(t, oauth2.CodeServerError, redirect(t, broken.authorize(authorizeQuery())).Get("error"))
 
 	insecure := newEnv(t, withResolver(fixedIssuer{issuer: "http://op.example"}))
-	assert.Equal(t, oauth2.CodeServerError, redirect(t, insecure.authorize(authorizeQuery())).Get("error"))
+	rec := insecure.authorize(authorizeQuery())
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+	assert.True(t, insecure.sink.contains(oauth2.ErrInvalidIssuer))
 
 	for _, e := range []*env{broken, insecure} {
 		interactive, silent := e.interaction.calls()

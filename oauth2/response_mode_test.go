@@ -11,10 +11,13 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hyperscale-stack/security/oauth2"
 	"github.com/hyperscale-stack/security/oauth2/clientauth"
+	"github.com/hyperscale-stack/security/oauth2/grant"
 	"github.com/hyperscale-stack/security/oauth2/storage/memory"
+	"github.com/hyperscale-stack/security/oauth2/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +42,12 @@ func (s *writeCountingStore) SaveTokenPair(ctx context.Context, pair *oauth2.Tok
 	return s.Store.SaveTokenPair(ctx, pair) //nolint:wrapcheck // test double
 }
 
+// codeGrant is the authorization_code grant over store: /authorize serves
+// the code flow only on a server registering it.
+func codeGrant(store oauth2.Storage) oauth2.Grant {
+	return grant.NewAuthorizationCode(grant.Config{Storage: store, AccessTokens: token.NewOpaque(32), AccessTTL: time.Hour})
+}
+
 // responseModeServer is a Profile20 server — the implicit flow can be
 // enabled — over a counting store, reporting to sink, behind resolver.
 func responseModeServer(t *testing.T, resolver oauth2.IssuerResolver, sink *errorSink) (*oauth2.Server, *writeCountingStore) {
@@ -54,6 +63,7 @@ func responseModeServer(t *testing.T, resolver oauth2.IssuerResolver, sink *erro
 				IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
 			},
 		}},
+		Grants:     []oauth2.Grant{codeGrant(store)},
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
 		OnError:    sink.hook,
 	})
@@ -135,6 +145,7 @@ func TestAuthorizeAcceptsTheDefaultResponseMode(t *testing.T) {
 			}
 
 			assert.NotEmpty(t, loc.Query().Get("code"))
+			assert.Equal(t, "_", loc.Fragment, "a query-mode response ends with #_")
 		})
 	}
 }
@@ -186,8 +197,8 @@ func TestAuthorizeRefusesUnsupportedResponseModes(t *testing.T) {
 }
 
 // TestResponseModeIsCheckedBeforeAnyRedirect: an unsupported response_mode
-// wins over every error that would be redirected — the issuer, the
-// response type, the scope, PKCE — since none of them can be encoded.
+// wins over every error that would be redirected — the response type, the
+// scope, PKCE — since none of them can be encoded.
 func TestResponseModeIsCheckedBeforeAnyRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +207,6 @@ func TestResponseModeIsCheckedBeforeAnyRedirect(t *testing.T) {
 		resolver oauth2.IssuerResolver
 		mutate   func(url.Values)
 	}{
-		{"failing resolver", failingIssuer{}, func(url.Values) {}},
 		{"scope not allowed", oauth2.StaticIssuer("https://auth.example", "api"), func(q url.Values) { q.Set("scope", "admin") }},
 		{"malformed PKCE", oauth2.StaticIssuer("https://auth.example", "api"), func(q url.Values) { q.Set("code_challenge", "short") }},
 	}

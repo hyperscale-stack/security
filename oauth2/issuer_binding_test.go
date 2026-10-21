@@ -155,57 +155,6 @@ func TestImplicitTokenRecordsTheResolvedIssuer(t *testing.T) {
 	assert.Equal(t, "api.a.example", at.Audience)
 }
 
-// TestAuthorizeIssuerFailureAnswersBeforeConsent: a resolver failure is a
-// server_error redirected — in the query for the code flow, in the fragment
-// for the implicit one — before the ConsentFunc runs, and nothing is saved.
-func TestAuthorizeIssuerFailureAnswersBeforeConsent(t *testing.T) {
-	t.Parallel()
-
-	for name, q := range map[string]url.Values{"code": authorizeQuery(), "implicit": implicitQuery()} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			sink := &errorSink{}
-			srv, err := oauth2.NewServer(oauth2.ServerConfig{
-				Profile: oauth2.Profile20, Storage: memory.New(), IssuerResolver: failingIssuer{},
-				ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-					testClientID: &oauth2.DefaultClient{
-						GrantTypeValues: allGrantTypes,
-						IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
-					},
-				}},
-				ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
-				OnError:    sink.hook,
-			})
-			require.NoError(t, err)
-
-			consented := false
-			rec := authorizeAt(srv, "a.example", q,
-				func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
-					consented = true
-
-					return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
-				})
-			require.Equal(t, http.StatusFound, rec.Code)
-			assert.False(t, consented, "the ConsentFunc never runs")
-
-			loc := mustLocation(t, rec)
-			params := loc.Query()
-
-			if name == "implicit" {
-				params, err = url.ParseQuery(loc.Fragment)
-				require.NoError(t, err)
-			}
-
-			assert.Equal(t, oauth2.CodeServerError, params.Get("error"))
-			assert.Equal(t, q.Get("state"), params.Get("state"))
-			assert.False(t, params.Has("code"))
-			assert.False(t, params.Has("access_token"))
-			assert.Equal(t, []string{oauth2.CodeServerError}, sink.codes())
-		})
-	}
-}
-
 // TestCodeRedeemedAtAnotherIssuerIsRefused issues a code on realm a and
 // redeems it on realm b: invalid_grant, and the code is burned.
 func TestCodeRedeemedAtAnotherIssuerIsRefused(t *testing.T) {
