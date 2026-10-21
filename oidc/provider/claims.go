@@ -48,17 +48,33 @@ const (
 // Claim names are case-sensitive (Core §5.1, RFC 7519 §4), but relying
 // parties often match them case-insensitively — Go's encoding/json reads
 // "SUB" or "ſub" as sub, the last one winning — or normalize them
-// ("email.verified" or "émail_verified" to emailVerified). Under that
-// comparison (a "case variant": the same name ignoring case — simple and
-// full case mappings —, the diacritics lodash's camelCase strips from
-// Latin letters, and every character but letters, decimal digits and
-// "#"), the provider never releases, and never asks for:
+// ("email.verified", "émail_verified" or, splitting words on "#" as
+// lodash's and change-case's camelCase do, "email#verified" to
+// emailVerified). Under that comparison (a "case variant": the same name
+// ignoring case — simple and full case mappings —, the diacritics lodash's
+// camelCase strips from Latin letters, and every character but letters and
+// decimal digits), the provider never releases, and never asks for:
 //   - a case variant of a protocol claim, or of a claim reserved to another
 //     protocol (azp, jti, sid, scope, …);
 //   - a case variant of a claim it knows — the standard claims of Core
 //     §5.1, roles, groups and entitlements (RFC 9068 §2.2.3.1) and
 //     [Config].ClaimsSupported — other than its exact spelling ("Email",
-//     "e_mail", "EMAIL#fr" are dropped, "email#fr" is released).
+//     "e_mail", "EMAIL#fr", "email_verified#" are dropped, "email#fr" is
+//     released);
+//   - a name whose part before its first "#" is one of the above ("sub#x",
+//     "Email#x");
+//   - a language-tagged name that reads, as a whole, as one of the above
+//     or as a tagged variant of one: the claim name's key followed by any
+//     part of the tag's ("email#verified" reads as email_verified,
+//     "email#verified-fr" as email_verified#fr, "s#ub-fr" as sub).
+//
+// A language-tagged name is a claim name, "#" and a well-formed BCP 47
+// language tag (Core §5.2, RFC 5646 §2.1): "name#fr",
+// "family_name#ja-Kana-JP". Any other "#" is an ordinary character —
+// "name#", "name#fr-" and the URI name
+// "https://example.com/claims#user_roles" (RFC 7519 §4.2) are names of
+// their own, released when requested under that exact name, never as a
+// variant of another.
 //
 // Of what remains, it drops every claim whose name is a case variant of
 // another one released with it (all of them: which one a relying party
@@ -113,7 +129,8 @@ type ClaimsQuery struct {
 	// Names lists the claims the provider may release: those of the granted
 	// scopes (UserInfo) and those the end-user agreed to release through the
 	// claims parameter. A language-tagged variant of a listed name
-	// ("name#fr", Core §5.2) is released with it. Empty: release nothing.
+	// ("name#fr", Core §5.2: a well-formed language tag after "#") is
+	// released with it. Empty: release nothing.
 	// The claims parameter's names are chosen by the client: untrusted
 	// input, only known to be 1 to 255 bytes of UTF-8 without control
 	// characters and releasable (see [ClaimsSource]) — a source that looks
@@ -208,19 +225,24 @@ var errClaimValue = errors.New("oidcprovider: claims source: a released claim va
 
 // releaseClaims keeps, of what a ClaimsSource returned, the claims allowed
 // lists — a language-tagged variant ("name#fr") with its untagged name —
-// under a valid claim name, encoded: their value is neither null nor an
-// empty string (Core §5.3.2), matches the request's value constraint, if
-// any (Core §5.5.1), and is well formed (see wellFormedValue). It then
-// drops every name that is a case variant of another kept one. allowed
-// never holds a reserved claim (see claimNames.releaseSet), so none is ever
-// kept. A value encoding/json cannot encode fails with errClaimValue —
-// unless constrained: it then matches no value and is dropped.
-func releaseClaims(src map[string]any, allowed map[string][]json.RawMessage) (map[string]any, error) {
+// under a valid claim name the provider may release (see
+// claimNames.releasable: "email#verified" is no variant of email to
+// release), encoded: their value is neither null nor an empty string (Core
+// §5.3.2), matches the request's value constraint, if any (Core §5.5.1),
+// and is well formed (see wellFormedValue). It then drops every name that
+// is a case variant of another kept one. A value encoding/json cannot
+// encode fails with errClaimValue — unless constrained: it then matches no
+// value and is dropped.
+func (n claimNames) releaseClaims(src map[string]any, allowed map[string][]json.RawMessage) (map[string]any, error) {
 	out := make(map[string]any, len(src))
 
 	for name, v := range src {
+		if !validClaimName(name) || !n.releasable(name) {
+			continue
+		}
+
 		values, ok := allowedValues(allowed, name)
-		if !ok || !validClaimName(name) {
+		if !ok {
 			continue
 		}
 

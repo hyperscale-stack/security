@@ -633,7 +633,7 @@ func TestUserInfoScopeClaims(t *testing.T) {
 		},
 		"openid email":   {"sub": "alice", "email": "alice@example.com", "email_verified": true},
 		"openid address": {"sub": "alice", "address": map[string]any{"country": "FR"}},
-		"openid phone":   {"sub": "alice", "phone_number": "+33 1 23 45 67 89", "phone_number#x#y": "+0"},
+		"openid phone":   {"sub": "alice", "phone_number": "+33 1 23 45 67 89", "phone_number#fr-CA": "+1 (fr-CA)"},
 	}
 
 	for scope, want := range cases {

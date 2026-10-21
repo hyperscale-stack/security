@@ -370,6 +370,7 @@ func TestReleasedClaimValuesAreWellFormed(t *testing.T) {
 		"lone_low":          json.RawMessage(`["\udc00"]`),
 		"escaped_backslash": json.RawMessage(`"\\ud800"`),
 		"nul_member":        map[string]any{"country": "FR", "country\x00": "EVIL"},
+		"hash_member":       map[string]any{"country": "FR", "country#": "EVIL"},
 		"control_member":    map[string]any{"role\x1f": "admin"},
 		"too_deep":          nested(32),
 		"deepest":           nested(31),
@@ -383,7 +384,7 @@ func TestReleasedClaimValuesAreWellFormed(t *testing.T) {
 	}
 	dropped := []string{
 		"folded_members", "deep_folded", "duplicate_members", "invalid_names", "invalid_name",
-		"escaped_invalid", "invalid_utf8", "lone_surrogate", "reversed_pair", "lone_low", "nul_member", "control_member", "too_deep",
+		"escaped_invalid", "invalid_utf8", "lone_surrogate", "reversed_pair", "lone_low", "nul_member", "hash_member", "control_member", "too_deep",
 		"beyond_float64", "big_integer", "deep_big_number",
 	}
 

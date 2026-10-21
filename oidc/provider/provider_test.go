@@ -84,6 +84,22 @@ func TestNewValidatesItsConfiguration(t *testing.T) {
 		{"supported delimiter variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant-id"} }},
 		{"supported tagged case variants", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"name#fr", "name#FR"} }},
 		{"supported tagged names of variant bases", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"x#fr", "X#de"} }},
+		{"supported empty-tag variant of name", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"name#"} }},
+		{"supported sub before a malformed tag", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"sub#x"} }},
+		{"supported variant of email before a malformed tag", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"Email#x"}
+		}},
+		{"supported sub without a claim name before #", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"#sub"} }},
+		{"supported tagged alias of email_verified", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"email#verified"} }},
+		{"supported tagged alias of email_verified#fr", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"email#verified-fr"}
+		}},
+		{"supported tagged alias of sub", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"s#ub-fr"} }},
+		{"supported tagged alias of an entry", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"foo_bar", "foo#bar"} }},
+		{"supported entry aliased by a tagged one", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"foo#bar", "foo_bar"} }},
+		{"supported tagged alias of a tagged entry", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"foo_bar#fr", "foo#bar-fr"}
+		}},
 		{"supported separator variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant.id"} }},
 		{"supported separator variant of email_verified", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"email verified"} }},
 		{"supported Unicode separator variant of email_verified", nil, func(c *oidcprovider.Config) {

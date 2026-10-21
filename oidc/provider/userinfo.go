@@ -196,7 +196,7 @@ func (p *Provider) userInfo(ctx context.Context, issuer, token string) (map[stri
 		return nil, sourceFailure(err, func(e error) error { return refuse(errBearerToken, e) })
 	}
 
-	claims, err := releaseClaims(src, allowed)
+	claims, err := p.names.releaseClaims(src, allowed)
 	if err != nil {
 		return nil, err
 	}

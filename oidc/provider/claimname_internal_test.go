@@ -29,8 +29,10 @@ func TestClaimKey(t *testing.T) {
 		{"waffle", "wa\ufb04e"},                                                                        // ffl ligature
 		{"flow", "\ufb02ow"},                                                                           // fl ligature
 		{"stable", "\ufb06able", "\ufb05able"},                                                         // st, long s t ligatures
-		{"name#fr", "NAME#FR", "name#Fr", "na_me#fr"},                                                  // language tags
-		{"a\xff", "a\xfe", "a\ufffd", "a"},                                                             // invalid UTF-8: U+FFFD
+		{"name#fr", "NAME#FR", "name#Fr", "na_me#fr", "name.fr", "namefr"},                             // language tags: # is a separator
+		{"email_verified", "email_verified#", "email_verified#-", "email#verified", "email_veri#fied"}, // lodash and change-case split on #
+		{"name", "name#"}, {"ab", "a#b"}, {"fr", "#fr"},
+		{"a\xff", "a\xfe", "a\ufffd", "a"}, // invalid UTF-8: U+FFFD
 		{"email_verified", "email.verified", "email verified", "Email~Verified", "e.m.a.i.l/verified"}, // camelCase normalizers
 		{"email_verified", "email\u00a0verified", "email\u3000verified", "email\tverified"},            // white space
 		{"auth_time", "auth~time", "auth.time", "auth time", "AUTH\x00TIME", "auth\x7ftime"},           // punctuation, controls
@@ -54,7 +56,7 @@ func TestClaimKey(t *testing.T) {
 	}
 
 	different := [][2]string{
-		{"sub", "subs"}, {"name#fr", "name#de"}, {"name", "name#"}, {"name#fr", "name.fr"}, {"a#b", "ab"}, {"claim1", "claim2"},
+		{"sub", "subs"}, {"name#fr", "name#de"}, {"claim1", "claim2"},
 		{"s", "\u00df"}, {"sub", "\u0455ub"}, {"sub", "\uff53ub"}, {"s", "\u1e61"}, {"claim", "claim\u0661"},
 	}
 

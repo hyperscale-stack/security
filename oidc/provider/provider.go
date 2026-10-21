@@ -45,8 +45,11 @@ type Config struct {
 	// of one (see [ClaimsSource]) is never released, so declare every claim
 	// relying parties make decisions on. New refuses an entry that is a
 	// claim the provider never releases (azp, jti, sid, scope, …) or a case
-	// variant of a protocol, standard or other entry's claim; a protocol or
-	// standard claim spelled exactly is accepted, and published once.
+	// variant of a protocol, standard or other entry's claim — its part
+	// before "#" included ("sub#x") —, and a language-tagged entry reading
+	// as one of them or as a tagged variant of one ("email#verified", or
+	// "foo#bar-fr" next to foo_bar); a protocol or standard claim spelled
+	// exactly is accepted, and published once.
 	ClaimsSupported []string
 	// ACRValuesSupported is published as Discovery acr_values_supported —
 	// omitted when empty. The provider enforces nothing about them: an acr
@@ -106,36 +109,49 @@ var (
 
 // checkClaimsSupported refuses, in supported, an invalid claim name, a
 // reserved claim — or a case variant of one — other than a protocol claim
-// spelled exactly, and a case variant of a known claim or of another entry
-// other than its exact spelling, untagged (its untagged name) or tagged.
+// spelled exactly, a case variant of a known claim or of another entry
+// other than its exact spelling, untagged (its untagged name) or tagged,
+// a name whose part before its first "#" is one of them, and a tagged name
+// that reads as one of them or as a tagged variant of one (see
+// claimNames.releasable).
 func checkClaimsSupported(supported []string) error {
 	known := newClaimNames(nil)
 	entries := map[string]string{}
 
 	for _, name := range supported {
-		base := untagged(name)
-
-		switch {
-		case !validClaimName(name):
-			return errSupportedInvalid
-		case reserved(base) && slices.Contains(protocolClaims, name):
-			continue // published once among the protocol claims
-		case reserved(base):
-			return errSupportedReserved
+		if err := checkSupported(known, entries, name); err != nil {
+			return err
 		}
-
-		key, fullKey := claimKey(base), claimKey(name)
-
-		if exact, ok := known[key]; ok && exact != base {
-			return errSupportedVariant
-		}
-
-		if exact, ok := entries[fullKey]; ok && exact != name {
-			return errSupportedVariant
-		}
-
-		known[key], entries[fullKey] = base, name
 	}
+
+	return nil
+}
+
+// checkSupported checks the ClaimsSupported entry name against the known
+// claims and the entries before it, which it records.
+func checkSupported(known claimNames, entries map[string]string, name string) error {
+	if !validClaimName(name) {
+		return errSupportedInvalid
+	}
+
+	base, tag, tagged := splitTag(name)
+	prefix, _, _ := strings.Cut(name, "#")
+	key, tagKey, fullKey := claimKey(base), claimKey(tag), claimKey(name)
+
+	switch {
+	case reserved(base) && slices.Contains(protocolClaims, name):
+		return nil // published once among the protocol claims
+	case reserved(base), reserved(prefix), tagged && continuesClaim(key, tagKey, isReservedKey):
+		return errSupportedReserved
+	case known.variant(base, name), known.variant(prefix, name), tagged && continuesClaim(key, tagKey, known.has):
+		return errSupportedVariant
+	}
+
+	if exact, ok := entries[fullKey]; ok && exact != name {
+		return errSupportedVariant
+	}
+
+	known[key], entries[fullKey] = base, name
 
 	return nil
 }

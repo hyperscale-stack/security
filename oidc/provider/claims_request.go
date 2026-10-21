@@ -10,7 +10,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/hyperscale-stack/security/oauth2"
@@ -338,10 +337,13 @@ func (r ClaimsRequest) subjects() []string {
 
 // releases reports whether the release list of a Decision covers the
 // requested claim name: the same name, or the untagged name of a
-// language-tagged one ("name" releases "name#fr").
+// language-tagged one (see splitTag: "name" releases "name#fr", not
+// "name#").
 func releases(released []string, name string) bool {
+	base, _, tagged := splitTag(name)
+
 	for _, r := range released {
-		if r == name || (!strings.Contains(r, "#") && strings.HasPrefix(name, r+"#")) {
+		if r == name || tagged && r == base {
 			return true
 		}
 	}

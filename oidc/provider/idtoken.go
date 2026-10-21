@@ -82,7 +82,7 @@ func (p *Provider) extendTokenResponse(ctx context.Context, iss oauth2.TokenIssu
 		return oauth2.TokenResponseExtension{}, nil
 	}
 
-	released, err := releaseClaims(claims, allowed)
+	released, err := p.names.releaseClaims(claims, allowed)
 	if err != nil {
 		return oauth2.TokenResponseExtension{}, err
 	}
