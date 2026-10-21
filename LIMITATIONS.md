@@ -295,6 +295,14 @@ PKCE. Not supported, and refused where a provider could select them:
   run time. One exception: a public client (`none`) requires the provider
   to advertise S256 in `code_challenge_methods_supported`, which some
   providers omit although they support it.
+- **A leaked state burns the pending login** — an authorization response is
+  not authenticated: any request to the callback carrying the state,
+  through the victim's own browser (which presents the binding cookie on a
+  top-level navigation), expires the binding cookie — and, with an error
+  or a bogus code, consumes the transaction — so the genuine response
+  fails and the user starts over. It cannot complete a login for the
+  attacker. `AuthRequest` prints and logs without the state; its JSON
+  encoding, the hand-off to a front end, keeps it.
 - **RFC 9207 `iss` policy** — a response carrying `iss` from a provider
   that does not advertise `authorization_response_iss_parameter_supported`
   is discarded (`ErrIssuerParameter`, RFC 9207 §2.4) unless

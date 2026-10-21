@@ -162,6 +162,11 @@ distinct redirect URIs).
 - In `form_post` mode exempt the callback route from CSRF middleware: the
   cross-site POST is the protocol, the binding cookie its defense. Leave
   the body unread before `HandleCallback`, or let it reuse `r.PostForm`.
+- A leaked state lets anyone burn the pending login: any request to the
+  callback carrying it, through the victim's browser, expires the binding
+  cookie (`TestLeakedStateBurnsThePendingLoginThroughTheVictimBrowser`).
+  The user starts over; keep the state and the authorization URL out of
+  logs (`AuthRequest` prints and logs without them).
 - Behind a reverse proxy, preserve the Host header (`HandleCallback`
   compares the URL the browser used) or call `Complete` with the public URL.
 - After a successful callback, create a fresh session (a new ID) and

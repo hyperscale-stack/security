@@ -175,8 +175,8 @@ type TransactionStore interface {
 	//   - expired (now is not before ExpiresAt) → ErrTransactionNotFound,
 	//     whatever the binding; the store may delete it;
 	//   - BindingHash different from bindingHash → ErrBindingMismatch, and
-	//     the transaction stays stored: a leaked state alone cannot burn a
-	//     login;
+	//     the transaction stays stored: a leaked state alone, presented from
+	//     another browser, cannot burn a login;
 	//   - otherwise the transaction, removed so that every later or
 	//     concurrent call gets ErrTransactionNotFound.
 	//

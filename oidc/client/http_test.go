@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	oidcclient "github.com/hyperscale-stack/security/oidc/client"
@@ -528,6 +529,114 @@ func TestEndToEndQuery(t *testing.T) {
 	body := readAll(t, resp.Body)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	assert.Equal(t, "hello "+testSubject, string(body))
+}
+
+// TestLeakedStateBurnsThePendingLoginThroughTheVictimBrowser characterizes
+// a residual risk, and documents it: an authorization response is not
+// authenticated, so whoever learned the state of a pending login can send
+// the victim's own browser — which presents the binding cookie, SameSite=Lax
+// on a top-level navigation — to the callback with that state. The response
+// to that request expires the binding cookie, and with an error (or a
+// bogus code) the transaction is consumed: the genuine callback then fails
+// (ErrBindingMismatch, the cookie gone) and the user starts over. A
+// request carrying the state alone — no code, no error — burns the login
+// through the cookie only. Keep the state out of logs (AuthRequest prints
+// without it).
+func TestLeakedStateBurnsThePendingLoginThroughTheVictimBrowser(t *testing.T) {
+	t.Parallel()
+
+	for name, forged := range map[string]url.Values{
+		"forged error response": {"error": {"access_denied"}},
+		"state alone":           {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			op := newFakeOP(t)
+
+			var (
+				mu      sync.Mutex
+				lastErr error
+			)
+
+			var c *oidcclient.Client
+
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
+				assert.NoError(t, c.StartLogin(w, r, oidcclient.AuthOptions{}))
+			})
+			mux.HandleFunc(testCallbackPath, func(w http.ResponseWriter, r *http.Request) {
+				_, err := c.HandleCallback(w, r)
+
+				mu.Lock()
+				lastErr = err
+				mu.Unlock()
+			})
+
+			rp := httptest.NewTLSServer(mux)
+			t.Cleanup(rp.Close)
+
+			c = op.client(t, func(cfg *oidcclient.Config) { cfg.RedirectURL = rp.URL + testCallbackPath })
+			rpURL, err := url.Parse(rp.URL)
+			require.NoError(t, err)
+
+			jar, err := cookiejar.New(nil)
+			require.NoError(t, err)
+
+			victim := *op.srv.Client()
+			victim.Jar = jar
+			victim.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+			get := func(target string) error {
+				resp, err := victim.Get(target)
+				require.NoError(t, err)
+				_ = resp.Body.Close()
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				return lastErr
+			}
+
+			resp, err := victim.Get(rp.URL + "/login")
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+
+			authURL := resp.Header.Get("Location")
+			loc, err := url.Parse(authURL)
+			require.NoError(t, err)
+
+			state := loc.Query().Get("state")
+			require.Len(t, jar.Cookies(rpURL), 1, "the binding cookie of the pending login")
+			binding := jar.Cookies(rpURL)[0].Value
+			code := op.authorize(t, authURL)
+
+			// The attacker, knowing the state, makes the victim's browser
+			// request the callback.
+			forged.Set("state", state)
+			require.Error(t, get(rp.URL+testCallbackPath+"?"+forged.Encode()))
+			assert.Empty(t, jar.Cookies(rpURL), "the response expired the binding cookie")
+
+			// The genuine response arrives without the cookie.
+			err = get(rp.URL + testCallbackPath + "?" + url.Values{"state": {state}, "code": {code}}.Encode())
+			require.ErrorIs(t, err, oidcclient.ErrBindingMismatch)
+			assert.Zero(t, op.hitCount("/token"))
+
+			// The store: an error response consumed the transaction; the
+			// state alone, refused before the store, left it.
+			received := receivedOn(rp.URL + testCallbackPath)
+			received.RawQuery = url.Values{"state": {state}, "code": {code}}.Encode()
+			_, err = c.Complete(context.Background(), oidcclient.Callback{
+				Mode: oidcclient.ResponseModeQuery, URL: received, Params: received.Query(), Binding: oidcclient.NewSecret(binding),
+			})
+
+			if forged.Has("error") {
+				require.ErrorIs(t, err, oidcclient.ErrTransactionNotFound)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 // TestEndToEndInsecureCookiesOnLoopback runs a login over plain http on the

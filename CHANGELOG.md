@@ -1067,6 +1067,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   with `memory.ErrFull`; it used to grow without bound unless built with
   `memory.WithCapacity`, while login starts are unauthenticated (breaking
   above 10 000 pending logins; see MIGRATION.md).
+- `oidcclient.AuthRequest` prints and logs (`String`, `GoString`, `Format`,
+  `LogValue`) without its state nor the query of its URL — hints included —
+  with a leaked state, a request to the callback through the victim's own
+  browser burns the pending login. Its JSON encoding, the hand-off of the
+  request to a front end, is unchanged.
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in

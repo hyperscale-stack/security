@@ -117,6 +117,48 @@ func TestSecretsAreRedacted(t *testing.T) {
 	assert.Contains(t, logged(id), id.Subject, "an identity stays recognizable")
 }
 
+// TestAuthRequestRenderingsOmitTheState checks that an AuthRequest prints
+// and logs without its state — with a leaked state, a request to the
+// callback through the victim's browser burns the pending login — nor the
+// rest of the authorization request's query (hints included): the URL is
+// rendered without its query. Its JSON encoding, the hand-off of the
+// request to a front end, keeps them.
+func TestAuthRequestRenderingsOmitTheState(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	c := op.client(t)
+
+	ar, err := c.Begin(context.Background(), oidcclient.AuthOptions{LoginHint: "jane@example.com"})
+	require.NoError(t, err)
+
+	endpoint, err := url.Parse(ar.URL)
+	require.NoError(t, err)
+
+	endpoint.RawQuery = ""
+
+	for _, v := range []any{*ar, ar} {
+		for way, rendered := range renderings(v) {
+			assert.NotContains(t, rendered, ar.State, "%s reveals the state", way)
+			assert.NotContains(t, rendered, "&state=", way)
+			assert.NotContains(t, rendered, "?", "%s renders the URL with its query", way)
+			assert.NotContains(t, rendered, "jane", "%s reveals the login hint", way)
+			assert.NotContains(t, rendered, ar.Binding.Reveal(), way)
+		}
+
+		assert.Contains(t, logged(v), endpoint.String(), "the authorization endpoint stays readable")
+		assert.Contains(t, fmt.Sprint(v), "State: REDACTED")
+	}
+
+	b, err := json.Marshal(ar)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), ar.State, "the JSON hand-off keeps the state")
+
+	unparsable := oidcclient.AuthRequest{URL: "https://op.example/authorize?state=secret-state\x7f\n%zz"}
+	assert.Contains(t, unparsable.String(), `URL: "REDACTED"`)
+	assert.NotContains(t, logged(unparsable), "secret-state")
+}
+
 func TestDefaultClock(t *testing.T) {
 	t.Parallel()
 

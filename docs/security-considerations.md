@@ -1408,8 +1408,14 @@ are attacker-influenced.
 - **Single use** — `TransactionStore.Consume` removes the transaction
   atomically, unknown first, then expired whatever the binding, then a
   binding mismatch, which keeps the transaction so that a leaked state
-  cannot burn the victim's login. A replayed callback finds nothing and
-  never reaches the token endpoint.
+  presented from another browser cannot burn the victim's login. A
+  replayed callback finds nothing and never reaches the token endpoint.
+  An authorization response is not authenticated, though: whoever learns
+  the state can send the victim's own browser — which presents the
+  binding cookie on a top-level navigation — to the callback with it, and
+  that request expires the cookie (and, with an error or a bogus code,
+  consumes the transaction): the login fails and the user starts over. Keep
+  the state out of logs — `AuthRequest` prints and logs without it.
 - **Mix-up attacks** (RFC 9700 §4.4) — give every connection its own
   redirect URI, distinct from every other connection's (by scheme, host,
   port, path or query parameter): `Complete` refuses a response received on

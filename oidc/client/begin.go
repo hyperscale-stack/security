@@ -74,8 +74,13 @@ type AuthOptions struct {
 	AppState string
 }
 
-// AuthRequest is a started login. It prints, logs and encodes to JSON
-// without its binding secret (String, LogValue, MarshalJSON).
+// AuthRequest is a started login. It prints and logs (String, GoString,
+// Format, LogValue) without its binding secret, its state nor the query of
+// its URL — with a leaked state, a request to the callback through the
+// victim's own browser burns the pending login. It encodes to JSON
+// (MarshalJSON), the hand-off of the request to a front end, with its URL
+// and state but without its binding secret: never log it nested in another
+// value under log/slog's JSON handler.
 type AuthRequest struct {
 	// URL is the authorization request: send the user agent to it.
 	URL string
@@ -92,23 +97,39 @@ type AuthRequest struct {
 	ExpiresAt time.Time
 }
 
-// String implements fmt.Stringer without the binding secret.
+// String implements fmt.Stringer without the binding secret, the state
+// nor the URL's query.
 func (r AuthRequest) String() string {
-	return fmt.Sprintf("oidcclient.AuthRequest{URL: %q, ExpiresAt: %s, Binding: REDACTED}", r.URL, r.ExpiresAt.Format(time.RFC3339))
+	return fmt.Sprintf("oidcclient.AuthRequest{URL: %q, State: REDACTED, ExpiresAt: %s, Binding: REDACTED}",
+		requestURLForLogs(r.URL), r.ExpiresAt.Format(time.RFC3339))
 }
 
-// GoString implements fmt.GoStringer without the binding secret.
+// GoString implements fmt.GoStringer like String.
 func (r AuthRequest) GoString() string { return r.String() }
 
-// LogValue implements slog.LogValuer without the binding secret.
+// LogValue implements slog.LogValuer like String.
 func (r AuthRequest) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("url", r.URL), slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
+	return slog.GroupValue(slog.String("url", requestURLForLogs(r.URL)), slog.String("state", redactedMark),
+		slog.Time("expires_at", r.ExpiresAt), slog.String("binding", redactedMark))
 }
 
-// MarshalJSON implements json.Marshaler without the binding secret, which
-// the default encoding would write — and log/slog's JSON handler encodes
-// a value nested in another one (a struct field, a map) with
-// encoding/json, LogValue applying to attribute values only. A struct
+// requestURLForLogs renders an authorization request URL without its query
+// — state, nonce, hints — nor fragment or userinfo; REDACTED when it does
+// not parse.
+func requestURLForLogs(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return redactedMark
+	}
+
+	return withoutQuery(u)
+}
+
+// MarshalJSON implements json.Marshaler with the URL and the state — the
+// encoding hands the request to a front end — but without the binding
+// secret. log/slog's JSON handler encodes a value nested in another one (a
+// struct field, a map) with encoding/json, LogValue applying to attribute
+// values only: log an AuthRequest as an attribute of its own. A struct
 // embedding AuthRequest is promoted this method and encodes as the
 // AuthRequest alone — or, when another type embedded at the same depth
 // also has a MarshalJSON, neither is promoted and encoding/json writes the
