@@ -196,8 +196,10 @@ the middleware runs inside a route, never the raw path.
 A panic of the security pipeline — an extractor, an authenticator, a
 voter — is recovered (grpc-go recovers none, so it would end the process)
 and answered `Internal`: the span gets the error status with the
-description `_OTHER` and a `panic recovered` event, never the panic value,
-which may hold a credential.
+description `_OTHER`, `error.type=_OTHER` and a `panic recovered` event,
+never the panic value, which may hold a credential — the application
+receives it through `grpcsec.WithPanicHandler`. An outer recovery
+interceptor no longer sees these panics.
 
 `grpcsec` deliberately does **not** open an `rpc` span — that belongs to
 `otelgrpc`, which you compose alongside these interceptors. `rpc.method` is

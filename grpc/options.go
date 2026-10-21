@@ -12,6 +12,9 @@ type config struct {
 	// errorMapper is the mapper given with WithErrorMapper, nil otherwise.
 	errorMapper       ErrorMapper
 	anonymousFallback bool
+	// panicHandler is the handler given with WithPanicHandler, nil
+	// otherwise.
+	panicHandler func(ctx context.Context, recovered any)
 }
 
 // Option configures an interceptor.
@@ -37,6 +40,21 @@ func WithErrorMapper(m ErrorMapper) Option {
 // whatever the fallback.
 func WithAnonymousFallback(allow bool) Option {
 	return func(c *config) { c.anonymousFallback = allow }
+}
+
+// WithPanicHandler sets a handler called with the value of every panic of
+// the security pipeline — an extractor, an authenticator, a user loader, a
+// decision manager or a voter — that the interceptors recover: they answer
+// the RPC as an internal error (codes.Internal with the default mapper) and
+// record a "panic recovered" span event, never the value. An outer recovery
+// interceptor no longer sees these panics: the handler is where to log them
+// or report them, with a stack (runtime/debug.Stack). The value may hold a
+// credential — what the panicking code had at hand —: the handler handles
+// it under the application's responsibility. It runs in the interceptor,
+// before the answer; a panic of the handler itself is ignored. Default:
+// none. WithPanicHandler(nil) keeps none.
+func WithPanicHandler(handler func(ctx context.Context, recovered any)) Option {
+	return func(c *config) { c.panicHandler = handler }
 }
 
 // buildConfig applies opts onto the default config.

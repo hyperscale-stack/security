@@ -32,18 +32,34 @@ var errPipelinePanic = errors.New("grpcsec: panic in the security pipeline")
 
 // contain runs fn and turns a panic into errPipelinePanic: grpc-go recovers
 // no panic, so one would end the process. The span records the error status
-// and a "panic recovered" event, never the panic value.
-func contain(span trace.Span, fn func() error) (err error) {
+// and error.type of an internal error and a "panic recovered" event, never
+// the panic value; the value goes to the WithPanicHandler handler, if any.
+func contain(ctx context.Context, span trace.Span, handler func(context.Context, any), fn func() error) (err error) {
 	defer func() {
-		if recover() != nil {
+		if recovered := recover(); recovered != nil {
 			span.AddEvent("panic recovered")
 			span.SetStatus(otelcodes.Error, security.ErrorClassOther)
+			span.SetAttributes(security.AttrErrorType.String(security.ErrorClassOther))
+			notify(ctx, handler, recovered)
 
 			err = errPipelinePanic
 		}
 	}()
 
 	return fn()
+}
+
+// notify hands a recovered panic value to the application's handler; a
+// panic of the handler itself is ignored, so that it cannot crash the
+// server either.
+func notify(ctx context.Context, handler func(context.Context, any), recovered any) {
+	if handler == nil {
+		return
+	}
+
+	defer func() { _ = recover() }() // a panicking panic handler is ignored on purpose
+
+	handler(ctx, recovered)
 }
 
 // authenticate runs the engine against the RPC metadata and returns the
@@ -63,7 +79,7 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 		auth   security.Authentication
 	)
 
-	err := contain(span, func() (err error) {
+	err := contain(ctx, span, cfg.panicHandler, func() (err error) {
 		newCtx, auth, err = engine.Process(ctx, carrier)
 
 		return err //nolint:wrapcheck // wrapped below
@@ -127,8 +143,9 @@ func withClientAddr(ctx context.Context) context.Context {
 // A panic of the security pipeline — an extractor, an authenticator — is
 // recovered and answered as an internal error (codes.Internal with the
 // default mapper): grpc-go recovers no panic, and one unauthenticated RPC
-// would otherwise end the process. The handler's own panics are not
-// recovered.
+// would otherwise end the process. An outer recovery interceptor therefore
+// no longer sees these panics: [WithPanicHandler] receives their value. The
+// handler's own panics are not recovered.
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside
