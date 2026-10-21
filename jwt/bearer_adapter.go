@@ -15,7 +15,10 @@ import (
 // AuthorityResolver maps the parsed standard claims to the authorities
 // attached to the resulting [security.Authentication]. The default resolver
 // (when none is provided) splits StandardClaims.Scope on spaces and prefixes
-// each entry with "scope:" so the voter package recognizes them.
+// each entry with "scope:" so the voter package recognizes them. A resolver
+// granting authorities by client keys them on claims.ClientID, never on
+// Subject: a client_credentials token's sub is its client ID, which a
+// resource owner's sub may equal (RFC 9700 §4.15).
 type AuthorityResolver func(claims *StandardClaims) []string
 
 // BearerOption configures [BearerVerifier].
@@ -44,9 +47,10 @@ func WithAccessTokenType(typ string) BearerOption {
 
 // BearerVerifier adapts a JWT [Verifier] to the [bearer.TokenVerifier]
 // contract as an RFC 9068 §4 resource server: the returned TokenVerifier
-// produces an authenticated [bearer.Authentication] whose principal is the
-// JWT `sub` claim and whose authorities are the values returned by the
-// resolver ([DefaultAuthorityResolver] when nil).
+// produces an authenticated [bearer.Authentication] whose principal is an
+// [AccessTokenPrincipal] — the JWT `sub` and `client_id` claims — and whose
+// authorities are the values returned by the resolver
+// ([DefaultAuthorityResolver] when nil).
 //
 // RFC 9068 §4 requires the resource server to check the token's typ
 // (at+jwt), iss and aud, and that the current time is before exp, so
@@ -79,7 +83,7 @@ func BearerVerifier(v Verifier, resolver AuthorityResolver, opts ...BearerOption
 			return nil, fmt.Errorf("%w: sub is required (RFC 9068 §2.2)", ErrInvalidClaims)
 		}
 
-		principal := claimPrincipal{sub: claims.Subject}
+		principal := AccessTokenPrincipal{subject: claims.Subject, clientID: claims.ClientID}
 		authorities := resolver(claims)
 
 		return bearer.New(token).WithAuthenticated(principal, authorities, claims.Subject), nil
@@ -152,8 +156,40 @@ func splitFields(s string) func(yield func(string) bool) {
 	}
 }
 
-// claimPrincipal is the [security.Principal] returned by BearerVerifier.
-type claimPrincipal struct{ sub string }
+// AccessTokenPrincipal is the [security.Principal] of an access token
+// [BearerVerifier] accepted: its `sub` and `client_id` claims (RFC 9068
+// §2.2). Read it with a type assertion on Authentication.Principal(). An
+// immutable value: the zero value designates no subject and no client.
+type AccessTokenPrincipal struct {
+	subject  string
+	clientID string
+}
 
-// Subject implements [security.Principal].
-func (p claimPrincipal) Subject() string { return p.sub }
+// Subject implements [security.Principal]: the `sub` claim — a resource
+// owner, or, for a token no resource owner is involved in
+// (client_credentials), the client itself (RFC 9068 §2.2).
+func (p AccessTokenPrincipal) Subject() string { return p.subject }
+
+// ClientID returns the `client_id` claim — the client the token was issued
+// to (RFC 8693 §4.3) — or "" when the token carries none.
+func (p AccessTokenPrincipal) ClientID() string { return p.clientID }
+
+// SubjectIsClient reports whether the token's subject is its client — sub
+// equals a non-empty client_id —, as in the client_credentials tokens of
+// this module's authorization server (oauth2's grant.ClientCredentials) and
+// of the others that follow RFC 9068 §2.2 to the letter (e.g. Amazon
+// Cognito). A client registered with an ID equal to a user's subject then
+// cannot be served that user's resources (RFC 9700 §4.15): refuse
+// resource-owner access when it is true.
+//
+// Use it to refuse, never to grant. A resource owner whose subject equals
+// the ID of the very client they use also reports true, so grant client
+// privileges by client_id and scope authorities, not by this method; and an
+// authorization server whose client tokens carry another sub (Keycloak's
+// service-account user, Auth0's "…@clients", Okta, Microsoft Entra ID)
+// always reports false — such servers keep client and user identifiers
+// disjoint, which RFC 9700 §4.15.1 asks of any server letting clients
+// choose their ID.
+func (p AccessTokenPrincipal) SubjectIsClient() bool {
+	return p.clientID != "" && p.subject == p.clientID
+}

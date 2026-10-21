@@ -35,6 +35,14 @@ future refactor phases.
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
   publish your own with `jwtsec.MarshalJWKS` (it refuses private and
   symmetric keys).
+- **Client and user subjects share `sub`** — a `client_credentials`
+  token's `sub` is its client ID (RFC 9068 §2.2): a resource server tells
+  it from a resource owner's token with
+  `jwtsec.AccessTokenPrincipal.SubjectIsClient()` (JWT) or
+  `AccessToken.ClientID == AccessToken.Subject` (store lookup), which also
+  holds for a user whose subject equals the ID of the client they use. Use
+  it to refuse, and keep client IDs out of the user-subject namespace when
+  clients can influence them (RFC 9700 §4.15.1).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
   JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload

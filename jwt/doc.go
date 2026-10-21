@@ -40,7 +40,10 @@
 //   - Issuer, audience and type checks are opt-in on NewVerifier
 //     (WithIssuer, WithAudience, WithType) and mandatory for BearerVerifier,
 //     the RFC 9068 §4 resource-server adapter: it refuses a verifier
-//     without them; WithAccessTokenType names another required typ.
+//     without them; WithAccessTokenType names another required typ. Its
+//     principal, an AccessTokenPrincipal, carries client_id:
+//     SubjectIsClient tells a client_credentials token from a resource
+//     owner's (RFC 9700 §4.15) — to refuse, never to grant.
 //   - NewRemoteJWKS fetches through the SSRF-safe outbound client (https,
 //     public destinations, no redirect, no proxy; the redirects a policy or
 //     an opt-out client allows stay on the JWK Set URL's origin), refreshes

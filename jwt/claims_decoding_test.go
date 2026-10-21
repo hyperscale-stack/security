@@ -210,9 +210,9 @@ func TestVerifyRefusesNonObjectPayloads(t *testing.T) {
 
 // TestVerifyRefusesMistypedRegisteredClaims pins RFC 7519 §4.1: exp, nbf
 // and iat MUST be numbers, iss, sub and jti strings, aud a string or an
-// array of strings — and scope a string (RFC 8693 §4.2). A null value is
-// not an absent claim: "nbf": null must not disable the not-before check,
-// nor "exp": null make a token immortal (review F8).
+// array of strings — and scope and client_id strings (RFC 8693 §4.2,
+// §4.3). A null value is not an absent claim: "nbf": null must not disable
+// the not-before check, nor "exp": null make a token immortal (review F8).
 func TestVerifyRefusesMistypedRegisteredClaims(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +238,9 @@ func TestVerifyRefusesMistypedRegisteredClaims(t *testing.T) {
 		"aud object":         `"aud":{"a":"b"}`,
 		"scope null":         `"scope":null`,
 		"scope array":        `"scope":["read"]`,
+		"client_id null":     `"client_id":null`,
+		"client_id number":   `"client_id":42`,
+		"client_id array":    `"client_id":["web"]`,
 		"aud nested array":   `"aud":[["api"]]`,
 		"exp array of dates": `"exp":[1]`,
 	} {
@@ -252,9 +255,10 @@ func TestVerifyRefusesMistypedRegisteredClaims(t *testing.T) {
 	}
 
 	std, err := v.Verify(context.Background(), forge(t, jwtsec.ES256, priv.Key, header(jwtsec.ES256, "ec-1"),
-		fmt.Sprintf(`{"iss":"i","sub":"s","jti":"j","scope":"a b","aud":["x","y"],"exp":%d,"nbf":1.5,"iat":2}`, in(time.Hour))), nil)
+		fmt.Sprintf(`{"iss":"i","sub":"s","jti":"j","scope":"a b","client_id":"c","aud":["x","y"],"exp":%d,"nbf":1.5,"iat":2}`, in(time.Hour))), nil)
 	require.NoError(t, err, "well-typed registered claims are accepted")
 	assert.Equal(t, jwtsec.Audience{"x", "y"}, std.Audience)
+	assert.Equal(t, "c", std.ClientID)
 }
 
 // unexportedPart is embedded by pointer below: go-jose's decoder (a fork

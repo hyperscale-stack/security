@@ -26,9 +26,10 @@ const jtiBytes = 16
 // Connect ID Token signed by the same key — and carries a fresh random
 // "jti" (RFC 9068 §2.2). The adapter projects [token.AccessTokenClaims]
 // onto a [StandardClaims] value: Issuer / Subject / Audience / Scope /
-// IssuedAt / ExpiresAt map one-to-one; the OAuth2 ClientID is carried in
-// the "client_id" claim (RFC 9068 §2.2) via a small payload type that
-// embeds StandardClaims.
+// IssuedAt / ExpiresAt / ClientID map one-to-one — ClientID to the
+// "client_id" claim (RFC 9068 §2.2). A client_credentials token's Subject
+// is its ClientID (RFC 9068 §2.2): resource servers tell it from a
+// resource owner's token with [AccessTokenPrincipal.SubjectIsClient].
 type OAuth2AccessTokenSigner struct {
 	signer Signer
 }
@@ -65,17 +66,15 @@ func (s *OAuth2AccessTokenSigner) SignAccessToken(ctx context.Context, claims to
 		return "", err
 	}
 
-	payload := oauth2AccessClaims{
-		StandardClaims: StandardClaims{
-			Issuer:    claims.Issuer,
-			Subject:   claims.Subject,
-			Audience:  Audience{claims.Audience},
-			Scope:     claims.Scope,
-			IssuedAt:  NewNumericDate(claims.IssuedAt),
-			ExpiresAt: NewNumericDate(claims.ExpiresAt),
-			JWTID:     jti,
-		},
-		ClientID: claims.ClientID,
+	payload := StandardClaims{
+		Issuer:    claims.Issuer,
+		Subject:   claims.Subject,
+		Audience:  Audience{claims.Audience},
+		Scope:     claims.Scope,
+		ClientID:  claims.ClientID,
+		IssuedAt:  NewNumericDate(claims.IssuedAt),
+		ExpiresAt: NewNumericDate(claims.ExpiresAt),
+		JWTID:     jti,
 	}
 
 	out, err := s.signer.Sign(ctx, payload)
@@ -125,14 +124,6 @@ func newJTI() (string, error) {
 	}
 
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// oauth2AccessClaims is the on-wire payload of an RFC 9068 access token.
-// "client_id" is the only extension over the standard claim set.
-type oauth2AccessClaims struct {
-	StandardClaims
-
-	ClientID string `json:"client_id,omitempty"`
 }
 
 // Compile-time interface check (defensive; the import path makes the

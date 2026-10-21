@@ -28,6 +28,12 @@ import (
 //
 // Refresh tokens MUST NOT be issued for this grant (RFC 6749 §4.4.3),
 // so the handler ignores cfg.RefreshTokens even when set.
+//
+// The token's Subject is the client ID (RFC 9068 §2.2), like its ClientID:
+// a resource server tells it from a resource owner's token by Subject ==
+// ClientID (jwtsec.AccessTokenPrincipal.SubjectIsClient for JWT access
+// tokens), and refuses it resource-owner data. Keep client IDs out of the
+// user-subject namespace when clients can choose them (RFC 9700 §4.15.1).
 type ClientCredentials struct {
 	cfg Config
 }

@@ -16,6 +16,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Added
 
+- `jwt`: `StandardClaims.ClientID` reads and writes the `client_id` claim
+  (RFC 8693 §4.3, RFC 9068 §2.2), and the principal of `BearerVerifier` is
+  the exported `AccessTokenPrincipal`: `Subject()`, `ClientID()` and
+  `SubjectIsClient()`. A `client_credentials` token's `sub` is its client's
+  ID (RFC 9068 §2.2), so a resource server could not tell it from the token
+  of a user with the same subject (RFC 9700 §4.15); `SubjectIsClient()`
+  does, to refuse resource-owner access — grant client privileges by
+  `client_id` and scope authorities, never by it.
 - **Transport-agnostic core** (`github.com/hyperscale-stack/security`):
   immutable `Authentication`/`Principal`, `Carrier`, `Extractor`,
   `Authenticator`, first-success-wins `Manager`, `Engine`, typed
@@ -532,6 +540,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `KeyRing.Published`): go-jose ≥ v4.1.6's `JSONWebKeySet` (go-oidc relying
   parties among others) refuses a whole JWK Set holding one, and this
   library's key sets ignore it, so its tokens would verify nowhere.
+- `jwt`: a `client_id` claim that is not a JSON string is refused with
+  `ErrMalformedToken`, like `sub` and `scope`.
 - `examples/oidc-client` bounds its unauthenticated login starts: each
   client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
   each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`

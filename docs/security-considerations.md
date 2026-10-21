@@ -185,6 +185,18 @@ keys by `kid` against a JWKS provider (static or remote).
   only when the resource server's audience is never the `client_id` of a
   client of that issuer. Untyped access tokens are never accepted by
   `BearerVerifier`. `NewVerifier` keeps these checks opt-in for other JWTs.
+- **Client tokens versus resource-owner tokens** (RFC 9700 §4.15) — a
+  `client_credentials` token's `sub` is its client ID (RFC 9068 §2.2), so a
+  client registered under a user's subject would get a token naming that
+  user. `StandardClaims.ClientID` carries `client_id`, and the principal of
+  `BearerVerifier` is an `AccessTokenPrincipal` whose `SubjectIsClient()`
+  reports `sub == client_id`: refuse resource-owner data when it is true.
+  It is a refusal rule only — a user whose subject equals the ID of the
+  client they use reports true as well — so grant client privileges by
+  `ClientID()` and scopes. Amazon Cognito's client-credentials tokens are
+  classified alike; Keycloak (service-account UUID), Auth0 (`…@clients`),
+  Okta and Microsoft Entra ID give client tokens subjects of their own and
+  always report false.
 - **Remote key sets** — `NewRemoteJWKS` fetches through
   [`outbound`](#outbound-requests-ssrf): https only, publicly routable
   destinations judged at dial time, no redirect, no proxy, 10 s and 1 MiB.
@@ -262,7 +274,11 @@ keys by `kid` against a JWKS provider (static or remote).
   for `code`, `implicit` for `token`) before the extension and the
   `ConsentFunc` run;
   `client_credentials` refuses every client that is not confidential (RFC
-  6749 §4.4); a consent narrows the requested scope, never broadens it; a
+  6749 §4.4), and its tokens' `Subject` is the client ID (RFC 9068 §2.2) —
+  a resource server reading the store tells them from a resource owner's by
+  `AccessToken.ClientID == AccessToken.Subject` (or an empty
+  `ExtensionData`), and keeps client IDs out of the user-subject namespace
+  when clients choose them (RFC 9700 §4.15.1); a consent narrows the requested scope, never broadens it; a
   refresh token goes only to a client declaring `refresh_token` (RFC 9700
   §4.14.2), and a refresh issues an access token only within the client's
   current scope registration, so shrinking a registration takes effect at

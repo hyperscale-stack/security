@@ -2501,3 +2501,26 @@ To migrate:
    `cryptosigner.Opaque` must honour it — or sign RS256 / ES256 instead.
 2. Tokens of a third-party issuer that signs otherwise are refused: ask the
    issuer to follow RFC 7518 §3.5, or have it sign RS256.
+
+### `jwt`: `client_id` is a `StandardClaims` field; `BearerVerifier`'s principal is `AccessTokenPrincipal`
+
+A `client_credentials` token's `sub` is its client's ID (RFC 9068 §2.2): the
+resource server saw `sub` only and could not tell it from a user's token with
+the same subject (RFC 9700 §4.15).
+
+| | Before | After |
+| --- | --- | --- |
+| `client_id` claim | ignored by `StandardClaims` | `StandardClaims.ClientID`; a non-string value is `ErrMalformedToken` |
+| `BearerVerifier` principal | unexported, `Subject()` only | `jwtsec.AccessTokenPrincipal`: `Subject()`, `ClientID()`, `SubjectIsClient()` |
+| a claims type embedding `StandardClaims` with its own `json:"client_id"` field | read it | an outer field shadows `StandardClaims.ClientID`; a field at the same depth (another embedded struct) makes both decoders drop both |
+
+To migrate:
+
+1. Remove your own `client_id` field from types embedding
+   `StandardClaims` and read `StandardClaims.ClientID`.
+2. On a resource server, refuse resource-owner data when
+   `auth.Principal().(jwtsec.AccessTokenPrincipal).SubjectIsClient()` is
+   true, and grant client privileges by `ClientID()` and scopes — never by
+   `Subject()`.
+3. If clients can choose their ID, keep it out of the user-subject
+   namespace (a prefix, a separate ID space; RFC 9700 §4.15.1).
