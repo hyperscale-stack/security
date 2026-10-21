@@ -68,6 +68,12 @@ var (
 	// principal (RFC 9068 §2.2). Wraps [security.ErrInvalidCredentials].
 	ErrInvalidClaims = newJWTError("invalid claims", security.ErrInvalidCredentials)
 
+	// ErrTokenInactive signals a verified access token the
+	// [ActiveTokenCheck] of [BearerVerifier] refused: revoked, or unknown
+	// to the authorization server (RFC 7009 §2.1, RFC 7662 §2.2). Wraps
+	// [security.ErrInvalidCredentials] (401 invalid_token).
+	ErrTokenInactive = newJWTError("token inactive", security.ErrInvalidCredentials)
+
 	// ErrUnsignableClaims signals claims a signer refuses to sign: claims
 	// that cannot be encoded — a [NumericDate] before 1970 or after year
 	// 9999, the zero time.Time included — or, for the RFC 9068 access

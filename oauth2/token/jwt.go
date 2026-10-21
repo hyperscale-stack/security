@@ -33,10 +33,10 @@ type AccessTokenSigner interface {
 //
 // Revoking such a token — or its family — takes effect in the store only:
 // a resource server verifying the JWT offline, from its signature and
-// claims, keeps accepting it until it expires, and the RFC 9068 payload
-// carries no family or token identifier to deny-list. Keep the access-token
-// lifetime short, or validate high-value requests against the store
-// ([oauth2.AccessTokenStore.LookupAccessToken]) or through RFC 7662
+// claims, keeps accepting it until it expires. Keep the access-token
+// lifetime short, or have the resource server ask whether the token is
+// still active — jwtsec.WithActiveTokenCheck, looking it up with
+// [oauth2.AccessTokenStore.LookupAccessToken] by this hash, or RFC 7662
 // introspection.
 type JWTAccessTokenGenerator struct {
 	signer AccessTokenSigner

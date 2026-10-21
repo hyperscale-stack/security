@@ -760,18 +760,24 @@ resource server that verifies JWT access tokens offline, from their
 signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
 until its `exp`, whatever happened to its family — including the tokens
 revoked after an authorization-code replay: deleting or flagging store
-records never invalidates a signature. The RFC 9068 payload the
-`jwtsec` signer emits carries a token identifier (`jti`) but no family, and
-no deny-list is shipped. RFC 7009 §2.1 acknowledges such a
+records never invalidates a signature. RFC 7009 §2.1 acknowledges such a
 propagation delay and asks implementations to minimize it; its §3 leaves
 immediate revocation of self-contained tokens to non-standardized backend
 interaction, and suggests short-lived access tokens instead. To bound the
 window:
 
 - keep `grant.Config.AccessTTL` short when access tokens are JWTs;
-- for high-value operations, validate the token against the authorization
-  server — RFC 7662 introspection, or `LookupAccessToken` when the resource
-  server shares the store — rather than offline;
+- give `BearerVerifier` that backend interaction,
+  `jwtsec.WithActiveTokenCheck`: it runs after every other check, in a
+  `jwtsec.BearerVerifier.ActiveTokenCheck` span, and refuses the token
+  (`ErrTokenInactive`, 401) unless the authorization server reports it
+  active. With a store shared with the authorization server, look the token
+  up by `oauth2.HashToken(nil, token)` with `LookupAccessToken` — an
+  `invalid_grant` `*oauth2.Error` means inactive, any other error means the
+  check could not be made (wrap `security.ErrUnavailable`: 503); otherwise
+  call RFC 7662 introspection. Accept only a token found active, never
+  deny-list token strings: an ECDSA token has a second valid form, which
+  the store does not know and a deny-list would miss;
 - or issue opaque access tokens, which only the store can validate.
 
 ## OpenID Provider

@@ -44,6 +44,9 @@
 //     principal, an AccessTokenPrincipal, carries client_id:
 //     SubjectIsClient tells a client_credentials token from a resource
 //     owner's (RFC 9700 §4.15) — to refuse, never to grant.
+//     WithActiveTokenCheck makes it ask the authorization server whether a
+//     verified token is still active (RFC 7009 §3): ErrTokenInactive
+//     otherwise.
 //   - NewRemoteJWKS fetches through the SSRF-safe outbound client (https,
 //     public destinations, no redirect, no proxy; the redirects a policy or
 //     an opt-out client allows stay on the JWK Set URL's origin), refreshes

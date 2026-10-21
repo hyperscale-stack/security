@@ -16,6 +16,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Added
 
+- `jwt`: `WithActiveTokenCheck(ActiveTokenCheck)` makes `BearerVerifier`
+  ask, after every other check, whether a verified access token is still
+  active — a lookup by `oauth2.HashToken(nil, token)` in a store shared with
+  the authorization server, or RFC 7662 introspection — so a revocation
+  (RFC 7009 §2.1, a token family revoked on a replay) takes effect before
+  the token expires (RFC 7009 §3). A refusal is `ErrTokenInactive` (401);
+  a check that could not be made, or a context that ended, is
+  `security.ErrUnavailable` (503). Without it nothing changes.
 - `jwt`: `StandardClaims.ClientID` reads and writes the `client_id` claim
   (RFC 8693 §4.3, RFC 9068 §2.2), and the principal of `BearerVerifier` is
   the exported `AccessTokenPrincipal`: `Subject()`, `ClientID()` and

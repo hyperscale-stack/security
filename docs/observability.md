@@ -215,6 +215,7 @@ to `otelconnect`, which you compose alongside these interceptors.
 | `jwtsec.Signer.Sign`  | `Signer.Sign`      | `jwt.alg` (string), `jwt.kid` (string)                  | —                                                                     |
 | `jwtsec.Verifier.Verify` | `Verifier.Verify` | `jwt.alg` (string), `jwt.kid` (string, clipped), `jwt.iss` (string, clipped) | `parse` (size bound, encoding, header, disallowed alg), `typ`, `kid` (no single key, key set unavailable, key bound to another algorithm or invalid), `signature`, `unmarshal` (claims), `claims` |
 | `jwtsec.VerifySignature` | `VerifySignature` | `jwt.alg` (string), `jwt.kid` (string, clipped)         | `parse` (disallowed alg included), `kid` (no single key, key bound to another alg or invalid), `signature` |
+| `jwtsec.BearerVerifier.ActiveTokenCheck` | the `ActiveTokenCheck` of a `BearerVerifier` built with `WithActiveTokenCheck`, for a token that passed every other check | `error.type` (string, on failure) | the error class only: `invalid_credentials` (inactive), `unavailable` — never the check's error text |
 | `jwtsec.RemoteJWKS.Fetch` | a fetch of the remote JWK Set — a new root span (the fetch outlives the request that started it) linked to the caller's span | `jwt.jwks.url` (string, without userinfo, query or fragment), `jwt.jwks.keys` (int, kept), `jwt.jwks.ignored` (int, unusable keys skipped) | `fetch` |
 
 Values taken from a token (`jwt.kid`, `jwt.alg` of a refused token,

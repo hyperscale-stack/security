@@ -45,10 +45,11 @@ future refactor phases.
   clients can influence them (RFC 9700 §4.15.1).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
-  JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload
-  carries a `jti` but no family, and no deny-list is shipped, so such a token
-  stays valid until it expires. Keep their lifetime short, or validate
-  against the store. See
+  JWT access tokens offline (`jwtsec.BearerVerifier`): such a token stays
+  valid until it expires, unless the resource server asks the
+  authorization server with `jwtsec.WithActiveTokenCheck` (a lookup in a
+  shared store, or RFC 7662 introspection — a request per token). Keep
+  their lifetime short. See
   [docs/security-considerations.md](docs/security-considerations.md#offline-jwt-access-tokens).
 - **Redis Cluster** — not supported by `oauth2/store/redis`: its Lua
   scripts touch keys of several hash slots. Use a standalone server or a
