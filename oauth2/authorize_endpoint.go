@@ -252,8 +252,8 @@ type AuthorizeConfig struct {
 	// redirect the user agent if it trusts the redirection URI" — lest it
 	// serve as a redirector to a phishing page a registered client controls.
 	// It is asked at most once per request, and only when the request
-	// fails before the resource owner authenticated: the issuer
-	// resolution, a repeated parameter, the state, the response type, the
+	// fails before the resource owner authenticated: a repeated
+	// parameter, the state, the response type, the
 	// client's grant types, the scope, PKCE, the nonce, the Extension's
 	// checks, a ConsentFunc error — and a Consent.Refusal stating that the
 	// request cannot complete without showing a user interface
@@ -318,6 +318,12 @@ type AuthorizeConfig struct {
 // [Profile20BCP] and [Profile21Draft], no http but a loopback IP literal
 // (RFC 9700 §2.6). Responses keep its query as
 // registered, byte for byte (RFC 6749 §3.1.2).
+//
+// The issuer comes first: when the [IssuerResolver] fails, or returns an
+// issuer the server cannot use ([ErrInvalidIssuer]), the request is
+// answered with a bare 500, never redirected and before any client is
+// loaded — no answer could name the issuer (RFC 9207 §2), nor the client be
+// checked against it ([IssuerBoundClient]).
 //
 // Errors that occur before the redirect URI is trusted (a client unknown
 // at the issuer, an unregistered or invalid redirect URI) are returned
@@ -405,15 +411,24 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	// The issuer comes before the client: a client bound to other issuers
-	// (IssuerBoundClient) is unknown at this one. When the resolver fails,
-	// the binding cannot be checked: the request then fails with a
-	// redirected server_error once the redirect URI is trusted.
-	resolved := s.resolveAuthorizeIssuer(r)
+	// (IssuerBoundClient) is unknown at this one. Without an issuer — the
+	// resolver failed, or returned one the server cannot use — no answer
+	// could name it (RFC 9207 §2) nor the client be checked against it: an
+	// outage, answered with a bare 500 that is never redirected.
+	issuer, audience, err := s.resolveIssuer(r.Context(), r)
+	if err != nil {
+		s.notifyError(r.Context(), err)
+		http.Error(w, "oauth2: server error", http.StatusInternalServerError)
 
-	// Client and redirect URI come first: a failure here MUST NOT redirect
+		return
+	}
+
+	// Client and redirect URI come next: a failure here MUST NOT redirect
 	// (the redirect target is not yet trusted). The refusal is deliberately
 	// opaque on the wire, so the hook is the only place the cause shows up.
-	client, err := resolved.clients(s.cfg.ClientStore).LoadClient(r.Context(), params.Get(paramClientID))
+	clients := &issuerClients{store: s.cfg.ClientStore, issuer: issuer}
+
+	client, err := clients.LoadClient(r.Context(), params.Get(paramClientID))
 	if err != nil && IsCode(err) != CodeInvalidClient {
 		// The store failed: an outage, not an unknown client.
 		s.notifyError(r.Context(), ErrServerError.WithDescription("client lookup failed").WithCause(err))
@@ -423,7 +438,7 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 	}
 
 	if err != nil || client == nil {
-		s.notifyError(r.Context(), resolved.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
+		s.notifyError(r.Context(), clients.explain(ErrInvalidClient.WithDescription("unknown or invalid client").WithCause(err)))
 		http.Error(w, "oauth2: unknown or invalid client", http.StatusBadRequest)
 
 		return
@@ -447,9 +462,11 @@ func (s *Server) serveAuthorize(cfg AuthorizeConfig, consent ConsentFunc, w http
 
 	// From here on the redirect URI is trusted: errors travel back to the
 	// client as a redirect.
-	in := authorizeInput{client: client, redirectURI: redirectURI, params: params, repeated: repeated}
+	in := authorizeInput{
+		client: client, redirectURI: redirectURI, params: params, repeated: repeated, issuer: issuer, audience: audience,
+	}
 
-	st, ok := s.validateAuthorize(cfg, w, r, in, resolved)
+	st, ok := s.validateAuthorize(cfg, w, r, in)
 	if !ok {
 		return
 	}
@@ -523,8 +540,7 @@ type authorizeState struct {
 type authorizeTarget struct {
 	redirectURI string
 	state       string
-	// issuer is the issuer identifier the request resolved to; empty when
-	// the IssuerResolver failed.
+	// issuer is the validated issuer identifier the request resolved to.
 	issuer   string
 	fragment bool
 	// trust decides whether an error before authentication travels to the
@@ -549,17 +565,14 @@ func (t *redirectTrust) allows(ctx context.Context) bool {
 
 // responseParams returns the parameters every authorization response to t
 // carries: state, echoed when the request carried one (RFC 6749 §4.1.2,
-// §4.1.2.1), and iss, the issuer identifier, whenever it is known (RFC 9207
-// §2: a server supporting it names itself in every authorization response,
-// error responses included).
+// §4.1.2.1), and iss, the issuer identifier (RFC 9207 §2: a server
+// supporting it names itself in every authorization response, error
+// responses included) — always known and valid here: a request whose issuer
+// is not is answered before any redirect.
 func (t authorizeTarget) responseParams() url.Values {
-	params := url.Values{}
+	params := url.Values{paramIss: {t.issuer}}
 	if t.state != "" {
 		params.Set(paramState, t.state)
-	}
-
-	if t.issuer != "" {
-		params.Set("iss", t.issuer)
 	}
 
 	return params
@@ -611,60 +624,28 @@ func (s *Server) refuseModified(w http.ResponseWriter, r *http.Request, st *auth
 	s.refuseAuthorize(w, r, st, ErrServerError.WithCause(errors.Join(ErrAuthorizeRequestModified, err)))
 }
 
-// authorizeIssuer is the outcome of resolving the issuer of an
-// authorization request.
-type authorizeIssuer struct {
-	issuer, audience string
-	err              error
-	// scoped is the request's view of the ClientStore at the issuer.
-	scoped *issuerClients
-}
-
-// resolveAuthorizeIssuer resolves the issuer of r once, for the client
-// lookup and the response.
-func (s *Server) resolveAuthorizeIssuer(r *http.Request) *authorizeIssuer {
-	issuer, audience, err := s.cfg.IssuerResolver.Resolve(r.Context(), r)
-
-	return &authorizeIssuer{issuer: issuer, audience: audience, err: err}
-}
-
-// clients returns store as the request sees it: the clients of other
-// issuers hidden, unless the issuer is unknown, and over-long identifiers
-// unknown in every case.
-func (a *authorizeIssuer) clients(store ClientStore) ClientStore {
-	a.scoped = &issuerClients{store: store, issuer: a.issuer, anyIssuer: a.err != nil}
-
-	return a.scoped
-}
-
-// explain adds [ErrClientNotAtIssuer] to the cause of oe when the client
-// was hidden.
-func (a *authorizeIssuer) explain(oe *Error) *Error {
-	return a.scoped.explain(oe)
-}
-
 // authorizeInput is an /authorize request behind a trusted redirect URI:
-// its client, the redirect URI resolved for it, and its parameters as the
-// core reads them — single-valued, an empty occurrence omitted — with the
-// first one it includes more than once (RFC 6749 §3.1).
+// its client, the redirect URI resolved for it, its parameters as the core
+// reads them — single-valued, an empty occurrence omitted — with the first
+// one it includes more than once (RFC 6749 §3.1), and the validated issuer
+// it resolved to, with the audience the resolver gave.
 type authorizeInput struct {
-	client      Client
-	redirectURI string
-	params      url.Values
-	repeated    string
+	client           Client
+	redirectURI      string
+	params           url.Values
+	repeated         string
+	issuer, audience string
 }
 
-// validateAuthorize validates the request behind a trusted redirect URI:
-// the issuer it resolved to, a repeated parameter, the flow, the scope and
-// the PKCE parameters, and answers the first failure with a redirect. The
-// issuer comes first, so every later redirect is answered within the realm
-// of the request.
+// validateAuthorize validates the request behind a trusted redirect URI —
+// a repeated parameter, the flow, the scope and the PKCE parameters — and
+// answers the first failure with a redirect, within the realm of the
+// request: every answer names its issuer.
 func (s *Server) validateAuthorize(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
 	r *http.Request,
 	in authorizeInput,
-	resolved *authorizeIssuer,
 ) (*authorizeState, bool) {
 	// An unsupported — or repeated — response type is answered in the query
 	// string, and a repeated or invalid state is not echoed.
@@ -673,6 +654,7 @@ func (s *Server) validateAuthorize(
 	stateValid := validState(state)
 	target := authorizeTarget{
 		redirectURI: in.redirectURI,
+		issuer:      in.issuer,
 		fragment:    flowErr == nil && flow == flowImplicit,
 		trust:       &redirectTrust{hook: cfg.TrustedRedirect, client: in.client, redirectURI: in.redirectURI},
 	}
@@ -680,17 +662,6 @@ func (s *Server) validateAuthorize(
 	if stateValid {
 		target.state = state
 	}
-
-	// Without an issuer the answer cannot name one (RFC 9207 §2): the
-	// server_error travels without iss.
-	if resolved.err != nil {
-		s.refuseUnauthenticated(w, r, target, ErrServerError.WithCause(resolved.err))
-
-		return nil, false
-	}
-
-	issuer, audience := resolved.issuer, resolved.audience
-	target.issuer = issuer
 
 	// RFC 6749 §4.1.2.1: invalid_request "includes a parameter more than
 	// once".
@@ -725,9 +696,9 @@ func (s *Server) validateAuthorize(
 		return nil, false
 	}
 
-	ar.Issuer = issuer
+	ar.Issuer = in.issuer
 	st := &authorizeState{
-		ar: *ar, clientID: in.client.ID(), audience: audience, fragment: target.fragment,
+		ar: *ar, clientID: in.client.ID(), audience: in.audience, fragment: target.fragment,
 		redirectURIOmitted: in.params.Get(paramRedirectURI) == "", trust: target.trust,
 	}
 

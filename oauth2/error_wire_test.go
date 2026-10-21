@@ -208,7 +208,7 @@ func TestRevokeAndIntrospectErrorsShareTheWireRules(t *testing.T) {
 	t.Parallel()
 
 	srv, err := oauth2.NewServer(oauth2.ServerConfig{
-		Storage: memory.New(), ClientStore: &staticClientStore{}, IssuerResolver: oauth2.StaticIssuer("", ""),
+		Storage: memory.New(), ClientStore: &staticClientStore{}, IssuerResolver: oauth2.StaticIssuer(testIssuer, ""),
 		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
 	})
 	require.NoError(t, err)

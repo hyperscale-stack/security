@@ -186,8 +186,8 @@ func TestAuthorizeRefusesUnsupportedResponseModes(t *testing.T) {
 }
 
 // TestResponseModeIsCheckedBeforeAnyRedirect: an unsupported response_mode
-// wins over every error that would be redirected — the issuer, the
-// response type, the scope, PKCE — since none of them can be encoded.
+// wins over every error that would be redirected — the response type, the
+// scope, PKCE — since none of them can be encoded.
 func TestResponseModeIsCheckedBeforeAnyRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +196,6 @@ func TestResponseModeIsCheckedBeforeAnyRedirect(t *testing.T) {
 		resolver oauth2.IssuerResolver
 		mutate   func(url.Values)
 	}{
-		{"failing resolver", failingIssuer{}, func(url.Values) {}},
 		{"scope not allowed", oauth2.StaticIssuer("https://auth.example", "api"), func(q url.Values) { q.Set("scope", "admin") }},
 		{"malformed PKCE", oauth2.StaticIssuer("https://auth.example", "api"), func(q url.Values) { q.Set("code_challenge", "short") }},
 	}

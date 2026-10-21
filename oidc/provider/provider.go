@@ -73,7 +73,10 @@ type Config struct {
 	AllowRefreshWithoutOfflineAccess bool
 	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
 	// localhost or a loopback IP address — for development only: OpenID
-	// Connect Core §2 requires an https issuer.
+	// Connect Core §2 requires an https issuer. It and the server's
+	// [oauth2.ServerConfig.AllowInsecureLoopbackIssuer] are one setting: New
+	// sets both when either is set, so the core and the provider validate
+	// the same issuers.
 	AllowInsecureLoopbackIssuer bool
 }
 
@@ -273,6 +276,11 @@ func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	if !hasGrant(server.Grants, oauth2.GrantTypeAuthorizationCode) {
 		return nil, errors.New("oidcprovider: New: the server needs the authorization_code grant")
 	}
+
+	// One loopback-issuer setting: the core and the provider validate the
+	// issuers the resolver returns alike.
+	loopback := server.AllowInsecureLoopbackIssuer || cfg.AllowInsecureLoopbackIssuer
+	server.AllowInsecureLoopbackIssuer, cfg.AllowInsecureLoopbackIssuer = loopback, loopback
 
 	p := &Provider{cfg: cfg, ttl: cfg.IDTokenTTL}
 	if p.ttl == 0 {

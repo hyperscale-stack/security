@@ -20,9 +20,6 @@ import (
 type issuerClients struct {
 	store  ClientStore
 	issuer string
-	// anyIssuer reports that the issuer is unknown — the IssuerResolver
-	// failed — so the binding cannot be checked: the request fails anyway.
-	anyIssuer bool
 	// hidden records that a client bound to other issuers was hidden: the
 	// cause of the refusal that follows.
 	hidden bool
@@ -35,7 +32,7 @@ func (c *issuerClients) LoadClient(ctx context.Context, id string) (Client, erro
 	}
 
 	client, err := c.store.LoadClient(ctx, id)
-	if err != nil || client == nil || c.anyIssuer {
+	if err != nil || client == nil {
 		return client, err //nolint:wrapcheck // the store's own answer, unchanged
 	}
 

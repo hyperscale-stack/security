@@ -351,7 +351,9 @@ func TestValueConstraintsMatchScalarsOnly(t *testing.T) {
 }
 
 // TestAuthorizationFailsClosedOnServerSideErrors: a key source or an issuer
-// the provider cannot use answers server_error before any interaction.
+// the provider cannot use fails the request before any interaction — a
+// redirected server_error for the keys, and for an issuer the core already
+// refuses, a bare 500 that names no issuer (oauth2.ErrInvalidIssuer).
 func TestAuthorizationFailsClosedOnServerSideErrors(t *testing.T) {
 	t.Parallel()
 
@@ -360,7 +362,10 @@ func TestAuthorizationFailsClosedOnServerSideErrors(t *testing.T) {
 	assert.Equal(t, oauth2.CodeServerError, redirect(t, broken.authorize(authorizeQuery())).Get("error"))
 
 	insecure := newEnv(t, withResolver(fixedIssuer{issuer: "http://op.example"}))
-	assert.Equal(t, oauth2.CodeServerError, redirect(t, insecure.authorize(authorizeQuery())).Get("error"))
+	rec := insecure.authorize(authorizeQuery())
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+	assert.True(t, insecure.sink.contains(oauth2.ErrInvalidIssuer))
 
 	for _, e := range []*env{broken, insecure} {
 		interactive, silent := e.interaction.calls()

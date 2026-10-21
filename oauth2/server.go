@@ -40,8 +40,16 @@ type ServerConfig struct {
 	// ClientStore resolves client records by ID.
 	ClientStore ClientStore
 	// IssuerResolver selects the (issuer, audience) pair for each request.
-	// Use [StaticIssuer] for single-tenant deployments.
+	// Use [StaticIssuer] for single-tenant deployments. The issuer is
+	// validated on every request ([ErrInvalidIssuer]), a StaticIssuer's by
+	// NewServer.
 	IssuerResolver IssuerResolver
+	// AllowInsecureLoopbackIssuer accepts http issuers whose host is exactly
+	// localhost or a loopback IP address — for development only: RFC 8414
+	// §2 and RFC 9207 §2 require an https issuer. oidcprovider.New sets it
+	// when its own Config.AllowInsecureLoopbackIssuer is set, and the
+	// reverse: the core and the provider validate the same issuers.
+	AllowInsecureLoopbackIssuer bool
 	// Grants lists the grant_type handlers active on /token. The Server
 	// builds a dispatch map keyed on Grant.Type(). Grants implementing
 	// [ProfileValidator] are checked against Profile at construction.
@@ -141,6 +149,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, errors.New("oauth2: NewServer: at least one ClientAuthenticator is required")
 	}
 
+	// The canonical single-tenant wiring fails here rather than on every
+	// request.
+	if static, ok := cfg.IssuerResolver.(staticIssuer); ok {
+		if err := checkIssuer(static.issuer, cfg.AllowInsecureLoopbackIssuer); err != nil {
+			return nil, fmt.Errorf("oauth2: NewServer: %w", err)
+		}
+	}
+
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -178,11 +194,16 @@ func (s *Server) notifyError(ctx context.Context, err error) {
 	s.cfg.OnError(ctx, err)
 }
 
-// resolveIssuer wraps IssuerResolver.Resolve, translating its error to the
-// canonical oauth2.Error envelope when present.
+// resolveIssuer wraps IssuerResolver.Resolve: a resolver error, or an
+// issuer the server cannot use ([ErrInvalidIssuer]), is a server_error
+// envelope with that cause — every endpoint answers both alike.
 func (s *Server) resolveIssuer(ctx context.Context, r *http.Request) (string, string, error) {
 	iss, aud, err := s.cfg.IssuerResolver.Resolve(ctx, r)
 	if err != nil {
+		return "", "", ErrServerError.WithCause(err)
+	}
+
+	if err := checkIssuer(iss, s.cfg.AllowInsecureLoopbackIssuer); err != nil {
 		return "", "", ErrServerError.WithCause(err)
 	}
 

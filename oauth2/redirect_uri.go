@@ -23,7 +23,7 @@ var ErrInvalidRedirectURI = errors.New("oauth2: invalid redirect URI")
 // server adds to the query of a redirect URI (RFC 6749 §4.1.2, §4.1.2.1;
 // RFC 9207 §2): a registered query naming one would carry it twice (RFC
 // 6749 §3.1).
-var reservedRedirectParameters = []string{paramCode, paramState, "iss", "error", "error_description", "error_uri"}
+var reservedRedirectParameters = []string{paramCode, paramState, paramIss, "error", "error_description", "error_uri"}
 
 // The URI schemes of the web (RFC 9110 §4.2), as url.Parse returns them:
 // lower-case.
@@ -31,6 +31,10 @@ const (
 	schemeHTTP  = "http"
 	schemeHTTPS = "https"
 )
+
+// reasonNoHost is why an http(s) redirect URI or an issuer is refused when
+// it names no host (RFC 9110 §4.2.1).
+const reasonNoHost = "no host"
 
 // ValidateRedirectURI reports whether uri may be registered as a redirect
 // URI of a server running profile p, wrapping [ErrInvalidRedirectURI] with
@@ -123,7 +127,7 @@ func redirectURIParts(u *url.URL) string {
 		// Hostname, not Host: "http://:80/cb" has an authority, no host
 		// (RFC 9110 §4.2.1: such a URI MUST be rejected as invalid).
 		if u.Hostname() == "" {
-			return "no host"
+			return reasonNoHost
 		}
 
 		if u.User != nil {

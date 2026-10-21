@@ -152,6 +152,9 @@ func buildServer() (http.Handler, error) {
 		Storage:        store,
 		ClientStore:    clients,
 		IssuerResolver: oauth2.StaticIssuer("http://127.0.0.1:1337", "api"),
+		// An http issuer on a loopback host, for the demo only: RFC 8414
+		// §2 and RFC 9207 §2 require an https issuer in production.
+		AllowInsecureLoopbackIssuer: true,
 		Grants: []oauth2.Grant{
 			grant.NewAuthorizationCode(gcfg),
 			grant.NewClientCredentials(gcfg),

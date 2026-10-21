@@ -13,6 +13,9 @@ const (
 	paramScope        = "scope"
 	paramState        = "state"
 	paramCode         = "code"
+	// paramIss is the issuer identifier of an authorization response (RFC
+	// 9207 §2).
+	paramIss = "iss"
 )
 
 // The request parameters each endpoint reads itself (RFC 6749 §3.1, §3.2):

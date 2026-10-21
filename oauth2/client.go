@@ -146,9 +146,10 @@ type ClientStore interface {
 // the secret presented — so another realm's clients can be neither enumerated
 // nor their secrets checked. unauthorized_client is not used: it would
 // confirm an authenticated, existing client. The [ErrorHook] gets
-// [ErrClientNotAtIssuer] as the cause. A server whose IssuerResolver fails
-// cannot check it: the request then fails with server_error, nothing
-// issued.
+// [ErrClientNotAtIssuer] as the cause. When the IssuerResolver fails, or
+// returns an issuer the server cannot use, no client is loaded at all: the
+// request fails as an outage — a bare 500 at /authorize, never redirected —
+// nothing issued.
 type IssuerBoundClient interface {
 	// AllowsIssuer reports whether the client is registered at issuer, the
 	// identifier the IssuerResolver returned — compared exactly (OpenID

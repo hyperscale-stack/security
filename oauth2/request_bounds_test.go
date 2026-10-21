@@ -546,27 +546,25 @@ func TestAuthorizeRecordsNoMethodWithoutChallenge(t *testing.T) {
 // TestOverlongClientIDIsUnknown pins the client-identifier bound (RFC 6749
 // §2.2: the server documents the size of the identifiers it issues): a
 // client_id over MaxClientIDLength bytes is an unknown client, refused
-// without a store lookup — at /authorize whether or not the issuer resolved,
-// and by every client-authentication method.
+// without a store lookup — at /authorize and by every client-authentication
+// method.
 func TestOverlongClientIDIsUnknown(t *testing.T) {
 	t.Parallel()
 
 	long := strings.Repeat("c", oauth2.MaxClientIDLength+1)
 
-	for name, resolver := range map[string]oauth2.IssuerResolver{"resolved issuer": nil, "failing resolver": failingIssuer{}} {
-		t.Run("authorize/"+name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("authorize", func(t *testing.T) {
+		t.Parallel()
 
-			env := newBoundsEnv(t, 0, resolver, nil)
-			q := boundsQuery()
-			q.Set("client_id", long)
+		env := newBoundsEnv(t, 0, nil, nil)
+		q := boundsQuery()
+		q.Set("client_id", long)
 
-			rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+q.Encode(), nil))
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Equal(t, "oauth2: unknown or invalid client\n", rec.Body.String())
-			env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
-		})
-	}
+		rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+q.Encode(), nil))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, "oauth2: unknown or invalid client\n", rec.Body.String())
+		env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
+	})
 
 	t.Run("authorize/at the bound", func(t *testing.T) {
 		t.Parallel()
@@ -610,23 +608,22 @@ func TestOverlongClientIDIsUnknown(t *testing.T) {
 	}
 }
 
-// TestFailingResolverChecksNoIssuerBinding pins what IssuerBoundClient
-// documents when the IssuerResolver fails: the binding cannot be checked, so
-// a bound client is not hidden — the request fails with a redirected
-// server_error, without iss — while an over-long client_id stays unknown.
-func TestFailingResolverChecksNoIssuerBinding(t *testing.T) {
+// TestFailingResolverLoadsNoClient pins what IssuerBoundClient documents
+// when the IssuerResolver fails: with no issuer to check a binding against,
+// no client is loaded — a client bound to another issuer cannot have an
+// error redirected to it — and the request is a bare 500.
+func TestFailingResolverLoadsNoClient(t *testing.T) {
 	t.Parallel()
 
 	env := newBoundsEnv(t, 0, failingIssuer{}, nil)
 	bound := confidentialClient([]string{oauth2.GrantTypeAuthorizationCode}, []string{"read"})
-	bound.IssuerValues = []string{"https://auth.example"}
+	bound.IssuerValues = []string{"https://other.example"}
 	env.clients.clients["machine"] = bound
 
 	rec := serve(env.authorizeHandler(approve), httptest.NewRequest(http.MethodGet, authorizePath+"?"+boundsQuery().Encode(), nil))
-	params := redirectParams(t, rec, false)
-	assert.Equal(t, oauth2.CodeServerError, params.Get("error"))
-	assert.NotContains(t, params, "iss", "no issuer is known")
-	env.lookups.AssertNumberOfCalls(t, "LoadClient", 1)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+	env.lookups.AssertNotCalled(t, "LoadClient", mock.Anything, mock.Anything)
 }
 
 // TestMalformedFormIsRefused: a body that is no valid form encoding is

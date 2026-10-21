@@ -14,8 +14,6 @@ import (
 	"testing"
 
 	"github.com/hyperscale-stack/security/oauth2"
-	"github.com/hyperscale-stack/security/oauth2/clientauth"
-	"github.com/hyperscale-stack/security/oauth2/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,34 +141,12 @@ func TestImplicitResponsesNameTheIssuer(t *testing.T) {
 func TestIssuerParameterIsFormEncoded(t *testing.T) {
 	t.Parallel()
 
-	const issuer = "https://auth.example/tenant a&b=c/"
+	const issuer = "https://auth.example/tenant-a&b=c/"
 
 	srv, _ := newRealmServer(t, oauth2.StaticIssuer(issuer, "api"))
 	params := redirectParams(t, authorizeAt(srv, "auth.example", authorizeQuery(), approve), false)
 
 	assert.Equal(t, issuer, params.Get("iss"))
-}
-
-// TestIssuerResolverFailureCannotNameTheIssuer: when the IssuerResolver
-// fails, no issuer is known: the server_error is redirected without iss.
-func TestIssuerResolverFailureCannotNameTheIssuer(t *testing.T) {
-	t.Parallel()
-
-	srv, err := oauth2.NewServer(oauth2.ServerConfig{
-		Profile: oauth2.Profile20, Storage: memory.New(), IssuerResolver: failingIssuer{},
-		ClientStore: &staticClientStore{clients: map[string]oauth2.Client{
-			testClientID: &oauth2.DefaultClient{
-				GrantTypeValues: allGrantTypes,
-				IDValue:         testClientID, RedirectURIValues: []string{redirectURI}, ScopeValues: []string{"read"},
-			},
-		}},
-		ClientAuth: []oauth2.ClientAuthenticator{clientauth.NewBasic()},
-	})
-	require.NoError(t, err)
-
-	params := redirectParams(t, runAuthorize(srv, authorizeQuery(), approve), false)
-	assert.Equal(t, oauth2.CodeServerError, params.Get("error"))
-	assert.False(t, params.Has("iss"))
 }
 
 // TestMetadataAdvertisesTheIssuerParameter pins RFC 9207 §2.3 and §3: the
