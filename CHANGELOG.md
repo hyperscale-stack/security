@@ -1238,6 +1238,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the distrust of compromised intermediate certificates in `crypto/x509`
   (GO-2026-6809, CVE-2026-111943), reachable from every TLS client path
   (`outbound`, the remote JWK Set of `jwtsec`).
+- The OpenID Connect interoperability tests (`internal/interop/oidcrp`,
+  never released) require `github.com/go-chi/chi/v5` v5.5.0 instead of
+  v5.3.2, which the provider they run pulls in: GHSA-j6qf-3m9c-vwj3 and
+  GHSA-rqrp-8cg2-5958, repository advisories that no vulnerability
+  database carries.
 - The OAuth2 token endpoint refuses a `code_verifier` presented for an
   authorization code issued without `code_challenge` (RFC 9700 §2.1.1,
   §4.8.2, #86), under every profile. Under `Profile20` — where PKCE is
