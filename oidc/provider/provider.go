@@ -211,6 +211,16 @@ type Provider struct {
 // [Config.AllowRefreshWithoutOfflineAccess]). The server's clock (Now) and
 // ErrorHook (OnError) are the provider's. New keeps its own copies of
 // cfg's slices: changing them afterwards changes nothing.
+//
+// At every code exchange and refresh the provider refuses (server_error)
+// an access-token audience — the IssuerResolver's — naming a relying party
+// of the token's issuer: the requesting client, or a client registered at
+// the issuer that declares the authorization_code grant, which would take
+// a JWT access token for one of its ID Tokens (RFC 8725 §2.8, §3.12). It
+// asks the server's ClientStore for the audience to tell: LoadClient must
+// answer an ID it does not know — typically a resource URI — with (nil,
+// nil) or an invalid_client error, without I/O beyond the store; any other
+// error fails the exchange.
 func New(server oauth2.ServerConfig, cfg Config) (*Provider, error) {
 	// Copied before they are validated: what is checked is what is served.
 	cfg.ClaimsSupported = slices.Clone(cfg.ClaimsSupported)

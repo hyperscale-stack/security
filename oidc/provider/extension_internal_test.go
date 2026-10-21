@@ -6,6 +6,7 @@ package oidcprovider
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -83,4 +84,31 @@ func TestOfflineAccessNeedsTheCodeFlow(t *testing.T) {
 	_, offline, err = view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessByPolicy)
 	require.NoError(t, err)
 	require.True(t, offline, "kept in the code flow")
+}
+
+// unusedClients is a ClientStore that must not be asked.
+type unusedClients struct{ t *testing.T }
+
+func (u unusedClients) LoadClient(context.Context, string) (oauth2.Client, error) {
+	u.t.Error("the ClientStore was asked")
+
+	return nil, errors.New("unusedClients: not asked")
+}
+
+// TestTheRequestingClientIsNeverTheAudience: an access-token audience equal
+// to the requesting client's ID is refused without asking the ClientStore
+// — whatever grants that client declares.
+func TestTheRequestingClientIsNeverTheAudience(t *testing.T) {
+	t.Parallel()
+
+	p := &Provider{clients: unusedClients{t: t}}
+	requester := &oauth2.DefaultClient{IDValue: "web", GrantTypeValues: []string{oauth2.GrantTypePassword}}
+
+	rp, err := p.audienceNamesRP(context.Background(), "web", "https://op.example", requester)
+	require.NoError(t, err)
+	require.True(t, rp)
+
+	rp, err = p.audienceNamesRP(context.Background(), "", "https://op.example", requester)
+	require.NoError(t, err)
+	require.False(t, rp, "an empty audience names no client")
 }
