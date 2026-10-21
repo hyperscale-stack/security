@@ -54,10 +54,11 @@ in-tree `password`) were removed during the rewrite. The core module's
 non-test imports are now stdlib + `go.opentelemetry.io/otel`; its tests also
 use `testify` and `otel/sdk`.
 
-`tools/golangci-lint`, `tools/govulncheck` and `tools/mockery` are not
-library modules: each pins one development tool, outside `go.work`, so the
-tools' dependencies never reach a library `go.mod` or a consumer's module
-graph. They are never released.
+`tools/golangci-lint`, `tools/govulncheck`, `tools/goveralls`,
+`tools/mockery` and `tools/osv-scanner` are not library modules: each pins
+one development tool, outside `go.work`, so the tools' dependencies never
+reach a library `go.mod` or a consumer's module graph. They are never
+released.
 
 ## Dependency policy
 
@@ -149,6 +150,7 @@ make generate     # mockery mocks: in-package mock_*_test.go files, never commit
 make test         # generate, then race + coverage, aggregated into build/coverage.out
 make lint         # golangci-lint (tools/golangci-lint) on every module with the shared config
 make vuln         # govulncheck -test on every module, outside the workspace
+make osv          # OSV-Scanner (tools/osv-scanner) on every module's go.mod, outside the workspace
 make tidy         # go work sync + go mod tidy on every module and tool + go work sync
 make check-modules # one go line, go.work complete, sync no-op, every module on its own (GOWORK=off)
 make test-backends # the store suites on real PostgreSQL/MySQL/MariaDB/Redis servers (Docker; scripts/test-backends.sh), run by CI
@@ -158,8 +160,9 @@ make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 The `Makefile` discovers modules dynamically via `find . -name go.mod`
 (except the tool modules under `tools/`), so a new sub-module is picked up
 automatically as soon as its `go.mod` lands. The tools (golangci-lint,
-govulncheck, mockery) are built from their pinned modules into `build/bin`
-on first use; mocks are generated before anything that compiles tests.
+govulncheck, goveralls, mockery, osv-scanner) are built from their pinned
+modules into `build/bin` on first use; mocks are generated before anything
+that compiles tests.
 Example program lines are excluded from the aggregated coverage profile
 (their `main()` is not unit-testable); the examples are still built, tested,
 and linted.
@@ -174,11 +177,12 @@ SHA.
   against every module, and uploads the aggregated coverage to Coveralls
   with goveralls (pinned in `tools/goveralls`).
 - `.github/workflows/govulncheck.yml` runs `make vuln` (every module, tests
-  included) on every change and weekly.
+  included) and `make osv` (OSV-Scanner on every module's `go.mod`) on every
+  change and weekly.
 - `.github/workflows/release.yml` runs when a `vX.Y.Z` or `<module>/vX.Y.Z`
   tag is pushed. A read-only job verifies it (`scripts/release-check.sh`,
-  `check-modules`, build, test, lint, govulncheck on the released module),
-  then a separate job publishes the GitHub release
+  `check-modules`, build, test, lint, govulncheck and OSV-Scanner on the
+  released module), then a separate job publishes the GitHub release
   ([docs/releasing.md](docs/releasing.md)).
 - Dependabot proposes updates for every workspace module (go.work mode), the
   tool modules and the actions, after a 7-day cooldown.
@@ -821,22 +825,26 @@ To migrate:
    `code_challenge` now fails: send the matching `code_challenge` (S256) in
    its authorization requests, or stop sending the verifier.
 
-### Toolchain: every module requires Go 1.27.2
+### Toolchain: every module requires Go 1.27.3
 
-Every `go.mod`, and `go.work`, now declares `go 1.27.2`. Since Go 1.21 the
+Every `go.mod`, and `go.work`, now declares `go 1.27.3`. Since Go 1.21 the
 `go` line is a minimum: a module that requires one of ours must declare
-`go 1.27.2` or later, and building it needs a go1.27.2 or later toolchain.
+`go 1.27.3` or later, and building it needs a go1.27.3 or later toolchain.
 The modules used to declare `go 1.26.0` or `go 1.26.5`, and the toolchain CI
 tested with (go1.26.5) carries standard-library advisories reachable from
 the library's own call paths: HTTP/2 server crashes and request smuggling in
 `net/http`, `crypto/tls`, `encoding/asn1`, `net/url`, `encoding/xml`. All of
-them are fixed in go1.27.2, on which `govulncheck` reports none.
+them are fixed in go1.27.2. go1.27.2 itself still lacks the distrust of
+compromised intermediate certificates in `crypto/x509` (GO-2026-6809,
+CVE-2026-111943), reachable from every TLS client path of the library
+(`outbound`, the remote JWK Set of `jwtsec`); it is fixed in go1.27.3, on
+which `govulncheck` reports none.
 
 |                                            | Before                    | After                                                      |
 | ------------------------------------------ | ------------------------- | ---------------------------------------------------------- |
-| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.2`                                                |
-| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.2 or later (switched to under `GOTOOLCHAIN=auto`)   |
-| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.2, read from `go.work`                              |
+| `go` line of every module and of `go.work` | `go 1.26.0` / `go 1.26.5` | `go 1.27.3`                                                |
+| Toolchain that builds a consumer           | go1.26.0 or later         | go1.27.3 or later (switched to under `GOTOOLCHAIN=auto`)   |
+| Toolchain CI tests and releases with       | go1.26.5                  | go1.27.3, read from `go.work`                              |
 
 Behaviour the Go 1.27 floor brings to every consumer (Go 1.27 release
 notes):
@@ -853,13 +861,13 @@ notes):
 
 To migrate:
 
-1. Set your module's `go` line to `1.27.2` or later: `go get` of one of our
-   modules does it, or run `go mod edit -go=1.27.2`.
-2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.2
+1. Set your module's `go` line to `1.27.3` or later: `go get` of one of our
+   modules does it, or run `go mod edit -go=1.27.3`.
+2. With `GOTOOLCHAIN=auto` (the default) the go command downloads go1.27.3
    from the module proxy, verified by the checksum database. Where
    `GOTOOLCHAIN=local` (some Linux distributions, hermetic CI), install
-   go1.27.2 or later first: an older toolchain stops with
-   `go.mod requires go >= 1.27.2`.
+   go1.27.3 or later first: an older toolchain stops with
+   `go.mod requires go >= 1.27.3`.
 3. Build and ship with the latest Go patch release: the `go` line is a
    floor, not the toolchain to release with.
 

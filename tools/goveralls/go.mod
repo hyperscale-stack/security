@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/tools/goveralls
 
-go 1.27.2
+go 1.27.3
 
 tool github.com/mattn/goveralls
 

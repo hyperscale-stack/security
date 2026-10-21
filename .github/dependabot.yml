@@ -38,6 +38,8 @@ updates:
         dependency-type: "all"
       - dependency-name: "github.com/vektra/mockery/v3"
         dependency-type: "all"
+      - dependency-name: "github.com/google/osv-scanner/v2"
+        dependency-type: "all"
     assignees:
       - euskadi31
 

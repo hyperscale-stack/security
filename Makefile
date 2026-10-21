@@ -10,7 +10,7 @@ MODULES := $(shell find . -name go.mod -not -path '*/vendor/*' -not -path '*/nod
 # Development tools: one module per tool under tools/<name>, outside the
 # workspace so that their dependencies never reach a library go.mod, each
 # pinned and checksum-verified by its own go.mod and go.sum.
-TOOLS := golangci-lint govulncheck goveralls mockery
+TOOLS := golangci-lint govulncheck goveralls mockery osv-scanner
 
 .PHONY: all
 all: test
@@ -120,6 +120,22 @@ vuln: generate $(BIN_DIR)/govulncheck
 		echo "==> govulncheck $$mod"; \
 		(cd "$$mod" && GOWORK=off $(BIN_DIR)/govulncheck -test ./...) || exit 1; \
 	done
+
+# OSV-Scanner (tools/osv-scanner) on the go.mod of every module, outside the
+# workspace, against the OSV database: the Go vulnerability database plus the
+# GitHub-reviewed advisories (GHSA) it has not imported yet and the records it
+# withdrew. Advisories with symbol data go through Go call analysis, as with
+# govulncheck; one without (a GHSA-only record) fails whenever a required
+# version is affected, test-only requirements included. A database error
+# fails too. Exceptions live in osv-scanner.toml only: --config replaces any
+# osv-scanner.toml next to a go.mod. The release workflow scans the released
+# module alone: make osv OSV_MODULES=<dir>.
+OSV_MODULES ?= $(MODULES)
+
+.PHONY: osv
+osv: $(BIN_DIR)/osv-scanner
+	@GOWORK=off $(BIN_DIR)/osv-scanner scan source --config="$(CURDIR)/osv-scanner.toml" \
+		$(addprefix --lockfile=,$(addsuffix /go.mod,$(OSV_MODULES)))
 
 # Every module on its own (scripts/check-modules.sh): one go line, go.work
 # lists every module, `go work sync` is a no-op, and every module builds,

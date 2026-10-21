@@ -1,6 +1,6 @@
 module github.com/hyperscale-stack/security/oidc/provider
 
-go 1.27.2
+go 1.27.3
 
 replace github.com/hyperscale-stack/security => ../../
 

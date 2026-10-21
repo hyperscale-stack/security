@@ -1611,34 +1611,50 @@ span catalog.
 
 ## Toolchain and supply chain
 
-- **Go toolchain.** Every module requires Go 1.27.2 (its `go` line). The
+- **Go toolchain.** Every module requires Go 1.27.3 (its `go` line). The
   library cannot be built with a toolchain carrying the standard-library
-  advisories fixed up to go1.27.2: HTTP/2 server crashes and request
+  advisories fixed up to go1.27.3: HTTP/2 server crashes and request
   smuggling in `net/http`, `crypto/tls`, `encoding/asn1`, `net/url`,
-  `encoding/xml`. Build and ship with the latest Go patch release, and run
+  `encoding/xml`, and the distrust of compromised intermediate certificates
+  in `crypto/x509` (GO-2026-6809), which every TLS client path of the
+  library reaches. Build and ship with the latest Go patch release, and run
   `govulncheck` on your application: which advisories matter depends on the
   code you call.
 - **Vulnerability scanning.** The `govulncheck` workflow scans every module
-  outside the workspace (its own requirements, tests included) on every
-  change and weekly, and it must be green on the commit of a release; the
-  release workflow also scans the released module itself and never
-  publishes over an advisory reachable from it. Known and not reachable:
-  GO-2026-5932 (`golang.org/x/crypto/openpgp` is unmaintained, no fix) is
-  reported at module level for the modules that require
-  `golang.org/x/crypto`; none imports `openpgp`. Accepted reachable
-  advisories (ID, reason, owner, review date): none.
+  on every change and weekly, and it must be green on the commit of a
+  release ([releasing.md](releasing.md)):
+  - govulncheck, outside the workspace (each module's own requirements,
+    tests included), against the Go vulnerability database;
+  - OSV-Scanner, against the OSV database, which adds the GitHub-reviewed
+    advisories (GHSA) before the Go database imports them, and the records
+    it withdrew. An advisory without symbol data fails whenever a required
+    version is affected; the others go through Go call analysis.
+
+  The release workflow scans the released module with both and never
+  publishes over a failing scan. Known and not reachable: GO-2026-5932
+  (`golang.org/x/crypto/openpgp` is unmaintained, no fix) is reported at
+  module level, and by OSV-Scanner as uncalled, for the modules that
+  require `golang.org/x/crypto`; none imports `openpgp`. Accepted reachable
+  advisories (ID, reason, owner, review date): none. No scanner covers the
+  security advisories a dependency publishes in its own repository and
+  GitHub never reviews, in practice those without a CVE:
+  [releasing.md](releasing.md) lists the ones known and the manual check
+  before a release.
 - **Dependencies.** Dependabot proposes version updates for every module
   after a 7-day cooldown (security updates are not delayed). The
-  development tools (golangci-lint, govulncheck, goveralls, mockery) are
-  pinned in modules of their own under `tools/` and never reach a library's
-  module graph.
+  development tools (golangci-lint, govulncheck, goveralls, mockery,
+  osv-scanner) are pinned in modules of their own under `tools/` and never
+  reach a library's module graph. They run in CI only, checksum-verified by
+  their `go.sum`, with a read-only token and no secret; osv-scanner alone
+  brings about 200 third-party modules into the jobs that build the tools,
+  and the release workflow builds them without a cache.
 - **CI and releases.**
   - The workflows run with a read-only token by default (only the release
     publish job gets `contents: write`), every action is pinned to a full
     commit SHA, and checkouts keep no credentials.
   - A release is verified with a read-only token (`scripts/release-check.sh`,
-    build, test, lint, govulncheck) before a separate job publishes the
-    GitHub release, without checkout or third-party code.
+    build, test, lint, govulncheck, OSV-Scanner) before a separate job
+    publishes the GitHub release, without checkout or third-party code.
   - Module tags are not signed: verify the modules through the Go checksum
     database (`sum.golang.org`), as `go get` does by default. Never set
     `GOSUMDB=off`, and never let a `GOPRIVATE` or `GONOSUMDB` pattern match
@@ -1647,7 +1663,7 @@ span catalog.
 
 ## Operator checklist
 
-- [ ] Build with Go 1.27.2 or later, the latest patch release, and run
+- [ ] Build with Go 1.27.3 or later, the latest patch release, and run
       `govulncheck` on your application.
 - [ ] Pick a password hasher and review its cost against current hardware;
       raise its limits (`WithArgon2idLimits`, `WithBCryptMaxCost`) before

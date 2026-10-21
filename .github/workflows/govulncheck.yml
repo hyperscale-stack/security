@@ -40,3 +40,34 @@ jobs:
       # consumer resolves), tests included, with the toolchain go.work pins.
       - name: Scan every module
         run: make vuln
+
+  # The OSV database adds what the Go vulnerability database lacks: the
+  # GitHub-reviewed advisories (GHSA) it has not imported yet, and the
+  # records it withdrew. An advisory without symbol data fails whenever a
+  # required version is affected; the others go through Go call analysis,
+  # so an uncalled one does not fail. GO-2026-5932 (golang.org/x/crypto,
+  # no fix) is such an uncalled record: if call analysis ever breaks, it
+  # turns this job red. An error reaching api.osv.dev fails the job too.
+  # Repository advisories that GitHub never reviews reach no database
+  # (docs/releasing.md).
+  osv-scanner:
+    name: OSV-Scanner (every module)
+    runs-on: ubuntu-latest
+    # The scan retries the OSV API: never hold a runner for 6 hours.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      # The go.mod of every module, with osv-scanner built from
+      # tools/osv-scanner; exceptions only in osv-scanner.toml.
+      - name: Scan every module
+        run: make osv

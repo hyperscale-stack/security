@@ -1,0 +1,22 @@
+# OSV-Scanner configuration: the only one `make osv` reads (it is passed with
+# --config, which replaces any osv-scanner.toml placed next to a go.mod).
+#
+# Triage of an advisory that fails the scan (docs/releasing.md):
+#   - prefer a fix: upgrade the dependency, or remove the call path;
+#   - an accepted advisory gets one [[IgnoredVulns]] entry here, with
+#       id          = the advisory ID the scan prints;
+#       ignoreUntil = a review date at most 90 days ahead (an entry without
+#                     it ignores the advisory for ever: never omit it);
+#       reason      = why it is not exploitable or is accepted, and the owner;
+#     and the same decision is recorded in docs/security-considerations.md;
+#   - never add [[PackageOverrides]], ScanGoModVersion or GoVersionOverride:
+#     they hide packages or change what is scanned.
+# A key osv-scanner does not know makes it refuse this file, which fails the
+# scan.
+#
+# Example:
+#
+#   [[IgnoredVulns]]
+#   id = "GHSA-xxxx-xxxx-xxxx"
+#   ignoreUntil = 2026-12-31T00:00:00Z
+#   reason = "Only reachable through X, which no module calls. Owner: @euskadi31."
