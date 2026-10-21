@@ -100,6 +100,18 @@ func TestNewValidatesItsConfiguration(t *testing.T) {
 		{"supported tagged alias of a tagged entry", nil, func(c *oidcprovider.Config) {
 			c.ClaimsSupported = []string{"foo_bar#fr", "foo#bar-fr"}
 		}},
+		{"supported tagged alias before the entry it reads as", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"foo#bar-fr", "foo_bar"}
+		}},
+		{"supported variant before # ahead of the entry it reads as", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"Tenant#x", "tenant"}
+		}},
+		{"supported tagged alias continuing at the tag's first letter", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"foo_x", "foo#x-fr"}
+		}},
+		{"supported tagged alias of sub at the tag's first letter", nil, func(c *oidcprovider.Config) {
+			c.ClaimsSupported = []string{"su#bfr"}
+		}},
 		{"supported separator variants of each other", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"tenant_id", "tenant.id"} }},
 		{"supported separator variant of email_verified", nil, func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"email verified"} }},
 		{"supported Unicode separator variant of email_verified", nil, func(c *oidcprovider.Config) {

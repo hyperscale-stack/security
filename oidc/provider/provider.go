@@ -48,8 +48,12 @@ type Config struct {
 	// variant of a protocol, standard or other entry's claim — its part
 	// before "#" included ("sub#x") —, and a language-tagged entry reading
 	// as one of them or as a tagged variant of one ("email#verified", or
-	// "foo#bar-fr" next to foo_bar); a protocol or standard claim spelled
-	// exactly is accepted, and published once.
+	// "foo#bar-fr" next to foo_bar), whatever the entries' order; a protocol
+	// or standard claim spelled exactly is accepted, and published once.
+	// Keep application claim names from extending standard ones: declaring
+	// "emails" makes the tagged variants "email#s…" ("email#sv") never
+	// released, as their claim name followed by their tag's first letters
+	// spells a known claim.
 	ClaimsSupported []string
 	// ACRValuesSupported is published as Discovery acr_values_supported —
 	// omitted when empty. The provider enforces nothing about them: an acr
@@ -123,26 +127,34 @@ func checkClaimsSupported(supported []string) error {
 		}
 	}
 
+	// What an entry reads as depends on every other entry: checked once all
+	// are known, so that their order does not matter.
+	for _, name := range supported {
+		if err := checkSupportedReading(known, name); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-// checkSupported checks the ClaimsSupported entry name against the known
-// claims and the entries before it, which it records.
+// checkSupported checks the ClaimsSupported entry name — its untagged name
+// and its key — against the known claims and the entries before it, and
+// records it.
 func checkSupported(known claimNames, entries map[string]string, name string) error {
 	if !validClaimName(name) {
 		return errSupportedInvalid
 	}
 
-	base, tag, tagged := splitTag(name)
-	prefix, _, _ := strings.Cut(name, "#")
-	key, tagKey, fullKey := claimKey(base), claimKey(tag), claimKey(name)
+	base := untagged(name)
+	key, fullKey := claimKey(base), claimKey(name)
 
 	switch {
 	case reserved(base) && slices.Contains(protocolClaims, name):
 		return nil // published once among the protocol claims
-	case reserved(base), reserved(prefix), tagged && continuesClaim(key, tagKey, isReservedKey):
+	case reserved(base):
 		return errSupportedReserved
-	case known.variant(base, name), known.variant(prefix, name), tagged && continuesClaim(key, tagKey, known.has):
+	case known.variant(base, name):
 		return errSupportedVariant
 	}
 
@@ -153,6 +165,29 @@ func checkSupported(known claimNames, entries map[string]string, name string) er
 	known[key], entries[fullKey] = base, name
 
 	return nil
+}
+
+// checkSupportedReading refuses the ClaimsSupported entry name when its
+// part before its first "#", or — tagged — its claim name followed by any
+// part of its tag, reads as a reserved claim or as another known one,
+// every entry included (see claimNames.releasable).
+func checkSupportedReading(known claimNames, name string) error {
+	if slices.Contains(protocolClaims, name) {
+		return nil
+	}
+
+	base, tag, tagged := splitTag(name)
+	prefix, _, _ := strings.Cut(name, "#")
+	key, tagKey := claimKey(base), claimKey(tag)
+
+	switch {
+	case reserved(prefix), tagged && continuesClaim(key, tagKey, isReservedKey):
+		return errSupportedReserved
+	case known.variant(prefix, name), tagged && continuesClaim(key, tagKey, known.has):
+		return errSupportedVariant
+	default:
+		return nil
+	}
 }
 
 // validClaimName reports whether name may name a claim: 1 to 255 bytes of
@@ -215,7 +250,9 @@ type Provider struct {
 // an access-token audience — the IssuerResolver's — naming a relying party
 // of the token's issuer: the requesting client, or a client registered at
 // the issuer that declares the authorization_code grant, which would take
-// a JWT access token for one of its ID Tokens (RFC 8725 §2.8, §3.12). It
+// a JWT access token for one of its ID Tokens (RFC 8725 §2.8, §3.12) — not
+// a client that kept refresh_token only, which still refreshes the OpenID
+// grants it holds: keep audiences apart from its ID too. It
 // asks the server's ClientStore for the audience to tell: LoadClient must
 // answer an ID it does not know — typically a resource URI — with (nil,
 // nil) or an invalid_client error, without I/O beyond the store; any other
