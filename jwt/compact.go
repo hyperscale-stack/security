@@ -14,13 +14,25 @@ import (
 	josejson "github.com/go-jose/go-jose/v4/json"
 )
 
-// unsupportedHeaders are the JOSE header parameters of the JWS extensions
-// this package does not implement, refused whatever their value: crit
-// (RFC 7515 §4.1.11 — a JWS whose crit lists an extension the recipient
-// does not support is invalid, and crit is never an empty list) and b64
-// (RFC 7797 §6 — it always comes with crit; §7 — a JWT MUST NOT use b64
-// with a false value).
-var unsupportedHeaders = []string{"crit", "b64"}
+// unsupportedHeaders are the JOSE header parameters this package refuses,
+// whatever their value:
+//
+//   - crit and b64, the JWS extensions it does not implement: crit (RFC
+//     7515 §4.1.11 — a JWS whose crit lists an extension the recipient does
+//     not support is invalid, and crit is never an empty list) and b64 (RFC
+//     7797 §6 — it always comes with crit; §7 — a JWT MUST NOT use b64 with
+//     a false value);
+//   - jwk, x5c, jku and x5u, which carry or locate a key or certificate (RFC
+//     7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6). RFC 7515 §4 lets a recipient
+//     ignore them; this package refuses them instead, as a local policy:
+//     verification keys come from the configured key set only (RFC 7515 §6;
+//     RFC 9068 §4 and OpenID Connect Core §3.1.3.7 require the issuer's
+//     keys), a URL in a token is never followed (RFC 8725 §3.10), and
+//     go-jose parses jwk and x5c — validating an embedded RSA private key at
+//     a cost cubic in its size, GHSA-mgcc-cww5-fp2q — before it checks the
+//     algorithm, the key or the signature. x5t and x5t#S256, thumbprints
+//     go-jose does not parse, stay ignored.
+var unsupportedHeaders = []string{"crit", "b64", "jwk", "x5c", "jku", "x5u"}
 
 // parseCompact parses token as a JWS Compact Serialization (RFC 7515 §7.1)
 // signed with one of allowed, after the checks of checkCompact. A failure
@@ -91,9 +103,10 @@ func checkCompact(token string, maxSize int) error {
 // checkHeader refuses a JOSE header that is not a strict JSON object —
 // valid UTF-8 without unpaired surrogate escapes, unique parameter names
 // even under case folding (RFC 7515 §4, RFC 7519 §7.2 step 4; see
-// validateJSON) — or that uses an extension this package does not
-// implement (unsupportedHeaders), whatever its value, null included: go-jose
-// treats a null crit or b64 as absent.
+// validateJSON) — or that holds one of unsupportedHeaders, matched on the
+// decoded name as go-jose reads it, whatever its value, null included:
+// go-jose treats a null crit or b64 as absent. It runs before go-jose sees
+// the header.
 func checkHeader(raw []byte) error {
 	var members map[string]josejson.RawMessage
 	if err := decodeStrict(raw, &members); err != nil {
