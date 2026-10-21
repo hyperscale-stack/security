@@ -1563,10 +1563,10 @@ is allowed by default: restrict hosts in `CheckURL`, and ports and
 specific public addresses in `CheckAddr`, which sees the numeric address
 and port actually dialed. `CheckURL` sees a canonical port too — decimal
 without leading zeros, absent for the scheme's default — so a port check
-there holds against `:022`, but compare numbers, not strings. Only the well-known NAT64 prefix
-is decoded: on a network translating a network-specific prefix (RFC 6052),
-refuse that prefix in `CheckAddr`, or its addresses reach the private IPv4
-addresses they embed.
+there holds against `:022`, but compare numbers, not strings. Only the
+well-known NAT64 prefix is decoded: on a network translating a
+network-specific prefix (RFC 6052), refuse that prefix in `CheckAddr`, or
+its addresses reach the private IPv4 addresses they embed.
 
 Host names ending in a number (`127.1`, `2130706433`, `0x7f.1`) are refused
 before `CheckURL`: resolvers read them as IPv4 addresses, so a host check
@@ -1574,9 +1574,9 @@ would vet another name than the one dialed. A dial error never names the
 resolved address and port, nor the resolver's address — a refused
 destination, a refused connection, a timeout, a resolver failure keep only
 their cause —, but an error after the connection (a reset, a TLS failure)
-may, and every error tells whether a name is refused: when tenants supply URLs ("test this connection"), log the error
-and show them a generic message, or the error text becomes an oracle on
-the internal network.
+may, and every error tells whether a name is refused: when tenants supply
+URLs ("test this connection"), log the error and show them a generic
+message, or the error text becomes an oracle on the internal network.
 
 ## Credentials in header fields only
 

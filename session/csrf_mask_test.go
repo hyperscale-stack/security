@@ -93,6 +93,16 @@ func TestVerifyCSRFRefusesTamperedTokens(t *testing.T) {
 	}
 }
 
+// Review nit 9: the length of a presented token is checked before it is
+// decoded, so that a large value costs no allocation.
+func TestVerifyCSRFDoesNotDecodeOversizedTokens(t *testing.T) {
+	s := &session.Session{CSRFToken: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"}
+	huge := strings.Repeat("A", 1<<16)
+
+	assert.False(t, session.VerifyCSRF(s, huge))
+	assert.Zero(t, testing.AllocsPerRun(20, func() { session.VerifyCSRF(s, huge) }))
+}
+
 // Audit F-24 (CORE-10): replacing the constant-time comparison of
 // VerifyCSRF with == kept every behavioural test green — only the timing
 // changes. This test pins it in the source: VerifyCSRF compares with

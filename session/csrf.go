@@ -78,9 +78,14 @@ func VerifyCSRF(s *Session, presented string) bool {
 		return false
 	}
 
-	// An empty token decodes to nothing: the length check refuses it.
+	// The length is checked before decoding, so that client input costs no
+	// allocation beyond a token's; an empty token fails it.
+	if len(presented) != base64.RawURLEncoding.EncodedLen(2*len(s.CSRFToken)) {
+		return false
+	}
+
 	raw, err := base64.RawURLEncoding.DecodeString(presented)
-	if err != nil || len(raw) != 2*len(s.CSRFToken) {
+	if err != nil {
 		return false
 	}
 

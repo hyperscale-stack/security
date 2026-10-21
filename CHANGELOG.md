@@ -555,6 +555,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     accounts alike, an outage as inconclusive, on a context a canceled
     request does not cancel. A limiter error that is not a throttle
     answers 503.
+- `grpcsec.WithPanicHandler(func(ctx context.Context, recovered any))`:
+  receives the value of every security-pipeline panic the interceptors
+  recover (the value may hold a credential: it is the application's to
+  log or report); a panic of the handler is ignored.
 
 ### Changed
 
@@ -1029,15 +1033,19 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   token over `DefaultMaxTokenLength` (16 KiB, `WithMaxTokenLength`) with
   `ErrInvalidCredentials` (401 `invalid_token`). Several spaces after the
   scheme are accepted. `httpsec.ExtractAuthorizationValue` strips
-  `1*SP` and returns `("", true)` for the scheme alone; the `httpsec` and
+  `1*SP` and returns `("", true)` for the scheme alone or followed by a
+  tab; the `httpsec` and
   `connectrpcsec` mappers recognize a Bearer credential ended by a tab.
   See [MIGRATION.md](MIGRATION.md).
-- `password`: only canonical stored hashes verify. Argon2id: `m`, `t`, `p`
-  in that order, decimal values without leading zeros, unpadded standard
-  base64 without any other character (CR and LF were skipped) and with
-  zero trailing bits (C2SP phc-strings) — else `ErrMalformedHash`. Bcrypt:
-  `$2a$`, `$2b$`, `$2y$` — `$2x$` (crypt_blowfish's buggy-hash marker) and
-  `$2$` answer `ErrUnsupportedAlgorithm`. See [MIGRATION.md](MIGRATION.md).
+- `password`: an argon2id stored hash verifies in its canonical encoding
+  only — `m`, `t`, `p` in that order, decimal values without leading
+  zeros, unpadded standard base64 without any other character (CR and LF
+  were skipped) and with zero trailing bits (C2SP phc-strings) — else
+  `ErrMalformedHash`. A bcrypt hash verifies with version `$2a$`, `$2b$` or
+  `$2y$` only — `$2x$` (crypt_blowfish's buggy-hash marker) and `$2$`
+  answer `ErrUnsupportedAlgorithm`; x/crypto still ignores what follows
+  the 60th character and the salt's unused bits. See
+  [MIGRATION.md](MIGRATION.md).
 - `session.CSRFToken` renders the session's secret masked anew on every
   call (`base64url(mask ‖ mask ⊕ secret)`, BREACH hardening) and
   `VerifyCSRF` unmasks it before the constant-time comparison; the raw
@@ -1318,9 +1326,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   extractor, an authenticator, a loader or a voter — a typed-nil
   dereference, say — ended the process on one unauthenticated RPC. The
   authentication and authorization interceptors now recover the panics of
-  the security pipeline and answer `Internal`, with a `panic recovered`
-  span event that never holds the panic value. The handler's own panics
-  are not recovered.
+  the security pipeline and answer `Internal`, with the span's error status,
+  `error.type=_OTHER` and a `panic recovered` event that never holds the
+  panic value; `grpcsec.WithPanicHandler` receives the value. An outer
+  recovery interceptor no longer sees these panics; the handler's own
+  panics are not recovered. See [MIGRATION.md](MIGRATION.md).
 - Documentation: a cookie tossed by a sibling host — with a session cookie
   name that is not `__Host-` — does not only deny a session: a signed-out
   browser carrying it alone is signed into the planted session (login

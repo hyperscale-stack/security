@@ -5,39 +5,11 @@
 package security_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/hyperscale-stack/security"
 	"github.com/stretchr/testify/assert"
 )
-
-// Dependencies implemented on pointers: their typed nils satisfy the
-// interfaces and panic on the first method call.
-type (
-	ptrManager       struct{}
-	ptrExtractor     struct{}
-	ptrAuthenticator struct{}
-	ptrVoter         struct{}
-)
-
-func (*ptrManager) Authenticate(context.Context, security.Authentication) (security.Authentication, error) {
-	return nil, nil
-}
-
-func (*ptrExtractor) Extract(context.Context, security.Carrier) (security.Authentication, error) {
-	return nil, nil
-}
-
-func (*ptrAuthenticator) Supports(security.Authentication) bool { return true }
-func (*ptrAuthenticator) Authenticate(context.Context, security.Authentication) (security.Authentication, error) {
-	return nil, nil
-}
-
-func (*ptrVoter) Supports(security.Attribute) bool { return true }
-func (*ptrVoter) Vote(context.Context, security.Authentication, []security.Attribute) security.Decision {
-	return security.DecisionGrant
-}
 
 // Audit I-27: the constructors compared their dependencies with nil, so a
 // typed nil was accepted and panicked on the first request. CHANGELOG: "A
@@ -53,17 +25,17 @@ func TestConstructorsRefuseTypedNilDependencies(t *testing.T) {
 		fn   func()
 	}{
 		{"engine typed-nil manager", "security: NewEngine: nil Manager",
-			func() { security.NewEngine((*ptrManager)(nil)) }},
+			func() { security.NewEngine((*security.MockManager)(nil)) }},
 		{"engine typed-nil extractor", "security: NewEngine: nil Extractor at index 0",
-			func() { security.NewEngine(security.NewManager(), (*ptrExtractor)(nil)) }},
+			func() { security.NewEngine(security.NewManager(), (*security.MockExtractor)(nil)) }},
 		{"manager typed-nil authenticator", "security: NewManager: nil Authenticator at index 0",
-			func() { security.NewManager((*ptrAuthenticator)(nil)) }},
+			func() { security.NewManager((*security.MockAuthenticator)(nil)) }},
 		{"affirmative typed-nil voter", "security: NewAffirmativeDecisionManager: nil Voter at index 1",
-			func() { security.NewAffirmativeDecisionManager(voter, (*ptrVoter)(nil)) }},
+			func() { security.NewAffirmativeDecisionManager(voter, (*security.MockVoter)(nil)) }},
 		{"consensus typed-nil voter", "security: NewConsensusDecisionManager: nil Voter at index 0",
-			func() { security.NewConsensusDecisionManager([]security.Voter{(*ptrVoter)(nil)}) }},
+			func() { security.NewConsensusDecisionManager([]security.Voter{(*security.MockVoter)(nil)}) }},
 		{"unanimous typed-nil voter", "security: NewUnanimousDecisionManager: nil Voter at index 0",
-			func() { security.NewUnanimousDecisionManager([]security.Voter{(*ptrVoter)(nil)}) }},
+			func() { security.NewUnanimousDecisionManager([]security.Voter{(*security.MockVoter)(nil)}) }},
 	}
 
 	for _, c := range cases {

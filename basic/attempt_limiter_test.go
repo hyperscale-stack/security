@@ -212,7 +212,9 @@ func TestAuthenticatorSettlesEveryAdmittedAttempt(t *testing.T) {
 }
 
 // cancelingHasher cancels the request while it verifies — the client hung
-// up after its guess was checked.
+// up after its guess was checked. Hand-written like the other
+// password.Hasher doubles of these tests (see timing_test.go): password's
+// generated MockHasher exists only in the password module's test binary.
 type cancelingHasher struct {
 	recordingHasher
 
@@ -361,7 +363,7 @@ func TestUnknownSourceMeetsThePerSubjectAllowance(t *testing.T) {
 }
 
 // openHasher accepts every password once released, and counts the
-// verifications running.
+// verifications running (hand-written, like cancelingHasher).
 type openHasher struct {
 	release chan struct{}
 	running atomic.Int32

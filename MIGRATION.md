@@ -2779,6 +2779,7 @@ anonymous request). It now follows RFC 6750 §2.1 to the letter:
 | A token over 16 KiB | passed to the verifier | `ErrInvalidCredentials` — 401 `invalid_token` |
 | `httpsec.ExtractAuthorizationValue("Bearer", "Bearer  abc")` | `(" abc", true)` | `("abc", true)` |
 | `httpsec.ExtractAuthorizationValue("Bearer", "Bearer")` | `("", false)` | `("", true)` — the scheme alone |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer<TAB>abc")` | `("", false)` — another scheme | `("", true)` — a malformed credential of this scheme |
 
 To migrate:
 
@@ -2788,7 +2789,8 @@ To migrate:
    `bearer.NewExtractor(bearer.WithMaxTokenLength(n))` and
    `jwtsec.WithMaxTokenSize(n)`.
 3. Application extractors calling `httpsec.ExtractAuthorizationValue`
-   refuse an empty value when the result is `ok`: the scheme stood alone.
+   refuse an empty value when the result is `ok`: the scheme stood alone
+   or was followed by a tab.
 
 ### `outbound`: canonical ports for `CheckURL`, ISATAP refused, dial errors without addresses
 
@@ -2815,7 +2817,7 @@ To migrate:
 3. Code that parsed the address out of a dial error reads it from its own
    resolution instead.
 
-### `password`: only canonical hash encodings verify
+### `password`: canonical argon2id encodings, current bcrypt versions
 
 The argon2id parser accepted several encodings of one hash: parameters in
 any order, decimal values with leading zeros (`m=0064`), CR and LF inside
@@ -2823,8 +2825,11 @@ the base64 values (which `encoding/base64` skips) and non-zero trailing
 bits. The bcrypt hasher accepted any `$2…$` prefix: `$2x$`, the marker
 crypt_blowfish gives the hashes of its sign-extension bug (x/crypto
 verified them as `$2a$`, wrongly for 8-bit passwords), and `$2$`, the
-format before `$2a$`. Only canonical encodings verify now (C2SP
-phc-strings).
+format before `$2a$`. An argon2id hash now verifies in its canonical
+encoding only (C2SP phc-strings), and a bcrypt hash with the versions
+`$2a$`, `$2b$` and `$2y$` only — x/crypto still ignores what follows its
+60th character (the space padding of a fixed-width column, say) and the
+unused bits of its salt's last character.
 
 | Stored hash | Before | After |
 | --- | --- | --- |
@@ -2886,3 +2891,25 @@ To migrate:
    tests, inject a clock through the component's option (`jwtsec.WithClock`,
    `session.WithClock`, `throttle.Config.Clock`…) instead of overriding a
    global.
+
+### `grpcsec`: the panics of the security pipeline are recovered
+
+grpc-go recovers no panic, and neither did `grpcsec`: one panic in an
+extractor, an authenticator, a user loader, a decision manager or a voter —
+a typed-nil dereference, say — ended the server on one unauthenticated
+RPC. The authentication and authorization interceptors now recover these
+panics and answer the RPC as an internal error. A recovery interceptor
+chained *outside* `grpcsec` (go-grpc-middleware's `recovery`, a Sentry
+reporter) therefore no longer sees them; the handler's own panics still
+reach it.
+
+| | Before | After |
+| --- | --- | --- |
+| Panic in the security pipeline | the process ends, or an outer recovery interceptor handles it | `codes.Internal` ("internal error"); span status Error, `error.type=_OTHER`, a `panic recovered` event — never the value |
+| Seeing the panic value | an outer recovery interceptor | `grpcsec.WithPanicHandler(func(ctx, recovered any))` on the authentication and authorization interceptors |
+| Panic in the RPC handler | unchanged | unchanged: not recovered by `grpcsec` |
+
+To migrate: pass the reporting of your recovery interceptor to
+`grpcsec.WithPanicHandler` — log the value and a stack
+(`runtime/debug.Stack()`) there, keeping in mind that the value may hold a
+credential the panicking code had at hand.
