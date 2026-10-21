@@ -100,12 +100,19 @@ The hook fires for:
   `temporarily_unavailable` (`revoke: client authentication failed`, which
   also covers an `IssuerResolver` failure there) — one `server_error`
   carrying the store's error;
+- an `IssuerResolver` that failed, or returned an issuer the server cannot
+  publish — a `server_error` whose cause is the resolver's error or
+  `oauth2.ErrInvalidIssuer` (with the reason, never the value): `/authorize`
+  answers a bare 500 before loading any client, the other endpoints as
+  listed above;
 - at `/authorize`, an unsupported `response_mode` (`invalid_request`, answered
-  with a bare 400), a failing `IssuerResolver`, a failing `ConsentFunc`
+  with a bare 400), a failing `ConsentFunc`
   (`consent handler failed`, its error as cause), a `Consent.Refusal` (as
   returned), an approval without a valid subject, and every error of an
   `oauth2.Extension` hook — a protocol code as returned, anything else as a
-  `server_error` (`authorization extension failed`) carrying it. An error
+  `server_error` (`authorization extension failed`) carrying it, and an
+  implicit approval naming the client as resource owner (`server_error`,
+  cause `oauth2.ErrSubjectIsClient`). An error
   whose code the endpoint cannot send reaches the hook as a `server_error`
   whose cause is the original. An error answered with a bare page because
   `AuthorizeConfig.TrustedRedirect` does not trust the client reaches the
@@ -116,8 +123,10 @@ The hook fires for:
 The `oidc/provider` OpenID Provider reports through the same
 `ServerConfig.OnError`: its `/authorize` and `/token` refusals travel as the
 extension errors above — a contract violation by the application's
-`Interaction`, a key source or claims source failure, an invalid issuer, all
-as a `server_error` carrying the cause — and its own handlers report theirs
+`Interaction`, a key source or claims source failure, an invalid issuer (the
+core refuses it first, `oauth2.ErrInvalidIssuer`, which
+`oidcprovider.ErrInvalidIssuer` wraps), all as a `server_error` carrying the
+cause — and its own handlers report theirs
 directly: every UserInfo refusal as an `*oauth2.Error` with its RFC 6750 code
 (`invalid_request`, `invalid_token`, `insufficient_scope`) and cause, and a
 discovery, JWK Set or UserInfo failure as a `server_error`. A UserInfo request

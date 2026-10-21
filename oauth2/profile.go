@@ -12,15 +12,19 @@ package oauth2
 //     rotation are opt-in for confidential clients — every other
 //     client needs PKCE and rotates its refresh tokens whatever the
 //     profile.
-//   - Profile20BCP   — IETF draft-ietf-oauth-security-topics ("OAuth 2.0
-//     Security Best Current Practice"). Refuses implicit
-//     and password grants outright; mandates PKCE on
-//     authorization_code; mandates refresh-token
-//     rotation.
+//   - Profile20BCP   — RFC 9700 ("OAuth 2.0 Security Best Current
+//     Practice"). Refuses implicit and password grants
+//     outright; mandates PKCE on authorization_code;
+//     mandates refresh-token rotation; refuses http
+//     redirect URIs but the loopback IP literals of
+//     native apps (§2.6, [ValidateRedirectURI]).
 //   - Profile21Draft — draft-ietf-oauth-v2-1. Same constraints as BCP,
 //     which already refuses "plain" PKCE (S256 only).
 //
-// The recommended default is [Profile20BCP].
+// The recommended default is [Profile20BCP]. No profile alone meets RFC
+// 9700 §4.11.2 ("The authorization server MUST always authenticate the user
+// first … before redirecting the user"): set
+// [AuthorizeConfig.TrustedRedirect] for that.
 type Profile int
 
 // Profile enumerations. The zero value is Profile20BCP so the "I forgot to

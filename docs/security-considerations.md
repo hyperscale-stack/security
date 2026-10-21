@@ -364,7 +364,8 @@ keys by `kid` against a JWKS provider (static or remote).
   a non-consuming lookup in every store, and refusing a code that has
   leaked is the conservative outcome (RFC 6749 §4.1.2 requires refusing a
   reused code). Keep codes out of logs and `Referer` headers, and
-  short-lived (`AuthorizeConfig.CodeTTL`).
+  short-lived (`AuthorizeConfig.CodeTTL`, at most 10 minutes: RFC 6749
+  §4.1.2 — `AuthorizeHandler` panics on a longer one).
 - **Atomic single-use** — `ConsumeAuthorizationCode` is atomic in every
   `Storage` implementation, and so are the token writes: `SaveTokenPair`
   and `RotateRefreshToken` persist a whole pair or nothing, gated by the
@@ -546,14 +547,28 @@ keys by `kid` against a JWKS provider (static or remote).
   apps listen on an ephemeral port — and the code is bound to the URI
   requested. `http://localhost` gets no such variance (RFC 8252 §8.3
   recommends the IP literal). The registered URI a request resolves to must
-  pass `oauth2.ValidateRedirectURI` — absolute, no fragment, a host, no
-  userinfo and a port within 1–65535 for http(s), a private-use scheme
-  holding a "." (RFC 8252 §8.4, which also rules out `javascript:`, `data:`
-  and `urn:ietf:wg:oauth:2.0:oob`), a query naming no
-  response parameter — or the request gets a bare 400, never a redirect
-  (RFC 6749 §3.1.2.4); run the same function when registering clients.
-  Responses keep the registered query byte for byte (RFC 6749 §3.1.2),
-  and the implicit flow appends its fragment to a URI that has none.
+  pass `oauth2.ValidateRedirectURI` with the server's profile — absolute,
+  no fragment, a host, no userinfo and a port within 1–65535 for http(s), a
+  private-use scheme holding a "." (RFC 8252 §8.4, which also rules out
+  `javascript:`, `data:` and `urn:ietf:wg:oauth:2.0:oob`), a query naming
+  no response parameter, and, under `Profile20BCP` and `Profile21Draft`, no
+  http but the loopback IP literals `http://127.0.0.1` and `http://[::1]`
+  (RFC 9700 §2.6: authorization responses never travel unencrypted;
+  `localhost` is refused too) — or the request gets a bare 400, never a
+  redirect (RFC 6749 §3.1.2.4); run the same function, with the same
+  profile, when registering clients. Responses keep the registered query
+  byte for byte (RFC 6749 §3.1.2), and the implicit flow appends its
+  fragment to a URI that has none. A response answered in the query ends
+  with the fragment `#_` (RFC 9700 §4.1.3), so that browsers do not carry
+  the fragment of the authorization request — chosen by whoever crafted the
+  link — on to the client's page; clients parse the redirect as a URL.
+- **Implicit tokens never name their client** — a `client_credentials`
+  token names the client in `sub` (RFC 9068 §2.2): the implicit flow
+  refuses to mint an access token whose subject equals the client's ID — a
+  redirected `server_error`, cause `oauth2.ErrSubjectIsClient` in
+  `OnError`, nothing persisted — so that `sub == client_id` marks a token
+  without resource owner exactly (RFC 9700 §4.15.1). Keep client IDs and
+  subjects disjoint.
 - **Open redirection** — RFC 9700 §4.11.2: a registered client controlling
   its redirect URI could send users an erroneous request (an invalid scope)
   or a `prompt=none` one, and have the authorization server redirect them
@@ -564,9 +579,16 @@ keys by `kid` against a JWKS provider (static or remote).
   interface (`login_required`, `interaction_required`,
   `account_selection_required`, `consent_required`) — is a bare error page,
   never redirected. Without it, every registered client is trusted (RFC 6749
-  §4.1.2.1 redirects errors once the redirect URI is validated). Once the
-  resource owner authenticated, the code and an explicit `access_denied` are
-  redirected to every client.
+  §4.1.2.1 redirects errors once the redirect URI is validated) — a
+  deliberate deviation from the RFC 9700 §4.11.2 MUST ("The authorization
+  server MUST always authenticate the user first … before redirecting the
+  user"), even under `Profile20BCP` and `Profile21Draft`, which
+  `TrustedRedirect` closes. It rests on how clients are registered: the
+  library has no dynamic client registration (RFC 7591, the attacker's
+  path in §4.11.2), so every client comes from the deployment's own
+  registry, and OpenID Connect Core §3.1.2.6 expects `prompt=none` refusals
+  to be redirected. Once the resource owner authenticated, the code and an
+  explicit `access_denied` are redirected to every client.
 - **Authorization endpoint pages** — the `ConsentFunc` renders the login
   and consent pages, but every response of `/authorize` carries
   `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`
@@ -622,17 +644,17 @@ keys by `kid` against a JWKS provider (static or remote).
   several authorization servers — or to several realms of one
   `IssuerResolver` — compares it with the issuer it sent the request to and
   aborts on a mismatch (RFC 9700 §4.4.2.1), the defense RFC 9700 prefers to
-  distinct redirect URIs. The issuer must therefore be a stable https URL
-  without query or fragment (RFC 9207 §2): the server sends it as the
-  resolver returns it. The one response without `iss` is the `server_error`
-  answering an `IssuerResolver` failure — no issuer is known then. RFC 9207
-  §2 asks for `iss` in error responses too, and §2.4 has RFC 9207 clients
-  reject a response without it, so the independent code review of #84
-  recommended a bare 500 instead; the redirect is kept so that RFC 6749
-  clients learn of the failure (RFC 6749 §4.1.2.1 `server_error`), and RFC
-  9207 clients discard it as they discard any response they cannot
-  attribute — a documented deviation on a server-failure path that issues
-  nothing.
+  distinct redirect URIs. The server validates the issuer on every request
+  (RFC 8414 §2, RFC 9207 §2: https, a host, no user info, query or
+  fragment, a valid port, canonical form; http on a loopback host only with
+  `ServerConfig.AllowInsecureLoopbackIssuer`, for development): `NewServer`
+  refuses an invalid `StaticIssuer` (`oauth2.ErrInvalidIssuer`), and an
+  `IssuerResolver` that fails or returns an invalid issuer makes the request
+  an outage — a bare 500 at `/authorize`, never redirected and before any
+  client is loaded, `server_error` at `/token`, `/introspect` and the
+  metadata, `503` at `/revoke`. No authorization response is ever sent
+  without `iss`, and none goes to a client whose issuer binding could not be
+  checked.
 
 ### Protocol extensions
 
@@ -1848,11 +1870,16 @@ span catalog.
       upgrade.
 - [ ] When third parties register clients, set
       `AuthorizeConfig.TrustedRedirect`, so that errors before
-      authentication never redirect to a client you do not trust.
+      authentication never redirect to a client you do not trust — without
+      it, the server deviates from the RFC 9700 §4.11.2 MUST.
 - [ ] Validate every redirect URI at registration with
-      `oauth2.ValidateRedirectURI`; register native apps with a reverse
-      domain name scheme (`com.example.app:/cb`) or a loopback IP literal
-      (`http://127.0.0.1/cb`).
+      `oauth2.ValidateRedirectURI` and the server's profile; register web
+      clients with https and native apps with a reverse domain name scheme
+      (`com.example.app:/cb`) or a loopback IP literal
+      (`http://127.0.0.1/cb`) — never `localhost`.
+- [ ] Use an https issuer; `AllowInsecureLoopbackIssuer` is for local
+      development only. Set `ServerConfig.AdvertiseJWKSURI` only when the
+      issuer's JWK Set is served at `{issuer}/.well-known/jwks.json`.
 - [ ] Protect the request carrying the consent decision against CSRF (a
       session-bound token, or `net/http.CrossOriginProtection`); replace
       the anti-framing headers of `/authorize` only for origins you trust.

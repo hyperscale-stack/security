@@ -391,8 +391,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   error — carries `iss`, the issuer the request resolved to, and the RFC 8414
   metadata publishes `authorization_response_iss_parameter_supported: true`,
   so a client talking to several authorization servers or realms can detect
-  a mix-up (RFC 9700 §4.4.2.1). The `server_error` answering an
-  `IssuerResolver` failure is the one response without it.
+  a mix-up (RFC 9700 §4.4.2.1). An `IssuerResolver` failure is answered
+  with a bare 500, never redirected (see Security).
 - **OAuth2 client ↔ issuer binding**: `oauth2.IssuerBoundClient`
   (`AllowsIssuer`), an optional client capability — implemented by
   `DefaultClient` through `IssuerValues` — for deployments whose
@@ -559,6 +559,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   receives the value of every security-pipeline panic the interceptors
   recover (the value may hold a credential: it is the application's to
   log or report); a panic of the handler is ignored.
+
+- `oauth2.ServerConfig.AllowInsecureLoopbackIssuer` (development only: an
+  http issuer on localhost or a loopback IP address), the
+  `oauth2.ErrInvalidIssuer` sentinel, `ServerConfig.ScopesSupported` (the
+  RFC 8414 `scopes_supported` member, validated and copied by `NewServer`),
+  `ServerConfig.AdvertiseJWKSURI` (publishes `jwks_uri`) and the
+  `oauth2.ErrSubjectIsClient` sentinel. `oidcprovider.ErrInvalidIssuer`
+  wraps `oauth2.ErrInvalidIssuer`; `oidcprovider.New` writes one
+  loopback-issuer setting to both configurations, sets `AdvertiseJWKSURI`
+  and gives the server its OpenID Connect scopes followed by the
+  deployment's own.
 
 ### Changed
 
@@ -1055,6 +1066,29 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and `security.DefaultClock` is removed (`security.SystemClock{}` is the
   default, as in `jwtsec`): neither global could be replaced for the whole
   process any more. See [MIGRATION.md](MIGRATION.md).
+- `oauth2.ValidateRedirectURI` takes the server's profile:
+  `ValidateRedirectURI(profile, uri)` (see Security).
+- `oauth2.AuthorizeHandler` panics on an `AuthorizeConfig.CodeTTL` beyond
+  10 minutes (RFC 6749 §4.1.2: "A maximum authorization code lifetime of 10
+  minutes is RECOMMENDED"; OAuth 2.1 §4.1.2); zero still means 10 minutes.
+  `oidcprovider.Provider.AuthorizeHandler` inherits it.
+- The RFC 8414 metadata of `oauth2` publishes `jwks_uri` only with
+  `ServerConfig.AdvertiseJWKSURI` — the module serves no JWK Set — and
+  `scopes_supported` from `ServerConfig.ScopesSupported`. A server without
+  the `authorization_code` grant advertises no `authorization_endpoint`,
+  no `code` response type and no PKCE methods unless its implicit flow
+  serves one, and its REQUIRED arrays read `[]` instead of `null` (an
+  omitted or null `grant_types_supported` meant `["authorization_code",
+  "implicit"]`); `/authorize` refuses `response_type=code` there with
+  `unsupported_response_type`, minting no code nothing could redeem.
+- Every `oauth2` authorization response answered in the query (codes,
+  errors, the 303 answering a POST) ends with the fragment `#_` (RFC 9700
+  §4.1.3; see Security).
+- `examples/oauth2` uses `http://127.0.0.1:1337` (issuer and redirect URI),
+  `examples/oidc-provider` registers `http://127.0.0.1:9000/oidc/demo/callback`
+  and validates its configured redirect URI with `ValidateRedirectURI` at
+  startup, and `e2e/oidc` runs the relying party on `127.0.0.1` and the
+  provider on `localhost`.
 
 ### Fixed
 
@@ -1288,7 +1322,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   client authentication methods of `/revoke` and `/introspect` (without
   `none` for the latter), whose absence meant `client_secret_basic` alone
   (RFC 8414 §2); its grant types are sorted, no longer in map order. The
-  godoc gives the `jwks_uri` and `.well-known` locations actually built.
+  godoc gives the `jwks_uri` (advertised with
+  `ServerConfig.AdvertiseJWKSURI`) and `.well-known` locations actually
+  built.
 - The OpenID Provider discovery document agrees with the RFC 8414 metadata
   again (RFC 9068 §4): it publishes
   `revocation_endpoint_auth_methods_supported` — whose absence meant
@@ -1337,6 +1373,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   CSRF). `LIMITATIONS.md`, the `session` godoc and the security
   considerations said "denial, never a swap"; a test pins the behaviour.
   The NFC, revocation and key-volume limitations now give their reasons.
+- `oauth2` answered an authorization request without `response_type` with
+  `unsupported_response_type`; RFC 6749 §4.1.1 makes the parameter
+  REQUIRED, and §4.1.2.1 answers a missing one with `invalid_request` — an
+  empty occurrence included (§3.1).
 
 ### Removed
 
@@ -2142,3 +2182,35 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   ISATAP router tunnels to the IPv4 address they embed, are refused like
   6to4 and Teredo. Dial errors keep their cause but no longer name the
   resolved address or the resolver. See [MIGRATION.md](MIGRATION.md).
+- `oauth2` accepted plain-http redirect URIs on any host under
+  `Profile20BCP` and `Profile21Draft`, so codes, `state` and `iss` could
+  travel unencrypted. RFC 9700 §2.6 ("authorization servers MUST NOT allow
+  redirection URIs that use the http scheme except for native clients that
+  use loopback interface redirection") and OAuth 2.1 §1.5 now apply: under
+  any profile but `Profile20` an http redirect URI must be the loopback IP
+  literal `http://127.0.0.1` or `http://[::1]` (any port, RFC 8252 §7.3) —
+  never `localhost`, another loopback address or another spelling —
+  at registration (`ValidateRedirectURI(profile, uri)`) and at
+  `/authorize`, which answers any other with a bare 400.
+- `oauth2` never validated the issuer: an empty issuer dropped `iss` from
+  every authorization response while the metadata advertised
+  `authorization_response_iss_parameter_supported`, and http or
+  query-carrying issuers were published (RFC 8414 §2, RFC 9207 §2). The
+  issuer is now validated with `oidc/provider`'s rules plus a valid port:
+  `NewServer` refuses an invalid `StaticIssuer`, and an invalid resolved
+  issuer is answered as a resolver failure at every endpoint.
+- When the `IssuerResolver` failed, `/authorize` loaded the client without
+  checking its issuer binding and redirected an `iss`-less `server_error`,
+  carrying the requester's `state`, to a client of another realm before any
+  user authentication. A resolver failure (or an invalid issuer) is now a
+  bare 500, never redirected, before any client is loaded — every
+  authorization response names its issuer (RFC 9207 §2).
+- `oauth2` authorization responses answered in the query carried no
+  fragment, so browsers re-attached the fragment of the authorization
+  request — chosen by whoever crafted the link — to the client's redirect
+  URI. They now end with `#_` (RFC 9700 §4.1.3).
+- The `oauth2` implicit flow minted an access token whose subject was the
+  client's own ID when the `ConsentFunc` approved such a subject: resource
+  servers could not tell it from the client's `client_credentials` token
+  (RFC 9068 §2.2, RFC 9700 §4.15). It now answers `server_error` (cause
+  `oauth2.ErrSubjectIsClient`), nothing minted or persisted.

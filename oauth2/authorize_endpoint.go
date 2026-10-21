@@ -273,7 +273,9 @@ type AuthorizeConfig struct {
 	// authenticated: the code, access_denied, other refusals and later
 	// failures are redirected for every client. Nil trusts every
 	// registered client: errors are redirected as soon as the redirect URI
-	// is validated (RFC 6749 §4.1.2.1). ctx is the request's. It runs on the
+	// is validated (RFC 6749 §4.1.2.1) — a deviation from the RFC 9700
+	// §4.11.2 MUST under every profile, acceptable only when the deployment
+	// registers every client itself. ctx is the request's. It runs on the
 	// request goroutine, MUST be fast and safe for concurrent use, and MUST
 	// NOT panic.
 	TrustedRedirect func(ctx context.Context, client Client, redirectURI string) bool
