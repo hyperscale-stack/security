@@ -58,22 +58,25 @@ func WithAccessTokenType(typ string) BearerOption {
 // replayed code or refresh token) otherwise reaches a resource server only
 // when the token expires.
 //
-// It receives the raw token and its claims. Answer active only for a token
-// found active — the string the authorization server issued, looked up in
-// its store, or RFC 7662 introspection answering "active": true — and
-// never through a deny-list of token strings: a token string is not unique
-// (an ECDSA signature has a second valid form), so a deny-listed token's
-// twin would pass. With a store shared with the oauth2 module, look the
-// token up by oauth2.HashToken(nil, token) with LookupAccessToken: an
-// invalid_grant *oauth2.Error means inactive; any other error means the
-// check could not be made.
+// It receives the raw token and a copy of its claims — changing them
+// changes nothing of the authentication — and is called concurrently: it
+// must be safe for concurrent use. Answer active only for a token found
+// active — the string the authorization server issued, looked up in its
+// store, or RFC 7662 introspection answering "active": true — and never
+// through a deny-list of token strings: a token string is not unique (an
+// ECDSA signature has a second valid form), so a deny-listed token's twin
+// would pass. With a store shared with the oauth2 module, look the token up
+// by oauth2.HashToken(nil, token) with LookupAccessToken: an invalid_grant
+// *oauth2.Error means inactive; any other error means the check could not
+// be made.
 //
 // Errors: wrap [security.ErrUnavailable] when the check could not be made
 // (the store or the introspection endpoint is down) — BearerVerifier then
 // fails with security.ErrUnavailable (503 / Unavailable), as it does when
 // the context ends; any other error refuses the token as
-// [ErrTokenInactive] (401 invalid_token). The error text travels with the
-// returned error: never put the token in it.
+// [ErrTokenInactive] (401 invalid_token), whatever else it wraps. The
+// error's text — not its chain — travels with the returned error: never
+// put the token in it.
 type ActiveTokenCheck func(ctx context.Context, token string, claims *StandardClaims) error
 
 // WithActiveTokenCheck makes [BearerVerifier] call check for every token
@@ -140,24 +143,27 @@ func BearerVerifier(v Verifier, resolver AuthorityResolver, opts ...BearerOption
 	})
 }
 
-// checkActive runs check in its own span, which records the error class
-// only — the error text may carry the check's input. A check that could
-// not be made — an error wrapping security.ErrUnavailable, or the context
-// ending — fails with security.ErrUnavailable; any other error with
-// ErrTokenInactive.
+// checkActive runs check on a copy of claims — it cannot rewrite the
+// identity being authenticated — in its own span, which records the error
+// class only: the error text may carry the check's input. A check that
+// could not be made — an error wrapping security.ErrUnavailable, or the
+// context ending — fails with security.ErrUnavailable; any other error with
+// ErrTokenInactive. Only the text of the check's error is kept, not its
+// chain, so that no other sentinel it wraps (security.ErrInvalidRequest:
+// 400) changes how the transports answer.
 func checkActive(ctx context.Context, check ActiveTokenCheck, token string, claims *StandardClaims) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "jwtsec.BearerVerifier.ActiveTokenCheck")
 	defer span.End()
 
-	err := check(ctx, token, claims)
+	err := check(ctx, token, claims.clone())
 	if err == nil {
 		return nil
 	}
 
 	if errors.Is(err, security.ErrUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		err = fmt.Errorf("jwt: active token check: %w: %w", security.ErrUnavailable, err)
+		err = fmt.Errorf("jwt: active token check: %w: %s", security.ErrUnavailable, err.Error())
 	} else {
-		err = fmt.Errorf("%w: %w", ErrTokenInactive, err)
+		err = fmt.Errorf("%w: %s", ErrTokenInactive, err.Error())
 	}
 
 	class := security.ErrorClass(err)
@@ -266,7 +272,9 @@ func (p AccessTokenPrincipal) ClientID() string { return p.clientID }
 // service-account user, Auth0's "…@clients", Okta, Microsoft Entra ID)
 // always reports false — such servers keep client and user identifiers
 // disjoint, which RFC 9700 §4.15.1 asks of any server letting clients
-// choose their ID.
+// choose their ID. A token without client_id reports false too: with an
+// issuer that sets sub to the client ID but omits client_id, only disjoint
+// identifiers tell the two kinds of tokens apart.
 func (p AccessTokenPrincipal) SubjectIsClient() bool {
 	return p.clientID != "" && p.subject == p.clientID
 }

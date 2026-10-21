@@ -159,3 +159,42 @@ func TestRemoteJWKSIgnoresWeakEd25519Keys(t *testing.T) {
 	_, err := jwtsec.NewVerifier(p).Verify(context.Background(), tokenFor(t, goodPriv, goodPub.KeyID), nil)
 	require.NoError(t, err)
 }
+
+// TestEd25519PrivateKeyConsistency (review finding 3): an ed25519.PrivateKey
+// is a seed followed by its public key; one whose second half is not the
+// seed's public key — the all-zero 64-byte buffer, whose public half is the
+// small-order all-zero point, or two keys spliced together — signs tokens
+// that no key verifies. PrivateKey.Public, PrivateKey.Validate and
+// NewSigner refuse it with ErrInvalidKey, as they refuse a key of another
+// length.
+func TestEd25519PrivateKeyConsistency(t *testing.T) {
+	t.Parallel()
+
+	_, a, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	_, b, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	spliced := append(append(ed25519.PrivateKey{}, a[:32]...), b[32:]...)
+
+	for name, key := range map[string]ed25519.PrivateKey{
+		"all zero":            make(ed25519.PrivateKey, ed25519.PrivateKeySize),
+		"seed of another key": spliced,
+		"truncated":           a[:31],
+		"seed only":           a[:32],
+	} {
+		priv := jwtsec.PrivateKey{KeyID: "ed", Algorithm: jwtsec.EdDSA, Key: key}
+
+		_, err := priv.Public()
+		require.ErrorIs(t, err, jwtsec.ErrInvalidKey, name)
+		require.ErrorIs(t, priv.Validate(), jwtsec.ErrInvalidKey, name)
+
+		_, err = jwtsec.NewSigner(priv)
+		require.ErrorIs(t, err, jwtsec.ErrInvalidKey, name)
+	}
+
+	pub, err := jwtsec.PrivateKey{KeyID: "ed", Algorithm: jwtsec.EdDSA, Key: a}.Public()
+	require.NoError(t, err)
+	assert.Equal(t, a.Public(), pub.Key)
+}

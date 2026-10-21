@@ -126,8 +126,9 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 }
 
 // checkSignature verifies, for an opaque PS* signer, the signature it made
-// over the signing input of token (RFC 7515 §5.1: header.payload): a salt
-// that is not the hash size (RFC 7518 §3.5) fails with ErrInvalidKey, and
+// over the signing input of token (RFC 7515 §5.1: header.payload) under the
+// public key it reports: a salt that is not the hash size (RFC 7518 §3.5),
+// or a public key that is not the signer's, fails with ErrInvalidKey, and
 // the token is never returned — no verifier of this package would accept
 // it.
 func (s *signer) checkSignature(token string, signature []byte) error {
@@ -137,7 +138,7 @@ func (s *signer) checkSignature(token string, signature []byte) error {
 
 	input := token[:strings.LastIndexByte(token, '.')]
 	if err := s.pss.VerifyPayload([]byte(input), signature, s.key.Algorithm.joseAlg()); err != nil {
-		return fmt.Errorf("%w: the opaque signer does not use a hash-size PSS salt (RFC 7518 §3.5)", ErrInvalidKey)
+		return fmt.Errorf("%w: the opaque signer's %s signature does not verify under its public key with a hash-size salt (RFC 7518 §3.5)", ErrInvalidKey, s.key.Algorithm)
 	}
 
 	return nil

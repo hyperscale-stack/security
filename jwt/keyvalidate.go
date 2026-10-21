@@ -5,6 +5,7 @@
 package jwtsec
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -168,12 +169,13 @@ func isHMAC(alg Algorithm) bool { return hmacKeySize(alg) > 0 }
 // that is not the public key that algorithm takes — an *rsa.PublicKey of at
 // least 2048 bits for RS* and PS* (RFC 7518 §3.3, §3.5), an *ecdsa.PublicKey
 // on the curve of ES256 / ES384 / ES512 (RFC 7518 §3.4), an
-// ed25519.PublicKey for EdDSA (RFC 8037) that is the canonical encoding
-// (RFC 8032 §5.1.3) of a point not of small order — the all-zero key and
-// the identity are refused, as forgeries verify against them (RFC 8725
-// §3.4). A private key is refused: one key,
-// one use, and private material never travels as a PublicKey. The kid is
-// not checked.
+// ed25519.PublicKey for EdDSA (RFC 8037) whose encoding has a canonical
+// y-coordinate (RFC 8032 §5.1.3 steps 1 and 4) that is not one of a point
+// of small order — the all-zero key and the identity are refused, as
+// forgeries verify against them (RFC 8725 §3.4); a y-coordinate of no
+// point of the curve is not detected, and verifies nothing. A private key
+// is refused: one key, one use, and private material never travels as a
+// PublicKey. The kid is not checked.
 func (k PublicKey) Validate() error {
 	family, curve := familyOf(k.Algorithm)
 
@@ -267,7 +269,8 @@ func belowP(y [ed25519.PublicKeySize]byte) bool {
 // *rsa.PrivateKey of 2048 to 4096 bits for RS* and PS* (see maxRSABits:
 // a larger published key breaks go-jose ≥ v4.1.6 consumers), an
 // *ecdsa.PrivateKey on the algorithm's curve for ES*, an
-// ed25519.PrivateKey for EdDSA. HMAC secrets and public keys are refused.
+// ed25519.PrivateKey for EdDSA whose public half is the one its seed
+// derives. HMAC secrets and public keys are refused.
 func (k PrivateKey) Validate() error {
 	if _, err := k.Public(); err != nil {
 		return err
@@ -291,7 +294,7 @@ func (k PrivateKey) Public() (PublicKey, error) {
 	case *ecdsa.PrivateKey:
 		ok = family == familyEC && key.Curve == curve && validECPrivateKey(key)
 	case ed25519.PrivateKey:
-		ok = family == familyEd25519 && len(key) == ed25519.PrivateKeySize
+		ok = family == familyEd25519 && validEd25519PrivateKey(key)
 	}
 
 	if !ok {
@@ -301,6 +304,21 @@ func (k PrivateKey) Public() (PublicKey, error) {
 	signer, _ := k.Key.(crypto.Signer) // every type accepted above is one
 
 	return PublicKey{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: signer.Public()}, nil
+}
+
+// validEd25519PrivateKey reports whether key is an Ed25519 private key —
+// a seed followed by its public key (RFC 8032 §5.1.5) — whose public half
+// is the one its seed derives. A key whose second half is anything else —
+// the all-zero buffer, whose public half is a small-order point, or two
+// keys spliced together — signs with a public key that is not its own:
+// its signatures verify under no key, and the public half it would
+// publish may be one PublicKey.Validate refuses.
+func validEd25519PrivateKey(key ed25519.PrivateKey) bool {
+	if len(key) != ed25519.PrivateKeySize {
+		return false
+	}
+
+	return bytes.Equal(ed25519.NewKeyFromSeed(key.Seed())[ed25519.SeedSize:], key[ed25519.SeedSize:])
 }
 
 // validECPublicKey reports whether key is a valid point of its curve.

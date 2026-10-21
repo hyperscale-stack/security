@@ -127,10 +127,41 @@ func TestOpaquePSSSignerSelfCheck(t *testing.T) {
 		for name, k := range map[string]any{"bare": bad, "JSONWebKey": jose.JSONWebKey{Key: bad}, "*JSONWebKey": &jose.JSONWebKey{Key: bad}} {
 			tok, err := mustSigner(t, jwtsec.PrivateKey{KeyID: "kms", Algorithm: alg, Key: k}).Sign(context.Background(), shortClaims())
 			require.ErrorIs(t, err, jwtsec.ErrInvalidKey, "%s %s", alg, name)
-			assert.Contains(t, err.Error(), "hash-size PSS salt")
+			assert.Contains(t, err.Error(), "does not verify under its public key with a hash-size salt")
 			assert.Empty(t, tok, "no token is returned")
 		}
 	}
+}
+
+// wrongPublicOpaque is a compliant PSS signer that reports another key as
+// its public half — a KMS alias rotated behind the signer.
+type wrongPublicOpaque struct {
+	pssOpaque
+
+	public *rsa.PublicKey
+}
+
+func (o wrongPublicOpaque) Public() *jose.JSONWebKey { return &jose.JSONWebKey{Key: o.public} }
+
+// TestOpaquePSSSignerWithAnotherPublicKey (review finding 5): the self-check
+// also refuses a signer whose signatures do not verify under the public key
+// it reports, and the error says so rather than blaming the salt alone.
+func TestOpaquePSSSignerWithAnotherPublicKey(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	signer := wrongPublicOpaque{pssOpaque{key: key, salt: rsa.PSSSaltLengthEqualsHash}, &other.PublicKey}
+
+	tok, err := mustSigner(t, jwtsec.PrivateKey{KeyID: "kms", Algorithm: jwtsec.PS256, Key: signer}).
+		Sign(context.Background(), shortClaims())
+	require.ErrorIs(t, err, jwtsec.ErrInvalidKey)
+	assert.Contains(t, err.Error(), "does not verify under its public key with a hash-size salt")
+	assert.Empty(t, tok)
 }
 
 // TestCryptosignerPSSIsRefused pins the MIGRATION note: go-jose's

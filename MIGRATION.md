@@ -2460,11 +2460,12 @@ To migrate:
 or the identity point verified tokens nobody signed, and crypto/ed25519
 decodes encodings RFC 8032 §5.1.3 refuses.
 
-| `ed25519.PublicKey` | Before | After |
+| Ed25519 key | Before | After |
 | --- | --- | --- |
-| a point of order 1, 2, 4 or 8 (all-zero, identity, …) | valid | `ErrInvalidKey`; tokens refused with `ErrInvalidSignature` |
-| y ≥ p, or x = 0 with the sign bit set | valid | `ErrInvalidKey` |
-| a key from `ed25519.GenerateKey` or a JWK Set | valid | valid |
+| public key: a point of order 1, 2, 4 or 8 (all-zero, identity, …) | valid | `ErrInvalidKey`; tokens refused with `ErrInvalidSignature` |
+| public key: y ≥ p, or x = 0 with the sign bit set | valid | `ErrInvalidKey` |
+| private key whose public half is not its seed's (all-zero buffer, spliced keys) | `NewSigner` accepted it; its tokens verified nowhere | `ErrInvalidKey` from `NewSigner`, `PrivateKey.Validate`, `PrivateKey.Public` |
+| a key from `ed25519.GenerateKey`, `ed25519.NewKeyFromSeed` or a JWK Set | valid | valid |
 
 To migrate:
 
@@ -2518,10 +2519,22 @@ To migrate:
 
 1. Remove your own `client_id` field from types embedding
    `StandardClaims` and read `StandardClaims.ClientID`.
-2. On a resource server, refuse resource-owner data when
-   `auth.Principal().(jwtsec.AccessTokenPrincipal).SubjectIsClient()` is
-   true, and grant client privileges by `ClientID()` and scopes — never by
-   `Subject()`.
+2. On a resource server, refuse resource-owner data unless the principal
+   is an `AccessTokenPrincipal` whose subject is not its client — with a
+   checked type assertion, since another authenticator or the anonymous
+   fallback gives another principal:
+
+   ```go
+   p, ok := auth.Principal().(jwtsec.AccessTokenPrincipal)
+   if !ok || p.SubjectIsClient() {
+       // not a resource owner's access token: refuse resource-owner data
+   }
+   ```
+
+   Grant client privileges by `ClientID()` and scopes — never by
+   `Subject()`. A token without `client_id` reports false: with an issuer
+   that omits it, the resource server cannot tell the two kinds of tokens
+   apart and relies on disjoint client and user identifiers only.
 3. If clients can choose their ID, keep it out of the user-subject
    namespace (a prefix, a separate ID space; RFC 9700 §4.15.1).
 

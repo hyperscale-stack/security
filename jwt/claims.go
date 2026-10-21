@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -156,6 +157,22 @@ type StandardClaims struct {
 	// identifier for grants without one, as client_credentials (see
 	// [AccessTokenPrincipal.SubjectIsClient], RFC 9700 §4.15).
 	ClientID string `json:"client_id,omitempty"`
+}
+
+// clone returns a deep copy of c: a caller-supplied hook can change it
+// without changing c.
+func (c *StandardClaims) clone() *StandardClaims {
+	out := *c
+	out.Audience = slices.Clone(c.Audience)
+
+	for _, d := range []**NumericDate{&out.ExpiresAt, &out.NotBefore, &out.IssuedAt} {
+		if *d != nil {
+			v := **d
+			*d = &v
+		}
+	}
+
+	return &out
 }
 
 // Audience is a flexible JSON representation of the `aud` claim. It marshals

@@ -40,9 +40,11 @@ future refactor phases.
   it from a resource owner's token with
   `jwtsec.AccessTokenPrincipal.SubjectIsClient()` (JWT) or
   `AccessToken.ClientID == AccessToken.Subject` (store lookup), which also
-  holds for a user whose subject equals the ID of the client they use. Use
-  it to refuse, and keep client IDs out of the user-subject namespace when
-  clients can influence them (RFC 9700 §4.15.1).
+  holds for a user whose subject equals the ID of the client they use, and
+  never for a token without `client_id` (an issuer omitting it leaves
+  disjoint identifiers as the only defence). Use it to refuse, and keep
+  client IDs out of the user-subject namespace when clients can influence
+  them (RFC 9700 §4.15.1).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
   JWT access tokens offline (`jwtsec.BearerVerifier`): such a token stays

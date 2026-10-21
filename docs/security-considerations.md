@@ -124,9 +124,11 @@ protections.
   token's `alg` — a key without one verifies nothing — and an asymmetric key
   must pass `PublicKey.Validate` (RSA of at least 2048 bits, the algorithm's
   curve, a public key: a private key or a `jose.JSONWebKey` wrapper verifies
-  nothing; an Ed25519 key must be the canonical encoding of a point not of
-  small order, RFC 8032 §5.1.3 — forgeries verify against the all-zero key
-  and the identity point). A `kid` shared by several keys designates none.
+  nothing; an Ed25519 key must have a canonical y-coordinate, RFC 8032
+  §5.1.3, that is not one of a point of small order — forgeries verify
+  against the all-zero key and the identity point; a y-coordinate of no
+  point of the curve is not detected, and verifies nothing). A `kid` shared
+  by several keys designates none.
   RSASSA-PSS signatures must use a salt of the hash size (RFC 7518 §3.5;
   go-jose alone accepts any).
 - **Claim smuggling** (RFC 7519 §4, §7.3, §10.1.1) — claims are decoded
@@ -200,7 +202,12 @@ keys by `kid` against a JWKS provider (static or remote).
   `ClientID()` and scopes. Amazon Cognito's client-credentials tokens are
   classified alike; Keycloak (service-account UUID), Auth0 (`…@clients`),
   Okta and Microsoft Entra ID give client tokens subjects of their own and
-  always report false.
+  always report false. A token without `client_id` reports false too: with
+  an issuer that sets `sub` to the client ID but omits `client_id`, the
+  resource server cannot tell the two kinds apart and relies on disjoint
+  client and user identifiers only. Check the principal's type with a
+  checked assertion: another authenticator, or the anonymous fallback,
+  gives another principal.
 - **Remote key sets** — `NewRemoteJWKS` fetches through
   [`outbound`](#outbound-requests-ssrf): https only, publicly routable
   destinations judged at dial time, no redirect, no proxy, 10 s and 1 MiB.

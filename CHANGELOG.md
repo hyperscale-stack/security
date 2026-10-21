@@ -1256,7 +1256,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   four for the all-zero key (an uninitialised buffer). Small-order keys and
   non-canonical encodings (RFC 8032 §5.1.3) are now refused with
   `ErrInvalidKey` — by `Verifier`, `VerifySignature`, `MarshalJWKS` and the
-  remote JWK Set, which ignores such a key (RFC 8725 §3.4).
+  remote JWK Set, which ignores such a key (RFC 8725 §3.4). An Ed25519
+  private key whose public half is not the one its seed derives — the
+  all-zero buffer, two keys spliced together — is refused by `NewSigner`
+  and `PrivateKey.Validate`: it signed tokens no key verifies.
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets

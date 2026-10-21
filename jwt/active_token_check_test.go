@@ -106,8 +106,11 @@ func TestActiveTokenCheckRunsLast(t *testing.T) {
 // a refusal is ErrTokenInactive — security.ErrInvalidCredentials, 401
 // invalid_token; a check that could not be made — an error wrapping
 // security.ErrUnavailable, or the context ending — is security.ErrUnavailable
-// (503) and never a credential failure. The token never appears in the
-// error.
+// (503) and never a credential failure. Nothing else of the check's error
+// chain is kept (review finding 1): an error wrapping another security
+// sentinel — security.ErrInvalidRequest, which transports answer with 400 —
+// still gives 401, and its text only is kept. The token never appears in
+// the error.
 func TestActiveTokenCheckErrors(t *testing.T) {
 	t.Parallel()
 
@@ -119,7 +122,10 @@ func TestActiveTokenCheckErrors(t *testing.T) {
 		class string
 	}{
 		"inactive":          {errors.New("not found in the store"), security.ErrorClassInvalidCredentials},
+		"invalid request":   {fmt.Errorf("introspection: %w", security.ErrInvalidRequest), security.ErrorClassInvalidCredentials},
+		"access denied":     {fmt.Errorf("introspection: %w", security.ErrAccessDenied), security.ErrorClassInvalidCredentials},
 		"store down":        {fmt.Errorf("lookup: %w", security.ErrUnavailable), security.ErrorClassUnavailable},
+		"down, bad request": {fmt.Errorf("lookup: %w: %w", security.ErrUnavailable, security.ErrInvalidRequest), security.ErrorClassUnavailable},
 		"context canceled":  {fmt.Errorf("lookup: %w", context.Canceled), security.ErrorClassUnavailable},
 		"deadline exceeded": {fmt.Errorf("lookup: %w", context.DeadlineExceeded), security.ErrorClassUnavailable},
 	}
@@ -131,9 +137,11 @@ func TestActiveTokenCheckErrors(t *testing.T) {
 		a, err := tv.Verify(context.Background(), tok)
 		require.Error(t, err, name)
 		assert.Nil(t, a, name)
-		require.ErrorIs(t, err, tc.err, name)
+		assert.Contains(t, err.Error(), tc.err.Error(), "%s: the cause's text is kept", name)
+		assert.NotErrorIs(t, err, tc.err, "%s: not its chain", name)
 		assert.Equal(t, tc.class, security.ErrorClass(err), name)
 		assert.NotContains(t, err.Error(), tok, name)
+		assert.NotErrorIs(t, err, security.ErrInvalidRequest, name)
 
 		if tc.class == security.ErrorClassUnavailable {
 			require.ErrorIs(t, err, security.ErrUnavailable, name)
@@ -145,6 +153,51 @@ func TestActiveTokenCheckErrors(t *testing.T) {
 			assert.NotErrorIs(t, err, security.ErrUnavailable, name)
 		}
 	}
+}
+
+// TestActiveTokenCheckCannotChangeTheIdentity (review finding 2): the check
+// receives a copy of the verified claims — a check that rewrites them, as
+// one "refreshing" them from an introspection response would, changes
+// neither the authenticated principal, its name and authorities, nor what
+// the resolver sees.
+func TestActiveTokenCheckCannotChangeTheIdentity(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	tok := accessToken(t, priv)
+
+	var seen jwtsec.StandardClaims
+
+	tv := jwtsec.BearerVerifier(rsVerifier(pub),
+		func(c *jwtsec.StandardClaims) []string {
+			seen = *c
+
+			return jwtsec.DefaultAuthorityResolver(c)
+		},
+		jwtsec.WithActiveTokenCheck(func(_ context.Context, _ string, c *jwtsec.StandardClaims) error {
+			c.Subject, c.ClientID, c.Scope, c.Issuer = "root", "root", "everything", "https://evil.example"
+			c.Audience[0] = "https://other.example"
+			*c.ExpiresAt = *jwtsec.NewNumericDate(time.Unix(0, 0))
+			*c.IssuedAt = *jwtsec.NewNumericDate(time.Unix(0, 0))
+
+			return nil
+		}))
+
+	a, err := tv.Verify(context.Background(), tok)
+	require.NoError(t, err)
+	assert.Equal(t, "alice", a.Name())
+	assert.ElementsMatch(t, []string{"scope:read:mail", "scope:write:mail", "scope:admin"}, a.Authorities())
+
+	p, ok := a.Principal().(jwtsec.AccessTokenPrincipal)
+	require.True(t, ok)
+	assert.Equal(t, "alice", p.Subject())
+	assert.Equal(t, "web", p.ClientID())
+
+	assert.Equal(t, "alice", seen.Subject)
+	assert.Equal(t, rsIssuer, seen.Issuer)
+	assert.Equal(t, jwtsec.Audience{rsAudience}, seen.Audience)
+	assert.True(t, seen.ExpiresAt.Time().After(time.Now()), "exp untouched")
+	assert.True(t, seen.IssuedAt.Time().After(time.Unix(0, 0)), "iat untouched")
 }
 
 // TestWithActiveTokenCheckRefusesNil: a nil check panics at construction.
@@ -244,4 +297,50 @@ func TestActiveTokenCheckAgainstTheStore(t *testing.T) {
 	_, err = tv.Verify(context.Background(), tok)
 	require.ErrorIs(t, err, jwtsec.ErrTokenInactive, "revoked")
 	assert.Equal(t, security.ErrorClassInvalidCredentials, security.ErrorClass(err))
+}
+
+// TestActiveTokenCheckSeesAFamilyRevocation (review finding 8) pins the
+// case D-03 is about: a JWT access token of a token family — what the
+// authorization_code and refresh_token grants issue — is refused once the
+// family is revoked (a replayed code, a reused refresh token: RFC 6749
+// §4.1.2, RFC 9700 §4.14.2), while it still verifies offline.
+func TestActiveTokenCheckSeesAFamilyRevocation(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := genECDSA(t)
+	store := memory.New()
+	now := time.Now()
+
+	claims := token.AccessTokenClaims{
+		Issuer: rsIssuer, Subject: "alice", Audience: rsAudience, ClientID: "web", Scope: "read",
+		FamilyID: "family-1", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+
+	tok, hash, err := token.NewJWTAccessTokenGenerator(mustAccessTokenSigner(t, priv)).Generate(context.Background(), claims)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SaveTokenPair(context.Background(), &oauth2.TokenPair{
+		Access: oauth2.AccessToken{
+			Token: tok, TokenHash: hash, ClientID: "web", Subject: "alice", Scope: "read", Issuer: rsIssuer,
+			Audience: rsAudience, FamilyID: "family-1", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+		Refresh: &oauth2.RefreshToken{
+			TokenHash: oauth2.HashToken(nil, "refresh"), ClientID: "web", Subject: "alice", Scope: "read",
+			Issuer: rsIssuer, FamilyID: "family-1", IssuedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+			FamilyIssuedAt: now,
+		},
+	}))
+
+	tv := jwtsec.BearerVerifier(rsVerifier(pub), nil, jwtsec.WithActiveTokenCheck(storeCheck(store)))
+
+	_, err = tv.Verify(context.Background(), tok)
+	require.NoError(t, err, "active")
+
+	require.NoError(t, store.RevokeRefreshFamily(context.Background(), "family-1"))
+
+	_, err = tv.Verify(context.Background(), tok)
+	require.ErrorIs(t, err, jwtsec.ErrTokenInactive, "the family is revoked")
+
+	_, err = jwtsec.BearerVerifier(rsVerifier(pub), nil).Verify(context.Background(), tok)
+	require.NoError(t, err, "offline, it lives until it expires")
 }

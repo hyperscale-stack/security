@@ -75,4 +75,15 @@ func TestVerifyRefusesALargeHeaderWithoutDecodingIt(t *testing.T) {
 
 	allocs := testing.AllocsPerRun(20, func() { _, _ = v.Verify(context.Background(), tok, nil) })
 	assert.Less(t, allocs, 30.0, "refused before decoding")
+
+	// The header is not even base64-decoded (review finding 4): a 64 KiB
+	// header would allocate 48 KiB.
+	r := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			_, _ = v.Verify(context.Background(), tok, nil)
+		}
+	})
+	assert.Less(t, r.AllocedBytesPerOp(), int64(4<<10), "refused on its encoded length")
 }
