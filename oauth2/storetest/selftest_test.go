@@ -32,17 +32,19 @@ const forgetAfter = time.Second
 // liar is the in-memory store with one deliberate defect, named by lie:
 // its lookups misreport one field of a token record, or it forgets a
 // consumed code, a rotated refresh token (at rotation, or at lookup) or a
-// revoked family after forgetAfter. The conformance suite must fail on every one of them.
+// revoked family — any, or only one revoked after issuance — after
+// forgetAfter. The conformance suite must fail on every one of them.
 type liar struct {
 	*memory.Store
 
-	lie   string
-	mu    sync.Mutex
-	since map[string]time.Time // when a code was consumed, a token rotated, a family revoked
+	lie    string
+	mu     sync.Mutex
+	since  map[string]time.Time // when a code was consumed, a token rotated, a family revoked
+	issued map[string]bool      // the families tokens were issued into
 }
 
 func newLiar(lie string) *liar {
-	return &liar{Store: memory.New(), lie: lie, since: map[string]time.Time{}}
+	return &liar{Store: memory.New(), lie: lie, since: map[string]time.Time{}, issued: map[string]bool{}}
 }
 
 // record notes that key happened now; forgotten reports whether key
@@ -102,15 +104,33 @@ func (l *liar) RevokeRefreshFamily(ctx context.Context, familyID string) error {
 	err := l.Store.RevokeRefreshFamily(ctx, familyID)
 	if err == nil {
 		l.record("forget-revoked", familyID)
+
+		l.mu.Lock()
+		issued := l.issued[familyID]
+		l.mu.Unlock()
+
+		if issued {
+			l.record("forget-revoked-issued", familyID)
+		}
 	}
 
 	return err
 }
 
 // SaveTokenPair issues a pair of a forgotten family into a fresh one: what
-// a store that lost the family's revoked state does.
+// a store that lost the family's revoked state does. forget-revoked forgets
+// every revoked family, forget-revoked-issued only those revoked after
+// tokens were issued into them — a store keeping the revocation of a
+// family with tokens under another TTL than that of an unknown one.
 func (l *liar) SaveTokenPair(ctx context.Context, pair *oauth2.TokenPair) error {
-	if pair != nil && l.forgotten("forget-revoked", pair.Access.FamilyID) {
+	if pair != nil {
+		l.mu.Lock()
+		l.issued[pair.Access.FamilyID] = true
+		l.mu.Unlock()
+	}
+
+	if pair != nil && (l.forgotten("forget-revoked", pair.Access.FamilyID) ||
+		l.forgotten("forget-revoked-issued", pair.Access.FamilyID)) {
 		reborn := *pair
 		reborn.Access.FamilyID += "/forgotten"
 
@@ -215,6 +235,7 @@ func TestConformanceCatchesLyingStores(t *testing.T) {
 		{"forget-rotated", retention, "reuse the rotated refresh token later"},
 		{"forget-consumed-token", retention, "lookup refresh token rt-retained-0"},
 		{"forget-revoked", retention, "issue into the family revoked before issuance, later"},
+		{"forget-revoked-issued", retention, "issue into the revoked family, later"},
 	} {
 		t.Run(c.lie+"/"+c.caseName, func(t *testing.T) {
 			t.Parallel()

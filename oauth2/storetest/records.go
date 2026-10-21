@@ -169,6 +169,11 @@ func testRetainedOverTime(t *testing.T, s oauth2.Storage) {
 	got, err := s.ConsumeAuthorizationCode(ctx(), code.CodeHash)
 	requireReplay(t, got, err, code, "replay the consumed code later")
 
+	// The live pair and the rotated chain are still found intact. The live
+	// pair's check doubles that of second, and requireUnusable(revoked)
+	// below holds even for a store that lost the family (I8 fails its
+	// lookups closed): sanity checks, which the self-test does not pin on
+	// their own.
 	requireRecords(t, s, live, false)
 	requireRecords(t, s, second, false)
 	requireRecords(t, s, first, true)
