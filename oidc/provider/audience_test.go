@@ -188,17 +188,31 @@ func TestAnEmptyAudienceIsNotLookedUp(t *testing.T) {
 
 // TestPlainGrantAudienceIsChecked: the audience rule holds for every
 // exchange the provider sees — a plain OAuth 2.0 grant's access token is no
-// less a JWT a relying party could take for an ID Token.
+// less a JWT a relying party could take for an ID Token —, whether the
+// provider approved the grant or another ConsentFunc did (no grant
+// context).
 func TestPlainGrantAudienceIsChecked(t *testing.T) {
 	t.Parallel()
 
 	for _, aud := range []string{webClientID, spaClientID} {
-		spy := &spyStore{}
-		e := newEnv(t, withSpy(spy), withResolver(audienceIssuer(aud)))
+		for approver, code := range map[string]func(*env) string{
+			"the provider": func(e *env) string { return e.code(plainQuery("read")) },
+			"another ConsentFunc": func(e *env) string {
+				approving := e.op.Server().AuthorizeHandler(oauth2.AuthorizeConfig{},
+					func(http.ResponseWriter, *http.Request, *oauth2.AuthorizeRequest) (*oauth2.Consent, error) {
+						return &oauth2.Consent{Approved: true, Subject: "alice"}, nil
+					})
 
-		rec := e.exchange(e.code(with(authorizeQuery(), "scope", "read", "nonce", "")))
-		assert.Equal(t, oauth2.CodeServerError, oauthError(t, rec), aud)
-		assert.Zero(t, spy.pairs.Load(), "%s: nothing is persisted", aud)
+				return redirect(t, serve(approving, get("/oauth2/authorize?"+plainQuery("read").Encode()))).Get("code")
+			},
+		} {
+			spy := &spyStore{}
+			e := newEnv(t, withSpy(spy), withResolver(audienceIssuer(aud)))
+
+			rec := e.exchange(code(e))
+			assert.Equal(t, oauth2.CodeServerError, oauthError(t, rec), "%s, approved by %s", aud, approver)
+			assert.Zero(t, spy.pairs.Load(), "%s, approved by %s: nothing is persisted", aud, approver)
+		}
 	}
 }
 
