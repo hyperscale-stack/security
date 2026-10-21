@@ -37,7 +37,9 @@ var errHintClaims = errors.New("oidcprovider: id_token_hint claims")
 // requesting client among its audiences (a hint is "about the End-User's
 // current or past authenticated session with the Client", Core §3.1.2.1),
 // a sub of at most 255 bytes. Its expiry is not checked: an expired ID
-// Token is accepted (Core §3.1.2.2).
+// Token is accepted (Core §3.1.2.2). A header carrying or locating a key —
+// jwk, x5c, jku, x5u (Core §2: ID Tokens SHOULD NOT use them) — is refused
+// by jwtsec.VerifySignature before go-jose parses it.
 func (p *Provider) verifyHint(ctx context.Context, raw, issuer, clientID string, snap *keySnapshot) (string, error) {
 	if raw == "" {
 		return "", nil
