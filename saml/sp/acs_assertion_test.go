@@ -671,6 +671,46 @@ func TestCompleteLogin_ProfileRefusedBeforeSignatureWork(t *testing.T) {
 	}
 }
 
+// TestCompleteLogin_SingleStatus: a Response carries exactly one Status
+// (Core §3.2.2), refused before the consumption with that rule, whatever
+// the order of two (audit F-24: with the rule weakened to "at least one",
+// a Success first is refused only later, after the consumption, and a
+// Responder first is reported as the IdP's error).
+func TestCompleteLogin_SingleStatus(t *testing.T) {
+	t.Parallel()
+
+	responder := func() *etree.Element {
+		st := etree.NewElement("samlp:Status")
+		st.CreateElement("samlp:StatusCode").CreateAttr("Value", "urn:oasis:names:tc:SAML:2.0:status:Responder")
+
+		return st
+	}
+
+	cases := map[string]respOpts{
+		"Success then Responder": onResponse(func(r *etree.Element) {
+			r.InsertChildAt(child(r, "Status").Index()+1, responder())
+		}),
+		"Responder then Success, no assertion": onResponse(func(r *etree.Element) {
+			r.InsertChildAt(child(r, "Status").Index(), responder())
+			r.RemoveChild(child(r, "Assertion"))
+		}),
+	}
+
+	for name, o := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newEnv(t)
+			lr := begin(t, e, samlsp.LoginOptions{})
+
+			res, err := complete(e, lr, respond(t, lr.requestID, o))
+			assert.Nil(t, res)
+			requireRejected(t, e, lr, err, samlsp.ErrMalformedResponse)
+			require.ErrorContains(t, err, "a Response needs exactly one Status")
+		})
+	}
+}
+
 func TestCompleteLogin_ProfileShape(t *testing.T) {
 	t.Parallel()
 
