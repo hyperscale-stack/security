@@ -1525,7 +1525,10 @@ network:
   and any scoped (zoned) address. IPv4-mapped IPv6 addresses and NAT64
   (`64:ff9b::/96`) addresses are judged on the IPv4 address they reach;
   IPv6 is limited to `2000::/3` minus its special-purpose blocks (Teredo,
-  6to4, documentation), so an unknown or future reservation is refused.
+  6to4, documentation), so an unknown or future reservation is refused,
+  and an address with an ISATAP interface identifier (RFC 5214 §6.1),
+  which an ISATAP router tunnels to the IPv4 address it embeds, is refused
+  from any prefix.
 - **URLs** must be https (http only with `AllowHTTP`, for development), carry
   no userinfo, and name an ASCII host: non-ASCII names (which `net/http`
   would map to another name before dialing), percent-encoded or
@@ -1549,18 +1552,22 @@ network:
 
 Exemptions are explicit: `AllowedPrefixes` for an on-premises identity
 provider's subnet (or `outbound.LoopbackPrefixes()` in tests). Any port
-is allowed by default; restrict ports and hosts in `CheckURL`, and deny
-specific public addresses in `CheckAddr`. Only the well-known NAT64 prefix
+is allowed by default: restrict hosts in `CheckURL`, and ports and
+specific public addresses in `CheckAddr`, which sees the numeric address
+and port actually dialed. `CheckURL` sees a canonical port too — decimal
+without leading zeros, absent for the scheme's default — so a port check
+there holds against `:022`, but compare numbers, not strings. Only the well-known NAT64 prefix
 is decoded: on a network translating a network-specific prefix (RFC 6052),
 refuse that prefix in `CheckAddr`, or its addresses reach the private IPv4
 addresses they embed.
 
 Host names ending in a number (`127.1`, `2130706433`, `0x7f.1`) are refused
 before `CheckURL`: resolvers read them as IPv4 addresses, so a host check
-would vet another name than the one dialed. A refused destination is never
-named in an error, but the errors of allowed destinations may name their
-resolved address and port, and every error tells whether a name is
-refused: when tenants supply URLs ("test this connection"), log the error
+would vet another name than the one dialed. A dial error never names the
+resolved address and port, nor the resolver's address — a refused
+destination, a refused connection, a timeout, a resolver failure keep only
+their cause —, but an error after the connection (a reset, a TLS failure)
+may, and every error tells whether a name is refused: when tenants supply URLs ("test this connection"), log the error
 and show them a generic message, or the error text becomes an oracle on
 the internal network.
 

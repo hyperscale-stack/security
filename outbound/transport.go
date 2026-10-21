@@ -77,7 +77,8 @@ func (g *guard) checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 // checkRequestURL refuses a URL the policy does not allow, then hands a
-// canonical clone to the application's CheckURL hook.
+// canonical clone to the application's CheckURL hook: the host as
+// canonicalHost gives it, the port as canonicalPort does.
 func (g *guard) checkRequestURL(ctx context.Context, u *url.URL) error {
 	switch {
 	case u.Scheme == schemeHTTPS:
@@ -95,8 +96,8 @@ func (g *guard) checkRequestURL(ctx context.Context, u *url.URL) error {
 		return err
 	}
 
-	port := u.Port()
-	if err := checkPort(port); err != nil {
+	port, err := canonicalPort(u.Scheme, u.Port())
+	if err != nil {
 		return err
 	}
 
@@ -192,19 +193,26 @@ func validLabel(label string) bool {
 	return true
 }
 
-// checkPort refuses a port outside 1–65535; an empty port is the scheme's
-// default.
-func checkPort(port string) error {
+// canonicalPort refuses a port that is not 1–65535 in decimal digits and
+// returns its canonical form: no leading zero, and "" for the scheme's
+// default port (443 for https, 80 for http), as a WHATWG URL serializes it.
+// The application's CheckURL then sees the port net/http dials, whatever
+// its spelling ("022" dials 22).
+func canonicalPort(scheme, port string) (string, error) {
 	if port == "" {
-		return nil
+		return "", nil
 	}
 
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("%w: invalid port", ErrURLNotAllowed)
+	n, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || n == 0 {
+		return "", fmt.Errorf("%w: invalid port", ErrURLNotAllowed)
 	}
 
-	return nil
+	if (scheme == schemeHTTPS && n == 443) || (scheme == schemeHTTP && n == 80) {
+		return "", nil
+	}
+
+	return strconv.FormatUint(n, 10), nil
 }
 
 // joinHostPort rebuilds a URL host from a canonical host and an optional

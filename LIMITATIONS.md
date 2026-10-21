@@ -413,7 +413,8 @@ PKCE. Not supported, and refused where a provider could select them:
   connect-time address check would judge the proxy, not the destination.
   Deployments whose egress must go through a proxy cannot use them yet.
 - **Ports are not restricted** by default — restrict them in
-  `Policy.CheckURL`.
+  `Policy.CheckAddr`, which sees the numeric port dialed (`Policy.CheckURL`
+  sees a canonical port too).
 - **Private networks** need an explicit `AllowedPrefixes` exemption.
 - **NAT64** — only the well-known prefix (`64:ff9b::/96`) is decoded and
   judged on its embedded IPv4 address. A network-specific prefix (RFC 6052
@@ -421,9 +422,10 @@ PKCE. Not supported, and refused where a provider could select them:
   ordinary global IPv6 and reach whatever IPv4 address they embed, private
   ones included: a network translating such a prefix must refuse it in
   `Policy.CheckAddr`.
-- **Error text** — a refused destination is never named, but the errors of
-  allowed destinations (refused connection, timeout, TLS failure) come
-  from the standard library and may name the resolved address and port.
+- **Error text** — a dial error never names the resolved address nor the
+  resolver, but an error after the connection is made (a reset, a read
+  timeout) comes from the standard library and may name the address and
+  port.
 
 ## SAML Service Provider
 

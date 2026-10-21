@@ -2789,3 +2789,28 @@ To migrate:
    `jwtsec.WithMaxTokenSize(n)`.
 3. Application extractors calling `httpsec.ExtractAuthorizationValue`
    refuse an empty value when the result is `ok`: the scheme stood alone.
+
+### `outbound`: canonical ports for `CheckURL`, ISATAP refused, dial errors without addresses
+
+`Policy.CheckURL` received the port as written: `http://h:022/` passed the
+range check as 22 while the hook, comparing strings, saw `"022"`, so a
+port deny-list was bypassed with leading zeros. ISATAP addresses (RFC 5214
+§6.1), which an ISATAP router tunnels to the IPv4 address they embed,
+were judged as ordinary global IPv6. Dial errors named the resolved
+address and the resolver.
+
+| | Before | After |
+| --- | --- | --- |
+| Port seen by `CheckURL` for `:022`, `:0443` (https), `:80` (http) | `022`, `0443`, `80` | `22`, none, none |
+| An address with an ISATAP interface identifier (`…:0:5efe:a.b.c.d`, `…:200:5efe:a.b.c.d`) | allowed (global IPv6) | refused, unless an `AllowedPrefixes` entry exempts its IPv6 prefix |
+| Dial errors (refused connection, timeout, resolver failure) | name the resolved address and port, or the resolver | keep their cause, name neither |
+
+To migrate:
+
+1. In `CheckURL`, expect no port for the scheme's default and compare
+   ports as numbers — or move the port policy to `CheckAddr`, which sees
+   the numeric port dialed.
+2. A destination reached through ISATAP needs an `AllowedPrefixes` entry
+   for its IPv6 prefix.
+3. Code that parsed the address out of a dial error reads it from its own
+   resolution instead.

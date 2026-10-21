@@ -87,19 +87,24 @@ type Policy struct {
 	// NAT64 prefix (RFC 6052 §2.2) is carved from global unicast space, so
 	// its addresses are judged as ordinary global IPv6 and reach whatever
 	// IPv4 address they embed: a network translating one must refuse it in
-	// CheckAddr.
+	// CheckAddr. Addresses with an ISATAP interface identifier (RFC 5214
+	// §6.1) are refused from any prefix; exempt them by their IPv6 prefix.
 	AllowedPrefixes []netip.Prefix
 
 	// CheckURL, when set, is called before any connection with a clone of
-	// the canonical URL (host lower-cased) of the initial request and of
-	// every redirect hop. A non-nil error refuses the request with
-	// [ErrURLNotAllowed]. Use it for host allow-lists and port
-	// restrictions.
+	// the canonical URL of the initial request and of every redirect hop:
+	// the host lower-cased (an IP literal in its canonical form), the port
+	// in decimal without leading zeros, and no port when it is the
+	// scheme's default (443 for https, 80 for http). A non-nil error
+	// refuses the request with [ErrURLNotAllowed]. Use it for host
+	// allow-lists; restrict ports here by comparing numbers
+	// (strconv.Atoi(u.Port())), or — more robustly — in CheckAddr.
 	CheckURL func(ctx context.Context, u *url.URL) error
 
 	// CheckAddr, when set, is called at connect time with every address
 	// about to be dialed, unmapped and unzoned, once the built-in checks
-	// accepted it. A non-nil error refuses the connection with
+	// accepted it — the numeric address and port: the robust place for a
+	// port policy. A non-nil error refuses the connection with
 	// [ErrDestinationNotAllowed]: the hook can only restrict.
 	CheckAddr func(ctx context.Context, addr netip.AddrPort) error
 
@@ -129,9 +134,10 @@ type Policy struct {
 // NewClient fails with [ErrInvalidPolicy] when p is unusable. The client is
 // safe for concurrent use; build one per policy and reuse it.
 //
-// A refused destination is never named in an error, but the errors of
-// allowed destinations (a refused connection, a timeout, a TLS failure)
-// are the standard library's and may name the resolved address and port.
+// A dial error never names the resolved address and port nor the
+// resolver's address — a refused destination or connection, a timeout, a
+// resolver failure keep only their cause —, but the errors after the
+// connection (a reset, a TLS failure) are the standard library's and may.
 // When the URL comes from a tenant, log the error and show the tenant a
 // generic message.
 func NewClient(p Policy) (*http.Client, error) {

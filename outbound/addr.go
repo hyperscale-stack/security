@@ -97,7 +97,8 @@ func embeddedIPv4(addr netip.Addr) (netip.Addr, bool) {
 
 // blocked reports whether addr, an unzoned address, lies outside the
 // publicly routable space: IPv4 (an IPv4-mapped address is judged as IPv4)
-// on a deny-list, IPv6 on an allow-list, NAT64 on its embedded IPv4.
+// on a deny-list, IPv6 on an allow-list, NAT64 on its embedded IPv4, and
+// every ISATAP address refused.
 func blocked(addr netip.Addr) bool {
 	addr = addr.Unmap()
 
@@ -109,7 +110,18 @@ func blocked(addr netip.Addr) bool {
 		return containedIn(blockedIPv4, v4)
 	}
 
-	return !globalIPv6.Contains(addr) || containedIn(reservedIPv6, addr)
+	return !globalIPv6.Contains(addr) || containedIn(reservedIPv6, addr) || isatap(addr)
+}
+
+// isatap reports whether addr, an IPv6 address, has an ISATAP interface
+// identifier (RFC 5214 §6.1): the IANA OUI 00-00-5E with the u and g bits
+// in any state, then 0xFE, then an IPv4 address. An ISATAP router tunnels
+// such an address to the IPv4 address it embeds, from any prefix: like
+// 6to4 and Teredo, every one is refused, whatever IPv4 it embeds.
+func isatap(addr netip.Addr) bool {
+	b := addr.As16()
+
+	return b[8]&^0x03 == 0 && b[9] == 0 && b[10] == 0x5e && b[11] == 0xfe
 }
 
 // exempted reports whether addr, or the IPv4 address it reaches through
@@ -164,24 +176,40 @@ func (g *guard) control(ctx context.Context, _, address string, _ syscall.RawCon
 	return g.checkAddress(ctx, ap)
 }
 
-// dialContext dials with d. When the guard refuses the address, the error
-// keeps its cause but drops the resolved address net.Dialer puts in its
-// *net.OpError, so that the error of a request to a tenant-supplied URL
-// does not disclose the internal address the name resolved to.
+// dialContext dials with d. A dial error keeps its cause — a refused
+// destination, a refused connection, a timeout, a resolver failure, all
+// still matched by errors.Is — but drops the addresses net puts in it: the
+// resolved address and port of the *net.OpError, and the resolver's address
+// of a *net.DNSError. The error of a request to a tenant-supplied URL then
+// discloses neither the internal address the name resolved to nor the
+// internal resolver.
 func dialContext(d *net.Dialer) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := d.DialContext(ctx, network, address)
-		if err == nil || !errors.Is(err, ErrDestinationNotAllowed) {
-			return conn, err //nolint:wrapcheck // the round tripper wraps transport errors
+		if err == nil {
+			return conn, nil
 		}
 
-		cause := ErrDestinationNotAllowed
-
-		var opErr *net.OpError
-		if errors.As(err, &opErr) {
-			cause = opErr.Err
-		}
-
-		return nil, &net.OpError{Op: "dial", Net: network, Err: cause}
+		return nil, anonymous(network, err)
 	}
+}
+
+// anonymous returns err without the addresses of its *net.OpError and
+// *net.DNSError.
+func anonymous(network string, err error) error {
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return err
+	}
+
+	cause := opErr.Err
+
+	var dnsErr *net.DNSError
+	if errors.As(cause, &dnsErr) {
+		stripped := *dnsErr
+		stripped.Server = ""
+		cause = &stripped
+	}
+
+	return &net.OpError{Op: "dial", Net: network, Err: cause}
 }

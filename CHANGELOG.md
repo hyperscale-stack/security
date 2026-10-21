@@ -2103,3 +2103,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   browser that sends no Fetch Metadata. The example now answers such a
   request 403, like a `cross-site` or `same-site` one; browsers without
   Fetch Metadata (Safari and iOS before 16.4) cannot sign in to it.
+
+- `outbound`: `Policy.CheckURL` saw the port as written, so a string port
+  deny-list was bypassed with leading zeros (`:022` dials 22); it now sees
+  the canonical port (no leading zero, none for the scheme's default).
+  Addresses with an ISATAP interface identifier (RFC 5214 §6.1), which an
+  ISATAP router tunnels to the IPv4 address they embed, are refused like
+  6to4 and Teredo. Dial errors keep their cause but no longer name the
+  resolved address or the resolver. See [MIGRATION.md](MIGRATION.md).

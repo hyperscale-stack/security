@@ -104,6 +104,20 @@ func TestBlocked(t *testing.T) {
 		// IPv4-mapped addresses are judged as IPv4.
 		{"::ffff:8.8.8.8", false},
 		{"::ffff:127.0.0.1", true},
+
+		// ISATAP interface identifiers (RFC 5214 §6.1: 000000ug 00000000
+		// 0x5E 0xFE, then an IPv4 address) are refused whatever IPv4 they
+		// embed, like 6to4 and Teredo: an ISATAP router tunnels them to it.
+		{"2a00:1450:4001:800::5efe:a00:1", true},      // u=0 g=0, 10.0.0.1
+		{"2a00:1450:4001:800::5efe:808:808", true},    // u=0 g=0, 8.8.8.8
+		{"2a00:1450:4001:800:200:5efe:a00:1", true},   // u=1
+		{"2a00:1450:4001:800:100:5efe:a00:1", true},   // g=1
+		{"2a00:1450:4001:800:300:5efe:7f00:1", true},  // u=1 g=1, 127.0.0.1
+		{"2a00:1450:4001:800:400:5efe:a00:1", false},  // another bit set: not ISATAP
+		{"2a00:1450:4001:800:1:5efe:a00:1", false},    // second octet not zero
+		{"2a00:1450:4001:800::5eff:a00:1", false},     // 0x5E 0xFF
+		{"2a00:1450:4001:800::5dfe:a00:1", false},     // 0x5D 0xFE
+		{"2a00:1450:4001:800:200:5eff:fe00:1", false}, // EUI-64 of an IANA MAC address
 	}
 
 	for _, c := range cases {
@@ -147,6 +161,9 @@ func TestCheckAddress(t *testing.T) {
 		{"nat64 embedded exempted", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "[64:ff9b::a00:1]:443", false},
 		{"private exempted subnet", []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, "10.20.1.2:443", false},
 		{"private outside exempted subnet", []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, "10.21.1.2:443", true},
+		{"isatap blocked", nil, "[2a00:1450:4001:800::5efe:808:808]:443", true},
+		{"isatap exempted by its IPv6 prefix", []netip.Prefix{netip.MustParsePrefix("2a00:1450:4001:800::/64")},
+			"[2a00:1450:4001:800::5efe:808:808]:443", false},
 	}
 
 	for _, c := range cases {
