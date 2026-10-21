@@ -219,23 +219,52 @@ library code itself builds without them.
 
 ## Repository settings (maintainer)
 
-These are not versioned in the repository; set them once:
+These settings are not versioned in the repository. They were applied on
+2026-10-21 and are listed here as they stand: change them only together
+with this section.
 
-- Actions → General:
-  - default workflow permissions **read**;
-  - untick "Allow GitHub Actions to create and approve pull requests";
-  - require actions to be pinned to a full-length commit SHA.
-- Rulesets:
-  - `master`: pull request plus the required status checks
-    `Build & test (workspace)` and `Store suites (real backends)`, the
-    latter once it has proven stable (its first pull request run, three
-    re-runs and the first push to master, all green). A required check is
-    matched by its job name: renaming a job of `go.yml` needs the same
-    change here, or every pull request waits for a check that never comes;
-  - tags `v*` and `**/v*`: creation, update and deletion restricted to
-    maintainers.
-- Releases: enable release immutability, so the tag of a published release
-  can no longer be moved or deleted.
-- Environments: give `release` (used by the publish job) required reviewers.
-- Code security: Dependabot alerts and security updates, secret scanning and
-  push protection.
+- **Actions** (Settings → Actions → General):
+  - default workflow permissions **read**, and GitHub Actions may not
+    create or approve pull requests;
+  - actions must be pinned to a full-length commit SHA. Any action may be
+    used (`allowed_actions: all`); the workflows only use
+    `actions/checkout` and `actions/setup-go`.
+- **Security features** (the repository's security settings): Dependabot
+  alerts and Dependabot security updates, secret scanning and push
+  protection, and private vulnerability reporting, the channel
+  [SECURITY.md](../SECURITY.md) gives reporters.
+- **Releases**: release immutability is on, so the tag of a published
+  release can no longer be moved or deleted.
+- **Environment `release`** (used by the publish job): required reviewer
+  `euskadi31`. It has no deployment branch or tag policy: the reviewer
+  approves each run, and the publish job only runs for the release tags.
+- **Rulesets** (Settings → Rules → Rulesets):
+  - `master` (the default branch), without bypass: no deletion, no force
+    push, pull request required (0 approvals), and the required status
+    checks `Build & test (workspace)` and `Store suites (real backends)`
+    (the branch need not be up to date). A required check is matched by its
+    job name: renaming a job of `go.yml` needs the same change here, or
+    every pull request waits for a check that never comes. The
+    `govulncheck` workflow (govulncheck and OSV-Scanner jobs) is not
+    required: a new advisory against any requirement of any module, or an
+    outage of a vulnerability database, would otherwise block every merge.
+    It must be green on the commit of a release (checklist step 1);
+  - `release tags` (`refs/tags/v*` and `refs/tags/**/v*`): creation,
+    update and deletion restricted; the repository admin and maintain roles
+    bypass it, which is how a maintainer pushes a release tag.
+
+To change them, use the settings pages above or the REST API (`gh api`;
+`{repo}` stands for `repos/hyperscale-stack/security`, and a `GET` on each
+endpoint shows the current value):
+
+| Setting | Endpoint |
+|---|---|
+| Actions enabled, allowed actions, SHA pinning | `PUT /{repo}/actions/permissions` (`enabled`, `allowed_actions`, `sha_pinning_required`) |
+| Workflow token, pull request approval by Actions | `PUT /{repo}/actions/permissions/workflow` (`default_workflow_permissions`, `can_approve_pull_request_reviews`) |
+| Dependabot alerts | `PUT` or `DELETE /{repo}/vulnerability-alerts` |
+| Dependabot security updates | `PUT` or `DELETE /{repo}/automated-security-fixes` |
+| Secret scanning, push protection | `PATCH /{repo}` (`security_and_analysis.secret_scanning`, `security_and_analysis.secret_scanning_push_protection`) |
+| Private vulnerability reporting | `PUT` or `DELETE /{repo}/private-vulnerability-reporting` |
+| Release immutability | `PUT` or `DELETE /{repo}/immutable-releases` |
+| Environment `release` | `PUT /{repo}/environments/release` (`reviewers`, `deployment_branch_policy`) |
+| Rulesets | `GET /{repo}/rulesets`, then `PUT /{repo}/rulesets/{id}` |

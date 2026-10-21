@@ -134,6 +134,11 @@ make e2e      # opt-in browser suites (Tales and Chrome: docs/saml-sp.md, e2e/oi
 make conformance # opt-in: the OpenID Foundation conformance suite, locally (docs/oidc-conformance.md)
 ```
 
+## Security
+
+Report a vulnerability privately, never in a public issue: see
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 Hyperscale security is licensed under [the MIT license](LICENSE.md).

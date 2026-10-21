@@ -1243,7 +1243,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     own repository and GitHub never reviews reach no database; they are
     checked by hand before a release (`docs/releasing.md`, `LIMITATIONS.md`);
   - Dependabot also covers the tool modules and the actions, groups related
-    updates, and waits 7 days before proposing a version.
+    updates, and waits 7 days before proposing a version;
+  - a security policy, `SECURITY.md`: vulnerabilities are reported through
+    GitHub's private vulnerability reporting, with target times for
+    acknowledgement, assessment and coordinated disclosure, and the
+    supported versions (the latest minor version of each module once
+    `v1.0.0` is out). `docs/releasing.md` lists the repository settings in
+    effect (rulesets, release environment, security features) and how to
+    change them.
 - `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of
   v0.58.0: HTTP/2 advisories GO-2026-6603, -6610, -6611, -6612 and -6617.
 - Every module, the tool modules and CI move to Go 1.27.3: go1.27.2 lacks
