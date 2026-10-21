@@ -11,13 +11,12 @@ import (
 	"time"
 
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
-	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func validConfig() samlsp.Config {
-	store := memory.New()
+	store := newMemoryStore(atT0)
 
 	return samlsp.Config{
 		Connections:     newResolver(),

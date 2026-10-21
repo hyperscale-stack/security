@@ -60,3 +60,22 @@ func TestValidateStoreKey(t *testing.T) {
 		require.ErrorIs(t, samlsp.ValidateStoreKey(bad), samlsp.ErrInvalidStoreRecord, bad)
 	}
 }
+
+// TestMemoryStore_SweepKeepsLiveLogins: the memory store sweeps expired
+// records on the clock it is given, the SP's (memory.WithClock): with a
+// clock in the past — t0 — and more than one sweep's worth of writes, no
+// live login is lost.
+func TestMemoryStore_SweepKeepsLiveLogins(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+
+	first := begin(t, e, samlsp.LoginOptions{})
+	for range 150 {
+		begin(t, e, samlsp.LoginOptions{})
+	}
+
+	res, err := complete(e, first, respond(t, first.requestID, respOpts{}))
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Identity.NameID.Value)
+}

@@ -992,6 +992,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   A handler built from `Provider.Server()` is not checked and must not
   enable the implicit flow either: the metadata would then contradict the
   discovery document. See [MIGRATION.md](MIGRATION.md).
+- `saml/sp/storage/memory` sweeps its expired transactions and replay marks
+  every 64 writes instead of keeping them for the process lifetime.
+  `memory.New` takes options; `memory.WithClock` gives it the
+  ServiceProvider's clock (`time.Now` by default).
 
 ### Fixed
 

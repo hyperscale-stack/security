@@ -17,7 +17,6 @@ import (
 
 	"github.com/beevik/etree"
 	samlsp "github.com/hyperscale-stack/security/saml/sp"
-	"github.com/hyperscale-stack/security/saml/sp/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -50,7 +49,7 @@ func (c *storeCounts) calls(t *testing.T, method string) int {
 func newCountingEnv(t *testing.T, opts ...envOption) (*env, *storeCounts) {
 	t.Helper()
 
-	mem := memory.New()
+	mem := newMemoryStore(atT0)
 	c := &storeCounts{}
 	c.mock = storageDouble(t, mem, func(m *samlsp.MockStorage) {
 		m.EXPECT().ConsumeTransaction(mock.Anything, mock.Anything, mock.Anything).
@@ -366,7 +365,7 @@ func TestCompleteLogin_LostConsumptionRaceIsFinal(t *testing.T) {
 		t.Run(lost.Error(), func(t *testing.T) {
 			t.Parallel()
 
-			mem := memory.New()
+			mem := newMemoryStore(atT0)
 			store := samlsp.NewMockStorage(t)
 			store.EXPECT().SaveTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.SaveTransaction).Once()
 			store.EXPECT().LookupTransaction(mock.Anything, mock.Anything).RunAndReturn(mem.LookupTransaction).Once()

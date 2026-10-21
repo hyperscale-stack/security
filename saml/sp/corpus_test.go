@@ -378,7 +378,7 @@ func runCorpusEntry(t testing.TB, m *corpusManifest, certs map[string]*x509.Cert
 	postTo := cmpOr(f.Knobs.PostTo, tx.Connection)
 	conns := corpusResolver(t, m, certs, postTo, f.Knobs)
 
-	store := &countingStore{Store: memory.New()}
+	store := &countingStore{Store: newMemoryStore(func() time.Time { return m.Instant })}
 	ctx := context.Background()
 	rec := tamperRecord(t, tx.Record, f.Knobs.Tamper)
 	require.NoError(t, store.SaveTransaction(ctx, &rec))

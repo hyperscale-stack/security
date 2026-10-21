@@ -45,7 +45,7 @@ func TestKeycloakResponse(t *testing.T) {
 	at := login.CapturedAt.Add(3 * time.Minute)
 
 	complete := func(samlResponse string, now time.Time) (*samlsp.LoginResult, error) {
-		store := memory.New()
+		store := memory.New(memory.WithClock(func() time.Time { return now }))
 		rec := withIntegrity(login.Transaction)
 		require.NoError(t, store.SaveTransaction(context.Background(), &rec))
 

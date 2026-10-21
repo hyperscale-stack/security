@@ -169,7 +169,7 @@ Keycloak run hit this with a freshly generated realm key.
 | refresh interval | `cacheDuration`, or 1 hour when absent | clamped to `[MinRefresh, MaxRefresh]` (5 minutes, 24 hours); an explicit `PT0S` asks for `MinRefresh` |
 | early expiry | — | a document whose `validUntil` comes before its scheduled refresh is refreshed once it expires, at most once per `RetryInterval` |
 | `RetryInterval` | 1 minute | spacing of the attempts after a failure or an early expiry, whatever the traffic |
-| `MaxStale` | 7 days | how long the last good document is served while refreshes fail; never past its `validUntil` |
+| `MaxStale` | 7 days | how long the last good document is served while refreshes fail; never past its `validUntil`. A key the IdP withdrew meanwhile stays trusted that long: lower it (down to `MaxRefresh`) to shorten that window, at the cost of failing closed sooner during an outage of the metadata URL |
 | afterwards | — | `BeginLogin` and `CompleteLogin` fail closed with `ErrMetadataExpired` |
 
   A refresh starts at the first use after it is due and runs in the
@@ -203,7 +203,11 @@ Keycloak run hit this with a freshly generated realm key.
   one-minute margin: `min(SubjectConfirmationData NotOnOrAfter + skew,
   rounded up to the second; transaction expiry) + 1 minute`.
 - Purging is per store:
-  - `saml/sp/storage/memory` never purges (development and tests only);
+  - `saml/sp/storage/memory` (development, tests and single-instance
+    demos) sweeps the expired records every 64 writes on its clock — give
+    it the SP's with `memory.WithClock` when that is not `time.Now`; it
+    holds the login rate times `TransactionTTL`, so rate-limit
+    `BeginLogin`;
   - `saml/sp/store/sql` ships no job, and its package documentation gives
     the cleanup statements;
   - `saml/sp/store/redis` uses key expiry, so Redis must run with

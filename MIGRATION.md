@@ -2620,3 +2620,23 @@ To migrate:
 2. If logins of some users now fail with `ErrInvalidAssertion` ("missing or
    empty NameID"), fix the IdP's NameID source for them: those users shared
    one identity before.
+
+### `saml/sp/storage/memory`: expired records are swept
+
+The in-memory SAML store kept every transaction and replay mark for the
+process lifetime. It now deletes the expired ones every 64 writes, judging
+expiry on its own clock: `time.Now` unless `memory.WithClock` says
+otherwise. `memory.New()` keeps compiling (`New(opts ...Option)`).
+
+| | Before | After |
+| --- | --- | --- |
+| a transaction or replay mark past its expiry | kept | deleted at a later sweep: a lookup answers `ErrTransactionNotFound` instead of the record (which the SP refused as expired anyway) |
+| a ServiceProvider whose `Config.Now` is not `time.Now` (tests with a fixed clock) | no effect on the store | records the store's clock sees as expired are swept |
+
+To migrate:
+
+1. Nothing for an application whose SP clock is `time.Now`.
+2. Where `Config.Now` is another clock — typically a test clock fixed in
+   the past — build the store with the same clock:
+   `memory.New(memory.WithClock(cfg.Now))`. Otherwise a test that makes
+   more than 64 writes to one store can lose its live logins.

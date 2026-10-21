@@ -135,7 +135,9 @@ func newServer(cfg appConfig) (http.Handler, error) {
 		return conn, nil
 	})
 
-	store := memory.New() // swap for sqlstore / redisstore in production
+	// Swap for sqlstore / redisstore in production. The memory store sweeps
+	// expired records on the SP's clock.
+	store := memory.New(memory.WithClock(cfg.now))
 
 	sp, err := samlsp.New(samlsp.Config{
 		Connections:     connections,

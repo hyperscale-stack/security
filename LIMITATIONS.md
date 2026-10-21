@@ -421,6 +421,10 @@ PKCE. Not supported, and refused where a provider could select them:
   idle connection is refreshed at its next login. A document that expires
   is refreshed at once but at most once per `RetryInterval`, so a document
   valid for less than that fails closed for the rest of the interval.
+  While refreshes fail, the last good document — and a key the IdP has
+  withdrawn since — is used for up to `MaxStale` (7 days by default, never
+  past its `validUntil`); lower it, down to `MaxRefresh`, to shorten that
+  window.
 - **Legal but ambiguous responses are refused** — several assertions,
   `SubjectConfirmation`s or `AuthnStatement`s, an assertion without
   `NameID`, a Response without `Issuer`. Configure the IdP to send one
@@ -497,9 +501,11 @@ PKCE. Not supported, and refused where a provider could select them:
   the ACS URL's host and reads no forwarding header: behind a proxy that
   rewrites `Host`, forward the original, or pass `CompleteLogin` a copy of
   the request whose `Host` comes from the trusted proxy's header.
-- **Stores** — `saml/sp/storage/memory` never purges anything (development
-  and tests only); `saml/sp/store/sql` ships no expiry job (its package
-  documentation gives the cleanup statements). CI runs the stores on
+- **Stores** — `saml/sp/storage/memory` (development and tests) sweeps its
+  expired records every 64 writes on its own clock (`memory.WithClock`) and
+  is otherwise unbounded: it holds the login rate times `TransactionTTL`.
+  `saml/sp/store/sql` ships no expiry job (its package documentation gives
+  the cleanup statements). CI runs the stores on
   SQLite and miniredis, and (`make test-backends`) their races,
   conformance suite and payload round trip on PostgreSQL 16.15, MySQL
   8.0.46 (end of life since April 2026) and Redis 7.4.11
