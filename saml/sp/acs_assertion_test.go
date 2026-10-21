@@ -425,10 +425,20 @@ func TestCompleteLogin_NameID(t *testing.T) {
 		av.AddChild(child(av, "NameID").Copy())
 	}), samlsp.ErrInvalidAssertion) // two NameIDs in one AttributeValue (review F6)
 
-	// Whitespace is preserved, never trimmed.
-	res, err := flow(t, newEnv(t), onAssertion(func(a *etree.Element) { nid(a).SetText(" alice ") }))
-	require.NoError(t, err)
-	assert.Equal(t, " alice ", res.Identity.NameID.Value)
+	// A NameID made only of white space or invisible characters (Unicode
+	// Cc, Cf) is as empty as "" (audit I-18): users whose IdP-side source
+	// is blank would share one account.
+	for _, blank := range []string{" ", "\t", "\n  \n", "\u00a0", "\u3000", "\u0085", "\u009f", "\u200b", "\ufeff", "\u2060", "\u00ad", " \u200b\t"} {
+		rejectConsumed(t, onAssertion(func(a *etree.Element) { nid(a).SetText(blank) }), samlsp.ErrInvalidAssertion)
+	}
+
+	// Values are never trimmed: white space and invisible characters
+	// around a visible one are kept.
+	for _, v := range []string{" alice ", "alice\u200b"} {
+		res, err := flow(t, newEnv(t), onAssertion(func(a *etree.Element) { nid(a).SetText(v) }))
+		require.NoError(t, err, "%q", v)
+		assert.Equal(t, v, res.Identity.NameID.Value)
+	}
 }
 
 func TestCompleteLogin_NameIDFormatPolicy(t *testing.T) {

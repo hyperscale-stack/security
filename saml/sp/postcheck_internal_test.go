@@ -116,6 +116,7 @@ func TestVerified_DefenceInDepth(t *testing.T) {
 		{"no AuthnStatement", func(v *verified) { a(v).AuthnStatement = nil }, ErrInvalidAssertion},
 		{"no AuthnInstant", func(v *verified) { a(v).AuthnStatement.AuthnInstant = nil }, ErrInvalidAssertion},
 		{"no NameID", func(v *verified) { a(v).Subject.NameID = nil }, ErrInvalidAssertion},
+		{"blank NameID", func(v *verified) { a(v).Subject.NameID.Value = " \u200b\t" }, ErrInvalidAssertion},
 	}
 
 	for _, tc := range cases {

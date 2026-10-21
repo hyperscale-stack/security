@@ -1239,6 +1239,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ClientStore` read as an unknown client — `invalid_client`, which tells a
   client its credentials are wrong — although the `ClientAuthenticator`
   contract asked to return store failures as such.
+- `samlsp.New` accepted a `TransactionTTL` with a sub-second part, with
+  which every `BeginLogin` then failed (the stores keep expiries to the
+  second); it now refuses it with `ErrInvalidConfig`.
 
 ### Removed
 
@@ -2008,3 +2011,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only, matched by namespace.
   See MIGRATION.md: keep only the signing certificate, never a CA in a
   descriptor of its own.
+- `saml/sp` accepted a NameID made only of white space, or of invisible
+  characters such as a zero-width space, while it refused an empty one: a
+  misbehaving IdP could collapse users onto one account. Such a NameID is
+  now refused with `ErrInvalidAssertion`; values are still never trimmed.

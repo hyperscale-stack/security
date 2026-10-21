@@ -2597,3 +2597,26 @@ To migrate:
    copy with `ParseIdentityProviderMetadata` and follow the IdP's key
    rollovers by hand, or have the IdP publish its signing certificate
    alone.
+
+### `saml/sp`: blank NameIDs and sub-second `TransactionTTL`s are refused
+
+A NameID made only of white space (`" "`, a tab, a no-break space…) or of
+invisible characters (a zero-width space, a byte order mark, a soft hyphen —
+Unicode control and format characters) was accepted, while an empty one was
+refused; a misbehaving IdP could thereby collapse users onto one account. A
+`TransactionTTL` with a sub-second part passed `New`, then every
+`BeginLogin` failed, the stores keeping expiries to the second.
+
+| | Before | After |
+| --- | --- | --- |
+| NameID `""` | `ErrInvalidAssertion` | unchanged |
+| NameID made only of white space or invisible characters | accepted, as is | `ErrInvalidAssertion` |
+| NameID with visible characters and surrounding white space (`" alice "`) | accepted, untrimmed | unchanged |
+| `Config.TransactionTTL` such as `1500 * time.Millisecond` | `New` succeeds, every `BeginLogin` fails (`ErrInvalidStoreRecord`) | `New` fails with `ErrInvalidConfig` |
+
+To migrate:
+
+1. Give `TransactionTTL` in whole seconds.
+2. If logins of some users now fail with `ErrInvalidAssertion` ("missing or
+   empty NameID"), fix the IdP's NameID source for them: those users shared
+   one identity before.

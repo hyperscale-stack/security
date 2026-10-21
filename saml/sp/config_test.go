@@ -51,6 +51,9 @@ func TestNew_ValidatesConfig(t *testing.T) {
 		}},
 		{"TTL below 1s", func(c *samlsp.Config) { c.TransactionTTL = time.Millisecond }},
 		{"TTL above max", func(c *samlsp.Config) { c.TransactionTTL = samlsp.MaxTransactionTTL + time.Second }},
+		// Stores keep whole-second expiries (ValidateExpiry): audit I-19.
+		{"TTL with a sub-second part", func(c *samlsp.Config) { c.TransactionTTL = 1500 * time.Millisecond }},
+		{"TTL one nanosecond over a second", func(c *samlsp.Config) { c.TransactionTTL = time.Second + time.Nanosecond }},
 		{"negative skew", func(c *samlsp.Config) { c.ClockSkew = -time.Second }},
 		{"skew above max", func(c *samlsp.Config) { c.ClockSkew = samlsp.MaxClockSkew + time.Second }},
 		{"response size too small", func(c *samlsp.Config) { c.MaxResponseSize = samlsp.MinMaxResponseSize - 1 }},
@@ -136,6 +139,7 @@ func TestNew_AcceptsBoundsAndDefaults(t *testing.T) {
 			c.MaxResponseSize = samlsp.MinMaxResponseSize
 			c.MetadataCacheDuration = time.Minute
 		}},
+		{"TTL of whole seconds that are not whole minutes", func(c *samlsp.Config) { c.TransactionTTL = 90 * time.Second }},
 		{"custom cookie", func(c *samlsp.Config) { c.CookieName = "__Host-tenant-sso" }},
 		{"four transaction keys of the minimum size", func(c *samlsp.Config) {
 			c.TransactionKeys = [][]byte{make([]byte, 32), make([]byte, 32), make([]byte, 32), make([]byte, 32)}

@@ -80,7 +80,7 @@ Trust comes from the connection only: the pinned IdP entity ID and its 1 to
 | `InResponseTo` | the bearer `SubjectConfirmationData` (required; absent means unsolicited) and, on a Success, the Response (required, Core §3.2.2) | the request ID of the browser's transaction |
 | `Recipient` | bearer `SubjectConfirmationData` | the connection's ACS URL |
 | `Audience` | every `AudienceRestriction` (at least one) | each names the connection's SP entity ID |
-| `NameID` | `Subject` (exactly one, never `BaseID`) | its format, when the connection requests one |
+| `NameID` | `Subject` (exactly one, never `BaseID`, never blank) | its format, when the connection requests one |
 
 ### 3.2 Algorithms and keys
 
@@ -107,7 +107,7 @@ and `skew` the clock skew:
 | `AuthnInstant` | `AuthnInstant ≤ now + skew`; with `ForceAuthn`, also `AuthnInstant ≥ request start − skew` |
 | `SessionNotOnOrAfter` | `now < SessionNotOnOrAfter + skew` |
 | IdP certificate validity | checked at `now − skew`: from `NotBefore + skew` to `NotAfter + skew` |
-| Transaction | `now` before the transaction's expiry (`TransactionTTL`, 10 minutes by default, 1 hour at most) |
+| Transaction | `now` before the transaction's expiry (`TransactionTTL`: whole seconds, 10 minutes by default, 1 hour at most) |
 
 A certificate whose validity starts when the IdP switches to it is refused
 for the first `ClockSkew`: import new certificates ahead of their use. The
@@ -242,7 +242,11 @@ global name.
   chosen by a tenant.
 - An absent `NameQualifier` stands for the issuer, and an absent
   `SPNameQualifier` for the SP entity ID (`Identity.Audience`).
-- Values are compared exactly, with no trimming or case folding.
+- Values are compared exactly, with no trimming or case folding. A NameID
+  that is empty, or made only of white space and invisible characters
+  (Unicode control and format characters: zero-width spaces, byte order
+  mark, soft hyphen…), is refused with `ErrInvalidAssertion`: users whose
+  IdP-side source attribute is blank would share one account.
 - Encode the key without ambiguity: a connection ID or a value may contain
   any separator. Length-prefix each field, as `accountKey` in
   `examples/saml-sp` does (`<len>:<field>;` for each), or store the SHA-256
@@ -555,7 +559,7 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | `ErrMalformedResponse`, `ErrInvalidAssertion`, `ErrMalformedRequest` | a response shape the SP refuses (several assertions, an unknown condition, a non-POST request) | configure the IdP to send one assertion with a persistent NameID |
 | `*StatusError` (`ErrResponseStatus`) | the IdP refused: `NoPassive` (an `IsPassive` login without a session), `AuthnFailed`, `RequestDenied`, `InvalidNameIDPolicy` | per status; its `AppState` and `ConnectionID` identify the login |
 | `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; a signing `KeyDescriptor` carrying several certificates (a chain) or two `KeyInfo`; refreshes have failed for `MaxStale` (watch the `samlsp.FetchMetadata` span errors) | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID; keep only the certificate the IdP signs with — never move a CA or intermediate certificate into a descriptor of its own (see [§3.4](#34-metadata-trust)) |
-| `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; the IdP wants signed requests and the SP has no key | configure the transaction keys; configure `SigningKey` and `SigningCertificate` |
+| `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; a `TransactionTTL` with a sub-second part; the IdP wants signed requests and the SP has no key | configure the transaction keys; give `TransactionTTL` in whole seconds; configure `SigningKey` and `SigningCertificate` |
 
 ## 9. Testing your integration
 

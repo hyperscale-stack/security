@@ -5,7 +5,9 @@
 package samlsp
 
 import (
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/russellhaering/gosaml2/types"
 )
@@ -259,11 +261,15 @@ func classRef(st *types.AuthnStatement) string {
 	return st.AuthnContext.AuthnContextClassRef.Value
 }
 
-// checkNameID requires a non-empty NameID in the requested format, when one
-// was requested (Core §3.4.1.1).
+// checkNameID requires a NameID that is not blank, in the requested format
+// when one was requested (Core §3.4.1.1). Blank — empty, or only white
+// space and invisible characters — is this package's policy (Core §2.2.2
+// types NameID as a mere string): users whose IdP-side source attribute is
+// blank would otherwise share one account. The value itself is never
+// trimmed.
 func (v *verified) checkNameID(a *types.Assertion) error {
 	nid := a.Subject.NameID
-	if nid == nil || nid.Value == "" {
+	if nid == nil || isBlank(nid.Value) {
 		return reject(ErrInvalidAssertion, "missing or empty NameID", nil)
 	}
 
@@ -272,6 +278,16 @@ func (v *verified) checkNameID(a *types.Assertion) error {
 	}
 
 	return nil
+}
+
+// isBlank reports whether s holds nothing visible: only Unicode white space
+// (Zs, Zl, Zp, tab, line breaks, NEL) and control or format characters (Cc,
+// Cf: zero-width spaces and joiners, word joiner, byte order mark, soft
+// hyphen, bidi controls).
+func isBlank(s string) bool {
+	return strings.TrimFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.In(r, unicode.Cc, unicode.Cf)
+	}) == ""
 }
 
 // identity builds the verified identity.

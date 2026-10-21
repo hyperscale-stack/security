@@ -61,7 +61,9 @@ type Identity struct {
 // NameID is the asserted subject identifier (Core §2.2.3), preserved
 // exactly: no trimming, no case folding.
 type NameID struct {
-	// Value is the identifier.
+	// Value is the identifier, never blank: a NameID that is empty or made
+	// only of white space and invisible characters (Unicode Cc, Cf) is
+	// refused with ErrInvalidAssertion. Surrounding white space is kept.
 	Value string
 	// Format is the NameID format URI ("" when absent, meaning unspecified).
 	Format string
