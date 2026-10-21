@@ -559,6 +559,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   receives the value of every security-pipeline panic the interceptors
   recover (the value may hold a credential: it is the application's to
   log or report); a panic of the handler is ignored.
+    the error classes sees the new `too_many_attempts` class.
+- **`oidcclient.Config.RequireIssParameter`**: declares that the provider
+  sends the RFC 9207 `iss` parameter in every authorization response
+  (RFC 9207 §2.4, "according to the client's configuration"): a response
+  without it is refused (`ErrIssuerParameter`). Set on every connection a
+  tenant configures, it closes the mix-up that distinct redirect URIs
+  leave open (RFC 9700 §4.4.2.2) for applications working only with
+  providers that send `iss`; it also admits a provider that sends `iss`
+  without advertising it.
 
 - `oauth2.ServerConfig.AllowInsecureLoopbackIssuer` (development only: an
   http issuer on localhost or a loopback IP address), the
@@ -1047,6 +1056,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   id_token_signed_response_alg parameter during Registration". A provider
   signing with ES256, PS256, EdDSA… needs `Config.Algorithms` set to that
   algorithm; the errors say so.
+- `oidc/client` discards an authorization response carrying `iss` from a
+  provider that does not advertise
+  `authorization_response_iss_parameter_supported` (`ErrIssuerParameter`,
+  RFC 9207 §2.4: "Clients SHOULD discard…"); a matching `iss` used to be
+  accepted. Breaking for a provider that sends `iss` without advertising
+  it: set `Config.RequireIssParameter` (see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in

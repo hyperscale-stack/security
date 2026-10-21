@@ -295,6 +295,14 @@ PKCE. Not supported, and refused where a provider could select them:
   run time. One exception: a public client (`none`) requires the provider
   to advertise S256 in `code_challenge_methods_supported`, which some
   providers omit although they support it.
+- **RFC 9207 `iss` policy** — a response carrying `iss` from a provider
+  that does not advertise `authorization_response_iss_parameter_supported`
+  is discarded (`ErrIssuerParameter`, RFC 9207 §2.4) unless
+  `Config.RequireIssParameter` declares that the provider sends it. Without
+  `RequireIssParameter` on every connection, distinct redirect URIs remain
+  the only mix-up defense against a provider that sends no `iss`, with the
+  gap RFC 9700 §4.4.2.2 names (docs/oidc-client.md, "Connections and
+  redirect URIs").
 - **ID Tokens are expected in RS256** — the default of OpenID Connect Core
   §3.1.3.7 step 7: a provider signing with another algorithm fails every
   login (`ErrIDTokenAlgorithm`, or `ErrInvalidMetadata` at `New` when it

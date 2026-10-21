@@ -29,6 +29,14 @@ type attackerAS struct {
 func newAttackerAS(t *testing.T, divert func(q url.Values) string) *attackerAS {
 	t.Helper()
 
+	return newAttackerASAdvertising(t, false, divert)
+}
+
+// newAttackerASAdvertising is newAttackerAS whose metadata advertises RFC
+// 9207 (authorization_response_iss_parameter_supported) when iss is true.
+func newAttackerASAdvertising(t *testing.T, iss bool, divert func(q url.Values) string) *attackerAS {
+	t.Helper()
+
 	a := &attackerAS{divert: divert}
 	mux := http.NewServeMux()
 
@@ -39,6 +47,10 @@ func newAttackerAS(t *testing.T, divert func(q url.Values) string) *attackerAS {
 			"response_types_supported": []string{"code"}, "subject_types_supported": []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"code_challenge_methods_supported":      []string{"S256"},
+		}
+
+		if iss {
+			doc["authorization_response_iss_parameter_supported"] = true
 		}
 
 		w.Header().Set("Content-Type", "application/json")

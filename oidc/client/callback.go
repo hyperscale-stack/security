@@ -114,8 +114,10 @@ type authorizationResponse struct {
 //     used — else ErrTransactionIntegrity;
 //  4. it must belong to this connection, issuer, client, redirect URI and
 //     response mode — else ErrTransactionMismatch — and be unexpired;
-//  5. the RFC 9207 iss parameter must be the issuer when present, and is
-//     required when the provider advertises it — else ErrIssuerParameter;
+//  5. the RFC 9207 iss parameter (§2.4) is required, and must be the
+//     issuer, when the provider advertises it or Config.RequireIssParameter
+//     is set; from another provider a response carrying iss is discarded —
+//     else ErrIssuerParameter;
 //  6. an error response becomes an *AuthorizationError;
 //  7. the code is redeemed with the PKCE verifier (RFC 7636 §4.5), the
 //     token response parsed strictly, the ID Token validated (OpenID Connect
@@ -306,22 +308,27 @@ func (c *Client) checkTransaction(tx *Transaction, now time.Time) error {
 	return nil
 }
 
-// checkIssuerParameter applies RFC 9207 §2.4: when present, iss must be
-// the issuer (simple string comparison), errors included; it is required
-// when the provider advertises authorization_response_iss_parameter_supported.
-// A matching iss from a provider that does not advertise it is accepted —
-// the local policy §2.4 leaves open.
+// checkIssuerParameter applies RFC 9207 §2.4, errors included. The
+// provider supports iss when its metadata advertises
+// authorization_response_iss_parameter_supported or Config.RequireIssParameter
+// says so ("according to the client's configuration"): iss is then
+// required and must be the issuer (simple string comparison). From a
+// provider that does not, a response carrying iss is discarded ("Clients
+// SHOULD discard authorization responses with the iss parameter from
+// authorization servers that do not indicate their support").
 func (c *Client) checkIssuerParameter(resp authorizationResponse) error {
-	if resp.hasIss {
-		if resp.iss != c.md.Issuer {
-			return fmt.Errorf("%w: iss of another issuer", ErrIssuerParameter)
-		}
+	supported := c.md.AuthorizationResponseIssParameterSupported || c.cfg.RequireIssParameter
 
-		return nil
-	}
-
-	if c.md.AuthorizationResponseIssParameterSupported {
+	switch {
+	case !resp.hasIss && supported:
 		return fmt.Errorf("%w: iss missing although the provider sends it", ErrIssuerParameter)
+	case !resp.hasIss:
+		return nil
+	case !supported:
+		return fmt.Errorf("%w: iss from a provider that does not advertise authorization_response_iss_parameter_supported "+
+			"(set Config.RequireIssParameter if it sends iss in every response)", ErrIssuerParameter)
+	case resp.iss != c.md.Issuer:
+		return fmt.Errorf("%w: iss of another issuer", ErrIssuerParameter)
 	}
 
 	return nil

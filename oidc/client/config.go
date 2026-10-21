@@ -214,6 +214,30 @@ type Config struct {
 	// tenant, log these errors and show the tenant a generic message.
 	Outbound outbound.Policy
 
+	// RequireIssParameter declares that the provider sends the RFC 9207 iss
+	// parameter in every authorization response, whatever its metadata
+	// says — RFC 9207 §2.4, "according to the client's configuration".
+	// Complete then refuses a response without iss, errors included, with
+	// ErrIssuerParameter, and compares the iss of the others with the
+	// issuer. Without it, iss is required when the provider advertises
+	// authorization_response_iss_parameter_supported, and a response
+	// carrying iss from a provider that does not is refused (RFC 9207 §2.4:
+	// "Clients SHOULD discard authorization responses with the iss
+	// parameter from authorization servers that do not indicate their
+	// support"): set it for a provider that sends iss without advertising
+	// it.
+	//
+	// It protects the connection that receives the response. The mix-up
+	// that distinct redirect URIs leave open (RFC 9700 §4.4.2.2) sends the
+	// honest provider's response, without iss, to the callback of a
+	// connection whose provider is the attacker's: only that connection
+	// requiring iss refuses it. An application whose tenants configure
+	// providers therefore sets it on every tenant connection — the
+	// application's setting, never the tenant's — and then works only with
+	// providers that send iss (RFC 9207 §2.4: clients "MAY … exclusively
+	// support authorization servers that provide the iss parameter").
+	RequireIssParameter bool
+
 	// InsecureCookies makes the net/http helpers set the binding cookie
 	// without the __Host- prefix and the Secure attribute, for local
 	// development over plain http. New refuses it unless RedirectURL is

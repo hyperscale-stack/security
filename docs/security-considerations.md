@@ -1415,12 +1415,17 @@ are attacker-influenced.
   port, path or query parameter): `Complete` refuses a response received on
   another URL than the connection's redirect URI, and a transaction of
   another connection, issuer, client, redirect URI or response mode. A
-  provider advertising RFC 9207 must also send the `iss` parameter,
-  compared with its issuer. Never route callbacks by the state value.
+  provider advertising RFC 9207 — or declared to send it with
+  `Config.RequireIssParameter` — must also send the `iss` parameter,
+  compared with its issuer; a response carrying `iss` from another provider
+  is discarded (RFC 9207 §2.4). Never route callbacks by the state value.
   Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names — an
   attacker registering, at the honest provider, a client with the redirect
-  URI of its own connection; RFC 9207 closes it, so prefer providers that
-  support it. Behind a reverse proxy, `HandleCallback` compares the Host
+  URI of its own connection, so that the honest response lands on the
+  attacker's connection. `RequireIssParameter` closes it on the connection
+  that receives the response: set it on every connection a tenant
+  configures (the application's setting, never the tenant's), and work only
+  with providers that send `iss`. Behind a reverse proxy, `HandleCallback` compares the Host
   header the proxy forwards: preserve it, or give `Complete` the public
   URL.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything

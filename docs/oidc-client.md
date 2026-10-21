@@ -51,8 +51,8 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | No parameter twice                  | RFC 6749 §3.1                       | The authorization endpoint's query is kept; `ExtraParams` may not repeat a parameter the client sends, one of that query or each other — names compared case-insensitively, `.` read as `_` (servers such as ASP.NET and PHP read them so); `New` refuses an endpoint query that does | `TestBeginSendsEveryParameterOnce`, `TestBeginRefusesOtherSpellingsOfReservedParams`, `TestBeginRefusesParamsOfTheEndpointQuery`, `TestEndpointURLs` |
 | `acr_values`                        | Core §3.1.2.1, §2                   | Sent as given; the ID Token's `acr` must then be one of them (a provider ignoring them fails the login)                                                                 | `TestIDTokenACR`, stack: `TestACRValuesThroughTheClient`, rp: `TestZitadelACRValues`                     |
 | Authorization errors                | RFC 6749 §4.1.2.1, Core §3.1.2.6    | `AuthorizationError` with the provider's code; nothing redeemed                                                                                                         | `TestCompleteAuthorizationError`, stack: `TestPromptNoneThroughTheClient`, `TestConsentDeniedThroughTheClient` |
-| RFC 9207 `iss`                      | RFC 9207                            | Compared when present; required when the provider advertises it                                                                                                        | `TestCompleteIssParameter`, stack: `TestMixUpBetweenIssuersOfOneProvider`                                |
-| Mix-up defense                      | RFC 9700 §4.4                       | The response must arrive on the connection's own redirect URI, for a transaction of that connection, issuer, client, redirect URI and response mode                      | `TestCompleteMixUp`, `TestCompleteTransactionMismatch`, stack: `TestMixUpWithAnAttackerProvider`, `TestMixUpResidualWithoutRFC9207` |
+| RFC 9207 `iss`                      | RFC 9207 §2.4                       | Required and compared when the provider advertises it or `Config.RequireIssParameter` is set; from another provider a response carrying `iss` is discarded             | `TestCompleteIssParameter`, stack: `TestMixUpBetweenIssuersOfOneProvider`                                |
+| Mix-up defense                      | RFC 9700 §4.4                       | The response must arrive on the connection's own redirect URI, for a transaction of that connection, issuer, client, redirect URI and response mode; `RequireIssParameter` closes the §4.4.2.2 residual | `TestCompleteMixUp`, `TestCompleteTransactionMismatch`, stack: `TestMixUpWithAnAttackerProvider`, `TestMixUpResidualWithoutRFC9207`, `TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual` |
 | Implicit and hybrid flows, PAR, request objects, `claims` parameter | Core §3.2, §3.3, §6, §5.5; RFC 9126 | Not supported                                                                                                       | —                                                                                                        |
 
 ### Tokens and claims
@@ -138,15 +138,23 @@ connection's — this is the mix-up defense (RFC 9700 §4.4.2): `Complete`
 refuses a response received on another URL, or carrying a transaction of
 another connection, issuer or client (`ErrTransactionMismatch`). Never route
 callbacks by the state value. A provider advertising RFC 9207 is
-additionally checked on `iss` (`ErrIssuerParameter`). One gap remains, the
-one RFC 9700 §4.4.2.2 names: when the honest provider does not send `iss`
-and an attacker registered, at that provider, a client whose redirect URI is
-the attacker connection's callback, nothing tells the responses apart —
-`stack: TestMixUpResidualWithoutRFC9207` shows the honest code reaching the
-attacker's token endpoint. Prefer providers that support RFC 9207, never
-register a connection's redirect URI at another provider, and on a
-multi-tenant provider use the tenant's own issuer (one registration valid
-at several issuers defeats the distinct redirect URIs).
+additionally checked on `iss` (`ErrIssuerParameter`); a response carrying
+`iss` from a provider that does not advertise it is discarded (RFC 9207
+§2.4), unless `Config.RequireIssParameter` declares that the provider sends
+it. Distinct redirect URIs leave the gap RFC 9700 §4.4.2.2 names: when the
+honest provider does not send `iss` and an attacker registered, at that
+provider, a client whose redirect URI is the attacker connection's
+callback, the response lands on the attacker connection and nothing tells
+it apart — `stack: TestMixUpResidualWithoutRFC9207` shows the honest code
+reaching the attacker's token endpoint. `Config.RequireIssParameter` closes
+it on the connection that receives the response
+(`stack: TestRequireIssParameterOnTheReceivingConnectionClosesTheResidual`):
+an application whose tenants configure providers sets it on every tenant
+connection — its own setting, never the tenant's — and then works only with
+providers that send `iss`. Otherwise, never register a connection's
+redirect URI at another provider, and on a multi-tenant provider use the
+tenant's own issuer (one registration valid at several issuers defeats the
+distinct redirect URIs).
 
 ### Callback and session
 

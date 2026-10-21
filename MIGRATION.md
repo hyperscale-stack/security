@@ -3104,3 +3104,37 @@ To migrate:
 2. For any algorithm but RS256, set `Config.Algorithms` to it, for example
    `[]oidcclient.Algorithm{oidcclient.ES256}`. List two only while the
    provider moves from one to the other.
+
+### `oidc/client`: the RFC 9207 `iss` policy and `Config.RequireIssParameter`
+
+RFC 9207 §2.4: "Clients SHOULD discard authorization responses with the iss
+parameter from authorization servers that do not indicate their support for
+the parameter", and they "MUST reject authorization responses without the
+iss parameter from authorization servers that do support the parameter
+according to the client's configuration". The client accepted a matching
+`iss` from a provider that did not advertise
+`authorization_response_iss_parameter_supported`, and had no configuration
+saying that a provider sends `iss`.
+
+| Authorization response | Provider advertises RFC 9207 | `RequireIssParameter` | Before | After |
+| --- | --- | --- | --- | --- |
+| `iss` = issuer | yes | — | accepted | unchanged |
+| `iss` = issuer | no | false (default) | accepted | `ErrIssuerParameter` |
+| `iss` = issuer | no | true | — | accepted |
+| no `iss` | yes | — | `ErrIssuerParameter` | unchanged |
+| no `iss` | no | false (default) | accepted | unchanged |
+| no `iss` | no | true | — | `ErrIssuerParameter` |
+| `iss` ≠ issuer | any | any | `ErrIssuerParameter` | unchanged |
+
+To migrate:
+
+1. Nothing for a provider that advertises RFC 9207, or that sends no `iss`.
+2. Symptom: every login of a connection fails with `ErrIssuerParameter`
+   and the text "iss from a provider that does not advertise
+   authorization_response_iss_parameter_supported": the provider sends
+   `iss` without advertising it. Set `RequireIssParameter: true` on that
+   connection.
+3. An application whose tenants configure providers sets
+   `RequireIssParameter: true` on every tenant connection — its own
+   setting, never one the tenant chooses — to close the mix-up residual of
+   RFC 9700 §4.4.2.2; it then works only with providers that send `iss`.

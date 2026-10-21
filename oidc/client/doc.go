@@ -69,8 +69,11 @@
 //     redirect URI — distinct from every other connection's by scheme,
 //     host, port, path or query parameter — and Complete refuses a response
 //     received on another URL than the connection's. Providers that
-//     advertise RFC 9207 are additionally checked on the iss parameter.
-//     Never route callbacks by the state value.
+//     advertise RFC 9207, or that Config.RequireIssParameter declares, are
+//     additionally checked on the iss parameter, which closes the residual
+//     of distinct redirect URIs (RFC 9700 §4.4.2.2) on the connection that
+//     receives the response; an iss from another provider is discarded
+//     (RFC 9207 §2.4). Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
 //   - Every credential — the client secret, the transaction keys, the
