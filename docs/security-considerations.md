@@ -1290,8 +1290,11 @@ session store to compromise or scale.
   `Secure`.
 - **Shadowing cookies** — when a request carries several cookies of the
   session's name and more than one opens as a valid session, it has no
-  session: a tossed cookie can deny a session (until it expires), never
-  swap it. Copies of one session count as several — they can differ, as a
+  session: a tossed cookie next to the user's own denies it (until it
+  expires). A browser without a session of its own carries the tossed
+  cookie alone and is signed into the planted session — login CSRF —:
+  with a name that is not `__Host-` (a `Domain`, another `Path`), a sibling
+  host can do that, so keep the default name wherever possible. Copies of one session count as several — they can differ, as a
   copy planted before a sign-in without `Rotate` does — while expired or
   undecodable ones do not count. With the default `__Host-` name no other
   host can toss one at all. Stale duplicates have the same effect: after

@@ -566,10 +566,14 @@ PKCE. Not supported, and refused where a provider could select them:
   401 to list several challenges, but a client is only told about that
   scheme. Use one middleware per scheme, or a custom `ErrorMapper` that
   writes every challenge.
-- **Basic credentials are not NFC-normalized yet** — a Basic challenge
-  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 also says the server
-  expects the user-id and password in Unicode Normalization Form C; `basic`
-  checks them as received.
+- **Basic credentials are not NFC-normalized** — a Basic challenge
+  advertises `charset="UTF-8"`, which per RFC 7617 §2.1 says the server
+  expects the user-id and password in Unicode Normalization Form C: clients
+  are to send them normalized, and `basic` checks them as received. The
+  dependency policy keeps `basic` and `password` off `golang.org/x/text`:
+  normalize passwords with the hasher decorator of the `password` package
+  documentation, user-ids in your `UserLoader` — and the attempt-limiter
+  subject alike (`basic.WithAttemptSubject`).
 
 ## Attempt limiting
 
@@ -638,8 +642,10 @@ PKCE. Not supported, and refused where a provider could select them:
   given, so a password typed in NFD on one device and NFC on another does
   not verify. NIST SP 800-63B-4 §3.1.1.2 says verifiers SHOULD apply NFC:
   wrap the hasher in the decorator shown in the `password` package
-  documentation (it needs `golang.org/x/text`, which the module does not
-  depend on).
+  documentation. Not built in: normalization needs `golang.org/x/text`,
+  which the dependency policy keeps out of `password`, and normalizing by
+  default would stop verifying the hashes of systems that never
+  normalized.
 - **bcrypt: 72 bytes** — longer passwords are refused (`ErrPasswordTooLong`),
   which caps passwords of multi-byte characters below the 64 characters
   SP 800-63B-4 asks verifiers to permit. Hashes imported from an
@@ -648,19 +654,24 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## Sessions
 
-- The session module is stateless: the whole session lives in an encrypted
-  cookie, there is no server-side session store. A session can be revoked
-  before its cookie expires only through `session.WithValidator` checking a
-  store of the application's (no Redis/SQL store is shipped); otherwise a
-  copy of the cookie stays valid until its deadline, `Logout` deleting the
-  browser's copy only.
+- The session module is stateless by design: the whole session lives in an
+  encrypted cookie, there is no server-side session store. A session can be
+  revoked before its cookie expires only through `session.WithValidator`
+  checking a store of the application's (no Redis/SQL store is shipped):
+  record a fingerprint of the session ID at logout, or a "valid since"
+  time per user, and refuse the sessions that match (OWASP ASVS V3.3).
+  Otherwise a copy of the cookie stays valid until its deadline, `Logout`
+  deleting the browser's copy only.
 - With a cookie name that is not `__Host-` (a `Domain`, another `Path`,
-  plain HTTP), a sibling host can plant a cookie of the session's name: the
-  request then carries two valid sessions and has none until that cookie
-  expires (denial, never a swap). The default `__Host-session` prevents it.
+  plain HTTP), a sibling host can plant a cookie of the session's name. A
+  signed-in browser then carries two valid sessions and has none until that
+  cookie expires (denial); a signed-out browser carries only the planted
+  one and is signed into the attacker's account (login CSRF). The default
+  `__Host-session` prevents both.
 - One active session key seals at most 2^32 cookies (random GCM nonces,
-  NIST SP 800-38D §8.3): the library does not count seals across
-  instances — rotate the key by volume.
+  NIST SP 800-38D §8.3): the library does not count seals — a per-process
+  count would miss the other instances — so rotate the key by volume
+  (about 50 days at 1 000 cookie writes per second).
 - The session cookie is read through `httpsec.Carrier` (its
   `CookiesNamed` accessor). The `grpcsec` and `connectrpcsec` carriers expose
   no cookies: a cookie session does not authenticate gRPC or ConnectRPC

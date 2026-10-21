@@ -1321,6 +1321,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the security pipeline and answer `Internal`, with a `panic recovered`
   span event that never holds the panic value. The handler's own panics
   are not recovered.
+- Documentation: a cookie tossed by a sibling host — with a session cookie
+  name that is not `__Host-` — does not only deny a session: a signed-out
+  browser carrying it alone is signed into the planted session (login
+  CSRF). `LIMITATIONS.md`, the `session` godoc and the security
+  considerations said "denial, never a swap"; a test pins the behaviour.
+  The NFC, revocation and key-volume limitations now give their reasons.
 
 ### Removed
 
