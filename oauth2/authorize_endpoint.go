@@ -1155,7 +1155,8 @@ func (s *Server) issueAuthorizationCode(
 }
 
 // issueImplicitToken mints an access token, persists it, and redirects it
-// back in the URL fragment (RFC 6749 §4.2.2).
+// back in the URL fragment (RFC 6749 §4.2.2) — never one whose subject is
+// the client's ID ([ErrSubjectIsClient]).
 func (s *Server) issueImplicitToken(
 	cfg AuthorizeConfig,
 	w http.ResponseWriter,
@@ -1163,6 +1164,12 @@ func (s *Server) issueImplicitToken(
 	st *authorizeState,
 	grant authorizedGrant,
 ) {
+	if grant.subject == st.clientID {
+		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(ErrSubjectIsClient))
+
+		return
+	}
+
 	raw, hash, err := cfg.ImplicitTokens.Generate(r.Context())
 	if err != nil {
 		s.refuseAuthorize(w, r, st, ErrServerError.WithCause(err))
