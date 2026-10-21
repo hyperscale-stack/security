@@ -579,7 +579,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   loopback-issuer setting to both configurations, sets `AdvertiseJWKSURI`
   and gives the server its OpenID Connect scopes followed by the
   deployment's own.
-
 - `CheckDeployment(ctx)` and `ErrDeploymentRequirement` on
   `oauth2/store/sql`, `oidc/client/store/sql`, `saml/sp/store/sql` and
   `oauth2/store/redis`: the deployment requirements of each package
@@ -1172,7 +1171,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and validates its configured redirect URI with `ValidateRedirectURI` at
   startup, and `e2e/oidc` runs the relying party on `127.0.0.1` and the
   provider on `localhost`.
-
 - **The SQL stores' `Migrate` checks the deployment (breaking on
   non-compliant MySQL deployments)**: it still only creates missing tables,
   then runs `CheckDeployment` and fails with `ErrDeploymentRequirement` on
@@ -1481,7 +1479,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `unsupported_response_type`; RFC 6749 §4.1.1 makes the parameter
   REQUIRED, and §4.1.2.1 answers a missing one with `invalid_request` — an
   empty occurrence included (§3.1).
-
 - `oidcclient.TransactionStore.Consume` validates its keys in the memory,
   SQL and Redis stores, as the interface documents: on MySQL a malformed
   state hash — upper-case, space-padded — matched the canonical one under
@@ -2350,7 +2347,6 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   encodings, so a non-canonical encoding (y ≥ p, whose decoding RFC 8032
   §5.1.3 makes fail) was used as a key. PS* signatures are now verified with
   a hash-size salt and such keys are ignored, as in the `jwt` module.
-
 - **SQL stores on MySQL use InnoDB**: the MySQL DDL of the three SQL
   stores named no storage engine, so on a server whose default engine is
   MyISAM `Migrate` created tables without transactions or row locks. The
