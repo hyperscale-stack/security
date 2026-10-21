@@ -278,3 +278,76 @@ func TestMySQLCheckDeploymentReportsMissingTables(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLCheckDeploymentIsScopedToItsDatabase: a MySQL server often holds
+// the store's tables in several databases — one per environment or
+// tenant. CheckDeployment reads the tables of the connection's database
+// only: a compliant copy in another database never hides a table missing,
+// on another engine or with text keys in this one.
+func TestMySQLCheckDeploymentIsScopedToItsDatabase(t *testing.T) {
+	for _, b := range mysqlServers {
+		t.Run(b.name, func(t *testing.T) {
+			b.server(t)
+
+			ctx := t.Context()
+
+			// The compliant copy, in a database of its own.
+			driver, dsn := b.namespace(t)
+			compliant := open(t, driver, dsn, 2)
+
+			for _, s := range sqlStores {
+				require.NoError(t, s.migrate(ctx, compliant, engineMySQL), "Migrate of %s", s.name)
+			}
+
+			// A database without the tables.
+			driver, dsn = b.namespace(t)
+			empty := open(t, driver, dsn, 2)
+
+			for _, s := range sqlStores {
+				err := s.check(ctx, empty, engineMySQL)
+				require.ErrorIs(t, err, s.requirement, "CheckDeployment of %s", s.name)
+
+				for _, table := range s.tables {
+					require.Contains(t, err.Error(), "table "+table+" not found in the connection's database")
+				}
+			}
+
+			// A database with MyISAM tables.
+			driver, dsn = b.namespace(t)
+			myisam := open(t, driver, dsn, 2)
+			createMyISAM(t, myisam)
+
+			for _, s := range sqlStores {
+				err := s.check(ctx, myisam, engineMySQL)
+				require.ErrorIs(t, err, s.requirement, "CheckDeployment of %s", s.name)
+
+				for _, table := range s.tables {
+					require.Contains(t, err.Error(), "table "+table+" uses the MyISAM engine, not InnoDB")
+				}
+			}
+
+			// A database whose oauth2 families table lacks its key column,
+			// and one with the former text keys.
+			driver, dsn = b.namespace(t)
+			keyless := open(t, driver, dsn, 2)
+			oauth2 := sqlStores[0]
+			schema := oauth2.schema(engineMySQL)
+			execAll(t, keyless, schema[:len(schema)-1]...)
+			execAll(t, keyless, `CREATE TABLE oauth2_token_families (
+				fid VARBINARY(64) PRIMARY KEY, revoked_at BIGINT NOT NULL DEFAULT 0, expires_at BIGINT NOT NULL
+			) ENGINE=InnoDB`)
+
+			err := oauth2.check(ctx, keyless, engineMySQL)
+			require.ErrorIs(t, err, oauth2.requirement)
+			require.Contains(t, err.Error(), "column oauth2_token_families.family_id not found")
+
+			driver, dsn = b.namespace(t)
+			legacy := open(t, driver, dsn, 2)
+			execAll(t, legacy, legacyMySQLSchema...)
+
+			err = oauth2.check(ctx, legacy, engineMySQL)
+			require.ErrorIs(t, err, oauth2.requirement)
+			require.Contains(t, err.Error(), "column oauth2_auth_codes.code_hash is varchar, not varbinary")
+		})
+	}
+}
