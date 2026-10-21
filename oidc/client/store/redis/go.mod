@@ -3,7 +3,7 @@ module github.com/hyperscale-stack/security/oidc/client/store/redis
 go 1.27.3
 
 require (
-	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/stretchr/testify v1.12.1
