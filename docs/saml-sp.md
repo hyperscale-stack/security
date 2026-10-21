@@ -77,7 +77,7 @@ Trust comes from the connection only: the pinned IdP entity ID and its 1 to
   signature covers it only when the Response is signed. When only the
   Assertion is signed, these values are unsigned: they only ever add
   refusals, never grant anything.
-- The structural pre-check reads from the raw document only: the
+- Besides refusals, the SP takes from the raw document only: the
   top-level `Status` (a non-Success one ends the login as a `*StatusError`,
   whose fields are unsigned unless the Response is signed), the Response
   `InResponseTo` (compared, refusal only), whether each signature has a
@@ -152,7 +152,17 @@ Keycloak run hit this with a freshly generated realm key.
   with `ErrInvalidMetadata` (Metadata Interoperability Profile §2.5.1: one
   key, one certificate per `KeyDescriptor`; XML Signature 1.1 §4.5.4 gives
   the certificates of an `X509Data` no order, so the SP cannot tell the end
-  entity apart). Keep only the certificate the IdP signs with. **Never list
+  entity apart). A `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to
+  the certificate must be that certificate's key (§2.5.1: "If both forms
+  are used, then they MUST represent the same key"): an RSA key value is
+  compared with the certificate's RSA key, a DER-encoded one with its
+  `SubjectPublicKeyInfo`, and any other (EC, DSA) or unparsable key value
+  is refused. The identifier hints — `KeyName`, `X509SubjectName`,
+  `X509IssuerSerial`, `X509SKI`, `dsig11:X509Digest` — are neither
+  verified nor used: the certificate alone is the key, so a CA certificate
+  published with the signing certificate's identifiers instead of that
+  certificate becomes a signing key. Keep only the certificate the IdP
+  signs with. **Never list
   a CA or intermediate certificate, not even in a descriptor of its own**:
   every listed certificate is a signing key, and whoever holds that CA's
   key could then sign any user in. A self-signed IdP certificate marked
@@ -595,7 +605,7 @@ resolver failures are returned as they are and do not match `ErrRejected`.
 | `ErrResponseTooLarge` | too many attributes or groups; an oversized body | filter what the IdP releases |
 | `ErrMalformedResponse`, `ErrInvalidAssertion`, `ErrMalformedRequest` | a response shape the SP refuses (several assertions, an unknown condition, a non-POST request) | configure the IdP to send one assertion with a persistent NameID |
 | `*StatusError` (`ErrResponseStatus`) | the IdP refused: `NoPassive` (an `IsPassive` login without a session), `AuthnFailed`, `RequestDenied`, `InvalidNameIDPolicy` | per status; its `AppState` and `ConnectionID` identify the login |
-| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; a signing `KeyDescriptor` carrying several certificates (a chain) or two `KeyInfo`; refreshes have failed for `MaxStale` (watch the `samlsp.FetchMetadata` span errors) | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID; keep only the certificate the IdP signs with — never move a CA or intermediate certificate into a descriptor of its own (see [§3.4](#34-metadata-trust)) |
+| `ErrMetadataUnavailable`, `ErrInvalidMetadata`, `ErrMetadataExpired` | the metadata URL is unreachable, refused by the outbound policy, or serves another entity; an `EntitiesDescriptor` without a pinned entity ID; a signing `KeyDescriptor` carrying several certificates (a chain), two `KeyInfo`, or a `KeyValue` that is not its certificate's key; refreshes have failed for `MaxStale` (watch the `samlsp.FetchMetadata` span errors) | check the URL, `Outbound.AllowedPrefixes` and `RootCAs` for an on-premises IdP; pass the entity ID; keep only the certificate the IdP signs with — never move a CA or intermediate certificate into a descriptor of its own (see [§3.4](#34-metadata-trust)) |
 | `ErrInvalidConfig` from `New` or `BeginLogin` | no `TransactionKeys`, or a key under 32 bytes; a `TransactionTTL` with a sub-second part; the IdP wants signed requests and the SP has no key | configure the transaction keys; give `TransactionTTL` in whole seconds; configure `SigningKey` and `SigningCertificate` |
 
 ## 9. Testing your integration

@@ -451,8 +451,13 @@ PKCE. Not supported, and refused where a provider could select them:
   the rollover is accepted only `ClockSkew` later.
 - **Metadata keys** — each imported certificate is trusted as a signing key
   by itself (no chain building): a signing `KeyDescriptor` carrying several
-  certificates, such as the IdP's certificate chain, or two `KeyInfo`
-  elements, is refused (`ErrInvalidMetadata`). An IdP that publishes its
+  certificates, such as the IdP's certificate chain, two `KeyInfo`
+  elements, or a `ds:KeyValue` / `dsig11:DEREncodedKeyValue` that is not
+  its certificate's key (EC and DSA key values cannot be compared and are
+  refused too), is refused (`ErrInvalidMetadata`). Identifier hints
+  (`KeyName`, `X509SubjectName`, `X509IssuerSerial`, `X509SKI`,
+  `X509Digest`) are neither verified nor used: the published certificate is
+  the key, whatever they name. An IdP that publishes its
   chain cannot be followed through `FetchIdentityProviderMetadata` or
   `MetadataSource` (each refresh fails; the last good document is served up
   to `MaxStale`): import an edited copy keeping only the signing

@@ -280,10 +280,11 @@ func (v *verified) checkNameID(a *types.Assertion) error {
 	return nil
 }
 
-// isBlank reports whether s holds nothing visible: only Unicode white space
-// (Zs, Zl, Zp, tab, line breaks, NEL) and control or format characters (Cc,
-// Cf: zero-width spaces and joiners, word joiner, byte order mark, soft
-// hyphen, bidi controls).
+// isBlank reports whether s holds only Unicode white space (Zs, Zl, Zp,
+// tab, line breaks, NEL) and control or format characters (Cc, Cf:
+// zero-width spaces and joiners, word joiner, byte order mark, soft hyphen,
+// bidi controls). Other characters that may render as nothing (Hangul
+// fillers, variation selectors, a blank Braille pattern) are not blank.
 func isBlank(s string) bool {
 	return strings.TrimFunc(s, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.In(r, unicode.Cc, unicode.Cf)

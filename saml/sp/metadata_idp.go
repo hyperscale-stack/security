@@ -5,10 +5,13 @@
 package samlsp
 
 import (
+	"bytes"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -62,8 +65,13 @@ type MetadataOptions struct {
 //     is refused (SAML V2.0 Metadata Interoperability Profile §2.5.1: one
 //     key, one certificate per KeyDescriptor): keep only the certificate the
 //     IdP signs with, and never list a CA or intermediate certificate, in
-//     that descriptor or in one of its own. A key published only as
-//     ds:KeyValue is not imported;
+//     that descriptor or in one of its own. A ds:KeyValue or
+//     dsig11:DEREncodedKeyValue next to the certificate must be its key
+//     (§2.5.1: "If both forms are used, then they MUST represent the same
+//     key"); an EC, DSA or unparsable key value is refused, since it cannot
+//     be compared. Identifier hints (KeyName, X509SubjectName,
+//     X509IssuerSerial, X509SKI, X509Digest) are neither verified nor
+//     used. A key published only as ds:KeyValue is not imported;
 //   - WantAuthnRequestsSigned;
 //   - validUntil and cacheDuration: the smallest of the root, entity and
 //     role values (errata E76). Expired metadata yields ErrMetadataExpired
@@ -362,8 +370,13 @@ const errSeveralCertificates = "a KeyDescriptor carries several certificates: ke
 // as one X509Certificate. It is read at ds:KeyInfo/ds:X509Data/
 // ds:X509Certificate only, each level matched by namespace: a certificate
 // anywhere else is no key representation and is never trusted. The
-// KeyDescriptor must hold at most one ds:KeyInfo (Metadata §2.4.1.1), and
-// its X509Data may repeat one certificate, never carry two.
+// KeyDescriptor must hold at most one ds:KeyInfo (Metadata §2.4.1.1), its
+// X509Data may repeat one certificate, never carry two, and a ds:KeyValue
+// or dsig11:DEREncodedKeyValue next to the certificate must be the
+// certificate's key (§2.5.1: "If both forms are used, then they MUST
+// represent the same key"; see checkKeyValues). Identifier hints (KeyName,
+// X509SubjectName, X509IssuerSerial, X509SKI, X509Digest) are neither
+// verified nor used.
 func keyDescriptorCertificate(kd *etree.Element) (*x509.Certificate, error) {
 	var (
 		found    *x509.Certificate
@@ -392,9 +405,97 @@ func keyDescriptorCertificate(kd *etree.Element) (*x509.Certificate, error) {
 				return nil, fmt.Errorf("%w: %s", ErrInvalidMetadata, errSeveralCertificates)
 			}
 		}
+
+		if found != nil {
+			if err := checkKeyValues(ki, found); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return found, nil
+}
+
+// checkKeyValues requires every ds:KeyValue and dsig11:DEREncodedKeyValue
+// child of keyInfo to represent the key of cert (Metadata Interoperability
+// Profile §2.5.1). XML Signature 1.1 §4.5.4 lets an X509Data carry the
+// certificates of a chain without its end entity, so a KeyValue naming the
+// signing key next to the issuing CA's certificate is a legal way to
+// publish a chain; trusting the certificate would make the CA a signing
+// key. A DEREncodedKeyValue (XML Signature 1.1 §4.5.5) is compared with the
+// certificate's SubjectPublicKeyInfo, an RSAKeyValue with its RSA key; any
+// other or unparsable key value cannot be compared and is refused.
+func checkKeyValues(keyInfo *etree.Element, cert *x509.Certificate) error {
+	for _, el := range keyInfo.ChildElements() {
+		var same bool
+
+		switch {
+		case inNS(el, nsDSig11, "DEREncodedKeyValue"):
+			der, err := decodeBase64Text(el.Text())
+			same = err == nil && bytes.Equal(der, cert.RawSubjectPublicKeyInfo)
+		case inNS(el, nsDSig, "KeyValue"):
+			same = rsaKeyValueMatches(el, cert)
+		default:
+			continue
+		}
+
+		if !same {
+			return fmt.Errorf("%w: a KeyDescriptor's KeyValue is not the key of its certificate "+
+				"(or cannot be compared with it): publish the signing certificate alone", ErrInvalidMetadata)
+		}
+	}
+
+	return nil
+}
+
+// rsaKeyValueMatches reports whether the ds:KeyValue kv holds exactly one
+// ds:RSAKeyValue whose Modulus and Exponent (CryptoBinary, XML Signature
+// §4.0.1) are those of cert's RSA key.
+func rsaKeyValueMatches(kv *etree.Element, cert *x509.Certificate) bool {
+	pub, ok := cert.PublicKey.(*rsa.PublicKey)
+	values := kv.ChildElements()
+
+	if !ok || len(values) != 1 || !inNS(values[0], nsDSig, "RSAKeyValue") {
+		return false
+	}
+
+	modulus, okN := cryptoBinary(values[0], "Modulus")
+	exponent, okE := cryptoBinary(values[0], "Exponent")
+
+	return okN && okE && modulus.Cmp(pub.N) == 0 && exponent.Cmp(big.NewInt(int64(pub.E))) == 0
+}
+
+// cryptoBinary decodes the single ds:<name> child of el as a CryptoBinary
+// (base64 of a big-endian unsigned integer).
+func cryptoBinary(el *etree.Element, name string) (*big.Int, bool) {
+	var found []*etree.Element
+
+	for _, c := range el.ChildElements() {
+		if inNS(c, nsDSig, name) {
+			found = append(found, c)
+		}
+	}
+
+	if len(found) != 1 {
+		return nil, false
+	}
+
+	b, err := decodeBase64Text(found[0].Text())
+	if err != nil {
+		return nil, false
+	}
+
+	return new(big.Int).SetBytes(b), true
+}
+
+// decodeBase64Text decodes base64 text, white space tolerated.
+func decodeBase64Text(text string) ([]byte, error) {
+	b, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(text), ""))
+	if err != nil {
+		return nil, fmt.Errorf("not base64: %w", err)
+	}
+
+	return b, nil
 }
 
 // x509Certificates returns the ds:X509Certificate children of the
@@ -420,7 +521,7 @@ func x509Certificates(keyInfo *etree.Element) []*etree.Element {
 // parseCertificateText decodes a base64 DER certificate, white space
 // tolerated.
 func parseCertificateText(text string) (*x509.Certificate, error) {
-	der, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(text), ""))
+	der, err := decodeBase64Text(text)
 	if err != nil {
 		return nil, fmt.Errorf("%w: certificate is not base64", ErrInvalidMetadata)
 	}

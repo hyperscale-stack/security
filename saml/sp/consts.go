@@ -27,6 +27,7 @@ const (
 	nsAssertion = "urn:oasis:names:tc:SAML:2.0:assertion"
 	nsMetadata  = "urn:oasis:names:tc:SAML:2.0:metadata"
 	nsDSig      = "http://www.w3.org/2000/09/xmldsig#"
+	nsDSig11    = "http://www.w3.org/2009/xmldsig11#"
 	nsXMLEnc    = "http://www.w3.org/2001/04/xmlenc#"
 	nsExcC14N   = "http://www.w3.org/2001/10/xml-exc-c14n#"
 	nsXML       = "http://www.w3.org/XML/1998/namespace"

@@ -2573,6 +2573,10 @@ certificate (SAML V2.0 Metadata Interoperability Profile §2.5.1):
 | one `X509Certificate`, possibly repeated | imported | unchanged |
 | several different certificates (a chain, a CA next to the signing certificate, two certificates of one key), in one `X509Data` or several | each imported as a signing key | refused: `ErrInvalidMetadata` |
 | two `ds:KeyInfo` elements | their certificates imported | refused: `ErrInvalidMetadata` |
+| a `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to the certificate, of another key (the end entity's key next to its CA's certificate, say) | key value ignored, certificate imported | refused: `ErrInvalidMetadata` |
+| the same, of the certificate's own key (RSA, or DER-encoded of any type) | imported | unchanged |
+| an EC, DSA or unparsable `ds:KeyValue` next to a certificate | key value ignored, certificate imported | refused: `ErrInvalidMetadata` (cannot be compared) |
+| `KeyName`, `X509SubjectName`, `X509IssuerSerial`, `X509SKI`, `X509Digest` hints | not used | unchanged: neither verified nor used |
 | a certificate outside `ds:KeyInfo/ds:X509Data/ds:X509Certificate` (in `EncryptionMethod` content, under another element or namespace) | imported | ignored (never trusted) |
 | `use="encryption"` descriptors | ignored | unchanged (never read, whatever they carry) |
 | one key per `KeyDescriptor`, several descriptors (rollover) | imported | unchanged |
@@ -2588,7 +2592,8 @@ To migrate:
    every listed certificate is trusted as a signing key, so that would
    re-open the flaw. A second signing key (a rollover) gets its own
    `KeyDescriptor`. A self-signed IdP certificate marked `CA:TRUE` is the
-   signing certificate: keep it.
+   signing certificate: keep it. A `ds:KeyValue` refused as "not the key
+   of its certificate" goes too: keep the signing certificate alone.
 3. An IdP that *publishes* its chain at its metadata URL can no longer be
    followed through `FetchIdentityProviderMetadata` or `MetadataSource`:
    each refresh fails (watch the errors of the `samlsp.FetchMetadata` span,

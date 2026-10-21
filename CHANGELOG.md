@@ -2013,8 +2013,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   elements, is now refused with `ErrInvalidMetadata` (SAML V2.0 Metadata
   Interoperability Profile §2.5.1), and certificates are read at
   `ds:KeyInfo/ds:X509Data/ds:X509Certificate` only, matched by namespace.
-  See MIGRATION.md: keep only the signing certificate, never a CA in a
-  descriptor of its own.
+  A `ds:KeyValue` or `dsig11:DEREncodedKeyValue` next to the certificate
+  must be the certificate's key — the end entity's key next to its CA's
+  certificate made the CA a signing key too. See MIGRATION.md: keep only
+  the signing certificate, never a CA in a descriptor of its own.
 - `saml/sp` accepted a NameID made only of white space, or of invisible
   characters such as a zero-width space, while it refused an empty one: a
   misbehaving IdP could collapse users onto one account. Such a NameID is

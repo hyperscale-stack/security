@@ -13,9 +13,12 @@ package samlsp_test
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +97,34 @@ func x509Data(certs ...*x509.Certificate) string {
 	return out + `</ds:X509Data>`
 }
 
+const nsDSig11 = "http://www.w3.org/2009/xmldsig11#"
+
+func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// rsaKeyValue renders the ds:KeyValue of an RSA key (CryptoBinary values).
+func rsaKeyValue(pub any) string {
+	k, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		panic("not an RSA key")
+	}
+
+	return rsaKeyValueOf(b64(k.N.Bytes()), b64(big.NewInt(int64(k.E)).Bytes()))
+}
+
+func rsaKeyValueOf(modulus, exponent string) string {
+	return `<ds:KeyValue><ds:RSAKeyValue><ds:Modulus>` + modulus + `</ds:Modulus><ds:Exponent>` + exponent +
+		`</ds:Exponent></ds:RSAKeyValue></ds:KeyValue>`
+}
+
+// derKeyValue renders the dsig11:DEREncodedKeyValue of a certificate's key.
+func derKeyValue(c *x509.Certificate) string {
+	return `<dsig11:DEREncodedKeyValue xmlns:dsig11="` + nsDSig11 + `">` + b64(c.RawSubjectPublicKeyInfo) +
+		`</dsig11:DEREncodedKeyValue>`
+}
+
+// keyInfo wraps inner in a signing KeyDescriptor's ds:KeyInfo.
+func keyInfo(inner string) string { return rawKeyDescriptor(`<ds:KeyInfo>` + inner + `</ds:KeyInfo>`) }
+
 // rawKeyDescriptor wraps inner (the KeyDescriptor's content) in a signing
 // KeyDescriptor.
 func rawKeyDescriptor(inner string) string {
@@ -120,6 +151,38 @@ func TestParseIdentityProviderMetadata_KeyDescriptorRefusals(t *testing.T) {
 			`<ds:KeyInfo>` + x509Data(k.idpB.cert) + `</ds:KeyInfo>`),
 		"two identical KeyInfo": rawKeyDescriptor(`<ds:KeyInfo>` + x509Data(k.idpA.cert) + `</ds:KeyInfo>` +
 			`<ds:KeyInfo>` + x509Data(k.idpA.cert) + `</ds:KeyInfo>`),
+		// Metadata Interoperability Profile §2.5.1: "If both forms are
+		// used, then they MUST represent the same key". A KeyValue naming
+		// the signing key next to its issuing CA's certificate would make
+		// the CA a signing key.
+		"KeyValue of the signing key next to the CA certificate":          keyInfo(rsaKeyValue(c.leaf.signer.Public()) + x509Data(c.ca.cert)),
+		"KeyValue after the CA certificate":                               keyInfo(x509Data(c.ca.cert) + rsaKeyValue(c.leaf.signer.Public())),
+		"DEREncodedKeyValue of the signing key next to the CA":            keyInfo(derKeyValue(c.leaf.cert) + x509Data(c.ca.cert)),
+		"RSA KeyValue of another exponent":                                keyInfo(rsaKeyValueOf(b64(k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()), "Aw==") + x509Data(k.idpA.cert)),
+		"RSA KeyValue of another modulus":                                 keyInfo(rsaKeyValue(k.idpB.signer.Public()) + x509Data(k.idpA.cert)),
+		"a matching KeyValue next to another one":                         keyInfo(rsaKeyValue(k.idpA.signer.Public()) + rsaKeyValue(c.ca.signer.Public()) + x509Data(k.idpA.cert)),
+		"a matching DEREncodedKeyValue next to a KeyValue of another key": keyInfo(derKeyValue(k.idpA.cert) + rsaKeyValue(c.ca.signer.Public()) + x509Data(k.idpA.cert)),
+		// Key values that cannot be compared fail closed.
+		"EC KeyValue next to a certificate": keyInfo(`<ds:KeyValue><dsig11:ECKeyValue xmlns:dsig11="` + nsDSig11 + `">` +
+			`<dsig11:NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/><dsig11:PublicKey>AAAA</dsig11:PublicKey></dsig11:ECKeyValue></ds:KeyValue>` +
+			x509Data(k.idpEC.cert)),
+		"DSA KeyValue next to a certificate": keyInfo(`<ds:KeyValue><ds:DSAKeyValue><ds:Y>AQAB</ds:Y></ds:DSAKeyValue></ds:KeyValue>` +
+			x509Data(k.idpA.cert)),
+		"empty KeyValue":           keyInfo(`<ds:KeyValue/>` + x509Data(k.idpA.cert)),
+		"KeyValue with two values": keyInfo(`<ds:KeyValue>` + rsaKeyValue(k.idpA.signer.Public())[len(`<ds:KeyValue>`):len(rsaKeyValue(k.idpA.signer.Public()))-len(`</ds:KeyValue>`)] + `<ds:RSAKeyValue/></ds:KeyValue>` + x509Data(k.idpA.cert)),
+		"RSA KeyValue without Exponent": keyInfo(`<ds:KeyValue><ds:RSAKeyValue><ds:Modulus>` + b64(k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()) +
+			`</ds:Modulus></ds:RSAKeyValue></ds:KeyValue>` + x509Data(k.idpA.cert)),
+		"RSA KeyValue with two moduli": keyInfo(`<ds:KeyValue><ds:RSAKeyValue><ds:Modulus>` + b64(k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()) +
+			`</ds:Modulus><ds:Modulus>` + b64(c.ca.signer.Public().(*rsa.PublicKey).N.Bytes()) + `</ds:Modulus><ds:Exponent>AQAB</ds:Exponent>` +
+			`</ds:RSAKeyValue></ds:KeyValue>` + x509Data(k.idpA.cert)),
+		"RSAKeyValue outside the dsig namespace": keyInfo(`<ds:KeyValue><x:RSAKeyValue xmlns:x="urn:x"><ds:Modulus>` +
+			b64(k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()) + `</ds:Modulus><ds:Exponent>AQAB</ds:Exponent></x:RSAKeyValue></ds:KeyValue>` +
+			x509Data(k.idpA.cert)),
+		"RSA KeyValue next to an EC certificate": keyInfo(rsaKeyValue(k.idpA.signer.Public()) + x509Data(k.idpEC.cert)),
+		"RSA KeyValue modulus not base64":        keyInfo(rsaKeyValueOf("!!!", "AQAB") + x509Data(k.idpA.cert)),
+		"RSA KeyValue exponent not base64":       keyInfo(rsaKeyValueOf(b64(k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()), "!!!") + x509Data(k.idpA.cert)),
+		"DEREncodedKeyValue not base64": keyInfo(`<dsig11:DEREncodedKeyValue xmlns:dsig11="` + nsDSig11 + `">!!!</dsig11:DEREncodedKeyValue>` +
+			x509Data(k.idpA.cert)),
 		// No partial import: one bad descriptor refuses the document.
 		"a chain next to a valid descriptor": keyDescriptor("signing", k.idpB.cert) +
 			keyDescriptor("signing", c.leaf.cert, c.ca.cert),
@@ -214,6 +277,32 @@ func TestParseIdentityProviderMetadata_KeyDescriptorShapes(t *testing.T) {
 		"a KeyValue-only descriptor is not imported": {
 			rawKeyDescriptor(`<ds:KeyInfo><ds:KeyValue><ds:RSAKeyValue><ds:Modulus>AQAB</ds:Modulus><ds:Exponent>AQAB</ds:Exponent>`+
 				`</ds:RSAKeyValue></ds:KeyValue></ds:KeyInfo>`) + keyDescriptor("signing", k.idpA.cert),
+			[]*x509.Certificate{k.idpA.cert},
+		},
+		// Both forms of one key (Metadata Interoperability Profile §2.5.1).
+		"KeyValue of the certificate's key": {keyInfo(rsaKeyValue(k.idpA.signer.Public()) + x509Data(k.idpA.cert)), []*x509.Certificate{k.idpA.cert}},
+		"KeyValue with zero-padded CryptoBinary values": {
+			keyInfo(rsaKeyValueOf(b64(append([]byte{0}, k.idpA.signer.Public().(*rsa.PublicKey).N.Bytes()...)), "AAEAAQ==") + x509Data(k.idpA.cert)),
+			[]*x509.Certificate{k.idpA.cert},
+		},
+		"DEREncodedKeyValue of the certificate's key":      {keyInfo(derKeyValue(k.idpA.cert) + x509Data(k.idpA.cert)), []*x509.Certificate{k.idpA.cert}},
+		"DEREncodedKeyValue of an EC certificate's key":    {keyInfo(derKeyValue(k.idpEC.cert) + x509Data(k.idpEC.cert)), []*x509.Certificate{k.idpEC.cert}},
+		"a KeyValue outside the dsig namespace is ignored": {keyInfo(`<x:KeyValue xmlns:x="urn:x"/>` + x509Data(k.idpA.cert)), []*x509.Certificate{k.idpA.cert}},
+		// Identifier hints are neither verified nor used (Metadata
+		// Interoperability Profile §2.5.1: "hints only"): the certificate is
+		// the key.
+		"KeyName and X509Data identifiers are not used": {
+			keyInfo(`<ds:KeyName>another key</ds:KeyName><ds:X509Data><ds:X509SubjectName>CN=another</ds:X509SubjectName>` +
+				`<ds:X509IssuerSerial><ds:X509IssuerName>CN=x</ds:X509IssuerName><ds:X509SerialNumber>1</ds:X509SerialNumber></ds:X509IssuerSerial>` +
+				`<ds:X509SKI>AAAA</ds:X509SKI><ds:X509Certificate>` + certB64(k.idpA.cert) + `</ds:X509Certificate></ds:X509Data>`),
+			[]*x509.Certificate{k.idpA.cert},
+		},
+		// Only use="signing" or no use is read: another value, even one
+		// differing in case, is not a signing key.
+		"descriptors of another use are ignored": {
+			strings.Replace(keyDescriptor("signing", k.attacker.cert), `use="signing"`, `use="Signing"`, 1) +
+				strings.Replace(keyDescriptor("signing", k.attacker.cert), `use="signing"`, `use="bogus"`, 1) +
+				keyDescriptor("signing", k.idpA.cert),
 			[]*x509.Certificate{k.idpA.cert},
 		},
 		// A rollover: one key per descriptor.

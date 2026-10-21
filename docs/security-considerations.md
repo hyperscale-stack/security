@@ -909,7 +909,8 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   metadata is not verified, and an aggregate (`EntitiesDescriptor`) is only
   accepted with a pinned entity ID. Each imported certificate is trusted as
   a signing key by itself, without chain building: a signing
-  `KeyDescriptor` carrying several certificates (a chain) is refused, and a
+  `KeyDescriptor` carrying several certificates (a chain), or a key value
+  that is not its certificate's key, is refused, and a
   CA or intermediate certificate must never be listed, not even in a
   descriptor of its own — its key would sign any user in (Metadata
   Interoperability Profile §2.5.1; the §2.6.1 deviations are listed in
