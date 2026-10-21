@@ -69,11 +69,11 @@ func TestArgon2idVerifyRejectsMalformedHash(t *testing.T) {
 
 	cases := []string{
 		"",
-		"$argon2id$v=19",                       // too few fields
-		"$argon2id$v=99$m=8,t=1,p=1$aaa$bbb",   // wrong version
-		"$argon2id$v=19$m=x,t=1,p=1$aaa$bbb",   // bad memory
-		"$argon2id$v=19$m=8,t=1,p=1$!!$bbb",    // bad base64 salt
-		"$argon2id$v=19$m=8,t=1,p=1$aGVsbG8$!!",// bad base64 key
+		"$argon2id$v=19",                        // too few fields
+		"$argon2id$v=99$m=8,t=1,p=1$aaa$bbb",    // wrong version
+		"$argon2id$v=19$m=x,t=1,p=1$aaa$bbb",    // bad memory
+		"$argon2id$v=19$m=8,t=1,p=1$!!$bbb",     // bad base64 salt
+		"$argon2id$v=19$m=8,t=1,p=1$aGVsbG8$!!", // bad base64 key
 	}
 	for _, c := range cases {
 		_, err := h.Verify(context.Background(), c, "x")

@@ -55,7 +55,7 @@ type scriptedAuthn struct {
 	calls  atomic.Int32
 }
 
-func (s *scriptedAuthn) AuthenticatorName() string         { return s.name }
+func (s *scriptedAuthn) AuthenticatorName() string             { return s.name }
 func (s *scriptedAuthn) Supports(security.Authentication) bool { return true }
 func (s *scriptedAuthn) Authenticate(_ context.Context, _ security.Authentication) (security.Authentication, error) {
 	s.calls.Add(1)
