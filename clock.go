@@ -13,12 +13,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// SystemClock is the default Clock returning time.Now().
+// SystemClock is the Clock returning time.Now(): the default of every
+// component that takes a Clock. Its zero value is ready to use; there is no
+// package-level Clock variable a test could replace for the whole process.
 type SystemClock struct{}
 
 // Now returns the current wall-clock time.
 func (SystemClock) Now() time.Time { return time.Now() }
-
-// DefaultClock is the package-level Clock used when none is supplied via
-// configuration. It is a value, not a pointer, so it is safe to copy.
-var DefaultClock Clock = SystemClock{}

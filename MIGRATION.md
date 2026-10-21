@@ -2865,3 +2865,24 @@ comparison.
 To migrate: render `session.CSRFToken(s)` — templates rendering the
 `Session.CSRFToken` field now get every state-changing request refused —,
 and compare tokens with `VerifyCSRF` only, never with `==`.
+
+### core: `AnonymousPrincipal` is a function, `DefaultClock` is removed
+
+`security.AnonymousPrincipal` and `security.DefaultClock` were exported
+variables: any package — a test override that leaked, a dependency — could
+replace them for the whole process, changing what every anonymous
+authentication reports, or freezing the clock `jwtsec` checks token expiry
+with.
+
+| Before | After |
+| --- | --- |
+| `security.AnonymousPrincipal` (variable) | `security.AnonymousPrincipal()` (function, one immutable value) |
+| `security.DefaultClock` (variable, `SystemClock{}`) | removed: use `security.SystemClock{}`, the default of every component taking a `Clock` |
+
+To migrate:
+
+1. Replace `security.AnonymousPrincipal` with `security.AnonymousPrincipal()`.
+2. Replace `security.DefaultClock` with `security.SystemClock{}`; in
+   tests, inject a clock through the component's option (`jwtsec.WithClock`,
+   `session.WithClock`, `throttle.Config.Clock`…) instead of overriding a
+   global.

@@ -1043,6 +1043,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `VerifyCSRF` unmasks it before the constant-time comparison; the raw
   `Session.CSRFToken` field no longer verifies. A source test pins the
   constant-time comparison. See [MIGRATION.md](MIGRATION.md).
+- `security.AnonymousPrincipal` is a function returning one immutable value,
+  and `security.DefaultClock` is removed (`security.SystemClock{}` is the
+  default, as in `jwtsec`): neither global could be replaced for the whole
+  process any more. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 

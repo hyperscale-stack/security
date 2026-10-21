@@ -34,7 +34,7 @@ type config struct {
 func defaults() *config {
 	return &config{
 		allowed:       slices.Clone(defaultAllowedAlgorithms),
-		clock:         security.DefaultClock,
+		clock:         security.SystemClock{},
 		requireExpiry: true,
 		maxTokenSize:  DefaultMaxTokenSize,
 	}
@@ -117,7 +117,7 @@ func WithMaxTokenSize(n int) Option {
 }
 
 // WithClock injects a clock for deterministic tests. Defaults to
-// [security.DefaultClock] (wall clock).
+// [security.SystemClock] (wall clock).
 func WithClock(c security.Clock) Option {
 	return func(cfg *config) {
 		if c != nil {

@@ -77,7 +77,7 @@ func (tokenExtractor) Extract(_ context.Context, c security.Carrier) (security.A
 // pendingAuth is the un-validated authentication produced by tokenExtractor.
 type pendingAuth struct{ token string }
 
-func (a pendingAuth) Principal() security.Principal { return security.AnonymousPrincipal }
+func (a pendingAuth) Principal() security.Principal { return security.AnonymousPrincipal() }
 func (a pendingAuth) Credentials() any              { return a.token }
 func (a pendingAuth) Authorities() []string         { return nil }
 func (a pendingAuth) IsAuthenticated() bool         { return false }
