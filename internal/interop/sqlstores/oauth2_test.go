@@ -53,6 +53,39 @@ func conformancePools(t *testing.T) func(driver, dsn string) *sql.DB {
 	}
 }
 
+// warmConnAttempts and warmConnTimeout bound the opening of each connection
+// of a warmed pool: a connect that stalls — seen once through Docker
+// Desktop's port forwarding — is tried again, and a server that never
+// answers fails the case with a clear error instead of a hang.
+const (
+	warmConnAttempts = 3
+	warmConnTimeout  = 10 * time.Second
+)
+
+// openConn opens a connection of db, each attempt bounded by
+// warmConnTimeout, and returns the last error after warmConnAttempts.
+func openConn(t *testing.T, db *sql.DB) (*sql.Conn, error) {
+	t.Helper()
+
+	var err error
+
+	for range warmConnAttempts {
+		ctx, cancel := context.WithTimeout(t.Context(), warmConnTimeout)
+
+		var c *sql.Conn
+
+		c, err = db.Conn(ctx)
+
+		cancel()
+
+		if err == nil {
+			return c, nil
+		}
+	}
+
+	return nil, err
+}
+
 // warmPool returns a pool of size connections on dsn, every one of them
 // opened — each held until all are, so that they are distinct — and
 // returned to the pool idle.
@@ -62,12 +95,10 @@ func warmPool(t *testing.T, driver, dsn string, size int) *sql.DB {
 	db := open(t, driver, dsn, size)
 	conns := make([]*sql.Conn, 0, size)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-
 	for i := range size {
-		c, err := db.Conn(ctx)
-		require.NoError(t, err, "opening connection %d of the pool", i)
+		c, err := openConn(t, db)
+		require.NoError(t, err, "opening connection %d of %d of the warmed pool (%d attempts of %s each)",
+			i+1, size, warmConnAttempts, warmConnTimeout)
 
 		conns = append(conns, c)
 	}
