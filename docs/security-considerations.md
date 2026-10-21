@@ -845,10 +845,13 @@ is, never for the protocol rules:
   consent fails closed. Wire `grant.Config.RefreshTokenScope =
   oidcprovider.ScopeOfflineAccess`: only the scope is gated, and a plain
   OAuth 2.0 grant gets refresh tokens per that setting.
-- **Token confusion** (RFC 9068 §5, RFC 8725 §3.12): an ID Token's audience
-  is the client ID, and an access token whose audience equals the requesting
-  client's ID is refused at issuance — another client's ID is not compared,
-  so keep every `IssuerResolver` audience apart from all client IDs; JWT
+- **Token confusion** (RFC 9068 §5, RFC 8725 §2.8, §3.11, §3.12): an ID
+  Token's audience is the client ID, and every code exchange and refresh
+  whose access-token audience is the requesting client's ID, or that of a
+  client registered at the issuer that declares `authorization_code`, is
+  refused (`server_error`) — `client_credentials` and `password` tokens are
+  checked only through the exchanges of the same issuer, so keep every
+  `IssuerResolver` audience apart from relying parties' client IDs; JWT
   access tokens are typed `at+jwt`. Resource servers require that type —
   `jwtsec.BearerVerifier` refuses a verifier without
   `WithType(TypeAccessToken)` — so an ID Token is never accepted as an
@@ -860,7 +863,8 @@ is, never for the protocol rules:
   `KeyRing.Published`: one `jwks_uri` serves both (RFC 9068 §4).
 - **Claims and accounts.** Only the claims the request and the end-user
   allow are released, and a `ClaimsSource` cannot override a protocol claim
-  — not even under a case variant (`SUB`, `ſub`, `s.u.b`, `iß`, `ïss`) that a
+  — not even under a case variant (`SUB`, `ſub`, `s.u.b`, `iß`, `ïss`) or a
+  `#` alias (`sub#x`, `s#ub-fr`, `email#verified`) that a
   relying party matching names case-insensitively (Go's `encoding/json`
   among them) or normalizing them to camelCase would read as `sub` or
   `iss`. Other spellings of known claims
@@ -869,9 +873,10 @@ is, never for the protocol rules:
   every application claim relying parties decide on in
   `Config.ClaimsSupported`, and keep the claim names end-users choose apart
   from them (see [oidc-provider.md](oidc-provider.md#claims)).
-  `ErrUnknownSubject` stops an OpenID grant at its next exchange; plain
-  OAuth 2.0 grants carry no context and are not checked, so disabling an
-  end-user must also revoke their token families.
+  `ErrUnknownSubject` stops an OpenID grant, or a plain OAuth 2.0 grant
+  `Provider.AuthorizeHandler` approved, at its next exchange; other plain
+  grants and issued access tokens are not checked, so disabling an end-user
+  must also revoke their token families.
 - **UserInfo serves personal data** to bearer tokens of OpenID grants of the
   request's issuer only, with `Cache-Control: no-store`. Allow browser
   origins (CORS) deliberately.
@@ -1872,8 +1877,10 @@ span catalog.
       from an unvalidated `Host`; a `KeySource` backed by your key store,
       rotated through `KeyRing.Published` (publish, sign, retire once the ID
       Tokens it signed have expired); access-token audiences that are never
-      client IDs; `RefreshTokenScope = offline_access`; sessions scoped to
-      their realm (and tenant), and clients to their issuers
+      relying parties' client IDs, and a `ClientStore` answering unknown IDs
+      with `(nil, nil)` or `invalid_client`; `RefreshTokenScope =
+      offline_access`; sessions scoped to their realm (and tenant), and
+      clients to their issuers
       (`IssuerBoundClient`); CSRF tokens and anti-framing headers on the
       login and consent pages; `ErrUnknownSubject` from the `ClaimsSource`
       for disabled end-users, whose token families you also revoke; every
