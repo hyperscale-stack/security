@@ -246,8 +246,8 @@ func TestAccessTokenNotAcceptedAsIDToken(t *testing.T) {
 }
 
 // TestIDTokenKeySelection checks RFC 8725 §3.1 (a key is used with exactly
-// one algorithm), §3.10 (keys only from the issuer's jwks_uri, never from
-// jwk/jku/x5u headers) and Core §10.1 (kid).
+// one algorithm), §3.10 (keys only from the issuer's jwks_uri: a jwk, jku or
+// x5u header is refused, never followed) and Core §10.1 (kid).
 func TestIDTokenKeySelection(t *testing.T) {
 	t.Parallel()
 
@@ -274,7 +274,7 @@ func TestIDTokenKeySelection(t *testing.T) {
 	runIDCases(t, []idCase{
 		{name: "unknown kid", err: oidcclient.ErrUnknownSigningKey, setup: func(op *fakeOP) { op.signer.kid = "ghost" }},
 		{
-			name: "embedded jwk of the attacker under the published kid", err: oidcclient.ErrIDTokenSignature,
+			name: "embedded jwk of the attacker under the published kid", err: oidcclient.ErrIDTokenMalformed,
 			setup: func(op *fakeOP) {
 				op.idTokenHook = func(g *grant) string {
 					payload, err := json.Marshal(op.idClaims(g))
@@ -296,8 +296,8 @@ func TestIDTokenKeySelection(t *testing.T) {
 				}
 			},
 		},
-		{name: "jku header never followed", err: oidcclient.ErrIDTokenSignature, setup: signedBy(keyEvil("rsa-1"), map[string]any{"jku": evil.URL + "/jwks"})},
-		{name: "x5u header never followed", err: oidcclient.ErrIDTokenSignature, setup: signedBy(keyEvil("rsa-1"), map[string]any{"x5u": evil.URL + "/cert"})},
+		{name: "jku header never followed", err: oidcclient.ErrIDTokenMalformed, setup: signedBy(keyEvil("rsa-1"), map[string]any{"jku": evil.URL + "/jwks"})},
+		{name: "x5u header never followed", err: oidcclient.ErrIDTokenMalformed, setup: signedBy(keyEvil("rsa-1"), map[string]any{"x5u": evil.URL + "/cert"})},
 		{name: "another key under the published kid", err: oidcclient.ErrIDTokenSignature, setup: signedBy(keyEvil("rsa-1"), nil)},
 		{name: "no kid, single key", setup: func(op *fakeOP) { op.signer.kid = ""; op.jwks = []jose.JSONWebKey{keyRSA(jose.RS256, "").jwk()} }},
 		{name: "no kid, one compatible key among others", setup: func(op *fakeOP) {

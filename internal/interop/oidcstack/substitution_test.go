@@ -121,12 +121,12 @@ func TestResignedIDTokensAreRefused(t *testing.T) {
 				h["kid"], h["jku"], h["x5u"] = "attacker", keyURL.URL+"/jwks", keyURL.URL+"/x5u"
 				h["jwk"] = publicJWK(rsaKeys()[10], "attacker")
 			}, nil)
-		}, oidcclient.ErrUnknownSigningKey, true, nil},
+		}, oidcclient.ErrIDTokenMalformed, true, nil},
 		{"the provider's kid, the attacker's embedded key", oidcclient.AuthOptions{}, func(t *testing.T, _ *op, tok string) string {
 			return resign(t, tok, "RS256", attackerKey(), func(h map[string]any) {
 				h["jku"], h["jwk"] = keyURL.URL+"/jwks", publicJWK(rsaKeys()[10], "root-rs256")
 			}, nil)
-		}, oidcclient.ErrIDTokenSignature, true, nil},
+		}, oidcclient.ErrIDTokenMalformed, true, nil},
 		{"alg none", oidcclient.AuthOptions{}, func(t *testing.T, _ *op, tok string) string {
 			return resign(t, tok, "none", nil, nil, nil)
 		}, oidcclient.ErrIDTokenAlgorithm, true, nil},

@@ -29,6 +29,22 @@ const maxSubjectLength = 255
 // package accepts.
 const maxNumericDate = 253402300799
 
+// maxIDTokenHeaderSize bounds the decoded JOSE header of an ID Token, in
+// bytes; real headers are a few hundred bytes.
+const maxIDTokenHeaderSize = 4 << 10
+
+// keyHeaders are the JOSE header parameters that carry or locate a key or
+// certificate (RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6). RFC 7515 §4 lets
+// a recipient ignore them; an ID Token using one is refused instead, a
+// local policy: ID Tokens SHOULD NOT use them (OpenID Connect Core §2), the
+// client uses the issuer's keys only (Core §3.1.3.7, RFC 7515 §6), a URL in
+// a token is never followed (RFC 8725 §3.10), and go-jose parses jwk and
+// x5c — validating an embedded RSA private key at a cost cubic in its
+// size, GHSA-mgcc-cww5-fp2q — before it checks the algorithm, the key or
+// the signature. x5t and x5t#S256, thumbprints go-jose does not parse, stay
+// ignored.
+var keyHeaders = []string{"jwk", "x5c", "jku", "x5u"}
+
 // idTokenClaims holds the claims the Client validates; the whole claims
 // set is returned in Identity.Claims.
 type idTokenClaims struct {
@@ -97,11 +113,16 @@ func (c *Client) verifyLogin(ctx context.Context, tokens Tokens, tx *Transaction
 	}, nil
 }
 
-// verifyIDToken parses the JWS Compact Serialization (RFC 7515 §7.1) — JWE
-// and the JSON serialization are refused — with the effective algorithm
-// allow-list, checks its explicit type, and verifies the signature with a
-// key of the issuer's JWK Set (never one named by jwk, jku, x5u or x5c).
+// verifyIDToken checks the JOSE header (checkRawHeader: bounded, strict
+// JSON, no jwk, x5c, jku or x5u), then parses the JWS Compact Serialization
+// (RFC 7515 §7.1) — JWE and the JSON serialization are refused — with the
+// effective algorithm allow-list, checks its explicit type, and verifies
+// the signature with a key of the issuer's JWK Set.
 func (c *Client) verifyIDToken(ctx context.Context, raw string) (Algorithm, []byte, error) {
+	if err := checkRawHeader(raw); err != nil {
+		return "", nil, err
+	}
+
 	jws, err := jose.ParseSignedCompact(raw, c.joseAlgs)
 	if err != nil {
 		var algErr *jose.ErrUnexpectedSignatureAlgorithm
@@ -142,6 +163,47 @@ func checkHeader(h jose.Header) error {
 	for _, name := range []jose.HeaderKey{jose.HeaderContentType, "crit", "b64"} {
 		if _, ok := h.ExtraHeaders[name]; ok {
 			return fmt.Errorf("%w: header %s", ErrIDTokenType, name)
+		}
+	}
+
+	return nil
+}
+
+// checkRawHeader checks the JOSE header of raw before go-jose parses the
+// token. It decodes it as go-jose does — the text before the first ".",
+// unpadded base64url — and requires, never more leniently than go-jose:
+//
+//   - at most maxIDTokenHeaderSize bytes, checked on the encoded length
+//     before decoding (go-jose decodes a header into maps about 100 times
+//     its size);
+//   - a strict JSON object (decodeStrict: valid UTF-8, no unpaired
+//     surrogate, no member names equal under case folding, exact and
+//     escaped duplicates included — RFC 7515 §4, RFC 7519 §7.2 step 4,
+//     RFC 8725 §3.7), so go-jose reads the typ and alg checked afterwards;
+//   - none of keyHeaders, whatever its value.
+//
+// Every refusal is ErrIDTokenMalformed with a fixed text: the header, chosen
+// by the provider, is never echoed.
+func checkRawHeader(raw string) error {
+	head, _, _ := strings.Cut(raw, ".") // without a ".", go-jose refuses the token next
+
+	if len(head) > base64.RawURLEncoding.EncodedLen(maxIDTokenHeaderSize) {
+		return fmt.Errorf("%w: JOSE header larger than %d bytes", ErrIDTokenMalformed, maxIDTokenHeaderSize)
+	}
+
+	decoded, err := base64.RawURLEncoding.DecodeString(head)
+	if err != nil {
+		return fmt.Errorf("%w: JOSE header is not base64url", ErrIDTokenMalformed)
+	}
+
+	var members map[string]josejson.RawMessage
+	if decodeStrict(decoded, &members) != nil {
+		return fmt.Errorf("%w: JOSE header is not a strict JSON object", ErrIDTokenMalformed)
+	}
+
+	for _, name := range keyHeaders {
+		if _, ok := members[name]; ok {
+			return fmt.Errorf("%w: unsupported %q header parameter", ErrIDTokenMalformed, name)
 		}
 	}
 
