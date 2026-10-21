@@ -11,7 +11,10 @@
 //
 // Only the Authorization-header scheme (RFC 6750 §2.1) is supported;
 // query-parameter tokens (§2.3) are intentionally not offered — they leak
-// into access logs, browser history, and Referer headers.
+// into access logs, browser history, and Referer headers. The Extractor
+// enforces its syntax — "Bearer" 1*SP b64token, at most
+// DefaultMaxTokenLength bytes —: a malformed credential is a malformed
+// request (400 invalid_request) and never reaches the TokenVerifier.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security (core)

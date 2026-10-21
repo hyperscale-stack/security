@@ -2760,3 +2760,32 @@ counts as none: the default mapper answers.
 
 To migrate: build every component with non-nil dependencies; a panic at
 start-up names the constructor and the dependency.
+
+### `bearer`: the Authorization field follows the RFC 6750 syntax
+
+The Bearer extractor took everything after `Bearer ` as the token: extra
+spaces, a second word, a comma and a second credential, quotes,
+non-ASCII and 64 KiB values reached the `TokenVerifier`, and were answered
+401 `invalid_token` instead of 400 `invalid_request`; `Bearer` alone,
+`Bearer ` and `Bearer<TAB>token` counted as no credential at all (an
+anonymous request). It now follows RFC 6750 §2.1 to the letter:
+`credentials = "Bearer" 1*SP b64token`.
+
+| Authorization field | Before | After |
+| --- | --- | --- |
+| `Bearer  abc` (several spaces) | token `" abc"` | token `abc` |
+| `Bearer`, `Bearer `, `Bearer<TAB>abc` | no credential (anonymous) | `ErrInvalidRequest` — 400 `invalid_request` |
+| `Bearer abc def`, `Bearer abc, Basic …`, a character outside the b64token alphabet, `=` before the end, a trailing space | passed to the verifier | `ErrInvalidRequest` — 400 `invalid_request` |
+| A token over 16 KiB | passed to the verifier | `ErrInvalidCredentials` — 401 `invalid_token` |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer  abc")` | `(" abc", true)` | `("abc", true)` |
+| `httpsec.ExtractAuthorizationValue("Bearer", "Bearer")` | `("", false)` | `("", true)` — the scheme alone |
+
+To migrate:
+
+1. Clients send `Bearer <token>`: a conforming client is not affected.
+2. Tokens longer than 16 KiB (`bearer.DefaultMaxTokenLength`, the bound
+   `jwtsec.DefaultMaxTokenSize` gives JWTs): raise both together —
+   `bearer.NewExtractor(bearer.WithMaxTokenLength(n))` and
+   `jwtsec.WithMaxTokenSize(n)`.
+3. Application extractors calling `httpsec.ExtractAuthorizationValue`
+   refuse an empty value when the result is `ok`: the scheme stood alone.

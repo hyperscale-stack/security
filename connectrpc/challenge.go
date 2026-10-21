@@ -72,7 +72,7 @@ func withBearerToken(ctx context.Context, header http.Header) context.Context {
 	sent := false
 
 	for _, v := range header.Values("Authorization") {
-		if scheme, _, _ := strings.Cut(v, " "); strings.EqualFold(scheme, "Bearer") {
+		if strings.EqualFold(authScheme(v), "Bearer") {
 			sent = true
 
 			break
@@ -86,4 +86,14 @@ func bearerTokenSent(ctx context.Context) bool {
 	sent, _ := ctx.Value(bearerTokenKey{}).(bool)
 
 	return sent
+}
+
+// authScheme returns the auth-scheme of an Authorization field value: its
+// first word, ended by a space, a tab or the end.
+func authScheme(v string) string {
+	if i := strings.IndexAny(v, " \t"); i >= 0 {
+		return v[:i]
+	}
+
+	return v
 }

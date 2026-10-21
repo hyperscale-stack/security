@@ -135,6 +135,12 @@ func TestExtractAuthorizationValueIsCaseInsensitive(t *testing.T) {
 		{"wrong_scheme", "Basic", "Bearer xyz", "", false},
 		{"too_short", "Bearer", "Bea", "", false},
 		{"empty", "Bearer", "", "", false},
+		// RFC 9110 §11.4: the scheme, then 1*SP (audit F-17).
+		{"several_spaces", "Bearer", "Bearer   abc", "abc", true},
+		{"scheme_alone", "Bearer", "Bearer", "", true},
+		{"scheme_and_spaces", "Bearer", "Bearer  ", "", true},
+		{"longer_scheme", "Bearer", "BearerX abc", "", false},
+		{"tab_separator", "Bearer", "Bearer\tabc", "", false},
 	}
 
 	for _, c := range cases {

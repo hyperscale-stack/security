@@ -9,6 +9,7 @@ import (
 	"net/textproto"
 	"testing"
 
+	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/bearer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,13 +77,15 @@ func TestExtractorCaseInsensitiveOnScheme(t *testing.T) {
 	assert.NotNil(t, got)
 }
 
-func TestExtractorIgnoresEmptyToken(t *testing.T) {
+// RFC 6750 §2.1, §3.1 (audit F-17): "Bearer " without a token is a
+// malformed Bearer credential, not the absence of one.
+func TestExtractorRefusesAnEmptyToken(t *testing.T) {
 	t.Parallel()
 
 	c := newCarrier()
 	c.Set("Authorization", "Bearer ")
 
 	got, err := bearer.NewExtractor().Extract(context.Background(), c)
-	require.NoError(t, err)
-	assert.Nil(t, got, "Bearer with empty token must let downstream extractors try")
+	require.ErrorIs(t, err, security.ErrInvalidRequest)
+	assert.Nil(t, got)
 }

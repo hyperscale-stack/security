@@ -60,6 +60,9 @@ func TestDefaultErrorMapperAnswers(t *testing.T) {
 	}{
 		{"invalid request, bearer", "Bearer", security.ErrInvalidRequest, bearerTokenSent, http.StatusBadRequest, challenge(invalidRequest)},
 		{"invalid request, no token", "Bearer", security.ErrInvalidRequest, "", http.StatusBadRequest, challenge(bearerAPI)},
+		// A malformed Bearer credential is a bearer attempt (audit F-17).
+		{"invalid request, bearer scheme alone", "Bearer", security.ErrInvalidRequest, "Bearer", http.StatusBadRequest, challenge(invalidRequest)},
+		{"invalid request, bearer and tab", "Bearer", security.ErrInvalidRequest, "Bearer\tabc", http.StatusBadRequest, challenge(invalidRequest)},
 		{"invalid request, basic credentials", "Bearer", security.ErrInvalidRequest, "Basic dTpw", http.StatusBadRequest, challenge(bearerAPI)},
 		{"unavailable", "Bearer", security.ErrUnavailable, bearerTokenSent, http.StatusServiceUnavailable, challenge(bearerAPI)},
 		{"unavailable joined with a verdict", "Bearer", refused(security.ErrTokenNotFound, security.ErrUnavailable), bearerTokenSent, http.StatusServiceUnavailable, challenge(bearerAPI)},

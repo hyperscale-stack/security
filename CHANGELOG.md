@@ -1021,6 +1021,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and `session` authenticators, instead of on the first request;
   `session.NewExtractor(nil)` panics too, and a typed-nil `ErrorMapper`
   counts as none. See [MIGRATION.md](MIGRATION.md).
+- `bearer.Extractor` enforces RFC 6750 §2.1 (`"Bearer" 1*SP b64token`):
+  a malformed Bearer credential — the scheme alone, a tab, an empty token,
+  a character outside the b64token alphabet, a second word or credential —
+  is refused with `ErrInvalidRequest` (400 `invalid_request`, §3.1) instead
+  of reaching the `TokenVerifier` or counting as no credential, and a
+  token over `DefaultMaxTokenLength` (16 KiB, `WithMaxTokenLength`) with
+  `ErrInvalidCredentials` (401 `invalid_token`). Several spaces after the
+  scheme are accepted. `httpsec.ExtractAuthorizationValue` strips
+  `1*SP` and returns `("", true)` for the scheme alone; the `httpsec` and
+  `connectrpcsec` mappers recognize a Bearer credential ended by a tab.
+  See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 

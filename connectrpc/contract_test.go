@@ -150,6 +150,7 @@ func TestWrapUnaryChallengesAMalformedRequest(t *testing.T) {
 		"Bearer then Basic":     {[]string{"Bearer letmein", "Basic dTpw"}, invalidRequest},
 		"uppercase BEARER ×2":   {[]string{"BEARER a", "BEARER b"}, invalidRequest},
 		"Digest then lowercase": {[]string{"Digest x", "bearer b"}, invalidRequest},
+		"Bearer and tab ×2":     {[]string{"Bearer\ta", "Bearer\tb"}, invalidRequest},
 	} {
 		_, err := authn.WrapUnary((&recordingUnary{}).fn)(context.Background(), requestWith(c.fields...))
 
