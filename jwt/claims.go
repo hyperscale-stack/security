@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -17,11 +18,12 @@ import (
 )
 
 // The JSON types of the registered claims StandardClaims decodes (RFC 7519
-// §4.1; scope: RFC 8693 §4.2). A member of another type — null included —
+// §4.1; scope and client_id: RFC 8693 §4.2, §4.3). A member of another
+// type — null included —
 // is refused, never read as an absent claim: "nbf": null must not disable
 // the not-before check.
 var (
-	stringClaims = []string{claimIss, claimSub, claimJti, claimScope}
+	stringClaims = []string{claimIss, claimSub, claimJti, claimScope, claimClientID}
 	dateClaims   = []string{claimExp, claimNbf, claimIat}
 )
 
@@ -124,9 +126,11 @@ func isAudience(raw []byte) bool {
 	}
 }
 
-// StandardClaims maps the RFC 7519 registered claims plus the OAuth2-friendly
-// `scope` claim (RFC 9068 §2.2.3). Custom claims belong in caller-defined
-// structs that embed StandardClaims.
+// StandardClaims maps the RFC 7519 registered claims plus the OAuth 2.0
+// `scope` and `client_id` claims (RFC 8693 §4.2-§4.3, RFC 9068 §2.2).
+// Custom claims belong in caller-defined structs that embed StandardClaims
+// — without a member of their own named like one of these, which would
+// shadow it, or, at the same depth, make the decoders drop both.
 type StandardClaims struct {
 	// Issuer is the `iss` claim — who minted the token.
 	Issuer string `json:"iss,omitempty"`
@@ -146,6 +150,29 @@ type StandardClaims struct {
 	JWTID string `json:"jti,omitempty"`
 	// Scope is the OAuth2 scope claim, space-separated per RFC 9068 §2.2.3.
 	Scope string `json:"scope,omitempty"`
+	// ClientID is the `client_id` claim (RFC 8693 §4.3; RFC 9068 §2.2:
+	// REQUIRED in an access token) — the OAuth 2.0 client the token was
+	// issued to. In a token whose Subject equals it, the subject is that
+	// client, not a resource owner: RFC 9068 §2.2 makes sub the client's
+	// identifier for grants without one, as client_credentials (see
+	// [AccessTokenPrincipal.SubjectIsClient], RFC 9700 §4.15).
+	ClientID string `json:"client_id,omitempty"`
+}
+
+// clone returns a deep copy of c: a caller-supplied hook can change it
+// without changing c.
+func (c *StandardClaims) clone() *StandardClaims {
+	out := *c
+	out.Audience = slices.Clone(c.Audience)
+
+	for _, d := range []**NumericDate{&out.ExpiresAt, &out.NotBefore, &out.IssuedAt} {
+		if *d != nil {
+			v := **d
+			*d = &v
+		}
+	}
+
+	return &out
 }
 
 // Audience is a flexible JSON representation of the `aud` claim. It marshals

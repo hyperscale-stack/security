@@ -124,7 +124,13 @@ protections.
   token's `alg` — a key without one verifies nothing — and an asymmetric key
   must pass `PublicKey.Validate` (RSA of at least 2048 bits, the algorithm's
   curve, a public key: a private key or a `jose.JSONWebKey` wrapper verifies
-  nothing). A `kid` shared by several keys designates none.
+  nothing; an Ed25519 key must have a canonical y-coordinate, RFC 8032
+  §5.1.3, that is not one of a point of small order — forgeries verify
+  against the all-zero key and the identity point; a y-coordinate of no
+  point of the curve is not detected, and verifies nothing). A `kid` shared
+  by several keys designates none.
+  RSASSA-PSS signatures must use a salt of the hash size (RFC 7518 §3.5;
+  go-jose alone accepts any).
 - **Claim smuggling** (RFC 7519 §4, §7.3, §10.1.1) — claims are decoded
   case-sensitively, by go-jose's decoder, into `StandardClaims` and into the
   caller's `claimsOut` alike. A claims set whose member names repeat —
@@ -137,8 +143,12 @@ protections.
   not-before check.
 - **Oversized and malformed tokens** — a token over
   `DefaultMaxTokenSize` (16 KiB, `WithMaxTokenSize`) is refused before any
-  decoding (go-jose decodes a header at about 100 times its size before
-  checking the algorithm); only the canonical compact serialization is
+  decoding, and so is a JOSE header that decodes to more than 4 KiB,
+  whatever the token bound: go-jose decodes the header into maps, 70 to 260
+  times its size depending on its shape, before checking the algorithm
+  (about 1 MiB and 1 ms at the bound, `BenchmarkVerifyHostileHeader`), and
+  the payload is only base64-decoded before the signature is verified;
+  only the canonical compact serialization is
   accepted (unpadded base64url, no whitespace, zero pad bits), with a strict
   JSON header that uses neither `crit` nor `b64` (RFC 7515 §4.1.11, RFC 7797
   §7: a JWT never uses `b64: false`). Values copied from a token into errors
@@ -181,6 +191,23 @@ keys by `kid` against a JWKS provider (static or remote).
   only when the resource server's audience is never the `client_id` of a
   client of that issuer. Untyped access tokens are never accepted by
   `BearerVerifier`. `NewVerifier` keeps these checks opt-in for other JWTs.
+- **Client tokens versus resource-owner tokens** (RFC 9700 §4.15) — a
+  `client_credentials` token's `sub` is its client ID (RFC 9068 §2.2), so a
+  client registered under a user's subject would get a token naming that
+  user. `StandardClaims.ClientID` carries `client_id`, and the principal of
+  `BearerVerifier` is an `AccessTokenPrincipal` whose `SubjectIsClient()`
+  reports `sub == client_id`: refuse resource-owner data when it is true.
+  It is a refusal rule only — a user whose subject equals the ID of the
+  client they use reports true as well — so grant client privileges by
+  `ClientID()` and scopes. Amazon Cognito's client-credentials tokens are
+  classified alike; Keycloak (service-account UUID), Auth0 (`…@clients`),
+  Okta and Microsoft Entra ID give client tokens subjects of their own and
+  always report false. A token without `client_id` reports false too: with
+  an issuer that sets `sub` to the client ID but omits `client_id`, the
+  resource server cannot tell the two kinds apart and relies on disjoint
+  client and user identifiers only. Check the principal's type with a
+  checked assertion: another authenticator, or the anonymous fallback,
+  gives another principal.
 - **Remote key sets** — `NewRemoteJWKS` fetches through
   [`outbound`](#outbound-requests-ssrf): https only, publicly routable
   destinations judged at dial time, no redirect, no proxy, 10 s and 1 MiB.
@@ -208,6 +235,11 @@ keys by `kid` against a JWKS provider (static or remote).
   error for a key unfit for its algorithm (RSA under 2048 or over 4096 bits,
   another curve, a public key, an HMAC secret shorter than its hash); KMS and
   HSM keys (`jose.OpaqueSigner`) are checked through their public half.
+  Every token carries its key's `KeyID` as `kid` (RFC 7515 §4.1.4) — HMAC
+  tokens included, so HMAC keys rotate like the others. An opaque PS* signer
+  is checked at every signature: one whose salt is not the hash size —
+  go-jose's `cryptosigner.Opaque` over an in-process key — makes `Sign` fail
+  with `ErrInvalidKey`, so no token is issued that verifiers refuse.
   `MarshalJWKS` refuses an RSA key over 4096 bits too. The 4096-bit cap is
   go-jose's since v4.1.6: a larger published key breaks its consumers — this
   library's remote key sets and `oidc/client` ignore it, go-jose's
@@ -219,8 +251,10 @@ keys by `kid` against a JWKS provider (static or remote).
   `IssuerResolver` must return a non-empty audience for JWT access tokens.
 - **Token strings are not unique** — an ECDSA signature has a second valid
   form (RFC 7518 §3.4 has no low-S rule; refusing it would refuse half of
-  the legitimate tokens): never key a cache, replay check or deny-list on
-  the token string — use `jti`.
+  the legitimate tokens, and normalising this package's own signatures
+  would not remove the twin anyone can compute): never key a cache, replay
+  check or deny-list on the token string — use `jti`, or accept only the
+  string the store holds (`WithActiveTokenCheck`).
 
 ## OAuth2
 
@@ -253,7 +287,11 @@ keys by `kid` against a JWKS provider (static or remote).
   for `code`, `implicit` for `token`) before the extension and the
   `ConsentFunc` run;
   `client_credentials` refuses every client that is not confidential (RFC
-  6749 §4.4); a consent narrows the requested scope, never broadens it; a
+  6749 §4.4), and its tokens' `Subject` is the client ID (RFC 9068 §2.2) —
+  a resource server reading the store tells them from a resource owner's by
+  `AccessToken.ClientID == AccessToken.Subject` (or an empty
+  `ExtensionData`), and keeps client IDs out of the user-subject namespace
+  when clients choose them (RFC 9700 §4.15.1); a consent narrows the requested scope, never broadens it; a
   refresh token goes only to a client declaring `refresh_token` (RFC 9700
   §4.14.2), and a refresh issues an access token only within the client's
   current scope registration, so shrinking a registration takes effect at
@@ -735,18 +773,24 @@ resource server that verifies JWT access tokens offline, from their
 signature and claims (`jwtsec.BearerVerifier`): such a token stays valid
 until its `exp`, whatever happened to its family — including the tokens
 revoked after an authorization-code replay: deleting or flagging store
-records never invalidates a signature. The RFC 9068 payload the
-`jwtsec` signer emits carries a token identifier (`jti`) but no family, and
-no deny-list is shipped. RFC 7009 §2.1 acknowledges such a
+records never invalidates a signature. RFC 7009 §2.1 acknowledges such a
 propagation delay and asks implementations to minimize it; its §3 leaves
 immediate revocation of self-contained tokens to non-standardized backend
 interaction, and suggests short-lived access tokens instead. To bound the
 window:
 
 - keep `grant.Config.AccessTTL` short when access tokens are JWTs;
-- for high-value operations, validate the token against the authorization
-  server — RFC 7662 introspection, or `LookupAccessToken` when the resource
-  server shares the store — rather than offline;
+- give `BearerVerifier` that backend interaction,
+  `jwtsec.WithActiveTokenCheck`: it runs after every other check, in a
+  `jwtsec.BearerVerifier.ActiveTokenCheck` span, and refuses the token
+  (`ErrTokenInactive`, 401) unless the authorization server reports it
+  active. With a store shared with the authorization server, look the token
+  up by `oauth2.HashToken(nil, token)` with `LookupAccessToken` — an
+  `invalid_grant` `*oauth2.Error` means inactive, any other error means the
+  check could not be made (wrap `security.ErrUnavailable`: 503); otherwise
+  call RFC 7662 introspection. Accept only a token found active, never
+  deny-list token strings: an ECDSA token has a second valid form, which
+  the store does not know and a deny-list would miss;
 - or issue opaque access tokens, which only the store can validate.
 
 ## OpenID Provider

@@ -5,6 +5,7 @@
 package jwtsec
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -168,9 +169,13 @@ func isHMAC(alg Algorithm) bool { return hmacKeySize(alg) > 0 }
 // that is not the public key that algorithm takes — an *rsa.PublicKey of at
 // least 2048 bits for RS* and PS* (RFC 7518 §3.3, §3.5), an *ecdsa.PublicKey
 // on the curve of ES256 / ES384 / ES512 (RFC 7518 §3.4), an
-// ed25519.PublicKey for EdDSA (RFC 8037). A private key is refused: one key,
-// one use, and private material never travels as a PublicKey. The kid is
-// not checked.
+// ed25519.PublicKey for EdDSA (RFC 8037) whose encoding has a canonical
+// y-coordinate (RFC 8032 §5.1.3 steps 1 and 4) that is not one of a point
+// of small order — the all-zero key and the identity are refused, as
+// forgeries verify against them (RFC 8725 §3.4); a y-coordinate of no
+// point of the curve is not detected, and verifies nothing. A private key
+// is refused: one key, one use, and private material never travels as a
+// PublicKey. The kid is not checked.
 func (k PublicKey) Validate() error {
 	family, curve := familyOf(k.Algorithm)
 
@@ -182,7 +187,7 @@ func (k PublicKey) Validate() error {
 	case *ecdsa.PublicKey:
 		ok = family == familyEC && key.Curve == curve && validECPublicKey(key)
 	case ed25519.PublicKey:
-		ok = family == familyEd25519 && len(key) == ed25519.PublicKeySize
+		ok = family == familyEd25519 && validEd25519PublicKey(key)
 	}
 
 	if !ok {
@@ -192,12 +197,80 @@ func (k PublicKey) Validate() error {
 	return nil
 }
 
+// ed25519SmallOrderY are the y-coordinates, little-endian with bit 255
+// clear, of the 8 points of order dividing 8 on Ed25519: 0 (order 4), 1
+// (the identity), p − 1 (order 2) and the two of the order-8 points.
+var ed25519SmallOrderY = [][ed25519.PublicKeySize]byte{
+	{},
+	{0x01},
+	{
+		0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+	},
+	{
+		0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+		0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05,
+	},
+	{
+		0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+		0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a,
+	},
+}
+
+// validEd25519PublicKey reports whether key is a 32-byte Ed25519 public key
+// a verifier may use: the canonical encoding of a point not of small
+// order. RFC 8032 §5.1.3 fails the decoding of a y-coordinate ≥ p (step 1)
+// and of x = 0 with its sign bit set (step 4), and §5.1.7 step 1 makes a
+// signature under a key that fails to decode invalid — crypto/ed25519
+// decodes both. A small-order key verifies forgeries: against the identity
+// point, R = B and S = 1 sign any message; against the all-zero key (y =
+// 0, order 4), R = identity and S = 0 sign one message in four (RFC 8725
+// §3.4: validate cryptographic inputs). The sign bit is ignored when
+// comparing with the small-order y-coordinates, which also refuses the
+// x = 0 encodings. A point off the curve is not detected here: it verifies
+// nothing, crypto/ed25519 failing to decode it.
+func validEd25519PublicKey(key ed25519.PublicKey) bool {
+	if len(key) != ed25519.PublicKeySize {
+		return false
+	}
+
+	var y [ed25519.PublicKeySize]byte
+
+	copy(y[:], key)
+	y[31] &= 0x7f
+
+	if !belowP(y) {
+		return false
+	}
+
+	return !slices.Contains(ed25519SmallOrderY, y)
+}
+
+// belowP reports whether y, a little-endian 255-bit integer, is below the
+// field order p = 2^255 − 19 (little-endian: 0xed, then 30 × 0xff, then
+// 0x7f): only y ∈ [p, 2^255 − 1] has its 31 high bytes at their maximum
+// and its low byte at 0xed or more.
+func belowP(y [ed25519.PublicKeySize]byte) bool {
+	if y[31] != 0x7f || y[0] < 0xed {
+		return true
+	}
+
+	for _, b := range y[1:31] {
+		if b != 0xff {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Validate reports, wrapping [ErrInvalidKey], why k cannot sign with its
 // algorithm: the private counterpart of [PublicKey.Validate] — an
 // *rsa.PrivateKey of 2048 to 4096 bits for RS* and PS* (see maxRSABits:
 // a larger published key breaks go-jose ≥ v4.1.6 consumers), an
 // *ecdsa.PrivateKey on the algorithm's curve for ES*, an
-// ed25519.PrivateKey for EdDSA. HMAC secrets and public keys are refused.
+// ed25519.PrivateKey for EdDSA whose public half is the one its seed
+// derives. HMAC secrets and public keys are refused.
 func (k PrivateKey) Validate() error {
 	if _, err := k.Public(); err != nil {
 		return err
@@ -221,7 +294,7 @@ func (k PrivateKey) Public() (PublicKey, error) {
 	case *ecdsa.PrivateKey:
 		ok = family == familyEC && key.Curve == curve && validECPrivateKey(key)
 	case ed25519.PrivateKey:
-		ok = family == familyEd25519 && len(key) == ed25519.PrivateKeySize
+		ok = family == familyEd25519 && validEd25519PrivateKey(key)
 	}
 
 	if !ok {
@@ -231,6 +304,21 @@ func (k PrivateKey) Public() (PublicKey, error) {
 	signer, _ := k.Key.(crypto.Signer) // every type accepted above is one
 
 	return PublicKey{KeyID: k.KeyID, Algorithm: k.Algorithm, Key: signer.Public()}, nil
+}
+
+// validEd25519PrivateKey reports whether key is an Ed25519 private key —
+// a seed followed by its public key (RFC 8032 §5.1.5) — whose public half
+// is the one its seed derives. A key whose second half is anything else —
+// the all-zero buffer, whose public half is a small-order point, or two
+// keys spliced together — signs with a public key that is not its own:
+// its signatures verify under no key, and the public half it would
+// publish may be one PublicKey.Validate refuses.
+func validEd25519PrivateKey(key ed25519.PrivateKey) bool {
+	if len(key) != ed25519.PrivateKeySize {
+		return false
+	}
+
+	return bytes.Equal(ed25519.NewKeyFromSeed(key.Seed())[ed25519.SeedSize:], key[ed25519.SeedSize:])
 }
 
 // validECPublicKey reports whether key is a valid point of its curve.

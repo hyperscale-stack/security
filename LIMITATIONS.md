@@ -35,12 +35,23 @@ future refactor phases.
   `oidc/provider` `JWKSHandler`, which serves the issuer's public keys, or
   publish your own with `jwtsec.MarshalJWKS` (it refuses private and
   symmetric keys).
+- **Client and user subjects share `sub`** — a `client_credentials`
+  token's `sub` is its client ID (RFC 9068 §2.2): a resource server tells
+  it from a resource owner's token with
+  `jwtsec.AccessTokenPrincipal.SubjectIsClient()` (JWT) or
+  `AccessToken.ClientID == AccessToken.Subject` (store lookup), which also
+  holds for a user whose subject equals the ID of the client they use, and
+  never for a token without `client_id` (an issuer omitting it leaves
+  disjoint identifiers as the only defence). Use it to refuse, and keep
+  client IDs out of the user-subject namespace when clients can influence
+  them (RFC 9700 §4.15.1).
 - **Offline JWT access tokens are not revocable** — a token-family
   revocation takes effect in the store, not at resource servers verifying
-  JWT access tokens offline (`jwtsec.BearerVerifier`): the RFC 9068 payload
-  carries a `jti` but no family, and no deny-list is shipped, so such a token
-  stays valid until it expires. Keep their lifetime short, or validate
-  against the store. See
+  JWT access tokens offline (`jwtsec.BearerVerifier`): such a token stays
+  valid until it expires, unless the resource server asks the
+  authorization server with `jwtsec.WithActiveTokenCheck` (a lookup in a
+  shared store, or RFC 7662 introspection — a request per token). Keep
+  their lifetime short. See
   [docs/security-considerations.md](docs/security-considerations.md#offline-jwt-access-tokens).
 - **Redis Cluster** — not supported by `oauth2/store/redis`: its Lua
   scripts touch keys of several hash slots. Use a standalone server or a
@@ -315,9 +326,12 @@ PKCE. Not supported, and refused where a provider could select them:
 ## JWT (`jwtsec`)
 
 - **Token strings are not unique** — an ECDSA signature has a second valid
-  form (s and n − s): the verifier accepts both, since refusing the "high"
-  one would refuse half of the legitimate tokens of other signers. Never key
-  a cache, replay check or deny-list on the token string; use `jti`.
+  form (s and n − s): the verifier accepts both, since RFC 7518 §3.4 sets no
+  low-S rule and refusing the "high" one would refuse half of the legitimate
+  tokens of other signers. Never key a cache, replay check or deny-list on
+  the token string; use `jti`. An `ActiveTokenCheck` looking tokens up in
+  the store accepts only the string the server issued, and so refuses the
+  twin.
 - **Untyped access tokens** — `BearerVerifier` accepts only access tokens
   typed `at+jwt` (RFC 9068 §4), or the type named by `WithAccessTokenType`.
   An authorization server that sends no `typ` cannot be served by it: wrap
@@ -336,7 +350,9 @@ PKCE. Not supported, and refused where a provider could select them:
   `"sub"` next to `"Sub"`).
 - **Key identifiers** — a `kid` shared by several keys designates no key,
   even keys of different types that RFC 7517 §4.5 allows to share one; a
-  token without `kid` is verified against a single-key set only.
+  token without `kid` is verified against a single-key set only. Signers
+  write their key's `KeyID` as the `kid` of every token, HMAC included: a
+  verification key must carry the same `KeyID`.
 - **Remote JWK Set policy** — the TTL is configurable (`WithCacheTTL`); the
   minimum refresh interval (10 s), the back-off cap (5 minutes), the
   maximum staleness (24 h), the 100-key and 2048–4096-bit RSA bounds, the
@@ -345,6 +361,12 @@ PKCE. Not supported, and refused where a provider could select them:
   RSA algorithm, otherwise nothing: publish `alg` on RSA keys signing
   PS256/384/512. A JWK Set URL redirecting to another origin cannot be
   used, whatever `MaxRedirects`: configure the final URL.
+- **RSASSA-PSS salt** — PS256/384/512 signatures must use a salt of the
+  hash size (RFC 7518 §3.5): tokens of signers using another — go-jose's
+  `cryptosigner.Opaque` over an in-process key outside FIPS 140-3 mode,
+  Vault Transit with its default `salt_length=auto`, the OpenSSL tools
+  before 3.1, `rsa.SignPSS(…, nil)` — are refused, and `Sign` fails for
+  such an opaque signer.
 - **No JWS extension, nested JWT or JWE** — tokens whose header uses `crit`
   or `b64` are refused, and a nested JWT (`cty: JWT`, RFC 7519 §7.2 step 8)
   is refused because its payload is not a claims object.
@@ -364,7 +386,8 @@ PKCE. Not supported, and refused where a provider could select them:
   `NewStaticJWKS` have no upper bound.
 - **Size bound** — tokens over 16 KiB are refused by default
   (`WithMaxTokenSize` on a `Verifier`); `VerifySignature` always applies
-  the default bound.
+  the default bound. A JOSE header over 4 KiB decoded is refused whatever
+  the token bound, with no option.
 
 ## Outbound requests
 

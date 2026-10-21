@@ -34,6 +34,16 @@ import (
 //     go-jose does not parse, stay ignored.
 var unsupportedHeaders = []string{"crit", "b64", "jwk", "x5c", "jku", "x5u"}
 
+// maxHeaderSize bounds the decoded JOSE header of a token, in bytes: 4 KiB.
+// Real headers are a few hundred bytes — alg, kid, typ, x5t; the members
+// that carry a key are refused (unsupportedHeaders). The header drives the
+// pre-authentication cost: go-jose decodes it into maps, 70 to 260 times
+// its size depending on its shape (BenchmarkVerifyHostileHeader), before
+// it checks the algorithm, while the payload is only base64-decoded before
+// the signature is verified. Bounding the header keeps that cost under
+// about 1 MiB and 1 ms per token whatever the token bound (WithMaxTokenSize).
+const maxHeaderSize = 4 << 10
+
 // parseCompact parses token as a JWS Compact Serialization (RFC 7515 §7.1)
 // signed with one of allowed, after the checks of checkCompact. A failure
 // wraps [ErrMalformedToken], or [ErrAlgorithmNotAllowed] for an algorithm
@@ -63,13 +73,13 @@ func parseCompact(token string, allowed []Algorithm, maxSize int) (*jose.JSONWeb
 }
 
 // checkCompact refuses, before any JOSE parsing, a token longer than
-// maxSize bytes (go-jose decodes the header into maps, about 100 times
-// its size, before checking the algorithm), a token that is not three
-// segments of canonical unpadded base64url — no whitespace, padding or
-// other characters (RFC 7515 §2, RFC 7519 §7.2 steps 3 and 9), no
-// non-zero pad bits (RFC 4648 §3.5), so a token has one encoding — with a
-// non-empty header and payload, and a header that is not a strict JSON
-// object (see checkHeader).
+// maxSize bytes, a token that is not three segments of canonical unpadded
+// base64url — no whitespace, padding or other characters (RFC 7515 §2, RFC
+// 7519 §7.2 steps 3 and 9), no non-zero pad bits (RFC 4648 §3.5), so a
+// token has one encoding — with a non-empty header and payload, a header
+// that decodes to more than maxHeaderSize bytes (checked on its encoded
+// length, before decoding), and a header that is not a strict JSON object
+// (see checkHeader).
 func checkCompact(token string, maxSize int) error {
 	if len(token) > maxSize {
 		return fmt.Errorf("%w: token larger than %d bytes", ErrMalformedToken, maxSize)
@@ -84,6 +94,10 @@ func checkCompact(token string, maxSize int) error {
 
 	if head == "" || payload == "" {
 		return fmt.Errorf("%w: empty header or payload", ErrMalformedToken)
+	}
+
+	if len(head) > base64.RawURLEncoding.EncodedLen(maxHeaderSize) {
+		return fmt.Errorf("%w: JOSE header larger than %d bytes", ErrMalformedToken, maxHeaderSize)
 	}
 
 	for _, segment := range []string{head, payload, signature} {

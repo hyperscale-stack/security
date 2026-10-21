@@ -103,7 +103,7 @@ func (v *verifier) verify(ctx context.Context, span trace.Span, token string, cl
 		return nil, err
 	}
 
-	payload, err := parsed.Verify(pub.toJOSE())
+	payload, err := parsed.Verify(pub.verificationKey())
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
 

@@ -13,14 +13,14 @@
 //     explicit opt-in via WithAllowedAlgorithms, to avoid key confusion. An
 //     algorithm outside the list is refused with ErrAlgorithmNotAllowed.
 //   - Parsing is bounded and strict: a token over DefaultMaxTokenSize
-//     (16 KiB, WithMaxTokenSize) is refused before any decoding; only the
-//     canonical compact serialization is accepted (unpadded base64url, no
-//     whitespace, zero pad bits); the header is strict JSON and may not use
-//     the crit or b64 extensions (RFC 7515 §4.1.11, RFC 7797) nor the jwk,
-//     x5c, jku or x5u members, refused before go-jose parses the header —
-//     a local policy: keys come from the configured key set only (RFC 9068
-//     §4, RFC 8725 §3.10); values taken from a token are clipped in errors
-//     and spans.
+//     (16 KiB, WithMaxTokenSize) or a JOSE header over 4 KiB decoded is
+//     refused before any decoding; only the canonical compact serialization
+//     is accepted (unpadded base64url, no whitespace, zero pad bits); the
+//     header is strict JSON and may not use the crit or b64 extensions (RFC
+//     7515 §4.1.11, RFC 7797) nor the jwk, x5c, jku or x5u members, refused
+//     before go-jose parses the header — a local policy: keys come from the
+//     configured key set only (RFC 9068 §4, RFC 8725 §3.10); values taken
+//     from a token are clipped in errors and spans.
 //   - Claims are decoded case-sensitively (RFC 7519 §7.3, §10.1.1): a claims
 //     set whose member names repeat — exactly, through an escape, or under
 //     Unicode case folding — at any depth is refused, as are invalid UTF-8,
@@ -30,8 +30,9 @@
 //   - Every verification key is bound to one algorithm (RFC 8725 §3.1): its
 //     Algorithm must equal the token's alg, an asymmetric key must pass
 //     PublicKey.Validate (RSA of 2048 bits or more, the algorithm's curve, a
-//     public key) and an HMAC key must be a []byte secret. A kid shared by
-//     several keys designates none.
+//     canonical Ed25519 point not of small order, a public key) and an HMAC
+//     key must be a []byte secret. A kid shared by several keys designates
+//     none.
 //   - exp is required by default (WithOptionalExpiry); a token is expired
 //     from now == exp + skew on; NumericDates outside 1970..9999 are
 //     refused when reading and when signing; WithClockSkew is bounded by
@@ -39,7 +40,13 @@
 //   - Issuer, audience and type checks are opt-in on NewVerifier
 //     (WithIssuer, WithAudience, WithType) and mandatory for BearerVerifier,
 //     the RFC 9068 §4 resource-server adapter: it refuses a verifier
-//     without them; WithAccessTokenType names another required typ.
+//     without them; WithAccessTokenType names another required typ. Its
+//     principal, an AccessTokenPrincipal, carries client_id:
+//     SubjectIsClient tells a client_credentials token from a resource
+//     owner's (RFC 9700 §4.15) — to refuse, never to grant.
+//     WithActiveTokenCheck makes it ask the authorization server whether a
+//     verified token is still active (RFC 7009 §3): ErrTokenInactive
+//     otherwise.
 //   - NewRemoteJWKS fetches through the SSRF-safe outbound client (https,
 //     public destinations, no redirect, no proxy; the redirects a policy or
 //     an opt-out client allows stay on the JWK Set URL's origin), refreshes
@@ -56,7 +63,9 @@
 //     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,
 //     RFC 7518 key sizes and curves). NewSigner refuses a key that cannot
 //     sign with its algorithm — KMS and HSM keys (jose.OpaqueSigner) are
-//     checked through their public half — and NewOAuth2AccessTokenSigner
+//     checked through their public half, and an opaque PS* signer at each
+//     signature: RSASSA-PSS salts are the hash size (RFC 7518 §3.5), as
+//     every verifier requires — and NewOAuth2AccessTokenSigner
 //     refuses claims missing an RFC 9068 §2.2 REQUIRED value.
 //   - VerifySignature checks a signature and nothing else, for callers that
 //     validate claims under their own rules (e.g. an OpenID Provider's

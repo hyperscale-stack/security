@@ -16,6 +16,22 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Added
 
+- `jwt`: `WithActiveTokenCheck(ActiveTokenCheck)` makes `BearerVerifier`
+  ask, after every other check, whether a verified access token is still
+  active — a lookup by `oauth2.HashToken(nil, token)` in a store shared with
+  the authorization server, or RFC 7662 introspection — so a revocation
+  (RFC 7009 §2.1, a token family revoked on a replay) takes effect before
+  the token expires (RFC 7009 §3). A refusal is `ErrTokenInactive` (401);
+  a check that could not be made, or a context that ended, is
+  `security.ErrUnavailable` (503). Without it nothing changes.
+- `jwt`: `StandardClaims.ClientID` reads and writes the `client_id` claim
+  (RFC 8693 §4.3, RFC 9068 §2.2), and the principal of `BearerVerifier` is
+  the exported `AccessTokenPrincipal`: `Subject()`, `ClientID()` and
+  `SubjectIsClient()`. A `client_credentials` token's `sub` is its client's
+  ID (RFC 9068 §2.2), so a resource server could not tell it from the token
+  of a user with the same subject (RFC 9700 §4.15); `SubjectIsClient()`
+  does, to refuse resource-owner access — grant client privileges by
+  `client_id` and scope authorities, never by it.
 - **Transport-agnostic core** (`github.com/hyperscale-stack/security`):
   immutable `Authentication`/`Principal`, `Carrier`, `Extractor`,
   `Authenticator`, first-success-wins `Manager`, `Engine`, typed
@@ -532,6 +548,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `KeyRing.Published`): go-jose ≥ v4.1.6's `JSONWebKeySet` (go-oidc relying
   parties among others) refuses a whole JWK Set holding one, and this
   library's key sets ignore it, so its tokens would verify nowhere.
+- `jwt`: a `client_id` claim that is not a JSON string is refused with
+  `ErrMalformedToken`, like `sub` and `scope`.
 - `examples/oidc-client` bounds its unauthenticated login starts: each
   client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
   each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
@@ -958,6 +976,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   strict JSON everywhere and said that `jku`, `x5u`, `jwk` and `x5c` were
   ignored, when go-jose parsed `jwk` and `x5c`. The header is now decoded
   strictly, bounded to 4 KiB, before go-jose parses the token.
+- `jwt`: HMAC signers (HS256, HS384, HS512) wrote no `kid` header —
+  go-jose writes it from a key's public half, which a secret lacks —
+  although `Signer.KeyID` said verifiers select the key by it: with two
+  HMAC keys trusted during a rotation, every token was refused. Every
+  signer whose key has a `KeyID` now writes it (RFC 7515 §4.1.4); the
+  tokens of the other keys are unchanged.
 - `oidcclient.Client.StartLogin` capped the binding cookies at four by
   expiring the oldest cookies whose name started with the binding prefix —
   `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could
@@ -1202,6 +1226,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 
 ### Security
 
+- `jwt`: go-jose decodes a token's JOSE header into maps — 70 to 260 times
+  its size — before it checks the algorithm, so the pre-authentication cost
+  of a hostile header grew with the token bound: about 16 MB and 15 ms per
+  token under `WithMaxTokenSize(64 KiB)`, about 125 MB under 1 MiB. The
+  decoded header is now bounded to 4 KiB, checked on its encoded length
+  before anything decodes it, by `Verifier`, `VerifySignature` and
+  `BearerVerifier` alike: at most about 1 MiB and 1 ms per token, whatever
+  the token bound.
 - **go-jose v4.1.6** (GHSA-mgcc-cww5-fp2q, not yet in the Go vulnerability
   database): go-jose ≤ v4.1.5 parsed a JWS header's `jwk` member before any
   check and validated an embedded RSA private key at a cost cubic in the
@@ -1211,6 +1243,23 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   each `oidc/client` login cost hours. Every module that depends on go-jose
   now requires v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and
   `x5u` before go-jose parses a header (see Changed).
+- `jwt`: PS256, PS384 and PS512 signatures were verified with any salt
+  length (go-jose verifies RSASSA-PSS with `PSSSaltLengthAuto`); RFC 7518
+  §3.5 sets the salt to the hash size, which `Verifier` and
+  `VerifySignature` now require. A `NewSigner` built on an opaque (KMS,
+  HSM) PS* signer checks each signature it makes and fails with
+  `ErrInvalidKey` when its salt is not the hash size, instead of emitting a
+  token every verifier of the package refuses.
+- `jwt`: `PublicKey.Validate` accepted any 32-byte Ed25519 key. Against a
+  small-order key a token nobody signed verified: R = B and S = 1 sign any
+  message for the identity point, R = identity and S = 0 one message in
+  four for the all-zero key (an uninitialised buffer). Small-order keys and
+  non-canonical encodings (RFC 8032 §5.1.3) are now refused with
+  `ErrInvalidKey` — by `Verifier`, `VerifySignature`, `MarshalJWKS` and the
+  remote JWK Set, which ignores such a key (RFC 8725 §3.4). An Ed25519
+  private key whose public half is not the one its seed derives — the
+  all-zero buffer, two keys spliced together — is refused by `NewSigner`
+  and `PrivateKey.Validate`: it signed tokens no key verifies.
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets
