@@ -103,12 +103,14 @@ request contexts carry no deadline.
 Limit failed attempts per account and per client (NIST SP 800-63B-4
 §3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts): the library
 ships `security.AttemptLimiter` and its in-memory implementation
-`throttle.MemoryLimiter` (see [Attempt limiting](#attempt-limiting)), which
-`basic.Authenticator` does not take yet — until it does, limit at the edge
-or in an `Authenticator` wrapper. Prefer exchanging Basic credentials once
-for a session or a token over sending them on every request. Form logins and the OAuth2 `password` grant's
-`ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the same
-protections.
+`throttle.MemoryLimiter` (see [Attempt limiting](#attempt-limiting)): give
+the `Authenticator` one with `basic.WithAttemptLimiter`. It keys the
+attempts on the user-id lower-cased — `basic.WithAttemptSubject` when your
+store merges other variants (accents, Unicode forms) — and on the client
+address. Prefer exchanging Basic credentials once for a session or a token
+over sending them on every request. Form logins and the OAuth2 `password`
+grant's `ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the
+same protections.
 
 ## JWT
 
@@ -1806,8 +1808,8 @@ span catalog.
 - [ ] HTTP Basic: build each `basic.Authenticator` once, configure its hasher
       with the parameters of the stored hashes (and implement
       `basic.PasswordRehasher`), bound the request time
-      (`http.TimeoutHandler`), and rate-limit failed attempts per account
-      and per client in front of it.
+      (`http.TimeoutHandler`), and limit failed attempts per account and
+      per client (`basic.WithAttemptLimiter`).
 - [ ] Behind a reverse proxy, store the client address it forwards
       (`security.WithClientAddr`, from the hop your proxy appended) before
       the transport adapters: attempt limits key on it.

@@ -22,3 +22,13 @@ packages:
       # no mocks, and the tool modules are not part of the workspace.
       exclude-subpkg-regex:
         - '^github\.com/hyperscale-stack/security/(examples|internal|tools)(/|$)'
+    interfaces:
+      # The basic module's tests double the core's AttemptLimiter: a second
+      # mock of it is generated into basic (mocks are in-package test files,
+      # so the core's own mock is not visible there).
+      AttemptLimiter:
+        configs:
+          - {}
+          - dir: basic
+            pkgname: basic
+            inpackage: false

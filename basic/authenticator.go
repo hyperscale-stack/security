@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/hyperscale-stack/security"
 	"github.com/hyperscale-stack/security/password"
@@ -65,8 +66,8 @@ type AuthorityResolver func(PasswordUser) []string
 // verifications run at once by default ([WithMaxConcurrentVerifications]):
 // further attempts wait for a slot, so a flood of attempts cannot exhaust
 // memory (an Argon2id verification with the default parameters allocates
-// 19 MiB). Rate-limit failed attempts per account and per client in front
-// of it (NIST SP 800-63B-4 §3.2.2).
+// 19 MiB). Limit the failed attempts per account and per client with
+// [WithAttemptLimiter] (NIST SP 800-63B-4 §3.2.2).
 type Authenticator struct {
 	loader     UserLoader
 	hasher     password.Hasher
@@ -74,7 +75,12 @@ type Authenticator struct {
 	dummyHash  string
 	maxVerify  int
 	slots      chan struct{} // nil: unlimited
+	limiter    security.AttemptLimiter
+	subject    func(username string) string
 }
+
+// attemptRealm is the realm of the AttemptKey of a Basic attempt.
+const attemptRealm = "basic"
 
 // NewAuthenticator returns an Authenticator using the supplied loader and
 // hasher. Authorities default to nil (use [WithAuthorityResolver] to
@@ -94,7 +100,7 @@ func NewAuthenticator(loader UserLoader, hasher password.Hasher, opts ...Option)
 		panic("basic: NewAuthenticator: nil password.Hasher")
 	}
 
-	a := &Authenticator{loader: loader, hasher: hasher, maxVerify: runtime.GOMAXPROCS(0)}
+	a := &Authenticator{loader: loader, hasher: hasher, maxVerify: runtime.GOMAXPROCS(0), subject: strings.ToLower}
 
 	for _, o := range opts {
 		o(a)
@@ -140,6 +146,52 @@ func WithMaxConcurrentVerifications(n int) Option {
 	return func(a *Authenticator) { a.maxVerify = n }
 }
 
+// WithAttemptLimiter limits the failed attempts with l — the online-guessing
+// control NIST SP 800-63B-4 §3.2.2 requires. Each well-formed attempt is
+// admitted by l before the user is looked up, keyed by the realm "basic",
+// the user-id normalized by [WithAttemptSubject] and the client address of
+// the request context ([security.ClientAddrFromContext], which the
+// transport adapters fill in). A refused attempt fails with l's error —
+// [security.ErrTooManyAttempts]: HTTP 429, gRPC ResourceExhausted — before
+// any lookup or verification; an error of l that is not a throttle answers
+// [security.ErrUnavailable] (fail closed). Each admitted attempt is then
+// settled: a success with security.AttemptSucceeded, an outage of the user
+// store or of the verification with security.AttemptInconclusive, every
+// other refusal — wrong password, unknown, disabled or locked account
+// alike, so that the limiter reveals no account — with
+// security.AttemptFailed, on a context a canceled request does not cancel.
+//
+// Outside the transport adapters — a form login calling Authenticate —
+// store the client address in the context ([security.WithClientAddr]):
+// without it the source is unknown and only the limiter's per-subject
+// allowance applies. An attempt holds its reservation while it waits for a
+// verification slot: size the allowance above a client's concurrency, or
+// exchange the credentials once for a session or a token. Another verifier
+// of the same passwords (an OAuth 2.0 password grant) keys its attempts in
+// its own realm: give it the same limiter knowingly, each realm has its own
+// allowance. Default: no limiter. It panics on a nil limiter, a typed nil
+// included.
+func WithAttemptLimiter(l security.AttemptLimiter) Option {
+	if isNil(l) {
+		panic("basic: WithAttemptLimiter: nil AttemptLimiter")
+	}
+
+	return func(a *Authenticator) { a.limiter = l }
+}
+
+// WithAttemptSubject sets how a user-id becomes the subject of an
+// [security.AttemptKey]. normalize MUST map every user-id your [UserLoader]
+// resolves to one account to one value: variants counted apart multiply the
+// allowance (a store comparing case- and accent-insensitively, a loader
+// applying NFC). Default: strings.ToLower. It panics on a nil function.
+func WithAttemptSubject(normalize func(username string) string) Option {
+	if normalize == nil {
+		panic("basic: WithAttemptSubject: nil function")
+	}
+
+	return func(a *Authenticator) { a.subject = normalize }
+}
+
 // AuthenticatorName implements [security.NamedAuthenticator] so the core
 // Manager can attribute spans to "basic".
 func (a *Authenticator) AuthenticatorName() string { return schemeLabel }
@@ -172,7 +224,34 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 		return security.Anonymous(), malformed("empty user-id")
 	}
 
-	user, loadErr := a.loader.LoadByUsername(ctx, in.Username())
+	key := a.attemptKey(ctx, in.Username())
+
+	if err := a.allow(ctx, key); err != nil {
+		return security.Anonymous(), err
+	}
+
+	user, stored, err := a.check(ctx, in.Username(), in.Password())
+	a.record(ctx, key, err)
+
+	if err != nil {
+		return security.Anonymous(), err
+	}
+
+	a.rehash(ctx, user, stored, in.Password())
+
+	var authorities []string
+	if a.authResolv != nil {
+		authorities = a.authResolv(user)
+	}
+
+	return in.WithAuthenticated(user, authorities), nil
+}
+
+// check looks the user up and verifies the password — exactly one
+// verification, whatever the account — and returns the user and its stored
+// hash, or the reason to refuse the attempt.
+func (a *Authenticator) check(ctx context.Context, username, pw string) (PasswordUser, string, error) {
+	user, loadErr := a.loader.LoadByUsername(ctx, username)
 
 	stored, hasPassword := "", false
 	if loadErr == nil && user != nil {
@@ -185,20 +264,58 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 		hash = stored
 	}
 
-	match, verifyErr := a.verify(ctx, hash, in.Password())
+	match, verifyErr := a.verify(ctx, hash, pw)
 
-	if err := refusal(loadErr, user, hasPassword, match, verifyErr); err != nil {
-		return security.Anonymous(), err
+	return user, stored, refusal(loadErr, user, hasPassword, match, verifyErr)
+}
+
+// attemptKey is the AttemptKey of an attempt by username.
+func (a *Authenticator) attemptKey(ctx context.Context, username string) security.AttemptKey {
+	if a.limiter == nil {
+		return security.AttemptKey{}
 	}
 
-	a.rehash(ctx, user, stored, in.Password())
+	source, _ := security.ClientAddrFromContext(ctx)
 
-	var authorities []string
-	if a.authResolv != nil {
-		authorities = a.authResolv(user)
+	return security.AttemptKey{Realm: attemptRealm, Subject: a.subject(username), Source: source}
+}
+
+// allow asks the limiter, if any, to admit the attempt. An error that is
+// neither a throttle nor an outage is answered as an outage: fail closed.
+func (a *Authenticator) allow(ctx context.Context, key security.AttemptKey) error {
+	if a.limiter == nil {
+		return nil
 	}
 
-	return in.WithAuthenticated(user, authorities), nil
+	err := a.limiter.Allow(ctx, key)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, security.ErrTooManyAttempts), errors.Is(err, security.ErrUnavailable):
+		return fmt.Errorf("basic: %w", err)
+	default:
+		return fmt.Errorf("basic: attempt limiter: %w (%w)", err, security.ErrUnavailable)
+	}
+}
+
+// record settles an admitted attempt with the outcome err tells, on a
+// context that outlives a canceled request.
+func (a *Authenticator) record(ctx context.Context, key security.AttemptKey, err error) {
+	if a.limiter == nil {
+		return
+	}
+
+	outcome := security.AttemptFailed
+
+	switch {
+	case err == nil:
+		outcome = security.AttemptSucceeded
+	case security.ErrorClass(err) == security.ErrorClassUnavailable:
+		outcome = security.AttemptInconclusive
+	}
+
+	a.limiter.Record(context.WithoutCancel(ctx), key, outcome)
 }
 
 // refusal returns the reason to refuse the attempt, or nil. It runs after

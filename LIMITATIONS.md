@@ -571,10 +571,9 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## Attempt limiting
 
-- **`basic` and `oauth2` do not use it yet** — `security.AttemptLimiter`
-  and its in-memory implementation `throttle.MemoryLimiter` exist, but
-  `basic.Authenticator` and the OAuth2 endpoints take none yet: limit their
-  failed attempts at the edge or in an `Authenticator` wrapper.
+- **Opt-in** — `basic.Authenticator` limits failed attempts only with
+  `basic.WithAttemptLimiter`; the OAuth2 endpoints take no
+  `security.AttemptLimiter` yet: limit their failed attempts at the edge.
 - **A throttle, not a lock-out** — `throttle.MemoryLimiter` slows guessing
   down; NIST SP 800-63B-4 §3.2.2 caps consecutive failures at 100 "by
   disabling that authenticator", which needs persistent state: an
@@ -609,10 +608,12 @@ PKCE. Not supported, and refused where a provider could select them:
 
 ## HTTP Basic
 
-- **No attempt limiting yet** — NIST SP 800-63B-4 §3.2.2 requires verifiers
-  to limit failed attempts: see [Attempt limiting](#attempt-limiting). The
+- **Attempt limiting is opt-in** — NIST SP 800-63B-4 §3.2.2 requires
+  verifiers to limit failed attempts: without `WithAttemptLimiter` the
   `Authenticator` only caps the number of concurrent verifications
-  (`runtime.GOMAXPROCS(0)` by default).
+  (`runtime.GOMAXPROCS(0)` by default). See
+  [Attempt limiting](#attempt-limiting) for what the shipped limiter does
+  not cover.
 - **Timing equalization residuals** — every attempt costs one verification,
   but a stored hash made with other parameters than the hasher's costs
   another time until it is re-hashed (`PasswordRehasher`), and the

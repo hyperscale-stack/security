@@ -546,7 +546,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     (HTTP 429, the same fields in the error metadata), and store the
     transport peer as the client address unless a middleware or
     interceptor before them stored one. A custom `ErrorMapper` switching on
-    the error classes sees the new `too_many_attempts` class.
+    the error classes sees the new `too_many_attempts` class;
+  - `basic.WithAttemptLimiter` and `basic.WithAttemptSubject`: the
+    `Authenticator` admits each well-formed attempt through the limiter
+    before the user lookup — keyed by the realm `basic`, the user-id
+    lower-cased (or normalized by `WithAttemptSubject`) and the client
+    address — and settles it after the verification: unknown and known
+    accounts alike, an outage as inconclusive, on a context a canceled
+    request does not cancel. A limiter error that is not a throttle
+    answers 503.
 
 ### Changed
 
