@@ -328,11 +328,13 @@ func TestPlainOAuth2OfflineAccessNeedsTheDecision(t *testing.T) {
 
 // TestReleasedClaims pins the release rule: only the individually requested
 // claims the end-user agreed to (Decision.Claims), a base name releasing
-// its language-tagged variants (Core §5.2).
+// its language-tagged variants (Core §5.2) — "#" followed by a well-formed
+// language tag (RFC 5646 §2.1): "phone_number#x#y" is a name of its own.
 func TestReleasedClaims(t *testing.T) {
 	t.Parallel()
 
-	request := `{"id_token": {"email": null, "name": null, "given_name#fr": null, "phone_number#x#y": null}}`
+	request := `{"id_token": {"email": null, "name": null, "given_name#fr": null, "phone_number#fr-CA": null,
+		"phone_number#x#y": null}}`
 
 	cases := []struct {
 		released []string
@@ -343,8 +345,9 @@ func TestReleasedClaims(t *testing.T) {
 		{[]string{"email"}, []string{"email"}, []string{"name", "name#fr"}},
 		{[]string{"name"}, []string{"name", "name#fr"}, []string{"email"}},
 		{[]string{"name#fr"}, nil, []string{"name", "name#fr", "email"}},
-		{[]string{"phone_number#x"}, nil, []string{"phone_number#x#y"}},
-		{[]string{"phone_number"}, []string{"phone_number#x#y"}, nil},
+		{[]string{"phone_number#fr"}, nil, []string{"phone_number#fr-CA"}},
+		{[]string{"phone_number"}, []string{"phone_number#fr-CA"}, []string{"phone_number#x#y"}},
+		{[]string{"phone_number#x#y"}, []string{"phone_number#x#y"}, []string{"phone_number#fr-CA"}},
 	}
 
 	for _, tc := range cases {

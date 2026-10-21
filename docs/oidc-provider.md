@@ -49,7 +49,7 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | ------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | Authorization Code flow                     | Core §3.1                          | Supported                                                                                                                                                                                                                            | `TestIDTokenClaims`, interop: `TestInteropCodeFlowS256`, `TestInteropCodeReplay` |
 | PKCE                                        | RFC 7636                           | As the core's `Profile` decides: `S256` required under `Profile20BCP` (default) and `Profile21Draft`; optional under `Profile20`, which also allows `plain`                                                                          | `TestDiscoveryPKCEMethodsFollowTheProfile`, interop: `TestInteropPublicClient`                                          |
-| Plain OAuth 2.0 requests (no `openid`)      | Core §3.1.2.1                      | OAuth 2.0 semantics: no ID Token, no UserInfo; the realm rule and the `offline_access` rule only | `TestPlainOAuth2RequestKeepsOAuth2Semantics`, `TestPlainOAuth2CodeExchange`, `TestRefreshOfAPlainOAuth2Grant`, `TestPlainOAuth2OfflineAccessNeedsTheDecision` |
+| Plain OAuth 2.0 requests (no `openid`)      | Core §3.1.2.1                      | OAuth 2.0 semantics: no ID Token, no UserInfo; the realm rule and the `offline_access` rule only; the end-user `Provider.AuthorizeHandler` approved them for is checked at every exchange (`ErrUnknownSubject` → `invalid_grant`), not that of a grant another `ConsentFunc` approved | `TestPlainOAuth2RequestKeepsOAuth2Semantics`, `TestPlainOAuth2CodeExchange`, `TestRefreshOfAPlainOAuth2Grant`, `TestPlainOAuth2OfflineAccessNeedsTheDecision`, `TestPlainOAuth2GrantStopsWithItsEndUser`, `TestForeignConsentPlainGrantIsNotChecked`, `TestForgedPlainGrantContextsAreRefused` |
 | Implicit and hybrid flows                   | Core §3.2, §3.3; RFC 9700 §2.1.2   | Not supported, not advertised: a request with another `response_type` — OpenID or plain OAuth 2.0 — to `Provider.AuthorizeHandler` gets `unsupported_response_type`; it panics on `AuthorizeConfig.AllowImplicit`, so the RFC 8414 metadata does not advertise the implicit flow either (RFC 9068 §4). A handler built from `Server().AuthorizeHandler` is not checked: never enable `AllowImplicit` there — the server would serve the flow to plain OAuth 2.0 requests and its RFC 8414 metadata would contradict the discovery document | `TestOpenIDImplicitRefused`, `TestAuthorizeHandlerServesNoImplicitFlow`, `TestDiscoveryConsistentWithRFC8414Metadata` |
 | Response modes                              | Core §3.1.2.1; OAuth 2.0 Multiple Response Types | `query` only (advertised); the core refuses any other with a bare `400`, never redirected                                                                                                                              | `TestDiscoveryDocument`, oauth2: `TestAuthorizeRefusesUnsupportedResponseModes`                                                                   |
 | `redirect_uri`                              | Core §3.1.2.1                      | REQUIRED for OpenID requests: missing → `400`, never redirected — once the core accepted the request: the core's state, response type, scope, PKCE and nonce checks run first and redirect their errors to the client's sole registered redirect URI (OAuth 2.0 behaviour) | `TestOpenIDRequestWithoutRedirectURIIsNotRedirected` |
@@ -61,14 +61,14 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | `max_age`                                   | Core §3.1.2.1, §2                  | Enforced (`auth_time + max_age` ≥ request time, to the second); `1*DIGIT`, longer values clamped to 2³¹−1 s, anything else → `invalid_request`; `auth_time` always in the ID Token                                                | `TestMaxAgeParsing`, `TestFreshnessIsEnforcedByTheProvider`, `TestIDTokenCarriesTheAuthenticationEvent`, interop: `TestInteropReauthentication` |
 | `id_token_hint`                             | Core §3.1.2.1, §3.1.2.2            | Verified: signed by a key the issuer publishes, `iss` the issuer, the client among its audiences, a `sub`, typed `JWT` or untyped (an `at+jwt` is refused); its expiry is not checked; a header holding `jwk`, `x5c`, `jku` or `x5u` (Core §2) is refused before it is parsed. It designates the end-user (another one → `login_required`). Invalid → `invalid_request` | `TestIDTokenHint`, `TestIDTokenHintKeyBearingHeaders`, `TestIDTokenHintOfARetiredKey`, `TestIDTokenHintDesignatesTheEndUser`, interop: `TestInteropIDTokenHint` |
 | `login_hint`, `display`, `ui_locales`, `claims_locales`, `acr_values` | Core §3.1.2.1, §5.2, §15.1 | Passed to the `Interaction`, bounded; never fail a request; `acr_values` is voluntary. `ui_locales`, `claims_locales`, `acr_values`: the first 32 values of at most 2048 bytes of UTF-8 — a longer value is ignored; `login_hint` at most 1024 bytes, `display` 255. `claims_locales` reaches the `Interaction` only, not the `ClaimsSource` (Core §15.1's minimum) | `TestPassthroughParameters`, `TestOversizedListParametersAreIgnored`, `TestVoluntaryACRIsNotEnforced` |
-| `claims` parameter                          | Core §5.5, §5.5.1                  | Supported (advertised): strict JSON, bounded; a requested claim is released only when the end-user agrees (`Decision.Claims`) and its value matches a `value`/`values` constraint; protocol claims, their case variants and other spellings of known claims are never shown nor released (see [Claims](#claims)) | `TestClaimsParameterParsing`, `TestClaimsParameterRefusals`, `TestReleasedClaims`, `TestValueConstraintsMatchScalarsOnly`, `TestTheInteractionIsShownReleasableClaimRequestsOnly`, interop: `TestInteropClaimsParameter` |
+| `claims` parameter                          | Core §5.5, §5.5.1                  | Supported (advertised): strict JSON, bounded; a requested claim is released only when the end-user agrees (`Decision.Claims`) and its value matches a `value`/`values` constraint; protocol claims, their case variants, their language-tag aliases and other spellings of known claims are never shown nor released (see [Claims](#claims)) | `TestClaimsParameterParsing`, `TestClaimsParameterRefusals`, `TestReleasedClaims`, `TestValueConstraintsMatchScalarsOnly`, `TestTheInteractionIsShownReleasableClaimRequestsOnly`, `TestClaimsParameterNeverAsksForTaggedAliases`, interop: `TestInteropClaimsParameter` |
 | Essential `acr`                             | Core §5.5.1.1                      | Enforced: unmet → `access_denied`, `login_required` under `prompt=none`; an authentication without acr never meets it. `acr` and `sub` values must be non-empty strings (`null` or `""` → `invalid_request`). Without `value`/`values`, an essential acr is not enforced (Core §5.5.1). The values of a voluntary `acr` request join `Request.ACRValues`, after those of `acr_values`, once each | `TestEssentialACRIsEnforced`, `TestRequestCheck`, `TestClaimsParameterRefusals`, `TestVoluntaryACRRequestsReachTheInteraction` |
 | `sub` claim request                         | Core §5.5.1                        | Designates the end-user, like a hint; conflicting designations → `invalid_request`                                                                                                                                                  | `TestClaimsParameterDerivedRequirements`, `TestIDTokenHintDesignatesTheEndUser`                                         |
 | `request`, `request_uri`                    | Core §6                            | Not supported: `request_not_supported`, `request_uri_not_supported`; advertised as unsupported                                                                                                                                      | `TestRequestObjectParametersRefused`, `TestDiscoveryDocument`                                                           |
 | `registration` parameter                    | Core §7.2.1                        | Not supported: `registration_not_supported`                                                                                                                                                                                          | `TestRequestObjectParametersRefused`                                                                                    |
 | Realm of the authentication                 | Core §16.15                        | `AuthenticationEvent.Issuer` must be the request's issuer: else `login_required` (OpenID) or `access_denied` (OAuth 2.0)                                                                                                            | `TestRealmIsEnforced`, `TestRequestCheck`, stack: `TestRefusalsRevealNoSession` |
 | Consent                                     | Core §3.1.2.4                      | `Decision`: approval, `Scope` narrowing (keeps `openid`), `Claims`, `Refusal`; an empty decision → `access_denied`                                                                                                                 | `TestDecisionScopeNarrows`, `TestInteractionFailures`, `TestApprovalContractViolations`, interop: `TestInteropConsentNarrowsScope` |
-| `offline_access`                            | Core §11                           | Every request: kept only when `Decision.OfflineAccess` grants it — the consent dialog (`OfflineAccessPrompted`: `prompt=consent` required for an OpenID request, `prompt` being no OAuth 2.0 parameter) or the application's policy (`OfflineAccessByPolicy`) — else dropped from the grant — and always outside the code flow (Core §11; `Provider.AuthorizeHandler` serves no implicit flow anyway); an approval left without any scope → `access_denied`. OpenID grants: a refresh token without that consent fails closed (`server_error` at issuance, `invalid_grant` at refresh) unless `Config.AllowRefreshWithoutOfflineAccess`. Plain OAuth 2.0 grants carry no context: only their scope is gated, their refresh tokens follow `grant.Config.RefreshTokenScope` | `TestOfflineAccessRequiresConsent`, `TestPlainOAuth2OfflineAccessNeedsTheDecision`, `TestRequestReportsOfflineAccessForEveryRequest`, `TestRefreshWithoutOfflineConsentFailsClosed`, interop: `TestInteropRefresh` |
+| `offline_access`                            | Core §11                           | Every request: kept only when `Decision.OfflineAccess` grants it — the consent dialog (`OfflineAccessPrompted`: `prompt=consent` required for an OpenID request, `prompt` being no OAuth 2.0 parameter) or the application's policy (`OfflineAccessByPolicy`) — else dropped from the grant — and always outside the code flow (Core §11; `Provider.AuthorizeHandler` serves no implicit flow anyway); an approval left without any scope → `access_denied`. OpenID grants: a refresh token without that consent fails closed (`server_error` at issuance, `invalid_grant` at refresh) unless `Config.AllowRefreshWithoutOfflineAccess`. Plain OAuth 2.0 grants: only their scope is gated, their refresh tokens follow `grant.Config.RefreshTokenScope` | `TestOfflineAccessRequiresConsent`, `TestPlainOAuth2OfflineAccessNeedsTheDecision`, `TestPlainOAuth2GrantKeepsItsRefreshPolicy`, `TestRequestReportsOfflineAccessForEveryRequest`, `TestRefreshWithoutOfflineConsentFailsClosed`, interop: `TestInteropRefresh` |
 
 ### ID Tokens and refresh
 
@@ -76,10 +76,10 @@ Test names refer to `oidc/provider` unless prefixed with `interop:`
 | -------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | ID Token claims                  | Core §2, §3.1.3.6                    | `iss`, `sub`, `aud` (the client ID, a string), `exp`, `iat`, `auth_time` (always), `nonce` (code exchange), `acr` and `amr` (from the event), `at_hash`; no `azp` (one audience)              | `TestIDTokenClaims`, `TestIDTokenCarriesTheAuthenticationEvent`                                     |
 | Signing algorithms               | Core §15.1, §16.14; Registration §2  | RS256 (mandatory, default), RS384/512, PS256/384/512, ES256/384/512 per client (`IDTokenSigningClient`); never `none`, HS* or EdDSA. No key for the client's algorithm → `server_error` before any interaction | `TestIDTokenSigningAlgorithms`, `TestClientWithoutAnAlgorithmGetsRS256`, `TestClientAlgorithmWithoutAKey`, interop: `TestInteropSigningAlgorithms` |
-| Application claims               | Core §5.4, §5.5                      | Only the claims requested through `claims` and released; protocol claims never come from the source, nor their case variants; other spellings of known claims, case variants of one another, invalid names, malformed values, null and empty strings dropped (see [Claims](#claims)). Scope claims (`profile`, `email`, …) go to UserInfo only | `TestIDTokenClaimsFromTheClaimsParameter`, `TestValueConstraintsMatchScalarsOnly`, `TestProtocolClaimsCannotBeAliasedByCaseVariants`, `TestKnownClaimsAreReleasedUnderTheirExactSpellingOnly`, `TestClaimNamesCollidingUnderCaseFoldingAreDropped`, `TestReleasedClaimNamesAreValidAndUnique`, `TestReleasedClaimValuesAreWellFormed`, interop: `TestInteropCaseVariantClaimsNeverReachTheRP` |
+| Application claims               | Core §5.2, §5.4, §5.5; RFC 5646 §2.1 | Only the claims requested through `claims` and released; protocol claims never come from the source, nor their case variants; other spellings of known claims, their language-tag aliases (`email#verified`, `email_verified#`), case variants of one another, invalid names, malformed values, null and empty strings dropped; a `#` without a well-formed language tag after it is an ordinary character (see [Claims](#claims)). Scope claims (`profile`, `email`, …) go to UserInfo only | `TestIDTokenClaimsFromTheClaimsParameter`, `TestValueConstraintsMatchScalarsOnly`, `TestProtocolClaimsCannotBeAliasedByCaseVariants`, `TestKnownClaimsAreReleasedUnderTheirExactSpellingOnly`, `TestClaimNamesCollidingUnderCaseFoldingAreDropped`, `TestReleasedClaimNamesAreValidAndUnique`, `TestReleasedClaimValuesAreWellFormed`, `TestTaggedAliasesOfKnownClaimsAreNeverReleased`, `TestTaggedAliasesOfRequestedClaimsAreNeverReleased`, `TestMalformedLanguageTagsAreNotTaggedVariants`, `TestURIClaimNamesWithAFragmentAreOrdinaryNames`, `TestNamesWhoseClaimNameIsAKnownClaimsVariantAreNeverReleased`, interop: `TestInteropCaseVariantClaimsNeverReachTheRP` |
 | Code issued for OpenID           | Core §3.1.3.2                        | An `openid` code without the provider's context → `invalid_grant`                                                                                                                            | `TestOpenIDCodeWithoutContextIsRefused`                                                             |
-| Account validity                 | —                                    | `ClaimsSource` queried on every exchange of an OpenID grant: `ErrUnknownSubject` → `invalid_grant`                                                                                          | `TestCodeExchangeFailures`, `TestRefreshChecksTheAccountEvenWithoutOpenID`                          |
-| Token confusion                  | RFC 9068 §5, RFC 8725 §3.12          | An access-token audience equal to the requesting client's ID → `server_error` (another client's ID is not compared: audiences are never client IDs); JWT access tokens are typed `at+jwt` | `TestCodeExchangeFailures`, jwt: `TestOAuth2AccessTokenSignerFollowsRFC9068`, interop: `TestInteropJWTAccessTokenIsNotAnIDToken`, stack: `TestIDTokenUsedAsAnotherToken` |
+| Account validity                 | —                                    | `ClaimsSource` queried on every exchange of an OpenID grant, and of a plain OAuth 2.0 grant `Provider.AuthorizeHandler` approved (naming no claim): `ErrUnknownSubject` → `invalid_grant` | `TestCodeExchangeFailures`, `TestRefreshChecksTheAccountEvenWithoutOpenID`, `TestPlainOAuth2GrantStopsWithItsEndUser` |
+| Token confusion                  | RFC 9068 §5; RFC 8725 §2.8, §3.11, §3.12 | An access-token audience naming a relying party of the issuer — the requesting client, or a client registered there that declares `authorization_code` — → `server_error` at every code exchange and refresh, nothing persisted; JWT access tokens are typed `at+jwt` | `TestCodeExchangeFailures`, `TestAccessTokenAudienceNamingARelyingPartyIsRefused`, `TestPlainGrantAudienceIsChecked`, `TestRefreshChecksTheAudience`, jwt: `TestOAuth2AccessTokenSignerFollowsRFC9068`, interop: `TestInteropJWTAccessTokenIsNotAnIDToken`, stack: `TestIDTokenUsedAsAnotherToken` |
 | Refresh                          | Core §12.2                           | An ID Token at every refresh of an OpenID grant: same `iss`, `sub`, `aud`; new `iat`; the original `auth_time`, `acr`, `amr`; no `nonce`; none once the scope drops `openid`                | `TestRefreshIDTokensFollowCore12_2`, `TestRefreshWithoutOpenIDHasNoIDToken`, interop: `TestInteropRefresh`, `TestInteropRefreshReuse` |
 | Encrypted ID Tokens              | Core §10.2                           | Not supported, not advertised                                                                                                                                                                | —                                                                                                   |
 
@@ -158,8 +158,8 @@ mux.Handle("GET "+paths.JWKS, op.JWKSHandler())
 - Wire `grant.Config.RefreshTokenScope = oidcprovider.ScopeOfflineAccess`:
   refresh tokens then only come with an `offline_access` the `Decision`
   granted, for OpenID and plain OAuth 2.0 requests alike. Only the scope is
-  gated: without that wiring, a plain OAuth 2.0 grant — which carries no
-  provider context — gets refresh tokens whatever its scope.
+  gated: without that wiring, a plain OAuth 2.0 grant gets refresh tokens
+  whatever its scope.
 - CORS, when browsers call `/token` or UserInfo — UserInfo SHOULD support it
   (Core §5.3) — is the application's middleware: allow the clients' origins
   deliberately.
@@ -229,8 +229,11 @@ null and empty values, and every protocol claim (`sub`, `iss`, `aud`, `exp`,
 `ErrUnknownSubject` for an end-user that no longer exists or may no longer
 sign in stops the grant — `invalid_grant` at `/token`, `invalid_token` at
 UserInfo; any other error answers `server_error`. Disabling an end-user
-must also revoke their token families: plain OAuth 2.0 grants carry no
-OpenID context, and the source is not consulted for them.
+must also revoke their token families: the source is asked — naming no
+claim — at every exchange of a plain OAuth 2.0 grant
+`Provider.AuthorizeHandler` approved too, but not about a plain grant
+another `ConsentFunc` approved, the `password` grant, nor access tokens
+already issued.
 
 `ClaimsQuery.Names` holds names the client chose in its `claims` parameter:
 untrusted input, only known to be 1 to 255 bytes of UTF-8 without control
@@ -246,19 +249,27 @@ case folding (`ſ`, the Kelvin sign), simple upper- and lower-case mappings
 (`İ`, `ı`: Java's `equalsIgnoreCase`), full case mappings (`ß` as `ss`, the
 `ﬁ` ligatures: upper-casing in JavaScript, Java, Python), the diacritics
 lodash's `camelCase` strips from Latin letters (`émail` as `email`), and
-ignoring every character but letters, decimal digits and `#` — punctuation,
-white space, invisible characters and marks (`encoding/json/v2` with
-`case:ignore` ignores `_` and `-`; camelCase key normalizers — lodash
-`camelCase`, `camelcase-keys`, humps — read `email.verified`,
-`email verified` or `email‐verified` (U+2010) as `emailVerified`) — and
-never releases, nor asks the source for:
+ignoring every character but letters and decimal digits — punctuation (`#`
+included), white space, invisible characters and marks (`encoding/json/v2`
+with `case:ignore` ignores `_` and `-`; camelCase key normalizers read
+`email.verified`, `email verified` or `email‐verified` (U+2010) as
+`emailVerified`, and lodash's and change-case's, which split words on `#`,
+`email#verified` and `email_verified#` too) — and never releases, nor asks
+the source for:
 
 - a case variant of a protocol claim, or of a claim reserved to another
   protocol (`azp`, `jti`, `sid`, `scope`, …);
 - another spelling of a claim it knows: the standard claims (Core §5.1),
   `roles`, `groups` and `entitlements` (RFC 9068 §2.2.3.1), and
-  `Config.ClaimsSupported` — `Email`, `e_mail` and `EMAIL#fr` are dropped,
-  `email#fr` is released;
+  `Config.ClaimsSupported` — `Email`, `e_mail`, `EMAIL#fr` and
+  `email_verified#` are dropped, `email#fr` is released;
+- a name whose part before its first `#` is one of the above (`sub#x`,
+  `Email#x`);
+- a language-tagged name — a claim name, `#` and a well-formed BCP 47 tag
+  (Core §5.2, RFC 5646 §2.1) — reading, as a whole, as one of the above or
+  as a tagged variant of one: its claim name followed by any part of its
+  tag (`email#verified` as `email_verified`, `email#verified-fr` as
+  `email_verified#fr`, `s#ub-fr` as `sub`);
 - claims whose names are case variants of one another in one response: all
   of them, since which one a relying party would read is unknowable;
 - a name that is not 1 to 255 bytes of UTF-8 without control characters
@@ -281,7 +292,17 @@ alone under another spelling is released under that spelling (a relying
 party may read it as the claim it expects), and requested together with a
 variant it is dropped (an end-user can suppress it). `New` refuses a
 `ClaimsSupported` entry the provider never releases or that is a case
-variant of a protocol, standard or other entry's claim.
+variant of a protocol, standard or other entry's claim — its part before
+`#` included —, and a tagged entry reading as one of them.
+
+**Language tags.** A name is language-tagged only when a claim name and a
+well-formed BCP 47 language tag (RFC 5646 §2.1) surround its first `#`
+(`name#fr`, `family_name#ja-Kana-JP`): such a tagged variant is released
+with its claim name. Any other `#` is an ordinary character — `name#`,
+`name#fr-` and URI names with a fragment
+(`https://example.com/claims#user_roles`, RFC 7519 §4.2) are names of their
+own, released when requested under that exact name, never as a variant of
+another.
 
 ### Keys and rotation
 
@@ -311,7 +332,14 @@ accepting it until its cached set is an hour old (stack:
 clients.
 
 The keys of JWT access tokens belong in `Published` too: one `jwks_uri`
-serves both (RFC 9068 §4). Their audiences must never be client IDs.
+serves both (RFC 9068 §4). Their audiences must never be the client IDs of
+relying parties: the provider refuses (`server_error`) every code exchange
+and refresh whose access-token audience is the requesting client's ID, or
+that of a client registered at the issuer that declares
+`authorization_code`, and asks the `ClientStore` for it — `LoadClient`
+must answer an unknown ID with `(nil, nil)` or `invalid_client`, without
+I/O beyond the store. A resource server registered as a client for
+introspection, without `authorization_code`, may be the audience.
 
 ### Clients
 

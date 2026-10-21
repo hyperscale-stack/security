@@ -516,7 +516,7 @@ func newFakeClaims() *fakeClaims {
 		"alice": {
 			"name": "Alice Liddell", "name#fr": "Alice Liddell (fr)", "given_name": "Alice", "family_name": "Liddell",
 			"email": "alice@example.com", "email_verified": true, "phone_number": "+33 1 23 45 67 89",
-			"phone_number#x#y": "+0", "sub#x": "mallory",
+			"phone_number#fr-CA": "+1 (fr-CA)", "phone_number#x#y": "+0", "sub#x": "mallory",
 			"address": map[string]any{"country": "FR"}, "updated_at": 1760000000, "nickname": "",
 			"middle_name": nil, "groups": []string{"admins"},
 			// Protocol claims an application must not be able to set.

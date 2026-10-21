@@ -1740,8 +1740,9 @@ as one duplicated member.
 The provider now compares claim names under a key that ignores case (simple
 and full case mappings: `ſ`, `K`, `İ`, `ı`, `ß`, `ﬁ`…), the diacritics
 lodash's `camelCase` strips from Latin letters (`é`, `æ`…), and every
-character but letters, decimal digits and `#` — punctuation, white space,
-invisible characters and marks (`email.verified`, `auth time`,
+character but letters and decimal digits — punctuation (`#` included, see
+[below](#oidcprovider-claim-names-access-token-audiences-and-plain-oauth-20-grants)),
+white space, invisible characters and marks (`email.verified`, `auth time`,
 `email‐verified` with U+2010, `émail` and `e_mail` are case variants of
 `email_verified`, `auth_time` and `email`) — and drops — dropping is never
 an error (Core §5.3.2, §5.5):
@@ -1796,8 +1797,8 @@ has one meaning at the provider's server:
 | OpenID request | §11 rules | unchanged |
 | plain OAuth 2.0 request approved by another `ConsentFunc` (`Server().AuthorizeHandler`) | OAuth 2.0 semantics | unchanged — never enable `AllowImplicit` on that handler ([below](#oidcprovider-providerauthorizehandler-serves-no-implicit-flow)) |
 
-Only the scope is gated: a plain OAuth 2.0 grant carries no provider context,
-so its refresh tokens still follow `grant.Config.RefreshTokenScope` alone.
+Only the scope is gated: the refresh tokens of a plain OAuth 2.0 grant still
+follow `grant.Config.RefreshTokenScope` alone.
 
 To migrate:
 
@@ -2645,3 +2646,73 @@ To migrate:
    the past — build the store with the same clock:
    `memory.New(memory.WithClock(cfg.Now))`. Otherwise a test that makes
    more than 64 writes to one store can lose its live logins.
+
+### `oidc/provider`: claim names, access-token audiences and plain OAuth 2.0 grants
+
+Three changes, all on by default.
+
+**Language-tagged claim names (OpenID Connect Core §5.2).** A claim name is
+language-tagged only when a claim name and a well-formed BCP 47 language
+tag (RFC 5646 §2.1) surround its first `#`; any other `#` is an ordinary
+character. Claim names are compared ignoring `#` like any other
+punctuation, as lodash's and change-case's camelCase split words on it
+(`email#verified` and `email_verified#` both read as `emailVerified`).
+Before, a name holding `#` counted as a tagged variant of the name before
+it, so the `ClaimsSource` could get a name released that a camelCase
+relying party reads as another claim — `email_verified#: false` next to the
+genuine `email_verified: true`, `email#verified: true` alone,
+`phone_number#verified`, `email#verified-fr`:
+
+| Name | Before | After |
+| --- | --- | --- |
+| `name#fr`, `family_name#ja-Kana-JP` (tagged variant of a requested or scope claim) | released | unchanged |
+| `email_verified#`, `name#`, `foo#1`, `foo#fr-` (no well-formed tag after `#`) | a tagged variant of `email_verified`, `name`, `foo` | a name of its own: released only when requested under that exact name, and never when it reads as a known or protocol claim (`email_verified#`, `name#`) |
+| `email#verified`, `phone_number#verified`, `email#verified-fr`, `s#ub-fr` (a tag that continues the claim's name) | released with `email`, `phone_number`, `s` | never released, never shown to the `Interaction` |
+| `sub#x`, `Email#x` (the part before `#` is a protocol claim or another spelling of a known one) | never released | unchanged |
+| `https://example.com/claims#user_roles` (URI name, RFC 7519 §4.2) | released when requested | unchanged |
+| `#fr`, `#sub` (no claim name before `#`) | tagged variants of the empty name | names of their own; `#sub` reads as `sub` and is never released |
+| a claim value holding the members `a` and `a#` | released | dropped, as other member names that are case variants of each other |
+| `Config.ClaimsSupported` entry `name#`, `sub#x`, `#sub`, `email#verified`, `email#verified-fr`, `foo#bar` next to `foo_bar` | accepted | `New` fails |
+| `Decision.Claims` entry `phone_number` | also released `phone_number#x#y` | releases tagged variants only (`phone_number#fr-CA`) |
+
+**Access-token audiences (RFC 8725 §2.8, §3.11, §3.12).** A code exchange
+or refresh answered `server_error` when the access-token audience was the
+requesting client's ID, and only when an ID Token was issued. It now does
+at every code exchange and refresh — OpenID or plain OAuth 2.0 — also when
+the audience is the ID of a client registered at the token's issuer that
+declares the `authorization_code` grant: such a client receives ID Tokens
+whose `aud` is its client ID, and could take a JWT access token for one. A
+client that cannot receive ID Tokens there — a resource server registered
+for introspection only, a `client_credentials` client — may be the
+audience. `ClientStore.LoadClient` is now also called with the access-token
+audience at every exchange.
+
+**Account checks of plain OAuth 2.0 grants.** A plain OAuth 2.0 grant (no
+`openid`) approved through `Provider.AuthorizeHandler` records a minimal
+grant context, and at every code exchange and refresh of it the provider
+asks the `ClaimsSource` whether the end-user is still valid —
+`ClaimsQuery{Target: ClaimsForIDToken}` naming no claim: `ErrUnknownSubject`
+answers `invalid_grant`, any other error `server_error`. Plain grants
+another `ConsentFunc` approved (`Server().AuthorizeHandler`), the
+`password` grant and `client_credentials` are not checked.
+
+To migrate:
+
+1. Rename the application claims whose names hold a `#` that is no
+   language-tag delimiter and read as a known claim, or tag them with a
+   real BCP 47 language tag; remove the `Config.ClaimsSupported` entries
+   `New` now refuses (it names the reason).
+2. Keep every access-token audience (`IssuerResolver`) apart from the IDs
+   of the clients that run the authorization code flow at that issuer.
+3. Make `ClientStore.LoadClient` answer an unknown ID — the access-token
+   audience, typically a URI — with `(nil, nil)` or an `invalid_client`
+   error, without I/O beyond the store: any other error now fails the
+   exchange.
+4. Make the `ClaimsSource` know the end-users of the plain OAuth 2.0
+   requests your `Interaction` approves, and answer a query naming no
+   claim cheaply.
+5. Upgrade every instance before relying on it: an instance of the previous
+   version answers `invalid_grant` to a plain grant a new one recorded (it
+   refuses an unknown grant-context member). During a rolling deployment
+   the end-user authorizes again; after a rollback, the refresh tokens of
+   the plain grants issued since the upgrade stop working.

@@ -74,12 +74,12 @@ func newKeyBases() map[rune]string {
 
 // claimKey returns the case-insensitive key of a claim name: two names are
 // "case variants" of each other — in this package's documentation — when
-// their keys are equal. The key holds letters and decimal digits, and "#"
-// (the language-tag delimiter): it ignores every other character —
-// punctuation, symbols, white space, controls, invisible format characters
-// and marks — and the letters ª, µ and º, which lodash's camelCase splits
-// words on. It reads the Latin letters of latinBases as their ASCII
-// letters (é as E, æ as AE), expands the nine code points of
+// their keys are equal. The key holds letters and decimal digits only: it
+// ignores every other character — punctuation ("#", the language-tag
+// delimiter, included), symbols, white space, controls, invisible format
+// characters and marks — and the letters ª, µ and º, which lodash's
+// camelCase splits words on. It reads the Latin letters of latinBases as
+// their ASCII letters (é as E, æ as AE), expands the nine code points of
 // fullCaseExpansions, and maps every other letter to the smallest rune
 // among the simple case-folding orbits of itself, of its simple uppercase
 // and of its simple lowercase mapping; a rune and its case variants are
@@ -88,13 +88,14 @@ func newKeyBases() map[rune]string {
 // parties matching names case-insensitively equate: Go's encoding/json
 // (strings.EqualFold, so ſ with s and K with k), encoding/json/v2 with
 // case:ignore (EqualFold, "_" and "-" ignored), camelCase key normalizers
-// — lodash camelCase, camelcase-keys, humps — splitting words on
-// punctuation, white space and invisible characters ("email.verified" and
-// "email\u2010verified" read as emailVerified) and, for lodash, stripping
-// the diacritics of Latin letters ("émail" read as email), Java's
-// equalsIgnoreCase and Turkic-locale lowercasing (İ and ı with i), .NET's
-// OrdinalIgnoreCase and Jackson's case-insensitive mode (ASCII case, and K
-// for Jackson), and full-mapping upper-casing (ß with ss). An invalid
+// splitting words on separators — lodash's and change-case's camelCase on
+// any punctuation, "#" included ("email.verified", "email#verified",
+// "email_verified#" and "email\u2010verified" read as emailVerified),
+// camelcase-keys and humps on "_", "-" and white space — and, for lodash,
+// stripping the diacritics of Latin letters ("émail" read as email),
+// Java's equalsIgnoreCase and Turkic-locale lowercasing (İ and ı with i),
+// .NET's OrdinalIgnoreCase and Jackson's case-insensitive mode (ASCII case,
+// and K for Jackson), and full-mapping upper-casing (ß with ss). An invalid
 // UTF-8 byte reads as U+FFFD, which encoding/json writes in its place: a
 // symbol, ignored.
 //
@@ -127,10 +128,10 @@ func asciiClaimKey(name string) (string, bool) {
 	return string(key), true
 }
 
-// keyed reports whether an ASCII rune counts in a claim key: a letter, a
-// digit or "#".
+// keyed reports whether an ASCII rune counts in a claim key: a letter or a
+// digit.
 func keyed(r rune) bool {
-	return 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '#'
+	return 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9'
 }
 
 // unicodeClaimKey is claimKey for any name.
@@ -187,12 +188,28 @@ func orbitMin(r rune) rune {
 	return smallest
 }
 
-// untagged returns name without its language tag (Core §5.2): "name#fr"
-// is name.
+// untagged returns name without its language tag (see splitTag): "name#fr"
+// is name, "name#" is name#.
 func untagged(name string) string {
-	base, _, _ := strings.Cut(name, "#")
+	base, _, _ := splitTag(name)
 
 	return base
+}
+
+// splitTag splits a language-tagged claim name (OpenID Connect Core §5.2:
+// a claim name, "#" and a BCP 47 language tag) at its first "#": a claim
+// name before it, a well-formed language tag (RFC 5646 §2.1) after it.
+// Any other name is untagged — (name, "", false) — and its "#" an ordinary
+// character: "name#", "name#fr-", "#fr" and the URI name
+// "https://example.com/claims#user_roles" (RFC 7519 §4.2) are claim names
+// of their own.
+func splitTag(name string) (base, tag string, tagged bool) {
+	i := strings.IndexByte(name, '#')
+	if i <= 0 || !languageTag(name[i+1:]) {
+		return name, "", false
+	}
+
+	return name[:i], name[i+1:], true
 }
 
 // keySet returns the claimKeys of names.
@@ -240,22 +257,71 @@ func newClaimNames(supported []string) claimNames {
 	return names
 }
 
-// releasable reports whether the provider may release a claim requested
-// under name: its untagged name is neither a reserved claim nor a case
-// variant of one, nor a case variant of a known claim other than that
-// claim's exact spelling — "SUB", "ſub#fr", "Email", "EMAIL#fr" and
-// "Roles" are never released, "email#fr" is.
+// releasable reports whether the provider may release a claim requested,
+// or returned by the ClaimsSource, under name. Its untagged name (see
+// splitTag), and its part before its first "#" — what a relying party
+// splitting language tags leniently reads as its claim name —, must be
+// neither a reserved claim nor a case variant of one, nor a case variant
+// of a known claim other than that claim's exact spelling: "SUB",
+// "ſub#fr", "sub#x", "Email", "EMAIL#fr", "Roles" and "email_verified#"
+// are never released, "email#fr" is. A tagged name must not read, as a
+// whole, as a reserved or known claim either, nor as a tagged variant of
+// one: the key of its untagged name followed by any part of its tag's must
+// not be another claim's — "email#verified" (email_verified),
+// "email#verified-fr" (email_verified#fr) and "s#ub-fr" (sub) are never
+// released.
 func (n claimNames) releasable(name string) bool {
-	base := untagged(name)
-	key := claimKey(base)
+	base, tag, tagged := splitTag(name)
+	prefix, _, _ := strings.Cut(name, "#")
 
-	if _, ok := reservedKeys[key]; ok {
+	if reserved(base) || reserved(prefix) || n.variant(base, name) || n.variant(prefix, name) {
 		return false
 	}
 
-	exact, known := n[key]
+	return !tagged || !continuesClaim(claimKey(base), claimKey(tag), n.hasOrReserved)
+}
 
-	return !known || exact == base
+// variant reports whether part — the untagged name of name, or its part
+// before its first "#" — is a case variant of a known claim spelled
+// neither part nor name: the declared "tenant#" is no variant of itself.
+func (n claimNames) variant(part, name string) bool {
+	exact, known := n[claimKey(part)]
+
+	return known && exact != part && exact != name
+}
+
+// has reports whether key is the claimKey of a known claim.
+func (n claimNames) has(key string) bool {
+	_, ok := n[key]
+
+	return ok
+}
+
+// hasOrReserved reports whether key is the claimKey of a known or a
+// reserved claim.
+func (n claimNames) hasOrReserved(key string) bool {
+	return n.has(key) || isReservedKey(key)
+}
+
+// isReservedKey reports whether key is the claimKey of a reserved claim.
+func isReservedKey(key string) bool {
+	_, ok := reservedKeys[key]
+
+	return ok
+}
+
+// continuesClaim reports whether key — the claimKey of a tagged name's
+// claim name — followed by a non-empty prefix of tagKey — its tag's — is a
+// key claims reports: a camelCase relying party, splitting words on "#",
+// reads "email#verified-fr" as the emailVerifiedFr of email_verified#fr.
+func continuesClaim(key, tagKey string, claims func(string) bool) bool {
+	for i := 1; i <= len(tagKey); i++ {
+		if claims(key + tagKey[:i]) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // filter returns the claim requests of r the provider may release — what

@@ -101,7 +101,8 @@ func TestRefreshChecksTheAccountEvenWithoutOpenID(t *testing.T) {
 }
 
 // TestRefreshOfAPlainOAuth2Grant: a plain OAuth 2.0 grant whose decision
-// grants offline_access refreshes without ID Tokens or account checks.
+// grants offline_access refreshes without ID Tokens, checking its end-user
+// at every exchange — claims queries naming no claim.
 func TestRefreshOfAPlainOAuth2Grant(t *testing.T) {
 	t.Parallel()
 
@@ -114,7 +115,15 @@ func TestRefreshOfAPlainOAuth2Grant(t *testing.T) {
 
 	refreshed := tokens(t, e.refresh(resp.RefreshToken, ""))
 	assert.Empty(t, refreshed.IDToken)
-	assert.Empty(t, e.claims.recorded(), "no OpenID grant, no account check")
+
+	queries := e.claims.recorded()
+	require.Len(t, queries, 2, "the code exchange and the refresh")
+
+	for _, q := range queries {
+		assert.Equal(t, oidcprovider.ClaimsQuery{
+			Issuer: testIssuer, Subject: "alice", ClientID: webClientID, Target: oidcprovider.ClaimsForIDToken,
+		}, q)
+	}
 }
 
 // TestRefreshWithoutOfflineConsentFailsClosed (user decision 1): grants

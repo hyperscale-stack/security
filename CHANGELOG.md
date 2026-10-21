@@ -575,6 +575,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   library's key sets ignore it, so its tokens would verify nowhere.
 - `jwt`: a `client_id` claim that is not a JSON string is refused with
   `ErrMalformedToken`, like `sub` and `scope`.
+- `oidc/provider`: a plain OAuth 2.0 grant approved through
+  `Provider.AuthorizeHandler` records a minimal grant context, and the
+  `ClaimsSource` is asked — naming no claim — at every code exchange and
+  refresh of it: `ErrUnknownSubject` answers `invalid_grant`, as for an
+  OpenID grant. `Config.ClaimsSupported` refuses entries holding a `#` that
+  makes them read as a reserved or known claim, and a `Decision` release
+  list covers tagged variants with a well-formed language tag only. See
+  [MIGRATION.md](MIGRATION.md).
 - `examples/oidc-client` bounds its unauthenticated login starts: each
   client (an IPv4 address, an IPv6 /64) may start 20 logins a minute and
   each network (an IPv4 /24, an IPv6 /48) 60 — `429 Too Many Requests`
@@ -1011,6 +1019,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   HMAC keys trusted during a rotation, every token was refused. Every
   signer whose key has a `KeyID` now writes it (RFC 7515 §4.1.4); the
   tokens of the other keys are unchanged.
+- `oidc/provider` UserInfo answers `401 invalid_token`, not `500`, for the
+  token of a client its `ClientStore` reports unknown with an
+  `invalid_client` error, as the `oauth2.ClientStore` contract allows.
 - `oidcclient.Client.StartLogin` capped the binding cookies at four by
   expiring the oldest cookies whose name started with the binding prefix —
   `oidc-` with `InsecureCookies`, `__Host-oidc-` otherwise — so it could
@@ -1292,6 +1303,23 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   private key whose public half is not the one its seed derives — the
   all-zero buffer, two keys spliced together — is refused by `NewSigner`
   and `PrivateKey.Validate`: it signed tokens no key verifies.
+- `oidc/provider` no longer releases claim names that a camelCase relying
+  party reads as another claim through `#`: the claim-name key ignores `#`
+  (lodash's and change-case's camelCase split words on it), a name is
+  language-tagged only when a well-formed BCP 47 tag follows its first `#`
+  (OpenID Connect Core §5.2, RFC 5646 §2.1), and a tagged name whose claim
+  name followed by any part of its tag reads as a reserved or known claim
+  (`email#verified`, `email#verified-fr`, `s#ub-fr`) is never released —
+  names returned by the `ClaimsSource` included. `email_verified#: false`
+  was released next to `email_verified: true`, and `email#verified: true`
+  alone. URI names with a fragment keep working. See
+  [MIGRATION.md](MIGRATION.md).
+- `oidc/provider` refuses (`server_error`) every code exchange and refresh
+  whose access-token audience is the requesting client's ID or that of a
+  client registered at the issuer that declares `authorization_code` — a
+  relying party that would take a JWT access token for one of its ID Tokens
+  (RFC 8725 §2.8, §3.12). Only the requesting client's ID was compared, and
+  only when an ID Token was issued.
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets
@@ -1824,7 +1852,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   member winning — read the victim's subject from her ID Token and UserInfo
   response (account takeover). Names are now compared ignoring case (simple
   and full case mappings), the diacritics lodash's `camelCase` strips from
-  Latin letters, and every character but letters, decimal digits and `#`:
+  Latin letters, and every character but letters and decimal digits:
   case variants of protocol claims are never asked for nor released, known
   claims (standard claims, `roles`, `groups`, `entitlements`,
   `Config.ClaimsSupported`) only under their exact spelling, names that are

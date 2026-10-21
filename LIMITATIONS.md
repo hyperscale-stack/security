@@ -180,25 +180,43 @@ matrix. Not supported, and never advertised:
 - **One release list for both targets** — `Decision.Claims` releases a
   requested claim in the ID Token and at UserInfo alike: an application
   cannot release a claim to one target only.
-- **Access-token audience** — the provider refuses an access token whose
-  audience is the requesting client's ID (it would be an ID Token's), but
-  does not compare it with the other clients' IDs: keep every
-  `IssuerResolver` audience apart from all client IDs.
+- **Access-token audience** — the provider refuses (`server_error`) every
+  code exchange and refresh whose access-token audience is the requesting
+  client's ID, or the ID of a client registered at the token's issuer that
+  declares the `authorization_code` grant (such a client receives ID Tokens
+  whose `aud` is its client ID). The first tokens of the `client_credentials`
+  and legacy `password` grants never reach the provider (a refresh does):
+  their audience is checked only through the code exchanges and refreshes
+  of the same issuer. A client that declares `refresh_token` but no longer
+  `authorization_code` still refreshes the OpenID grants it holds, yet is
+  not counted. Keep every `IssuerResolver` audience apart from the client
+  IDs of relying parties.
 - **Claim-name aliasing beyond case variants** — the provider compares claim
   names ignoring case (simple and full case mappings), the diacritics
   lodash's `camelCase` strips from Latin letters, and every character but
-  letters, decimal digits and `#`; a relying party comparing them under
+  letters and decimal digits (`#` included); a tagged name whose claim name
+  followed by any part of its tag reads as another claim
+  (`email#verified-fr`) is refused. A relying party comparing names under
   compatibility normalization (NFKC: fullwidth `ｓｕｂ`), stripping other
   diacritics (`ṡ`, beyond Latin-1 and Latin Extended-A), under
   locale-sensitive collation, or reading confusable letters (Cyrillic `ѕ`)
-  as Latin ones is not covered. An application claim missing from
+  as Latin ones is not covered. The continuation rule also over-refuses: a
+  tagged variant whose claim name followed by the first letters of its tag
+  spells another known claim is never released — declaring `emails` drops
+  `email#sv`; declaring `named` drops the standard `name#de-CH` and still
+  releases `named#ech`, which a camelCase relying party comparing
+  case-insensitively reads as `name#de-CH`. Keep application claim names
+  from extending standard ones. An application claim missing from
   `Config.ClaimsSupported` is released under another spelling when requested
   alone, and dropped together with such a variant — an end-user can suppress
   it: declare every claim relying parties decide on.
-- **Account checks of plain OAuth 2.0 grants** — the `ClaimsSource` stops an
-  OpenID grant whose end-user is gone (`ErrUnknownSubject`), but a grant
-  without `openid` carries no provider context and is not checked: revoke
-  the end-user's token families too.
+- **Account checks of grants the provider did not approve** — the
+  `ClaimsSource` stops, at its next exchange, an OpenID grant or a plain
+  OAuth 2.0 grant approved through `Provider.AuthorizeHandler` whose
+  end-user is gone (`ErrUnknownSubject`); a plain grant another
+  `ConsentFunc` approved (`Server().AuthorizeHandler`), the `password`
+  grant and access tokens already issued are not checked: revoke the
+  end-user's token families too.
 - **No UI, directory or CORS** — no login or consent pages, tenant
   directory or identity linking (the application's `Interaction`), and no
   built-in CORS, which UserInfo SHOULD support for browser-based clients

@@ -6,6 +6,7 @@ package oidcprovider
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -22,17 +23,37 @@ func TestTokenResponseRefusesAnotherClientsGrant(t *testing.T) {
 	t.Parallel()
 
 	p := &Provider{}
-	access := oauth2.AccessToken{ClientID: "web", Scope: ScopeOpenID, ExtensionData: `{"v":1,"auth_time":1760000000}`}
-
 	elsewhere := &oauth2.DefaultClient{IDValue: "web", IssuerValues: []string{"https://other.example"}}
-	access.Issuer = "https://op.example"
 
-	for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}, elsewhere} {
-		_, err := p.extendTokenResponse(context.Background(), oauth2.TokenIssuance{
-			GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
-		})
-		require.ErrorIs(t, err, errClientMismatch)
+	for _, access := range []oauth2.AccessToken{
+		{ClientID: "web", Scope: ScopeOpenID, ExtensionData: `{"v":1,"auth_time":1760000000}`},
+		{ClientID: "web", Scope: "read", ExtensionData: plainContext},
+	} {
+		access.Issuer = "https://op.example"
+
+		for _, client := range []oauth2.Client{nil, &oauth2.DefaultClient{IDValue: "other"}, elsewhere} {
+			_, err := p.extendTokenResponse(context.Background(), oauth2.TokenIssuance{
+				GrantType: oauth2.GrantTypeAuthorizationCode, Client: client, Access: access,
+			})
+			require.ErrorIs(t, err, errClientMismatch, "%s", access.ExtensionData)
+		}
 	}
+}
+
+// TestPlainContextIsTheEncodedMark: the ExtensionData a plain OAuth 2.0
+// grant records is grantContext{Plain: true} as encode writes it, and
+// decodes as such.
+func TestPlainContextIsTheEncodedMark(t *testing.T) {
+	t.Parallel()
+
+	data, err := grantContext{Plain: true}.encode()
+	require.NoError(t, err)
+	require.Equal(t, plainContext, data)
+
+	gc, present, err := decodeContext(plainContext)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, grantContext{V: contextVersion, Plain: true}, gc)
 }
 
 // TestProtocolGuardsBehindTheCore: the provider re-checks the response type
@@ -83,4 +104,31 @@ func TestOfflineAccessNeedsTheCodeFlow(t *testing.T) {
 	_, offline, err = view.offlineScope("read "+ScopeOfflineAccess, OfflineAccessByPolicy)
 	require.NoError(t, err)
 	require.True(t, offline, "kept in the code flow")
+}
+
+// unusedClients is a ClientStore that must not be asked.
+type unusedClients struct{ t *testing.T }
+
+func (u unusedClients) LoadClient(context.Context, string) (oauth2.Client, error) {
+	u.t.Error("the ClientStore was asked")
+
+	return nil, errors.New("unusedClients: not asked")
+}
+
+// TestTheRequestingClientIsNeverTheAudience: an access-token audience equal
+// to the requesting client's ID is refused without asking the ClientStore
+// — whatever grants that client declares.
+func TestTheRequestingClientIsNeverTheAudience(t *testing.T) {
+	t.Parallel()
+
+	p := &Provider{clients: unusedClients{t: t}}
+	requester := &oauth2.DefaultClient{IDValue: "web", GrantTypeValues: []string{oauth2.GrantTypePassword}}
+
+	rp, err := p.audienceNamesRP(context.Background(), "web", "https://op.example", requester)
+	require.NoError(t, err)
+	require.True(t, rp)
+
+	rp, err = p.audienceNamesRP(context.Background(), "", "https://op.example", requester)
+	require.NoError(t, err)
+	require.False(t, rp, "an empty audience names no client")
 }
