@@ -95,20 +95,26 @@ func TestVerifyRefusesKeyBearingHeaders(t *testing.T) {
 		{"jwk of another key", "jwk", `{"alg":"ES256","kid":"ec-1","jwk":` + rsaJWK + `}`},
 		{"jwk of the advisory", "jwk", `{"alg":"ES256","kid":"ec-1","jwk":` + advisoryJWK(1024) + `}`},
 		{"jwk null", "jwk", `{"alg":"ES256","kid":"ec-1","jwk":null}`},
-		{"jwk escaped name", "jwk", `{"alg":"ES256","kid":"ec-1","jwk":` + ecJWK + `}`},
+		{"jwk escaped name", "jwk", `{"alg":"ES256","kid":"ec-1","\u006awk":` + ecJWK + `}`},
 		{"x5c of the signing key", "x5c", `{"alg":"ES256","kid":"ec-1","x5c":["` + cert + `"]}`},
 		{"x5c garbage", "x5c", `{"alg":"ES256","kid":"ec-1","x5c":["!!"]}`},
 		{"x5c null", "x5c", `{"alg":"ES256","kid":"ec-1","x5c":null}`},
-		{"x5c escaped name", "x5c", `{"alg":"ES256","kid":"ec-1","x5c":["` + cert + `"]}`},
+		{"x5c escaped name", "x5c", `{"alg":"ES256","kid":"ec-1","x5\u0063":["` + cert + `"]}`},
 		{"jku", "jku", `{"alg":"ES256","kid":"ec-1","jku":"https://attacker.example/jwks"}`},
 		{"jku null", "jku", `{"alg":"ES256","kid":"ec-1","jku":null}`},
+		{"jku escaped name", "jku", `{"alg":"ES256","kid":"ec-1","j\u006bu":"https://attacker.example/jwks"}`},
 		{"x5u", "x5u", `{"alg":"ES256","kid":"ec-1","x5u":"https://attacker.example/cert.pem"}`},
 		{"x5u null", "x5u", `{"alg":"ES256","kid":"ec-1","x5u":null}`},
+		{"x5u escaped name", "x5u", `{"alg":"ES256","kid":"ec-1","x5\u0075":"https://attacker.example/cert.pem"}`},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if strings.Contains(tc.name, "escaped") {
+				require.Contains(t, tc.header, `\u00`, "the member name is written with a JSON escape")
+			}
 
 			errV, errS := verifyBoth(t, keys, forge(t, jwtsec.ES256, priv.Key, tc.header, payload))
 
@@ -118,6 +124,18 @@ func TestVerifyRefusesKeyBearingHeaders(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("escaped duplicate jwk", func(t *testing.T) {
+		t.Parallel()
+
+		h := `{"alg":"ES256","kid":"ec-1","jwk":null,"\u006a\u0077\u006b":` + advisoryJWK(1024) + `}`
+		errV, errS := verifyBoth(t, keys, forge(t, jwtsec.ES256, priv.Key, h, payload))
+
+		for _, err := range []error{errV, errS} {
+			require.ErrorIs(t, err, jwtsec.ErrMalformedToken)
+			assert.NotContains(t, err.Error(), "private parameters", "go-jose never saw the key")
+		}
+	})
 
 	t.Run("refused before the algorithm allow-list", func(t *testing.T) {
 		t.Parallel()

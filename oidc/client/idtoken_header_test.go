@@ -97,19 +97,26 @@ func TestIDTokenKeyBearingHeaders(t *testing.T) {
 		{"jwk of the attacker", "jwk", `{"alg":"RS256","kid":"rsa-1","jwk":` + string(evilJWK) + `}`},
 		{"jwk of the advisory", "jwk", `{"alg":"RS256","kid":"rsa-1","jwk":` + advisoryJWK(16384) + `}`},
 		{"jwk null", "jwk", `{"alg":"RS256","kid":"rsa-1","jwk":null}`},
-		{"jwk escaped name", "jwk", `{"alg":"RS256","kid":"rsa-1","jwk":` + string(evilJWK) + `}`},
+		{"jwk escaped name", "jwk", `{"alg":"RS256","kid":"rsa-1","\u006awk":` + string(evilJWK) + `}`},
 		{"jwk with HS256", "jwk", `{"alg":"HS256","kid":"rsa-1","jwk":` + advisoryJWK(1024) + `}`},
 		{"x5c", "x5c", `{"alg":"RS256","kid":"rsa-1","x5c":["MIIB"]}`},
 		{"x5c null", "x5c", `{"alg":"RS256","kid":"rsa-1","x5c":null}`},
+		{"x5c escaped name", "x5c", `{"alg":"RS256","kid":"rsa-1","x5\u0063":["MIIB"]}`},
 		{"jku", "jku", `{"alg":"RS256","kid":"rsa-1","jku":"https://attacker.example/jwks"}`},
 		{"jku null", "jku", `{"alg":"RS256","kid":"rsa-1","jku":null}`},
+		{"jku escaped name", "jku", `{"alg":"RS256","kid":"rsa-1","j\u006bu":"https://attacker.example/jwks"}`},
 		{"x5u", "x5u", `{"alg":"RS256","kid":"rsa-1","x5u":"https://attacker.example/cert.pem"}`},
 		{"x5u null", "x5u", `{"alg":"RS256","kid":"rsa-1","x5u":null}`},
+		{"x5u escaped name", "x5u", `{"alg":"RS256","kid":"rsa-1","x5\u0075":"https://attacker.example/cert.pem"}`},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if strings.Contains(tc.name, "escaped") {
+				require.Contains(t, tc.header, `\u00`, "the member name is written with a JSON escape")
+			}
 
 			id, err := headerLogin(t, tc.header)
 			require.ErrorIs(t, err, oidcclient.ErrIDTokenMalformed)
@@ -164,7 +171,9 @@ func TestIDTokenHeaderStrict(t *testing.T) {
 	headers := map[string]string{
 		"typ twice":              `{"alg":"RS256","kid":"rsa-1","typ":"JWT","typ":"at+jwt"}`,
 		"typ at+jwt then JWT":    `{"alg":"RS256","kid":"rsa-1","typ":"at+jwt","typ":"JWT"}`,
-		"escaped duplicate typ":  `{"alg":"RS256","kid":"rsa-1","typ":"JWT","typ":"at+jwt"}`,
+		"escaped duplicate typ":  `{"alg":"RS256","kid":"rsa-1","typ":"JWT","t\u0079p":"at+jwt"}`,
+		"escaped duplicate alg":  `{"alg":"RS256","\u0061lg":"none","kid":"rsa-1-at+jwt"}`,
+		"escaped duplicate jwk":  `{"alg":"RS256","kid":"rsa-1-at+jwt","jwk":null,"\u006a\u0077\u006b":null}`,
 		"case variant Typ":       `{"alg":"RS256","kid":"rsa-1","Typ":"at+jwt","typ":"JWT"}`,
 		"alg twice":              `{"alg":"none","alg":"RS256","kid":"rsa-1"}`,
 		"kid twice":              `{"alg":"RS256","kid":"other-at+jwt","kid":"rsa-1"}`,
@@ -181,6 +190,10 @@ func TestIDTokenHeaderStrict(t *testing.T) {
 	for name, h := range headers {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+
+			if strings.HasPrefix(name, "escaped") {
+				require.Contains(t, h, `\u00`, "the member name is written with a JSON escape")
+			}
 
 			id, err := headerLogin(t, h)
 			require.ErrorIs(t, err, oidcclient.ErrIDTokenMalformed)
