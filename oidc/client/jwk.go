@@ -146,6 +146,10 @@ func parseVerificationKey(raw []byte, members map[string]josejson.RawMessage) (v
 
 		k.kind, k.implied = kindEC, alg
 	case ed25519.PublicKey:
+		if !validEd25519PublicKey(pub) {
+			return verificationKey{}, false
+		}
+
 		k.kind, k.implied = kindEd25519, EdDSA
 	default:
 		return verificationKey{}, false
@@ -221,6 +225,19 @@ func implicitRSAAlgorithm(effective []Algorithm) Algorithm {
 	}
 
 	return only
+}
+
+// verifier returns what verifies a signature made with alg under k: the
+// public key, or for PS256/384/512 a pssVerifier, which requires the salt
+// length RFC 7518 §3.5 prescribes.
+func (k verificationKey) verifier(alg Algorithm) any {
+	if pub, ok := k.key.(*rsa.PublicKey); ok {
+		if _, pss := pssHashes[jose.SignatureAlgorithm(alg)]; pss {
+			return pssVerifier{pub: pub}
+		}
+	}
+
+	return k.key
 }
 
 // candidates returns the keys that may verify a signature made with alg

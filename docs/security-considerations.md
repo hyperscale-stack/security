@@ -1437,7 +1437,9 @@ are attacker-influenced.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
   is returned: RS256 — or the algorithm registered for the client, named in
   `Config.Algorithms` (OpenID Connect Core §3.1.3.7 step 7) — asymmetric
-  algorithms only (HMAC and `none` refused), `typ`
+  algorithms only (HMAC and `none` refused; PS256/384/512 with a salt as
+  long as the hash, RFC 7518 §3.5; Ed25519 keys canonical and not of small
+  order, RFC 8032 §5.1.3, RFC 8725 §3.4), `typ`
   absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from
   the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk` and `x5c`
   are refused, see below) through a bounded cache that refetches once, rate

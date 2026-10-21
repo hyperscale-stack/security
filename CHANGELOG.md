@@ -1077,6 +1077,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   provider withdraws stops verifying ID Tokens within five minutes while
   the JWK Set endpoint answers; the 24-hour staleness limit while fetches
   fail is unchanged.
+- `oidc/client` verifies PS256/384/512 ID Tokens only with a salt as long
+  as the hash output (RFC 7518 §3.5), and ignores JWK Set Ed25519 keys that
+  are not canonically encoded (RFC 8032 §5.1.3) or of small order (RFC 8725
+  §3.4) — the rules of the `jwt` module. A provider signing PS* tokens with
+  another salt length (the maximum, say) now fails with
+  `ErrIDTokenSignature` (see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in
@@ -2280,3 +2286,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   the callback with its own code — signing the victim in as the attacker
   (login CSRF, RFC 9700 §4.7; rfc6265bis §4.1.3.2). `New` now refuses it
   unless the redirect URI is http on a loopback host.
+- `oidc/client` verified ID Tokens through go-jose directly, which accepts
+  an RSASSA-PSS signature of any salt length (RFC 7518 §3.5 requires the
+  hash size) and checks an Ed25519 JWK only against a list of weak
+  encodings, so a non-canonical encoding (y ≥ p, whose decoding RFC 8032
+  §5.1.3 makes fail) was used as a key. PS* signatures are now verified with
+  a hash-size salt and such keys are ignored, as in the `jwt` module.

@@ -3179,3 +3179,19 @@ To migrate:
 1. Nothing in the application.
 2. A provider with a strict rate limit on its `jwks_uri` sees up to twelve
    requests an hour per `Client` instead of one.
+
+### `oidc/client`: PS* salts and Ed25519 keys are checked strictly
+
+| ID Token or key | Before | After |
+| --- | --- | --- |
+| PS256/384/512 signature with a salt as long as the hash (RFC 7518 §3.5) | verified | unchanged |
+| PS* signature with another salt length (the maximum, as `crypto/rsa` signs with `PSSSaltLengthAuto`, some older OpenSSL defaults) | verified | `ErrIDTokenSignature` |
+| JWK Set Ed25519 key encoded non-canonically (y ≥ p) or of small order | used (small-order ones already refused by go-jose) | ignored: an ID Token naming it fails with `ErrUnknownSigningKey` |
+
+To migrate:
+
+1. Nothing for providers signing with RS*, ES* or EdDSA, or with PS* and a
+   hash-size salt (key management services do).
+2. A provider whose PS* ID Tokens now fail with `ErrIDTokenSignature` must
+   sign with a salt as long as the hash (RFC 7518 §3.5), or the client use
+   another algorithm it offers (`Config.Algorithms`).
