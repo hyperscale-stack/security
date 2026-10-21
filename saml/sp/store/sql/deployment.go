@@ -30,6 +30,13 @@ func (s *Store) CheckDeployment(ctx context.Context) error {
 	return s.dialect.checkDeployment(ctx, s.db)
 }
 
+// querier runs the queries of a deployment check: the store's *sql.DB, or
+// the *sql.Conn of a Migrate holding its named lock.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // storeTables are the tables of the store, in Schema's order.
 var storeTables = []string{"samlsp_transactions", "samlsp_used_assertions"}
 
@@ -39,8 +46,8 @@ const selectEngines = `SELECT TABLE_NAME, COALESCE(ENGINE, '') FROM information_
 
 // checkMySQL reads the storage engines of the store's tables, then checks
 // them.
-func checkMySQL(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, selectEngines, storeTables[0], storeTables[1])
+func checkMySQL(ctx context.Context, q querier) error {
+	rows, err := q.QueryContext(ctx, selectEngines, storeTables[0], storeTables[1])
 	if err != nil {
 		return fmt.Errorf("sqlstore: check deployment: storage engines: %w", err)
 	}

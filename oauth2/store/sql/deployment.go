@@ -41,6 +41,13 @@ func (s *Store) CheckDeployment(ctx context.Context) error {
 	return s.dialect.checkDeployment(ctx, s.db)
 }
 
+// querier runs the queries of a deployment check: the store's *sql.DB, or
+// the *sql.Conn of a Migrate holding its named lock.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // storeTables are the tables of the store, in [Schema]'s order.
 var storeTables = []string{"oauth2_auth_codes", "oauth2_access_tokens", "oauth2_refresh_tokens", "oauth2_token_families"}
 
@@ -64,24 +71,24 @@ const (
 
 // checkMySQL reads what the requirements of a MySQL deployment depend on,
 // then checks it.
-func checkMySQL(ctx context.Context, db *sql.DB) error {
+func checkMySQL(ctx context.Context, q querier) error {
 	tables := make([]any, len(storeTables))
 	for i, table := range storeTables {
 		tables[i] = table
 	}
 
-	engines, err := queryPairs(ctx, db, selectEngines, tables...)
+	engines, err := queryPairs(ctx, q, selectEngines, tables...)
 	if err != nil {
 		return fmt.Errorf("sqlstore: check deployment: storage engines: %w", err)
 	}
 
-	types, err := queryPairs(ctx, db, selectColumnTypes, tables...)
+	types, err := queryPairs(ctx, q, selectColumnTypes, tables...)
 	if err != nil {
 		return fmt.Errorf("sqlstore: check deployment: column types: %w", err)
 	}
 
 	var mode string
-	if err := db.QueryRowContext(ctx, selectSQLMode).Scan(&mode); err != nil {
+	if err := q.QueryRowContext(ctx, selectSQLMode).Scan(&mode); err != nil {
 		return fmt.Errorf("sqlstore: check deployment: sql_mode: %w", err)
 	}
 
@@ -89,8 +96,8 @@ func checkMySQL(ctx context.Context, db *sql.DB) error {
 }
 
 // queryPairs runs query and returns its two-column rows as a map.
-func queryPairs(ctx context.Context, db *sql.DB, query string, args ...any) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, query, args...)
+func queryPairs(ctx context.Context, q querier, query string, args ...any) (map[string]string, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // wrapped by the caller
 	}

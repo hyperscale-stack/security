@@ -58,6 +58,7 @@ func lockingStore(t *testing.T, lock string) (*Store, *sql.DB) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	d := NewMockDialect(t)
+	d.EXPECT().namedMigrationLock().Return("")
 	d.EXPECT().migrationLock().Return(lock)
 	d.EXPECT().tableOptions().Return("").Maybe()
 	d.EXPECT().checkDeployment(mock.Anything, db).Return(nil).Maybe()
@@ -206,6 +207,7 @@ func TestMigrateEndsWithTheDeploymentCheck(t *testing.T) {
 	unmet := checkEngine("MyISAM", true)
 
 	d := NewMockDialect(t)
+	d.EXPECT().namedMigrationLock().Return("")
 	d.EXPECT().migrationLock().Return("")
 	d.EXPECT().tableOptions().Return("")
 	d.EXPECT().checkDeployment(mock.Anything, db).Return(unmet).Once()

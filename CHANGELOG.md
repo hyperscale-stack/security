@@ -1178,7 +1178,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   then runs `CheckDeployment` and fails with `ErrDeploymentRequirement` on
   a MyISAM or missing table, on `VARCHAR` key columns of the oauth2 store
   and on a non-strict `sql_mode` for the oauth2 store. The MySQL DDL names
-  `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`. See [MIGRATION.md](MIGRATION.md).
+  `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`. On MySQL and MariaDB, `Migrate`
+  creates the tables and checks them under a named lock per store module
+  (`GET_LOCK`, released before it returns, waited for as long as its context
+  allows), like the advisory lock it takes on PostgreSQL: concurrent
+  `CREATE TABLE IF NOT EXISTS` of one table could fail with a metadata-lock
+  deadlock. See [MIGRATION.md](MIGRATION.md).
 - **`oauth2/store/redis.New` refuses a `*redis.ClusterClient` or a
   `*redis.Ring`** (breaking): the store's multi-key scripts cannot work
   with their sharding; Cluster clients used to fail at runtime (CROSSSLOT)

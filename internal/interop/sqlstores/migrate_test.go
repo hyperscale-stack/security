@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -319,9 +320,16 @@ func migrateTogether(t *testing.T, b backend) {
 func migrateWithin(t *testing.T, ctx context.Context, limit time.Duration, s sqlStore, db *sql.DB) error {
 	t.Helper()
 
+	return migrateOnWithin(t, ctx, limit, s, db, enginePostgres)
+}
+
+// migrateOnWithin is migrateWithin on the engine e.
+func migrateOnWithin(t *testing.T, ctx context.Context, limit time.Duration, s sqlStore, db *sql.DB, e engine) error {
+	t.Helper()
+
 	done := make(chan error, 1)
 
-	go func() { done <- s.migrate(ctx, db, enginePostgres) }()
+	go func() { done <- s.migrate(ctx, db, e) }()
 
 	select {
 	case err := <-done:
@@ -423,6 +431,99 @@ func TestMigrateFailureCreatesNothing(t *testing.T) {
 
 			require.NoError(t, migrateWithin(t, ctx, 15*time.Second, s, db), "the next Migrate on the same pool")
 			requireTables(t, admin, enginePostgres, s, true)
+		})
+	}
+}
+
+// mysqlMigrationLock is the GET_LOCK name the Migrate of the store module
+// takes on MySQL and MariaDB, as its package documentation names it: the
+// module path without its host, then ".Migrate".
+func mysqlMigrationLock(module string) string {
+	return strings.TrimPrefix(module, "github.com/") + ".Migrate"
+}
+
+// holdNamedLock takes the MySQL named lock name on a connection of db of
+// its own, which keeps it until released or closed.
+func holdNamedLock(t *testing.T, db *sql.DB, name string) *sql.Conn {
+	t.Helper()
+
+	conn, err := db.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var got int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "SELECT GET_LOCK(?, 0)", name).Scan(&got))
+	require.Equal(t, 1, got, "lock %s taken", name)
+
+	return conn
+}
+
+// requireLockFree asserts that no session holds the named lock.
+func requireLockFree(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+
+	var free int
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT IS_FREE_LOCK(?)", name).Scan(&free))
+	require.Equal(t, 1, free, "lock %s released", name)
+}
+
+// TestMySQLMigrateWaitsForItsLock: on MySQL and MariaDB, Migrate creates
+// its tables and checks them under the named lock its package
+// documentation names (GET_LOCK), so that the Migrates of a deployment's
+// instances run one after the other — concurrent CREATE TABLE IF NOT EXISTS
+// of one table can fail with a metadata-lock deadlock. Held by another
+// session, the lock makes Migrate wait — until its context's deadline, or
+// its cancellation, having created nothing — while the Migrate of another
+// store, whose lock is distinct, goes through. Once the holder releases
+// it, Migrate creates the tables; after Migrate, failed or not, the lock
+// is free again.
+func TestMySQLMigrateWaitsForItsLock(t *testing.T) {
+	for _, b := range mysqlServers {
+		t.Run(b.name, func(t *testing.T) {
+			b.server(t)
+
+			for i, s := range sqlStores {
+				t.Run(s.name, func(t *testing.T) {
+					driver, dsn := b.namespace(t)
+					db := open(t, driver, dsn, 2)
+					admin := open(t, driver, dsn, 2)
+					name := mysqlMigrationLock(s.module)
+					holder := holdNamedLock(t, admin, name)
+
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+
+					require.ErrorIs(t, migrateOnWithin(t, ctx, 10*time.Second, s, db, engineMySQL), context.DeadlineExceeded)
+					requireTables(t, db, engineMySQL, s, false)
+
+					cancelled, cancelNow := context.WithCancel(t.Context())
+					time.AfterFunc(500*time.Millisecond, cancelNow)
+					require.ErrorIs(t, migrateOnWithin(t, cancelled, 10*time.Second, s, db, engineMySQL), context.Canceled)
+					requireTables(t, db, engineMySQL, s, false)
+
+					otherCtx, cancelOther := context.WithTimeout(t.Context(), 10*time.Second)
+					defer cancelOther()
+
+					other := sqlStores[(i+1)%len(sqlStores)]
+					require.NoError(t, migrateOnWithin(t, otherCtx, 15*time.Second, other, db, engineMySQL),
+						"%s's lock is not %s's", other.name, s.name)
+					requireTables(t, db, engineMySQL, other, true)
+
+					var released int
+					require.NoError(t, holder.QueryRowContext(t.Context(), "SELECT RELEASE_LOCK(?)", name).Scan(&released))
+					require.Equal(t, 1, released)
+
+					require.NoError(t, s.migrate(t.Context(), db, engineMySQL))
+					requireTables(t, db, engineMySQL, s, true)
+					requireLockFree(t, admin, name)
+
+					// A Migrate failing its check releases the lock too.
+					execAll(t, db, "DROP TABLE "+s.tables[0])
+					execAll(t, db, strings.Replace(s.schema(engineMySQL)[0], "ENGINE=InnoDB", "ENGINE=MyISAM", 1))
+					require.ErrorIs(t, s.migrate(t.Context(), db, engineMySQL), s.requirement)
+					requireLockFree(t, admin, name)
+				})
+			}
 		})
 	}
 }

@@ -3246,6 +3246,7 @@ acknowledged before a crash could be lost. The DDL now names
 | `oauth2/store/sql` `Migrate` with legacy `VARCHAR` key columns | succeeds                  | fails with `ErrDeploymentRequirement`, naming each column             |
 | `oauth2/store/sql` `Migrate` on a non-strict `sql_mode` | succeeds (over-long values truncated) | fails with `ErrDeploymentRequirement`                              |
 | `Store.CheckDeployment(ctx)`                        | —                                    | new, on the three SQL stores (no-op on PostgreSQL and SQLite)         |
+| Concurrent `Migrate` on MySQL                       | concurrent `CREATE TABLE IF NOT EXISTS` (could fail with a metadata-lock deadlock, 1213) | one after the other, under the named lock `hyperscale-stack/security/<module>.Migrate` (`GET_LOCK`) |
 | PostgreSQL and SQLite                               | —                                    | unchanged                                                             |
 
 `Migrate` still never alters a table. To migrate (MySQL and MariaDB only):
@@ -3298,6 +3299,11 @@ acknowledged before a crash could be lost. The DDL now names
    requirements; it lists every one it finds unmet. When you apply
    `Schema` with your own migration tool, call `store.CheckDeployment(ctx)`
    at boot, before serving traffic.
+7. **Concurrent boots.** On MySQL and MariaDB, `Migrate` holds the named
+   lock its package documentation names (`GET_LOCK`, server-wide) while it
+   creates the tables and checks them, and waits for it as long as its
+   context allows: pass a deadline. A migration tool applying `Schema`
+   while instances run `Migrate` should take the same lock.
 
 ### `oauth2/store/redis`: `New` refuses Cluster and Ring clients
 

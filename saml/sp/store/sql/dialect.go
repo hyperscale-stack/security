@@ -29,9 +29,13 @@ type Dialect interface {
 	// [Schema]: the storage engine and character set the dialect needs,
 	// "" when it needs none.
 	tableOptions() string
+	// namedMigrationLock is the session-level named lock [Store.Migrate]
+	// takes around the creation of the tables and its deployment check, on
+	// an engine whose DDL cannot run in a transaction; "" for none.
+	namedMigrationLock() string
 	// checkDeployment verifies the requirements of the package
 	// documentation the database reports (see [Store.CheckDeployment]).
-	checkDeployment(ctx context.Context, db *sql.DB) error
+	checkDeployment(ctx context.Context, q querier) error
 	// purgeStatements are the statements [Store.PurgeExpired] runs, one
 	// per table, each deleting at most a batch of the rows expired before
 	// a second.
@@ -112,15 +116,17 @@ func (postgres) purgeArgs(before int64, limit int) []any { return []any{before, 
 func (postgres) purgeTxOptions() *sql.TxOptions { return readCommitted }
 
 // checkDeployment checks nothing PostgreSQL reports.
-func (postgres) checkDeployment(context.Context, *sql.DB) error { return nil }
+func (postgres) checkDeployment(context.Context, querier) error { return nil }
+
+func (postgres) namedMigrationLock() string { return "" }
 
 type mysql struct{}
 
 func (mysql) Name() string           { return "mysql" }
 func (mysql) rebind(q string) string { return q }
 
-// migrationLock is empty: MySQL commits every DDL statement on its own,
-// and serializes the creation of a table on the metadata lock of its name.
+// migrationLock is empty: MySQL commits every DDL statement on its own, so
+// Migrate takes a named lock instead (see namedMigrationLock).
 func (mysql) migrationLock() string { return "" }
 
 // tableOptions names the engine and the character set: a table created
@@ -128,7 +134,13 @@ func (mysql) migrationLock() string { return "" }
 // so, without crash safety.
 func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" }
 
-func (mysql) checkDeployment(ctx context.Context, db *sql.DB) error { return checkMySQL(ctx, db) }
+func (mysql) checkDeployment(ctx context.Context, q querier) error { return checkMySQL(ctx, q) }
+
+// namedMigrationLock serializes the Migrate calls of a deployment: MySQL
+// commits every DDL statement on its own, so no transaction can hold a
+// lock across them, and concurrent CREATE TABLE IF NOT EXISTS of one
+// table can fail with a metadata-lock deadlock (1213).
+func (mysql) namedMigrationLock() string { return migrationLockName }
 
 // purgeStatements are single-table DELETEs with LIMIT, which MySQL accepts
 // (unlike LIMIT in an IN subquery).
@@ -167,4 +179,6 @@ func (sqlite) purgeArgs(before int64, limit int) []any { return []any{before, li
 func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
 
 // checkDeployment checks nothing: SQLite has one engine.
-func (sqlite) checkDeployment(context.Context, *sql.DB) error { return nil }
+func (sqlite) checkDeployment(context.Context, querier) error { return nil }
+
+func (sqlite) namedMigrationLock() string { return "" }

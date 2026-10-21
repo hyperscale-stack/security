@@ -30,6 +30,13 @@ func (s *Store) CheckDeployment(ctx context.Context) error {
 	return s.dialect.checkDeployment(ctx, s.db)
 }
 
+// querier runs the queries of a deployment check: the store's *sql.DB, or
+// the *sql.Conn of a Migrate holding its named lock.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // storeTable is the table of the store.
 const storeTable = "oidc_client_transactions"
 
@@ -38,10 +45,10 @@ const selectEngine = `SELECT COALESCE(ENGINE, '') FROM information_schema.TABLES
 	WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`
 
 // checkMySQL reads the storage engine of the store's table, then checks it.
-func checkMySQL(ctx context.Context, db *sql.DB) error {
+func checkMySQL(ctx context.Context, q querier) error {
 	var engine string
 
-	err := db.QueryRowContext(ctx, selectEngine, storeTable).Scan(&engine)
+	err := q.QueryRowContext(ctx, selectEngine, storeTable).Scan(&engine)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

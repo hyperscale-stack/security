@@ -62,6 +62,7 @@ func lockingStore(t *testing.T, lock string) (*Store, *sql.DB) {
 	d.EXPECT().migrationLock().Return(lock)
 	d.EXPECT().keyType(mock.Anything).RunAndReturn(sqlite{}.keyType).Maybe()
 	d.EXPECT().tableOptions().Return("").Maybe()
+	d.EXPECT().namedMigrationLock().Return("")
 	d.EXPECT().checkDeployment(mock.Anything, db).Return(nil).Maybe()
 
 	return &Store{db: db, dialect: d}, db
@@ -209,6 +210,7 @@ func TestMigrateEndsWithTheDeploymentCheck(t *testing.T) {
 	unmet := fmt.Errorf("%w: table oauth2_auth_codes uses the MyISAM engine, not InnoDB", ErrDeploymentRequirement)
 
 	d := NewMockDialect(t)
+	d.EXPECT().namedMigrationLock().Return("")
 	d.EXPECT().migrationLock().Return("")
 	d.EXPECT().keyType(mock.Anything).RunAndReturn(sqlite{}.keyType)
 	d.EXPECT().tableOptions().Return("")

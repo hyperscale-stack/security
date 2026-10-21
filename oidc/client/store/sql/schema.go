@@ -69,11 +69,20 @@ func Schema(d Dialect) []string {
 // server-side wait when ctx ends. A migration tool applying [Schema]
 // concurrently with Migrate should take the same lock. An engine without
 // pg_advisory_xact_lock cannot use Migrate: apply Schema with your own
-// tool. MySQL serializes the creation of a table on the metadata lock of
-// its name, and SQLite on its write lock — given the busy timeout the
-// package documentation requires, without which a concurrent call fails
-// with SQLITE_BUSY.
+// tool. On MySQL and MariaDB, where concurrent CREATE TABLE IF NOT EXISTS
+// of one table can fail with a metadata-lock deadlock, Migrate creates the
+// tables and runs the check on one connection holding the named lock
+// "hyperscale-stack/security/oidc/client/store/sql.Migrate" (GET_LOCK; named
+// locks are server-wide), which it releases before returning: concurrent
+// calls run one after the other, waiting as long as ctx allows. SQLite
+// serializes the creation of a table on its write lock — given the busy
+// timeout the package documentation requires, without which a concurrent
+// call fails with SQLITE_BUSY.
 func (s *Store) Migrate(ctx context.Context) error {
+	if name := s.dialect.namedMigrationLock(); name != "" {
+		return s.migrateUnderNamedLock(ctx, name)
+	}
+
 	if err := s.createTable(ctx); err != nil {
 		return err
 	}
