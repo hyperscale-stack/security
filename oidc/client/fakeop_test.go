@@ -58,8 +58,11 @@ const (
 	testConnection   = "acme"
 	testCallbackPath = "/oidc/acme/callback"
 	testRedirectURL  = "https://rp.example.com" + testCallbackPath
-	testSubject      = "248289761001"
-	testAccessToken  = "at-1"
+	// testLocalRedirectURL is a plain-http loopback redirect URI, the only
+	// kind Config.InsecureCookies accepts.
+	testLocalRedirectURL = "http://localhost" + testCallbackPath
+	testSubject          = "248289761001"
+	testAccessToken      = "at-1"
 )
 
 // testClock is a settable clock shared by a fake OP and its clients.

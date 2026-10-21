@@ -187,7 +187,7 @@ func (c *Client) bindingCookie(name, value string, maxAge int) *http.Cookie {
 		sameSite = http.SameSiteNoneMode
 	}
 
-	return &http.Cookie{ //nolint:gosec // G124: Secure is false only with Config.InsecureCookies, the explicit local-development opt-in
+	return &http.Cookie{ //nolint:gosec // G124: Secure is false only with Config.InsecureCookies, which New admits for a loopback http RedirectURL only
 		Name:     name,
 		Value:    value,
 		Path:     "/",

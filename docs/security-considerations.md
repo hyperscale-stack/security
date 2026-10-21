@@ -1466,8 +1466,9 @@ are attacker-influenced.
   sharing the prefix. SameSite is Lax for the `query` response mode — the callback
   is a top-level GET — and None for `form_post`, whose cross-site POST
   carries no Lax cookie; an opt-in headless-Chrome test checks both.
-  `InsecureCookies` drops Secure for local http development only, and is
-  refused with `form_post`.
+  `InsecureCookies` drops the prefix and Secure for local http development
+  only: `New` refuses it unless the redirect URI is http — on a loopback
+  host, the only http redirect URI accepted — and with `form_post`.
 - **CSRF** — exempt the callback route from CSRF middleware in `form_post`
   mode: the cross-site POST is the protocol, the binding cookie its
   defense. Start logins on a user action from the application's own

@@ -203,8 +203,14 @@ type Config struct {
 
 	// InsecureCookies makes the net/http helpers set the binding cookie
 	// without the __Host- prefix and the Secure attribute, for local
-	// development over plain http. Refused with ResponseModeFormPost:
-	// browsers refuse SameSite=None cookies that are not Secure.
+	// development over plain http. New refuses it unless RedirectURL is
+	// http — on a loopback host, the only http RedirectURL accepted: on an
+	// https site, the prefix and Secure are what keep a sibling subdomain,
+	// or a network attacker answering for the http origin, from planting a
+	// binding cookie of its own login and signing the victim in as the
+	// attacker (rfc6265bis-22 §4.1.3.2, §8.6; RFC 9700 §4.7). Refused with
+	// ResponseModeFormPost too: browsers refuse SameSite=None cookies that
+	// are not Secure.
 	InsecureCookies bool
 
 	// Now is the clock; time.Now when nil.
@@ -225,6 +231,11 @@ func (c Config) normalized() (Config, *url.URL, error) {
 	redirect, err := parseRedirectURL(c.RedirectURL)
 	if err != nil {
 		return Config{}, nil, err
+	}
+
+	// parseRedirectURL admits plain http on a loopback host only.
+	if c.InsecureCookies && redirect.Scheme != schemeHTTP {
+		return Config{}, nil, fmt.Errorf("%w: InsecureCookies requires an http RedirectURL on a loopback host", ErrInvalidConfig)
 	}
 
 	if err := c.validateFlow(); err != nil {

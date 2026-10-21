@@ -113,7 +113,7 @@ func TestStartLoginCookie(t *testing.T) {
 		t.Parallel()
 
 		op := newFakeOP(t)
-		c := op.client(t, func(cfg *oidcclient.Config) { cfg.InsecureCookies = true })
+		c := op.client(t, func(cfg *oidcclient.Config) { cfg.InsecureCookies, cfg.RedirectURL = true, testLocalRedirectURL })
 
 		rec := startLogin(t, c)
 		ck := cookieNamed(t, rec, expectedCookieName("oidc-", loginState(t, rec)))
@@ -193,7 +193,11 @@ func TestStartLoginLeavesApplicationCookies(t *testing.T) {
 			t.Parallel()
 
 			op := newFakeOP(t)
-			c := op.client(t, func(cfg *oidcclient.Config) { cfg.InsecureCookies = tc.insecure })
+			c := op.client(t, func(cfg *oidcclient.Config) {
+				if tc.insecure {
+					cfg.InsecureCookies, cfg.RedirectURL = true, testLocalRedirectURL
+				}
+			})
 
 			var cookies, bindings []*http.Cookie
 
@@ -466,6 +470,17 @@ func TestHandleCallbackRefuses(t *testing.T) {
 func newRP(t *testing.T, op *fakeOP, mode oidcclient.ResponseMode) (*httptest.Server, *http.Client) {
 	t.Helper()
 
+	return serveRP(t, op, httptest.NewTLSServer, func(cfg *oidcclient.Config) { cfg.ResponseMode = mode })
+}
+
+// serveRP serves StartLogin and HandleCallback for a Client of op on the
+// server serve starts, its RedirectURL on that server, modified by the
+// mutators.
+func serveRP(t *testing.T, op *fakeOP, serve func(http.Handler) *httptest.Server,
+	mutators ...func(*oidcclient.Config),
+) (*httptest.Server, *http.Client) {
+	t.Helper()
+
 	var c *oidcclient.Client
 
 	mux := http.NewServeMux()
@@ -485,21 +500,20 @@ func newRP(t *testing.T, op *fakeOP, mode oidcclient.ResponseMode) (*httptest.Se
 		_, _ = io.WriteString(w, "hello "+id.Subject)
 	})
 
-	rp := httptest.NewTLSServer(mux)
+	rp := serve(mux)
 	t.Cleanup(rp.Close)
 
-	c = op.client(t, func(cfg *oidcclient.Config) {
+	c = op.client(t, append([]func(*oidcclient.Config){func(cfg *oidcclient.Config) {
 		cfg.RedirectURL = rp.URL + testCallbackPath
-		cfg.ResponseMode = mode
-	})
+	}}, mutators...)...)
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 
-	browser := rp.Client() // trusts the httptest certificate shared by the RP and the OP
+	browser := *op.srv.Client() // a copy: trusts the httptest certificate shared by the RP and the OP
 	browser.Jar = jar
 
-	return rp, browser
+	return rp, &browser
 }
 
 func TestEndToEndQuery(t *testing.T) {
@@ -507,6 +521,25 @@ func TestEndToEndQuery(t *testing.T) {
 
 	op := newFakeOP(t)
 	rp, browser := newRP(t, op, oidcclient.ResponseModeQuery)
+
+	resp, err := browser.Get(rp.URL + "/login")
+	require.NoError(t, err)
+
+	body := readAll(t, resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	assert.Equal(t, "hello "+testSubject, string(body))
+}
+
+// TestEndToEndInsecureCookiesOnLoopback runs a login over plain http on the
+// loopback interface — the local development setup InsecureCookies is for —
+// through a browser's cookie jar, which keeps a cookie without Secure on
+// http.
+func TestEndToEndInsecureCookiesOnLoopback(t *testing.T) {
+	t.Parallel()
+
+	op := newFakeOP(t)
+	rp, browser := serveRP(t, op, httptest.NewServer, func(cfg *oidcclient.Config) { cfg.InsecureCookies = true })
+	require.True(t, strings.HasPrefix(rp.URL, "http://127.0.0.1:"))
 
 	resp, err := browser.Get(rp.URL + "/login")
 	require.NoError(t, err)

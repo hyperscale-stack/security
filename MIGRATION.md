@@ -3059,3 +3059,25 @@ To migrate:
    encoding of `Identity` and `Tokens` now writes them `REDACTED`.
 5. Compare two `Secret`s with `crypto/subtle.ConstantTimeCompare` on their
    revealed values, never with `==` (which compares their identity).
+
+### `oidc/client`: `InsecureCookies` only with a loopback http redirect URI
+
+`Config.InsecureCookies` sets the binding cookie without the `__Host-`
+prefix and the `Secure` attribute, for local development over plain http.
+It was accepted with an https `RedirectURL` too, where it removes the
+protection of the cookie against a sibling subdomain or a network attacker
+planting one (login CSRF, RFC 9700 §4.7; rfc6265bis §4.1.3.2).
+
+| `InsecureCookies: true` with | Before | After |
+| --- | --- | --- |
+| an http `RedirectURL` (loopback host: `localhost`, `127.0.0.1`, `[::1]`) | accepted | unchanged |
+| an https `RedirectURL`, loopback host included | accepted; plain `oidc-…` cookie without `Secure` | `New` fails with `ErrInvalidConfig` |
+| `ResponseMode: form_post` | `ErrInvalidConfig` | unchanged |
+
+To migrate:
+
+1. Set `InsecureCookies` only where the application is served over plain
+   http on the loopback interface (`examples/oidc-client` sets it when
+   `BASE_URL` is http).
+2. Over https — including `https://localhost` — drop it: the `__Host-`
+   cookie works on any https origin.

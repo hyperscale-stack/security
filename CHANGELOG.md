@@ -1035,6 +1035,10 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   encodes as `REDACTED` everywhere, `encoding/json` included: `Identity`
   and `Tokens` no longer encode their tokens, which applications persist by
   revealing them (see MIGRATION.md).
+- `oidcclient.Config.InsecureCookies` is refused (`ErrInvalidConfig`)
+  unless `RedirectURL` is plain http, which is accepted on a loopback host
+  only (breaking for a configuration combining it with an https redirect
+  URI; see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in
@@ -2230,3 +2234,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and the tokens of an `Identity` reached logs — `slog`'s text handler
   included. They are now `oidcclient.Secret` values (see Changed), which
   print as an address there and `REDACTED` everywhere else, with every verb.
+- `oidcclient.Config.InsecureCookies`, documented for local development,
+  was accepted with a public https `RedirectURL`: the binding cookie then
+  lost its `__Host-` prefix and `Secure` attribute, so a sibling subdomain
+  or a network attacker answering for the site's http origin could plant
+  the binding cookie of a login it started itself and send the victim to
+  the callback with its own code — signing the victim in as the attacker
+  (login CSRF, RFC 9700 §4.7; rfc6265bis §4.1.3.2). `New` now refuses it
+  unless the redirect URI is http on a loopback host.
