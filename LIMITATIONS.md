@@ -216,7 +216,16 @@ PKCE. Not supported, and refused where a provider could select them:
   (JAR), PAR (RFC 9126), the `claims` request parameter.
 - **ID Token formats** — encrypted ID Tokens (JWE), HMAC-signed ones
   (HS256/384/512), `alg=none`, and the fully-specified `Ed25519` algorithm
-  identifier of RFC 9864 (go-jose v4.1.5 knows `EdDSA` only).
+  identifier of RFC 9864 (go-jose v4.1.6 knows `EdDSA` only).
+- **Keys named or carried by the ID Token** — an ID Token whose JOSE header
+  holds `jwk`, `x5c`, `jku` or `x5u`, whatever its value, is refused
+  (`ErrIDTokenMalformed`) before it is parsed: keys come from the issuer's
+  `jwks_uri` only (OpenID Connect Core §2: ID Tokens SHOULD NOT use these
+  members). RFC 7515 §4 would let a recipient ignore them; this is a local
+  policy, with no opt-out: providers that send them are not supported
+  (Cloud Foundry UAA and SAP BTP XSUAA put `jku` in their token headers).
+  So is the 4 KiB bound on the decoded header. RSA keys of the JWK Set
+  outside 2048–4096 bits are ignored.
 - **RSA keys without `alg`** — one algorithm per key (RFC 8725 §3.1): an
   RSA JWK without `alg` verifies RS256 only, or the single RSA algorithm of
   `Config.Algorithms`. A provider signing with PS256/384/512, RS384 or
@@ -330,7 +339,7 @@ PKCE. Not supported, and refused where a provider could select them:
   token without `kid` is verified against a single-key set only.
 - **Remote JWK Set policy** — the TTL is configurable (`WithCacheTTL`); the
   minimum refresh interval (10 s), the back-off cap (5 minutes), the
-  maximum staleness (24 h), the 100-key and 2048–8192-bit RSA bounds, the
+  maximum staleness (24 h), the 100-key and 2048–4096-bit RSA bounds, the
   10 s and 1 MiB fetch bounds are not. An RSA key published without `alg`
   verifies RS256 when the verifier allows it, otherwise the verifier's only
   RSA algorithm, otherwise nothing: publish `alg` on RSA keys signing
@@ -339,6 +348,18 @@ PKCE. Not supported, and refused where a provider could select them:
 - **No JWS extension, nested JWT or JWE** — tokens whose header uses `crit`
   or `b64` are refused, and a nested JWT (`cty: JWT`, RFC 7519 §7.2 step 8)
   is refused because its payload is not a claims object.
+- **No key in the token header** — a token whose JOSE header holds `jwk`,
+  `x5c`, `jku` or `x5u`, whatever its value, is refused
+  (`ErrMalformedToken`) by `Verifier`, `VerifySignature` and
+  `BearerVerifier`, with no opt-out. RFC 7515 §4 would let a recipient
+  ignore these members; refusing them is a local policy (keys come from the
+  configured key set only: RFC 9068 §4, RFC 8725 §3.10). Issuers that send
+  them are not supported: Cloud Foundry UAA and SAP BTP XSUAA put `jku` in
+  every token header. `x5t` and `x5t#S256` are accepted and ignored.
+- **RSA key sizes** — signing keys are 2048–4096 bits (`NewSigner` refuses
+  larger ones: go-jose ≥ v4.1.6 JWK Set consumers ignore them), and so are
+  the keys of a remote JWK Set; verification keys given to
+  `NewStaticJWKS` have no upper bound.
 - **Size bound** — tokens over 16 KiB are refused by default
   (`WithMaxTokenSize` on a `Verifier`); `VerifySignature` always applies
   the default bound.

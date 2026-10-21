@@ -2376,3 +2376,45 @@ To migrate (MySQL and MariaDB only; PostgreSQL and SQLite need nothing):
    on by default in interactive mode since 8.0.19).
 6. **Custom stores** compare family IDs and hashes byte for byte, and pass
    `storetest.RunConformance`, which now checks it (`KeysAreComparedExactly`).
+
+### `jwt`, `oidc/client`, `oidc/provider`: key-bearing JOSE headers refused, RSA keys of at most 4096 bits (go-jose v4.1.6)
+
+go-jose up to v4.1.5 parsed the `jwk` member of a JWS header before any
+check and validated an embedded RSA private key at a cost cubic in its size
+(GHSA-mgcc-cww5-fp2q): one unauthenticated token cost minutes of CPU. Every
+module now requires go-jose v4.1.6, and the library refuses the header
+members that carry or locate a key (RFC 7515 §4.1.2–§4.1.6) before go-jose
+parses the header. RFC 7515 §4 would let a recipient ignore them; refusing
+them is a local policy: keys come from configuration only (RFC 9068 §4,
+OpenID Connect Core §2 and §3.1.3.7, RFC 8725 §3.10). go-jose v4.1.6 also
+caps RSA moduli at 4096 bits, which the library adopts as its own bound.
+
+| | Before | After |
+| --- | --- | --- |
+| `jwk`, `x5c`, `jku` or `x5u` in a token header (`jwtsec.Verifier`, `VerifySignature`, `BearerVerifier`) | `jwk` and `x5c` parsed by go-jose, then all four ignored | refused before parsing, whatever the value (`null` included): `jwtsec.ErrMalformedToken` |
+| the same in an ID Token (`oidc/client`) | parsed, then ignored: `ErrIDTokenSignature` or `ErrUnknownSigningKey` when the token named another key | `ErrIDTokenMalformed` |
+| the same in an `id_token_hint` (`oidc/provider`) | parsed, then ignored | `invalid_request` |
+| ID Token JOSE header (`oidc/client`) | go-jose's rules: case-variant names, unpaired surrogates, any size within the 64 KiB token | strict JSON of at most 4 KiB, else `ErrIDTokenMalformed` |
+| `x5t`, `x5t#S256` | ignored | ignored |
+| RSA key of 4097–8192 bits in a fetched JWK Set (`jwtsec.NewRemoteJWKS`, `oidc/client`) | used | ignored, whatever `jose.MaxRSAModulusBits` |
+| RSA signing key over 4096 bits (`jwtsec.NewSigner`, `NewOAuth2AccessTokenSigner`, `PrivateKey.Validate`, an opaque signer's public half, `oidcprovider.KeyRing`) | accepted | `jwtsec.ErrInvalidKey`, `oidcprovider.ErrInvalidKeyRing` |
+| RSA verification key given to `jwtsec.NewStaticJWKS` | 2048 bits or more | unchanged |
+
+Issuers that put these members in their token headers are not supported:
+Cloud Foundry UAA and SAP BTP XSUAA put `jku` in every token header, so
+`jwtsec` refuses their tokens, with no opt-out. Microsoft Entra ID (`x5t`),
+Google, Keycloak, Okta, Auth0, Amazon Cognito and Apple send none of them.
+
+1. **Check the headers your issuers send** — decode the first segment of a
+   token. An issuer sending `jwk`, `x5c`, `jku` or `x5u` must stop, or its
+   tokens be verified by another library: there is no option to ignore
+   them.
+2. **Rotate RSA keys over 4096 bits** to RSA of 2048–4096 bits, ECDSA or
+   EdDSA: signing keys now fail at construction, and a provider's
+   published key over 4096 bits is ignored, so every token it signs fails
+   with an unknown key.
+3. **Update error matching**: an ID Token with a `jku`, `x5u` or `jwk`
+   header now fails with `ErrIDTokenMalformed`, no longer
+   `ErrIDTokenSignature` or `ErrUnknownSigningKey`.
+4. **Raising `jose.MaxRSAModulusBits`** in your application has no effect
+   on these bounds.

@@ -145,6 +145,18 @@ protections.
   and span attributes are clipped to 128 bytes. Cap the transports as well:
   `http.Server.MaxHeaderBytes` (1 MiB by default) and
   `grpc.MaxHeaderListSize` (16 MiB by default) of about 64 KiB.
+- **Keys named or carried by the token** — a header holding `jwk`, `x5c`,
+  `jku` or `x5u` (RFC 7515 §4.1.2–§4.1.6), whatever its value, is refused
+  with `ErrMalformedToken` before go-jose parses the header. go-jose parses
+  `jwk` and `x5c` before it checks the algorithm, the key or the signature;
+  up to v4.1.5 it validated an embedded RSA private key there, at a cost
+  cubic in its size, so one unauthenticated 16 KiB token cost minutes of
+  CPU (GHSA-mgcc-cww5-fp2q). RFC 7515 §4 would let a recipient ignore these
+  members: refusing them is a local policy — keys come from the configured
+  key set only (RFC 7515 §6; RFC 9068 §4 for resource servers), and a URL
+  in a token is never followed (RFC 8725 §3.10). Issuers that send them
+  cannot be served: Cloud Foundry UAA and SAP BTP XSUAA put `jku` in every
+  token header. `x5t` and `x5t#S256` are accepted and ignored.
 - **Time claims** — `exp` is required unless `WithOptionalExpiry`; the
   token is expired from `now == exp + skew` on (RFC 7519 §4.1.4: the current
   time MUST be before `exp`); `nbf` is inclusive; an `iat` in the future is
@@ -187,15 +199,20 @@ keys by `kid` against a JWKS provider (static or remote).
   older than `MaxKeySetStaleness` (24 h). Each key is validated on its own
   and an unusable one ignored (private or symmetric material, `use` other
   than `sig`, `key_ops` without `verify`, unknown `kty` or curve, RSA outside
-  2048–8192 bits, an `alg` the key cannot verify); a valid set without
+  2048–4096 bits, an `alg` the key cannot verify); a valid set without
   usable keys replaces the previous one. An outage is
   `ErrKeySetUnavailable`, which wraps `security.ErrUnavailable` (503 /
   Unavailable), never an invalid token. The provider prints and reports its
   URL without userinfo or query.
 - **Signing keys** — `NewSigner` and `NewOAuth2AccessTokenSigner` return an
-  error for a key unfit for its algorithm (RSA under 2048 bits, another
-  curve, a public key, an HMAC secret shorter than its hash); KMS and HSM
-  keys (`jose.OpaqueSigner`) are checked through their public half. The RFC
+  error for a key unfit for its algorithm (RSA under 2048 or over 4096 bits,
+  another curve, a public key, an HMAC secret shorter than its hash); KMS
+  and HSM keys (`jose.OpaqueSigner`) are checked through their public half.
+  The 4096-bit cap is go-jose's since v4.1.6: its JWK Set consumers — this
+  library's remote key sets and `oidc/client` included — ignore a larger
+  published key, so tokens signed with one would verify nowhere. The bound
+  is the library's own: raising the process-wide `jose.MaxRSAModulusBits`
+  does not move it. The RFC
   9068 signer refuses claims missing a REQUIRED value — an empty `iss`,
   `sub`, `aud` or `client_id`, a zero `iat` or `exp` — so an
   `IssuerResolver` must return a non-empty audience for JWT access tokens.
@@ -790,9 +807,9 @@ is, never for the protocol rules:
   `WithType(TypeAccessToken)` — so an ID Token is never accepted as an
   access token.
 - **Keys.** Key rings are validated on every use (RS256 required, one key
-  per algorithm and one algorithm per key, RSA of at least 2048 bits, curves
-  bound to algorithms) and fail closed; private and symmetric keys are never
-  published. The keys of JWT access tokens belong in `KeyRing.Published`:
+  per algorithm and one algorithm per key, RSA of at least 2048 bits —
+  signing keys of at most 4096 —, curves bound to algorithms) and fail
+  closed; private and symmetric keys are never published. The keys of JWT access tokens belong in `KeyRing.Published`:
   one `jwks_uri` serves both (RFC 9068 §4).
 - **Claims and accounts.** Only the claims the request and the end-user
   allow are released, and a `ClaimsSource` cannot override a protocol claim
@@ -1307,13 +1324,23 @@ are attacker-influenced.
 - **ID Token** — validated per OpenID Connect Core §3.1.3.7 before anything
   is returned: asymmetric algorithms only (HMAC and `none` refused), `typ`
   absent or `JWT` (an RFC 9068 `at+jwt` access token is refused), keys from
-  the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk`, `x5c`
-  ignored) through a bounded cache that refetches once, rate limited, for
-  an unknown key, and never on a bad signature from a known one; `iss`,
+  the configured issuer's `jwks_uri` only (`jku`, `x5u`, `jwk` and `x5c`
+  are refused, see below) through a bounded cache that refetches once, rate
+  limited, for an unknown key, and never on a bad signature from a known
+  one; `iss`,
   `aud` (further audiences only when trusted), `azp`, `exp`/`iat`/`nbf`
   within a bounded skew, `nonce`, `auth_time` against `max_age`, `acr`
-  against the requested `acr_values`, and `at_hash` when present. Every
-  JSON document is decoded strictly: duplicate member names, two names
+  against the requested `acr_values`, and `at_hash` when present. Before
+  go-jose parses it, the JOSE header must be strict JSON of at most 4 KiB
+  without `jku`, `x5u`, `jwk` or `x5c` (OpenID Connect Core §2: ID Tokens
+  SHOULD NOT use them): go-jose parses `jwk` and `x5c` before any check,
+  and up to v4.1.5 validated an embedded RSA private key at a cost cubic in
+  its size, so a hostile provider could make each login cost hours of CPU
+  (GHSA-mgcc-cww5-fp2q). RFC 7515 §4 would let a recipient ignore these
+  members; refusing them is a local policy: providers that send them —
+  Cloud Foundry UAA and SAP BTP XSUAA put `jku` in their headers — are not
+  supported. Every JSON document is decoded strictly: duplicate member
+  names, two names
   that differ only by case, invalid UTF-8 and unpaired surrogates are
   refused, so no decoder can pick between two members. A lone member whose
   name differs from a known claim only by case (`EMAIL_VERIFIED`) is
