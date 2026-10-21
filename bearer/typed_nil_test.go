@@ -17,6 +17,32 @@ type ptrVerifier struct{}
 
 func (*ptrVerifier) Verify(context.Context, string) (security.Authentication, error) { return nil, nil }
 
+// Review nit 7: a verifier returning a typed-nil Authentication is answered
+// like one returning nil — invalid credentials (401) —, not as a broken
+// contract (500).
+func TestAuthenticatorRefusesATypedNilResult(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *ptrAuthentication
+
+	a := bearer.NewAuthenticator(bearer.VerifierFunc(func(context.Context, string) (security.Authentication, error) {
+		return typedNil, nil
+	}))
+
+	out, err := a.Authenticate(context.Background(), bearer.New("token"))
+	assert.ErrorIs(t, err, security.ErrInvalidCredentials)
+	assert.Equal(t, security.Anonymous(), out)
+}
+
+// ptrAuthentication is an Authentication implemented on a pointer.
+type ptrAuthentication struct{}
+
+func (*ptrAuthentication) Principal() security.Principal { return nil }
+func (*ptrAuthentication) Credentials() any              { return nil }
+func (*ptrAuthentication) Authorities() []string         { return nil }
+func (*ptrAuthentication) IsAuthenticated() bool         { return true }
+func (*ptrAuthentication) Name() string                  { return "" }
+
 // Audit I-27: a typed-nil verifier — bearer.VerifierFunc(nil) included —
 // was accepted and panicked on the first request.
 func TestNewAuthenticatorRefusesATypedNilVerifier(t *testing.T) {

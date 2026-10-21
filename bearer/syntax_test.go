@@ -53,6 +53,9 @@ func TestExtractorEnforcesTheB64tokenSyntax(t *testing.T) {
 		{name: "control character", header: "Bearer ab\x01c", class: security.ErrorClassInvalidRequest},
 		{name: "exactly 16 KiB", header: "Bearer " + strings.Repeat("A", 16<<10), token: strings.Repeat("A", 16<<10)},
 		{name: "over 16 KiB", header: "Bearer " + strings.Repeat("A", 16<<10+1), class: security.ErrorClassInvalidCredentials},
+		// The cap is checked first: an over-length value is not scanned.
+		{name: "over 16 KiB, not a b64token", header: "Bearer " + strings.Repeat("!", 16<<10+1),
+			class: security.ErrorClassInvalidCredentials},
 	}
 
 	for _, c := range cases {

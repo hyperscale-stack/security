@@ -56,7 +56,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 		return security.Anonymous(), fmt.Errorf("bearer: verify token: %w", err)
 	}
 
-	if out == nil {
+	if isNil(out) {
 		return security.Anonymous(), fmt.Errorf("bearer: verifier returned nil authentication: %w", security.ErrInvalidCredentials)
 	}
 

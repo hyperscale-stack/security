@@ -140,7 +140,10 @@ func TestExtractAuthorizationValueIsCaseInsensitive(t *testing.T) {
 		{"scheme_alone", "Bearer", "Bearer", "", true},
 		{"scheme_and_spaces", "Bearer", "Bearer  ", "", true},
 		{"longer_scheme", "Bearer", "BearerX abc", "", false},
-		{"tab_separator", "Bearer", "Bearer\tabc", "", false},
+		// A tab is no separator (RFC 9110 §11.4: 1*SP), but the field is a
+		// malformed credential of this scheme, not another scheme (review
+		// minor 3, aligned with bearer.Extractor): refuse it.
+		{"tab_separator", "Bearer", "Bearer\tabc", "", true},
 	}
 
 	for _, c := range cases {
