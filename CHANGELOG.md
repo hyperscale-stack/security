@@ -1217,6 +1217,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   each `oidc/client` login cost hours. Every module that depends on go-jose
   now requires v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and
   `x5u` before go-jose parses a header (see Changed).
+- `jwt`: `PublicKey.Validate` accepted any 32-byte Ed25519 key. Against a
+  small-order key a token nobody signed verified: R = B and S = 1 sign any
+  message for the identity point, R = identity and S = 0 one message in
+  four for the all-zero key (an uninitialised buffer). Small-order keys and
+  non-canonical encodings (RFC 8032 §5.1.3) are now refused with
+  `ErrInvalidKey` — by `Verifier`, `VerifySignature`, `MarshalJWKS` and the
+  remote JWK Set, which ignores such a key (RFC 8725 §3.4).
 - **CI and release supply chain**:
   - the workflows run with a read-only `GITHUB_TOKEN` by default
     (`permissions: contents: read`); only the release `publish` job gets

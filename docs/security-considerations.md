@@ -124,7 +124,9 @@ protections.
   token's `alg` — a key without one verifies nothing — and an asymmetric key
   must pass `PublicKey.Validate` (RSA of at least 2048 bits, the algorithm's
   curve, a public key: a private key or a `jose.JSONWebKey` wrapper verifies
-  nothing). A `kid` shared by several keys designates none.
+  nothing; an Ed25519 key must be the canonical encoding of a point not of
+  small order, RFC 8032 §5.1.3 — forgeries verify against the all-zero key
+  and the identity point). A `kid` shared by several keys designates none.
 - **Claim smuggling** (RFC 7519 §4, §7.3, §10.1.1) — claims are decoded
   case-sensitively, by go-jose's decoder, into `StandardClaims` and into the
   caller's `claimsOut` alike. A claims set whose member names repeat —

@@ -30,8 +30,9 @@
 //   - Every verification key is bound to one algorithm (RFC 8725 §3.1): its
 //     Algorithm must equal the token's alg, an asymmetric key must pass
 //     PublicKey.Validate (RSA of 2048 bits or more, the algorithm's curve, a
-//     public key) and an HMAC key must be a []byte secret. A kid shared by
-//     several keys designates none.
+//     canonical Ed25519 point not of small order, a public key) and an HMAC
+//     key must be a []byte secret. A kid shared by several keys designates
+//     none.
 //   - exp is required by default (WithOptionalExpiry); a token is expired
 //     from now == exp + skew on; NumericDates outside 1970..9999 are
 //     refused when reading and when signing; WithClockSkew is bounded by
