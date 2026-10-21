@@ -520,12 +520,50 @@ PKCE. Not supported, and refused where a provider could select them:
   expects the user-id and password in Unicode Normalization Form C; `basic`
   checks them as received.
 
+## Attempt limiting
+
+- **`basic` and `oauth2` do not use it yet** — `security.AttemptLimiter`
+  and its in-memory implementation `throttle.MemoryLimiter` exist, but
+  `basic.Authenticator` and the OAuth2 endpoints take none yet: limit their
+  failed attempts at the edge or in an `Authenticator` wrapper.
+- **A throttle, not a lock-out** — `throttle.MemoryLimiter` slows guessing
+  down; NIST SP 800-63B-4 §3.2.2 caps consecutive failures at 100 "by
+  disabling that authenticator", which needs persistent state: an
+  `AttemptLimiter` over your account store, or an account flag your user
+  loader reports locked.
+- **One process** — its budgets live in memory: each instance of a
+  deployment has its own, and a restart forgets them. Share an
+  `AttemptLimiter` over a common store for a global limit.
+- **Lock-out and shared addresses** — the per-subject budget lets a
+  distributed attacker lock an account out for as long as the attack lasts
+  (turn it off, `Unlimited`, for credentials that cannot be guessed, such as
+  OAuth 2.0 client secrets); the per-source budgets are shared by every
+  client behind one IPv4 address or inside one IPv6 /56 — a NAT, a proxy
+  whose forwarded address the application does not store, providers that
+  number customers inside one /56, a NAT64 or SIIT translator mapping every
+  IPv4 client into one prefix (store the embedded IPv4 address with
+  `security.WithClientAddr`).
+- **Unknown sources** — an attempt whose source is unknown (the zero
+  address: a Unix-socket listener, an unparsable forwarded address) skips
+  both source budgets and meets only the per-subject one; with that budget
+  off, no budget applies and `Allow` refuses the attempt as unavailable
+  (503) until the client address is supplied.
+- **Reservations count** — an attempt counts as failed until it is settled:
+  more concurrent attempts against one key than its allowance are refused,
+  legitimate ones included. Reservations are counted per key: a settlement
+  arriving after its own charges expired may settle a newer reservation of
+  the key, letting a burst exceed its allowance by that many attempts
+  (never the long-run rate).
+- **No limit across subjects and sources** — a password-spraying campaign
+  from many sources against many accounts is bounded only per source and
+  per account: rate-limit at the edge.
+
 ## HTTP Basic
 
-- **No rate limiter or account lockout is shipped** — NIST SP 800-63B-4
-  §3.2.2 requires verifiers to limit failed attempts: do it at the edge or
-  in an `Authenticator` wrapper. The `Authenticator` only caps the number
-  of concurrent verifications (`runtime.GOMAXPROCS(0)` by default).
+- **No attempt limiting yet** — NIST SP 800-63B-4 §3.2.2 requires verifiers
+  to limit failed attempts: see [Attempt limiting](#attempt-limiting). The
+  `Authenticator` only caps the number of concurrent verifications
+  (`runtime.GOMAXPROCS(0)` by default).
 - **Timing equalization residuals** — every attempt costs one verification,
   but a stored hash made with other parameters than the hasher's costs
   another time until it is re-hashed (`PasswordRehasher`), and the
@@ -581,7 +619,8 @@ PKCE. Not supported, and refused where a provider could select them:
 - **What `fmt` cannot redact** — the types that hold secrets
   (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
   keys, signers and key sets, `session.Codec` and `session.Session`, the
-  `basic`, `bearer` and `session` authentications…) print redacted with
+  `basic`, `bearer` and `session` authentications, `security.AttemptKey`…)
+  print redacted with
   every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without

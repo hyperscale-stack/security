@@ -522,6 +522,31 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
 - `String`, `Format` and `LogValue` on `session.Session` (and a redacting
   `MarshalJSON`), `session.Authentication`, `basic.Authentication` and
   `bearer.Authentication`.
+- **Attempt limiting** (NIST SP 800-63B-4 §3.2.2; RFC 6749 §2.3.1, §4.3.2):
+  - core: `security.AttemptLimiter` — `Allow` reserves an attempt before
+    the credentials are checked, `Record` settles it with an
+    `AttemptOutcome` (`AttemptFailed`, the zero value, `AttemptSucceeded`,
+    `AttemptInconclusive`) —, `AttemptKey` (realm, subject, source; prints
+    its subject `REDACTED`), the `ErrTooManyAttempts` sentinel and its
+    `*TooManyAttemptsError` (with `RetryAfter`), the `too_many_attempts`
+    error class (ranked after `unavailable`) and `RetryAfterSeconds`;
+  - core: the client address — `WithClientAddr`, `ClientAddrFromContext`,
+    `ParseClientAddr`;
+  - `throttle` (a sub-package of the core module, on the standard library
+    and the core only):
+    `NewMemoryLimiter`, a bounded, in-memory `AttemptLimiter` with three
+    budgets — per subject and source (10 per 15 minutes), per subject (100
+    per hour) and per source (100 per 15 minutes) —, IPv6 sources counted
+    per /56, at most `MaxKeys` entries (100 000) keyed by a truncated
+    SHA-256, an injected `Clock`, and a refused attempt charging nothing;
+  - `httpsec`, `grpcsec` and `connectrpcsec` answer `too_many_attempts`
+    with HTTP 429 Too Many Requests (RFC 6585 §4: `Retry-After` in whole
+    seconds, `Cache-Control: no-store`; a Bearer challenge without error
+    code), gRPC `ResourceExhausted` and Connect `CodeResourceExhausted`
+    (HTTP 429, the same fields in the error metadata), and store the
+    transport peer as the client address unless a middleware or
+    interceptor before them stored one. A custom `ErrorMapper` switching on
+    the error classes sees the new `too_many_attempts` class.
 
 ### Changed
 

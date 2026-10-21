@@ -97,6 +97,15 @@ var (
 	// to HTTP 503 / gRPC Unavailable / Connect CodeUnavailable, even when it
 	// is joined with a credential failure of another authenticator.
 	ErrUnavailable = newSentinel("security: authentication temporarily unavailable")
+
+	// ErrTooManyAttempts indicates that an [AttemptLimiter] refused the
+	// attempt before any credential was checked: too many failed attempts
+	// were made against its key (NIST SP 800-63B-4 §3.2.2). It is not a
+	// verdict on the credentials. Limiters return it as a
+	// [*TooManyAttemptsError], which tells when to retry. Maps to HTTP 429
+	// Too Many Requests with a Retry-After field (RFC 6585 §4) and to
+	// gRPC/Connect ResourceExhausted.
+	ErrTooManyAttempts = newSentinel("security: too many failed authentication attempts")
 )
 
 // sentinelError is the concrete type backing every package-level sentinel.

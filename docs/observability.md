@@ -159,8 +159,8 @@ storage layer, so apply the same redaction rules you apply to your logs.
 A failing core span records **the class of its error, never the error
 text**: the status description and the OpenTelemetry `error.type` attribute
 are `security.ErrorClass(err)` — `invalid_credentials`, `token_expired`,
-`unavailable`, `access_denied`, … or `_OTHER` for an error that wraps no
-security sentinel — and no `exception` event is added. The error text can
+`unavailable`, `too_many_attempts`, `access_denied`, … or `_OTHER` for an
+error that wraps no security sentinel — and no `exception` event is added. The error text can
 hold user input (a username, a password typed in the username field) and
 the wrapped errors of your stores; it reaches only the caller, which may log
 it server-side. `error.type` is not set on success.

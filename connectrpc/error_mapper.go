@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -43,6 +45,7 @@ type ErrorMapper interface {
 //	class                                       code (HTTP)             challenge
 //	invalid_request                             InvalidArgument (400)   Bearer realm=R; + bearer token sent: error="invalid_request"
 //	unavailable                                 Unavailable (503)       Bearer realm=R
+//	too_many_attempts                           ResourceExhausted (429) Bearer realm=R
 //	token_expired, token_not_found,
 //	client_secret_mismatch, invalid_credentials Unauthenticated (401)   S realm=R; Bearer + bearer token sent: error="invalid_token"
 //	authentication_required,
@@ -51,7 +54,11 @@ type ErrorMapper interface {
 //	no_extractor, _OTHER                        Internal (500)          Bearer realm=R
 //
 // A Bearer resource challenges every refusal (RFC 6750 §3); another scheme
-// the Unauthenticated and PermissionDenied answers. A Basic challenge also
+// the Unauthenticated and PermissionDenied answers. A throttled attempt
+// ([security.ErrTooManyAttempts]) also carries Cache-Control: no-store and,
+// when the [*security.TooManyAttemptsError] knows the delay — the first one
+// of the error chain —, Retry-After in whole seconds rounded up (RFC 6585
+// §4, RFC 9110 §10.2.3). A Basic challenge also
 // carries charset="UTF-8" (RFC 7617 §2.1). Whether the request carried a
 // bearer token is told by the interceptors; without them no RFC 6750 code
 // is sent. An empty scheme means "Bearer" and an
@@ -104,7 +111,23 @@ func (m *defaultErrorMapper) Map(ctx context.Context, err error) error {
 		ce.Meta().Set("WWW-Authenticate", challenge)
 	}
 
+	if o.code == connect.CodeResourceExhausted {
+		setRetryAfter(ce.Meta(), err)
+	}
+
 	return ce
+}
+
+// setRetryAfter sets the fields of a throttled answer: Cache-Control:
+// no-store — RFC 6585 §4: a 429 "MUST NOT be stored by a cache" — and, when
+// err tells the delay, Retry-After in delay-seconds (RFC 9110 §10.2.3).
+func setRetryAfter(h http.Header, err error) {
+	h.Set("Cache-Control", "no-store")
+
+	var tooMany *security.TooManyAttemptsError
+	if errors.As(err, &tooMany) && tooMany.RetryAfter > 0 {
+		h.Set("Retry-After", strconv.FormatInt(security.RetryAfterSeconds(tooMany.RetryAfter), 10))
+	}
 }
 
 // challengeFor returns the WWW-Authenticate value of an outcome, or "". A
@@ -153,6 +176,8 @@ func outcomeOf(class string) outcome {
 		return outcome{connect.CodeInvalidArgument, "invalid request", false, "invalid_request", descInvalidRequest}
 	case security.ErrorClassUnavailable:
 		return outcome{code: connect.CodeUnavailable, message: "authentication unavailable"}
+	case security.ErrorClassTooManyAttempts:
+		return outcome{code: connect.CodeResourceExhausted, message: "too many attempts"}
 	case security.ErrorClassTokenExpired, security.ErrorClassTokenNotFound,
 		security.ErrorClassClientSecretMismatch, security.ErrorClassInvalidCredentials:
 		return outcome{connect.CodeUnauthenticated, msgUnauthenticated, true, "invalid_token", descInvalidToken}

@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 )
 
 const tracerName = "github.com/hyperscale-stack/security/grpc"
@@ -31,6 +32,7 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 
 	span.SetAttributes(attribute.String("rpc.method", method))
 
+	ctx = withClientAddr(ctx)
 	carrier := NewCarrier(ctx)
 
 	newCtx, auth, err := engine.Process(ctx, carrier)
@@ -53,6 +55,28 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 	return newCtx, carrier, nil
 }
 
+// withClientAddr stores the RPC's peer address in ctx as the client
+// address an [security.AttemptLimiter] keys on, unless an interceptor
+// before stored one with [security.WithClientAddr] or the peer has no IP
+// address (a Unix socket).
+func withClientAddr(ctx context.Context) context.Context {
+	if _, ok := security.ClientAddrFromContext(ctx); ok {
+		return ctx
+	}
+
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return ctx
+	}
+
+	addr := security.ParseClientAddr(p.Addr.String())
+	if !addr.IsValid() {
+		return ctx
+	}
+
+	return security.WithClientAddr(ctx, addr)
+}
+
 // UnaryServerInterceptor authenticates every unary RPC. On success the
 // handler runs with the request context enriched via
 // [security.WithAuthentication]; on failure the configured [ErrorMapper]
@@ -62,6 +86,11 @@ func authenticate(ctx context.Context, engine security.Engine, cfg *config, meth
 //
 // Install [StreamServerInterceptor] too — or use [ServerOptions]: this
 // interceptor leaves streaming RPCs unauthenticated.
+//
+// The interceptor stores the RPC's peer address as the client address an
+// [security.AttemptLimiter] keys on, unless an interceptor before it stored
+// one with [security.WithClientAddr] — do so behind a proxy (Envoy, a load
+// balancer terminating the connection), or every RPC counts as the proxy's.
 //
 // It opens a "grpcsec.Authenticate" span but deliberately does NOT open an
 // "rpc" span — that belongs to otelgrpc, which users compose alongside

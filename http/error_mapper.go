@@ -5,8 +5,10 @@
 package httpsec
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/hyperscale-stack/security"
@@ -40,6 +42,7 @@ type ErrorMapper interface {
 //	class                                 status  WWW-Authenticate
 //	invalid_request                       400     Bearer realm=R; + bearer token sent: error="invalid_request"
 //	unavailable                           503     Bearer realm=R
+//	too_many_attempts                     429     Bearer realm=R
 //	token_expired, token_not_found,
 //	client_secret_mismatch,
 //	invalid_credentials                   401     S realm=R; Bearer + bearer token sent: error="invalid_token"
@@ -59,6 +62,13 @@ type ErrorMapper interface {
 // unavailable dependency is not a failed check: 503, no error code. The
 // error_description is a fixed, generic string per code — the error chain
 // is never reflected into the response.
+//
+// A throttled attempt — [security.ErrTooManyAttempts] — is answered 429 Too
+// Many Requests (RFC 6585 §4) with Cache-Control: no-store and, when the
+// [*security.TooManyAttemptsError] knows the delay, a Retry-After field in
+// whole seconds rounded up (RFC 9110 §10.2.3) — the first one of the error
+// chain when several authenticators throttled. Its credentials were not
+// checked: a Bearer challenge carries no error code.
 //
 // An empty scheme means "Bearer" and an empty realm [DefaultRealm].
 // DefaultErrorMapper panics when scheme is not an RFC 9110 token or realm
@@ -108,6 +118,10 @@ func (m *defaultErrorMapper) Map(w http.ResponseWriter, r *http.Request, err err
 		w.Header().Set("WWW-Authenticate", challenge)
 	}
 
+	if o.status == http.StatusTooManyRequests {
+		setRetryAfter(w.Header(), err)
+	}
+
 	http.Error(w, http.StatusText(o.status), o.status)
 }
 
@@ -151,6 +165,8 @@ func outcomeOf(class string) outcome {
 		return outcome{http.StatusBadRequest, "invalid_request", descInvalidRequest}
 	case security.ErrorClassUnavailable:
 		return outcome{status: http.StatusServiceUnavailable}
+	case security.ErrorClassTooManyAttempts:
+		return outcome{status: http.StatusTooManyRequests}
 	case security.ErrorClassTokenExpired, security.ErrorClassTokenNotFound,
 		security.ErrorClassClientSecretMismatch, security.ErrorClassInvalidCredentials:
 		return outcome{http.StatusUnauthorized, "invalid_token", descInvalidToken}
@@ -160,5 +176,17 @@ func outcomeOf(class string) outcome {
 		return outcome{http.StatusForbidden, "insufficient_scope", descInsufficientScope}
 	default:
 		return outcome{status: http.StatusInternalServerError}
+	}
+}
+
+// setRetryAfter sets the fields of a 429 answer: Cache-Control: no-store —
+// RFC 6585 §4: the response "MUST NOT be stored by a cache" — and, when
+// err tells the delay, Retry-After in delay-seconds (RFC 9110 §10.2.3).
+func setRetryAfter(h http.Header, err error) {
+	h.Set("Cache-Control", "no-store")
+
+	var tooMany *security.TooManyAttemptsError
+	if errors.As(err, &tooMany) && tooMany.RetryAfter > 0 {
+		h.Set("Retry-After", strconv.FormatInt(security.RetryAfterSeconds(tooMany.RetryAfter), 10))
 	}
 }

@@ -100,11 +100,13 @@ CPU-bound: more parallel verifications than cores add latency and memory,
 not throughput. Bound the request time (`http.TimeoutHandler`): `net/http`
 request contexts carry no deadline.
 
-The library ships no rate limiter: limit failed attempts per account and per
-client at the edge or in an `Authenticator` wrapper (NIST SP 800-63B-4
-§3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts), and prefer
-exchanging Basic credentials once for a session or a token over sending them
-on every request. Form logins and the OAuth2 `password` grant's
+Limit failed attempts per account and per client (NIST SP 800-63B-4
+§3.1.1.2, §3.2.2 — verifiers SHALL rate-limit failed attempts): the library
+ships `security.AttemptLimiter` and its in-memory implementation
+`throttle.MemoryLimiter` (see [Attempt limiting](#attempt-limiting)), which
+`basic.Authenticator` does not take yet — until it does, limit at the edge
+or in an `Authenticator` wrapper. Prefer exchanging Basic credentials once
+for a session or a token over sending them on every request. Form logins and the OAuth2 `password` grant's
 `ResourceOwnerVerifier` can reuse `basic.Authenticator` to get the same
 protections.
 
@@ -1562,6 +1564,75 @@ page can trigger. Protect every state-changing endpoint reached with a
 cookie session against CSRF, and prefer one engine per audience (browser
 pages, APIs) so that an API never authenticates an ambient cookie.
 
+## Attempt limiting
+
+`security.AttemptLimiter` is the online-guessing control of NIST SP
+800-63B-4 §3.2.2 and the brute-force protection RFC 6749 §2.3.1 and §4.3.2
+require of the OAuth 2.0 endpoints that check a secret. A verifier calls
+`Allow` before it checks the credentials and `Record` with the outcome
+after:
+
+- **Reserve, then settle — once per attempt.** One `Allow` per attempt,
+  with one key: the limiter charges every budget it keeps for that key, the
+  per-source one included. `Allow` counts the attempt as failed until
+  `Record` settles it, so a burst of concurrent guesses cannot all pass the
+  check before the first failure is known. Concurrent legitimate attempts
+  hold reservations too: size the allowance above a client's concurrency,
+  or authenticate once and carry a session or a token. A lost `Record`
+  keeps the charge: it errs toward limiting.
+- **Fail closed.** A refusal wraps `ErrTooManyAttempts`: HTTP 429 Too Many
+  Requests with `Retry-After` and `Cache-Control: no-store` (RFC 6585 §4),
+  gRPC and Connect `ResourceExhausted`. A limiter that cannot decide (a
+  shared store is down) returns an error wrapping `ErrUnavailable` — 503 —,
+  and any other error refuses the attempt too.
+- **The key.** `AttemptKey` names the credential type (`Realm`), the
+  claimed identity (`Subject`) and the client address (`Source`). The
+  subject is client input — even a password typed in the username field —:
+  the key prints it `REDACTED`, and `throttle` stores only a hash of it.
+  Normalize the subject the way your account store does (case, Unicode
+  form): every variant counted apart multiplies the allowance.
+- **The source.** `httpsec`, `grpcsec` and `connectrpcsec` store the
+  transport peer as the client address (`security.ClientAddrFromContext`).
+  Behind a reverse proxy every request comes from the proxy: store the
+  client address it forwards with `security.WithClientAddr` in a middleware
+  or interceptor that runs before the adapter — taken from the hop your
+  trusted proxy appended (the right-most `X-Forwarded-For` entry it wrote,
+  or RFC 7239 `Forwarded`), never the left-most entry, which the client
+  chooses. Outside the adapters (a form login calling `Authenticate`, an
+  OAuth 2.0 endpoint), read the address the same way: from the context
+  first (`security.ClientAddrFromContext`), then from the transport peer
+  (`security.ParseClientAddr(r.RemoteAddr)`).
+
+`throttle.MemoryLimiter` charges every attempt to three budgets, checked
+and charged together, a refusal charging none: per subject and source (10
+failures, then one every 90 s), per subject from every source (100, then
+one every 36 s — the per-account limit) and per source against every
+subject (100, then one every 9 s — spraying). IPv6 sources count per /56
+(RFC 6177), IPv4 per address; an unknown source only meets the per-subject
+budget. A success clears its own (subject, source) failures and refunds its
+own charge elsewhere — it does not reset the per-subject budget, which
+other sources keep spending. The table holds at most `MaxKeys` entries
+(100 000, about 12 MiB); when it is full the least throttled entry is
+forgotten, never one of the attempt being charged.
+
+Trade-offs to choose knowingly:
+
+- The per-subject budget lets a distributed attacker lock an account out
+  while the attack lasts. Keep it for passwords (NIST requires a
+  per-account limit); turn it off (`Limit{Failures: throttle.Unlimited}`)
+  for credentials that cannot be guessed, such as OAuth 2.0 client secrets,
+  whose client identifiers are public. Use one limiter per credential type.
+- The per-source budgets are shared by every client behind one IPv4
+  address or inside one IPv6 /56: a NAT, a proxy, providers that number
+  customers inside one /56, a NAT64 or SIIT translator (store the embedded
+  IPv4 address with `security.WithClientAddr`).
+- An unknown source meets only the per-subject budget: with it off, `Allow`
+  refuses the attempt as unavailable (503) — supply the client address.
+- It is a throttle, not the lock-out of NIST §3.2.2 ("no more than 100 …
+  by disabling that authenticator"), and it lives in one process. A global
+  or permanent limit needs an `AttemptLimiter` over a shared store, or an
+  account flag your loader reports locked.
+
 ## Authorization
 
 Authorization follows Spring Security's voter model, and fails closed:
@@ -1717,6 +1788,9 @@ span catalog.
       `basic.PasswordRehasher`), bound the request time
       (`http.TimeoutHandler`), and rate-limit failed attempts per account
       and per client in front of it.
+- [ ] Behind a reverse proxy, store the client address it forwards
+      (`security.WithClientAddr`, from the hop your proxy appended) before
+      the transport adapters: attempt limits key on it.
 - [ ] Rotate JWT signing keys; expose them through a JWKS endpoint
       (`oidc/provider` serves one).
 - [ ] Keep the JWT allowlist asymmetric unless you truly need HMAC.

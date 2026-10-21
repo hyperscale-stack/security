@@ -54,12 +54,14 @@ func authenticate(
 	cfg *config,
 	procedure string,
 	header http.Header,
+	peer connect.Peer,
 ) (context.Context, *Carrier, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "connectrpcsec.Authenticate")
 	defer span.End()
 
 	span.SetAttributes(attribute.String("rpc.method", procedure))
 
+	ctx = withClientAddr(ctx, peer.Addr)
 	carrier := NewCarrier(header)
 
 	newCtx, auth, err := engine.Process(ctx, carrier)
@@ -82,6 +84,23 @@ func authenticate(
 	return newCtx, carrier, nil
 }
 
+// withClientAddr stores the peer address peerAddr in ctx as the client
+// address an [security.AttemptLimiter] keys on, unless an interceptor
+// before stored one with [security.WithClientAddr] or peerAddr is not an
+// IP address.
+func withClientAddr(ctx context.Context, peerAddr string) context.Context {
+	if _, ok := security.ClientAddrFromContext(ctx); ok {
+		return ctx
+	}
+
+	addr := security.ParseClientAddr(peerAddr)
+	if !addr.IsValid() {
+		return ctx
+	}
+
+	return security.WithClientAddr(ctx, addr)
+}
+
 // AuthenticationInterceptor is a [connect.Interceptor] that authenticates
 // every inbound RPC against a [security.Engine]. On success the handler runs
 // with the request context enriched via [security.WithAuthentication]; on
@@ -89,6 +108,11 @@ func authenticate(
 // Connect error — with its WWW-Authenticate challenge — and the handler is
 // not invoked. The headers the extractors stage on the [Carrier] reach the
 // client on every path: the response, a refusal or a handler error.
+//
+// The interceptor stores the RPC's peer address as the client address an
+// [security.AttemptLimiter] keys on, unless an interceptor before it stored
+// one with [security.WithClientAddr] — do so behind a reverse proxy, or
+// every RPC counts as the proxy's.
 //
 // It opens a "connectrpcsec.Authenticate" span but deliberately does NOT open
 // an "rpc" span — that belongs to otelconnect, which users compose alongside
@@ -125,7 +149,7 @@ func (i *AuthenticationInterceptor) WrapUnary(next connect.UnaryFunc) connect.Un
 			return next(ctx, req) //nolint:wrapcheck // pass-through: the client error is the terminal value
 		}
 
-		newCtx, carrier, err := authenticate(ctx, i.engine, i.cfg, req.Spec().Procedure, req.Header())
+		newCtx, carrier, err := authenticate(ctx, i.engine, i.cfg, req.Spec().Procedure, req.Header(), req.Peer())
 		if err != nil {
 			return nil, withStaged(i.mapper.Map(withBearerToken(ctx, req.Header()), err), carrier)
 		}
@@ -148,7 +172,7 @@ func (i *AuthenticationInterceptor) WrapStreamingHandler(
 	next connect.StreamingHandlerFunc,
 ) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		newCtx, carrier, err := authenticate(ctx, i.engine, i.cfg, conn.Spec().Procedure, conn.RequestHeader())
+		newCtx, carrier, err := authenticate(ctx, i.engine, i.cfg, conn.Spec().Procedure, conn.RequestHeader(), conn.Peer())
 
 		flushHeader(conn.ResponseHeader(), carrier.ResponseHeader())
 

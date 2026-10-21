@@ -42,6 +42,11 @@ var errEngineContract = errors.New("httpsec: the engine returned no context or a
 // 401 Unauthorized ([security.ErrAuthenticationRequired]), so applications
 // fail closed. Invalid credentials are refused whatever the fallback.
 //
+// The middleware stores the request's peer address (r.RemoteAddr) in the
+// context as the client address an [security.AttemptLimiter] keys on,
+// unless a middleware before it stored one with [security.WithClientAddr]
+// — do so behind a reverse proxy, or every request counts as the proxy's.
+//
 // The middleware makes its error mapper available to [Authorize], so the
 // authorization step answers with the same challenge. Middleware panics at
 // construction on a nil engine and on an invalid challenge configuration
@@ -64,7 +69,7 @@ func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.
 				span.SetAttributes(attrHTTPRoute.String(route))
 			}
 
-			ctx = withErrorMapper(ctx, cfg.errorMapper)
+			ctx = withClientAddr(withErrorMapper(ctx, cfg.errorMapper), r.RemoteAddr)
 
 			newCtx, auth, err := engine.Process(ctx, NewCarrier(w, r.WithContext(ctx)))
 
@@ -88,6 +93,22 @@ func Middleware(engine security.Engine, opts ...Option) func(http.Handler) http.
 			next.ServeHTTP(w, r.WithContext(withErrorMapper(newCtx, cfg.errorMapper)))
 		})
 	}
+}
+
+// withClientAddr stores the peer address remoteAddr in ctx as the client
+// address, unless ctx carries one already or remoteAddr is not an IP
+// address.
+func withClientAddr(ctx context.Context, remoteAddr string) context.Context {
+	if _, ok := security.ClientAddrFromContext(ctx); ok {
+		return ctx
+	}
+
+	addr := security.ParseClientAddr(remoteAddr)
+	if !addr.IsValid() {
+		return ctx
+	}
+
+	return security.WithClientAddr(ctx, addr)
 }
 
 // buildConfig applies opts to a default config — a Bearer challenge with

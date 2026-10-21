@@ -29,6 +29,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		security.ErrAuthenticationRequired,
 		security.ErrInvalidRequest,
 		security.ErrUnavailable,
+		security.ErrTooManyAttempts,
 	}
 
 	for i, a := range sentinels {
