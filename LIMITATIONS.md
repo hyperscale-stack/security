@@ -587,6 +587,19 @@ PKCE. Not supported, and refused where a provider could select them:
   `go vet` from the module cache, distribution builds) only compile from a
   repository checkout after `make generate`; the library code builds without
   them.
+- **Advisories outside every database** — the CI scanners (govulncheck,
+  OSV-Scanner) and Dependabot only see advisories that reached the Go
+  vulnerability database or the GitHub Advisory Database. A security
+  advisory a dependency publishes in its own repository reaches neither
+  until GitHub reviews it, and the ones without a CVE are in practice never
+  reviewed: 15 such advisories against 6 dependencies of the workspace
+  since July 2026, among them go-jose's GHSA-mgcc-cww5-fp2q. They are
+  checked by hand before a release ([docs/releasing.md](docs/releasing.md)).
+- **Tool modules are not scanned** — `tools/*` hold no package, so neither
+  govulncheck nor OSV-Scanner can analyse them; Dependabot alerts and
+  version updates are the only signal for the development tools, which run
+  in CI with a read-only token. Scanning the built tool binaries
+  (`govulncheck -mode=binary`) is a planned follow-up.
 
 ## Not planned
 

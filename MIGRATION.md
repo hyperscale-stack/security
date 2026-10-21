@@ -54,10 +54,11 @@ in-tree `password`) were removed during the rewrite. The core module's
 non-test imports are now stdlib + `go.opentelemetry.io/otel`; its tests also
 use `testify` and `otel/sdk`.
 
-`tools/golangci-lint`, `tools/govulncheck` and `tools/mockery` are not
-library modules: each pins one development tool, outside `go.work`, so the
-tools' dependencies never reach a library `go.mod` or a consumer's module
-graph. They are never released.
+`tools/golangci-lint`, `tools/govulncheck`, `tools/goveralls`,
+`tools/mockery` and `tools/osv-scanner` are not library modules: each pins
+one development tool, outside `go.work`, so the tools' dependencies never
+reach a library `go.mod` or a consumer's module graph. They are never
+released.
 
 ## Dependency policy
 
@@ -149,6 +150,7 @@ make generate     # mockery mocks: in-package mock_*_test.go files, never commit
 make test         # generate, then race + coverage, aggregated into build/coverage.out
 make lint         # golangci-lint (tools/golangci-lint) on every module with the shared config
 make vuln         # govulncheck -test on every module, outside the workspace
+make osv          # OSV-Scanner (tools/osv-scanner) on every module's go.mod, outside the workspace
 make tidy         # go work sync + go mod tidy on every module and tool + go work sync
 make check-modules # one go line, go.work complete, sync no-op, every module on its own (GOWORK=off)
 make test-backends # the store suites on real PostgreSQL/MySQL/MariaDB/Redis servers (Docker; scripts/test-backends.sh), run by CI
@@ -158,8 +160,9 @@ make e2e          # opt-in browser suites (Tales + Chrome), never run by CI
 The `Makefile` discovers modules dynamically via `find . -name go.mod`
 (except the tool modules under `tools/`), so a new sub-module is picked up
 automatically as soon as its `go.mod` lands. The tools (golangci-lint,
-govulncheck, mockery) are built from their pinned modules into `build/bin`
-on first use; mocks are generated before anything that compiles tests.
+govulncheck, goveralls, mockery, osv-scanner) are built from their pinned
+modules into `build/bin` on first use; mocks are generated before anything
+that compiles tests.
 Example program lines are excluded from the aggregated coverage profile
 (their `main()` is not unit-testable); the examples are still built, tested,
 and linted.
@@ -174,11 +177,12 @@ SHA.
   against every module, and uploads the aggregated coverage to Coveralls
   with goveralls (pinned in `tools/goveralls`).
 - `.github/workflows/govulncheck.yml` runs `make vuln` (every module, tests
-  included) on every change and weekly.
+  included) and `make osv` (OSV-Scanner on every module's `go.mod`) on every
+  change and weekly.
 - `.github/workflows/release.yml` runs when a `vX.Y.Z` or `<module>/vX.Y.Z`
   tag is pushed. A read-only job verifies it (`scripts/release-check.sh`,
-  `check-modules`, build, test, lint, govulncheck on the released module),
-  then a separate job publishes the GitHub release
+  `check-modules`, build, test, lint, govulncheck and OSV-Scanner on the
+  released module), then a separate job publishes the GitHub release
   ([docs/releasing.md](docs/releasing.md)).
 - Dependabot proposes updates for every workspace module (go.work mode), the
   tool modules and the actions, after a 7-day cooldown.

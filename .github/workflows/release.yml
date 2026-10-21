@@ -86,6 +86,15 @@ jobs:
           DIR: ${{ steps.tag.outputs.dir }}
         run: cd "$DIR" && GOWORK=off "$GITHUB_WORKSPACE/build/bin/govulncheck" ./...
 
+      # Broader than the govulncheck step: every requirement of the
+      # released module's go.mod, test-only ones included, against the OSV
+      # database (make osv). An exception goes into osv-scanner.toml on
+      # master; nothing publishes over a failing scan.
+      - name: Scan the released module (OSV-Scanner)
+        env:
+          DIR: ${{ steps.tag.outputs.dir }}
+        run: make osv OSV_MODULES="$DIR"
+
   publish:
     name: Publish ${{ github.ref_name }}
     needs: verify

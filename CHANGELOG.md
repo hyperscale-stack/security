@@ -666,8 +666,9 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `replace` directives. The first release of every module is `v1.0.0`; the
   checklist is [docs/releasing.md](docs/releasing.md).
 - **Development tools in their own modules**: golangci-lint (v2.14.0, Go
-  1.27 support), govulncheck (v1.9.0), goveralls (v0.0.12) and mockery
-  (v3.8.1) are pinned in one module each under `tools/`, outside `go.work`.
+  1.27 support), govulncheck (v1.9.0), goveralls (v0.0.12), mockery
+  (v3.8.1) and osv-scanner (v2.7.0) are pinned in one module each under
+  `tools/`, outside `go.work`.
   The core module no longer declares the mockery `tool` directive: a
   consumer importing only the core now resolves 23 modules instead of 50,
   both counts including the consumer (no mockery, cobra, viper, zerolog or
@@ -1230,6 +1231,17 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
     and tags of nested modules (`oidc/client/v…`) now trigger it;
   - a new `govulncheck` workflow scans every module on every change and
     weekly;
+  - an OSV-Scanner job in that workflow (`make osv`, pinned in
+    `tools/osv-scanner`) checks every module's `go.mod` against the OSV
+    database, which adds the GitHub-reviewed advisories (GHSA) the Go
+    vulnerability database has not imported yet and the records it
+    withdrew: an advisory without symbol data fails whenever a required
+    version is affected, the others go through Go call analysis. The
+    release workflow also runs it on the released module, test-only
+    requirements included. Exceptions live in the root `osv-scanner.toml`
+    only, with an expiry date. Advisories that a dependency publishes in its
+    own repository and GitHub never reviews reach no database; they are
+    checked by hand before a release (`docs/releasing.md`, `LIMITATIONS.md`);
   - Dependabot also covers the tool modules and the actions, groups related
     updates, and waits 7 days before proposing a version.
 - `grpc` (and the examples) require `golang.org/x/net` v0.60.0 instead of

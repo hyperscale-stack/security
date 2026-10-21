@@ -34,8 +34,10 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: "**/go.sum"
 
-      # golangci-lint, govulncheck, goveralls and mockery, each built from its
-      # pinned module under tools/ and verified by that module's go.sum.
+      # golangci-lint, govulncheck, goveralls, mockery and osv-scanner, each
+      # built from its pinned module under tools/ and verified by that
+      # module's go.sum. This job runs golangci-lint, goveralls and mockery;
+      # the build cache keeps the other two cheap.
       - name: Install the pinned tools
         run: make tools
 
