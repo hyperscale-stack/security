@@ -55,6 +55,8 @@ separate module) — it ships an in-memory `oauth2.Storage` for dev and tests.
 `outbound` is a sub-package of the core module (standard library only): the
 SSRF-safe `*http.Client` factory used for requests to URLs that come from
 configuration or remote metadata — see [Outbound requests](#outbound-requests).
+`throttle` is another sub-package of the core: the bounded, in-memory
+`security.AttemptLimiter` (see [Attempt limiting](#attempt-limiting)).
 `oidc/client/storage/memory` (an in-memory `TransactionStore`) and
 `oidc/client/storetest` (the store conformance suite) are sub-packages of
 `oidc/client`; `saml/sp/storage/memory` and `saml/sp/storetest` are,
@@ -64,7 +66,8 @@ likewise, packages of the `saml/sp` module.
 
 ```
 core (.)                ← stdlib + go.opentelemetry.io/otel
-                           (outbound/ is a stdlib-only sub-package of the core)
+                           (outbound/ and throttle/ are sub-packages of the
+                           core on the stdlib — and the core — only)
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 connectrpc/             ← core + otel + connectrpc.com/connect
@@ -134,6 +137,23 @@ Carrier ──▶ Extractor ──▶ Authentication (pending)
   skipped; all-fail produces an aggregated error.
 - **`Engine`** is the entry point: it runs the extractors, hands the result
   to the `Manager`, and stores the outcome in the returned context.
+
+### Attempt limiting
+
+An `Authenticator` that checks a guessable secret limits the failed
+attempts against it with a `security.AttemptLimiter` (NIST SP 800-63B-4
+§3.2.2; RFC 6749 §2.3.1 and §4.3.2 for OAuth 2.0): it calls `Allow` with an
+`AttemptKey` — the credential type (realm), the claimed identity (subject)
+and the client address (source) — before checking the credentials, then
+`Record` with the outcome. `Allow` reserves the attempt, so concurrent
+guesses cannot exceed the allowance; a refusal wraps `ErrTooManyAttempts`
+(class `too_many_attempts`: HTTP 429 with `Retry-After`, gRPC and Connect
+`ResourceExhausted`). The transport adapters store the transport peer as
+the client address (`security.ClientAddrFromContext`) unless a middleware
+before them stored the address a trusted proxy forwarded
+(`security.WithClientAddr`). `throttle.MemoryLimiter` implements it in
+memory with three budgets: per subject and source, per subject, per
+source.
 
 ## The authorization pipeline
 

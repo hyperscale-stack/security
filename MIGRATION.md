@@ -41,7 +41,9 @@ standalone module): it ships the in-memory `oauth2.Storage` used for dev
 and tests. Likewise `outbound` is a sub-package of the core module: the
 SSRF-safe `*http.Client` factory the federation modules use to fetch
 configuration-supplied URLs. It depends on the standard library only and
-is the only networking code of the core. `oidc/client/storage/memory`
+is the only networking code of the core. `throttle` is another one: the
+bounded, in-memory `security.AttemptLimiter` (standard library and core
+only). `oidc/client/storage/memory`
 (in-memory transaction store) and `oidc/client/storetest` (the conformance
 suite every transaction store passes) are sub-packages of the
 `oidc/client` module, as `saml/sp/storage/memory` (the in-memory
@@ -64,7 +66,8 @@ released.
 
 ```
 core (.)                ← stdlib + go.opentelemetry.io/otel
-                           (outbound/ is a stdlib-only sub-package of the core)
+                           (outbound/ and throttle/ are sub-packages of the
+                           core on the stdlib — and the core — only)
 http/                   ← core + otel
 grpc/                   ← core + otel + google.golang.org/grpc
 connectrpc/             ← core + otel + connectrpc.com/connect
@@ -1309,8 +1312,8 @@ To migrate:
 
 1. Do not read the presented credentials from the value `Engine.Process`
    returns on failure: it is `security.Anonymous()`. Per-username throttling
-   or lockout belongs in an `Authenticator` wrapper, which sees the
-   credentials before they are checked.
+   or lockout belongs in the `Authenticator` (a `security.AttemptLimiter`),
+   which sees the claimed identity before the credentials are checked.
 2. Make every `Authenticator` (and `bearer.TokenVerifier`) return an
    authenticated value on success, and an error wrapping a security sentinel
    otherwise.

@@ -38,7 +38,9 @@ workspace so you import only what you need.
 | `…/security/saml/sp/store/redis`       | Production SAML SP storage on Redis                              |
 
 The core module also ships `…/security/outbound`, an SSRF-safe
-`*http.Client` factory for requests to configuration-supplied URLs.
+`*http.Client` factory for requests to configuration-supplied URLs, and
+`…/security/throttle`, a bounded, in-memory `security.AttemptLimiter` that
+limits failed authentication attempts.
 
 ## Install
 
