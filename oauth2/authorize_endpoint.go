@@ -25,9 +25,10 @@ import (
 // Authorization-endpoint defaults applied when the matching
 // [AuthorizeConfig] field is left zero.
 const (
-	// defaultAuthCodeTTL caps the authorization-code lifetime (RFC 6749
-	// §4.1.2 recommends 10 minutes maximum).
-	defaultAuthCodeTTL = 10 * time.Minute
+	// maxAuthCodeTTL is the longest authorization-code lifetime, and the
+	// default one: RFC 6749 §4.1.2 — "A maximum authorization code lifetime
+	// of 10 minutes is RECOMMENDED".
+	maxAuthCodeTTL = 10 * time.Minute
 	// defaultImplicitTTL is the implicit-flow access-token lifetime.
 	defaultImplicitTTL = time.Hour
 )
@@ -228,8 +229,13 @@ type ConsentFunc func(w http.ResponseWriter, r *http.Request, ar *AuthorizeReque
 
 // AuthorizeConfig configures the /authorize endpoint.
 type AuthorizeConfig struct {
-	// CodeTTL is the authorization-code lifetime. Defaults to 10 minutes
-	// (RFC 6749 §4.1.2) when zero.
+	// CodeTTL is the authorization-code lifetime: 10 minutes when zero or
+	// negative, at most 10 minutes otherwise — [Server.AuthorizeHandler]
+	// panics on a longer one (RFC 6749 §4.1.2: "A maximum authorization code
+	// lifetime of 10 minutes is RECOMMENDED"; OAuth 2.1 §4.1.2: the code
+	// "MUST expire shortly after it is issued"). A code is redeemed right
+	// after the redirect: a longer lifetime only widens the window a leaked
+	// one can be used in.
 	CodeTTL time.Duration
 	// AllowImplicit enables the legacy implicit flow (response_type=token).
 	//
@@ -348,9 +354,9 @@ type AuthorizeConfig struct {
 // answering a GET a 302 Found; a method other than GET and POST gets a 405
 // listing them in Allow.
 //
-// AuthorizeHandler panics on a nil consent, and on an implicit-flow
-// misconfiguration (AllowImplicit on a non-Profile20 server, or without an
-// ImplicitTokens generator).
+// AuthorizeHandler panics on a nil consent, on a CodeTTL beyond 10 minutes,
+// and on an implicit-flow misconfiguration (AllowImplicit on a non-Profile20
+// server, or without an ImplicitTokens generator).
 func (s *Server) AuthorizeHandler(cfg AuthorizeConfig, consent ConsentFunc) http.Handler {
 	if consent == nil {
 		panic("oauth2: AuthorizeHandler: nil ConsentFunc")
@@ -368,8 +374,11 @@ func (s *Server) AuthorizeHandler(cfg AuthorizeConfig, consent ConsentFunc) http
 		s.implicit.Store(true)
 	}
 
-	if cfg.CodeTTL <= 0 {
-		cfg.CodeTTL = defaultAuthCodeTTL
+	switch {
+	case cfg.CodeTTL > maxAuthCodeTTL:
+		panic("oauth2: AuthorizeHandler: CodeTTL exceeds 10 minutes (RFC 6749 §4.1.2)")
+	case cfg.CodeTTL <= 0:
+		cfg.CodeTTL = maxAuthCodeTTL
 	}
 
 	if cfg.ImplicitTTL <= 0 {
