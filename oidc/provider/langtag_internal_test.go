@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLanguageTag pins RFC 5646 \u00a72.1 well-formedness (\u00a72.2.9: the ABNF,
+// TestLanguageTag pins RFC 5646 §2.1 well-formedness (§2.2.9: the ABNF,
 // not the registry): the examples of Appendix A, every production's
 // bounds, and the irregular grandfathered tags, compared case-insensitively
-// (\u00a72.1.1).
+// (§2.1.1).
 func TestLanguageTag(t *testing.T) {
 	t.Parallel()
 
@@ -26,13 +26,13 @@ func TestLanguageTag(t *testing.T) {
 		"sl-IT-nedis", "hy-Latn-IT-arevela", "de-DE", "en-US", "es-419", "de-CH-x-phonebk", "az-Arab-x-AZE-derbend",
 		"x-whatever", "qaa-Qaaa-QM-x-southern", "de-Qaaa", "sr-Latn-QM", "sr-Qaaa-RS", "en-US-u-islamcal",
 		"zh-CN-a-myext-x-private", "en-a-myext-b-another",
-		// Repeated singletons are well formed, though not valid (\u00a72.2.6, \u00a72.2.9).
+		// Repeated singletons are well formed, though not valid (§2.2.6, §2.2.9).
 		"ar-a-aaa-b-bbb-a-ccc",
 		// Language: 2*3ALPHA [extlang] / 4ALPHA / 5*8ALPHA.
-		"abc", "abcd", "abcde", "abcdefgh", "verified", "zh-abc-def-ghi",
+		"abc", "abcd", "abcde", "abcdefgh", "verified", "zh-abc-def-ghi", "abc-def", "sgn-ase", "zho-yue-HK",
 		// Script, region (2ALPHA / 3DIGIT), variants (5*8alphanum / DIGIT 3alphanum).
 		"en-Latn", "en-GB", "en-123", "en-1234", "de-1996", "en-abcde", "en-12345678", "en-1abc", "en-Latn-GB-1abc-abcde",
-		// Extensions: any singleton but x \u2014 i and digits included \u2014 then 2 to 8 alphanum.
+		// Extensions: any singleton but x — i and digits included — then 2 to 8 alphanum.
 		"en-i-abc", "de-1-abc", "en-a-ab", "en-a-abcdefgh", "en-a-ab-cd-x-y",
 		// Private use: 1 to 8 alphanum after x.
 		"en-x-a", "x-a", "x-abcdefgh", "X-ABC", "x-a-b-c",
@@ -40,7 +40,7 @@ func TestLanguageTag(t *testing.T) {
 		"en-GB-oed", "EN-gb-OED", "i-ami", "i-bnn", "i-default", "i-hak", "i-klingon", "I-KLINGON", "i-lux", "i-mingo",
 		"i-navajo", "i-pwn", "i-tao", "i-tay", "i-tsu", "sgn-BE-FR", "sgn-BE-NL", "sgn-CH-DE",
 		"art-lojban", "cel-gaulish", "no-bok", "no-nyn", "zh-guoyu", "zh-hakka", "zh-min", "zh-min-nan", "zh-xiang",
-		// Case is not significant (\u00a72.1.1).
+		// Case is not significant (§2.1.1).
 		"FR", "Fr-ca", "ZH-HANT-tw", "SR-latn-rs",
 	}
 
@@ -75,9 +75,9 @@ func TestLanguageTag(t *testing.T) {
 	}
 }
 
-// TestSplitTag: a claim name is language-tagged (OIDC Core \u00a75.2) when a
+// TestSplitTag: a claim name is language-tagged (OIDC Core §5.2) when a
 // claim name and a well-formed language tag surround its first "#"; any
-// other "#" is an ordinary character (RFC 7519 \u00a74.2 URI names).
+// other "#" is an ordinary character (RFC 7519 §4.2 URI names).
 func TestSplitTag(t *testing.T) {
 	t.Parallel()
 
@@ -162,7 +162,7 @@ func isASCII(s string) bool {
 
 // FuzzSplitTagKey: a tagged name is its base, "#" and a well-formed tag;
 // the base is not empty and holds no "#"; and the key of the name is the
-// key of the base followed by the key of the tag \u2014 the key ignores "#", as
+// key of the base followed by the key of the tag — the key ignores "#", as
 // lodash's and change-case's camelCase do.
 func FuzzSplitTagKey(f *testing.F) {
 	for _, seed := range []string{"name#fr", "email#verified-fr", "#fr", "name#", "\u00e9mail#fr", "a#b#c", "https://e.example/c#roles"} {

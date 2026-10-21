@@ -82,16 +82,21 @@ func TestTaggedAliasesOfKnownClaimsAreNeverReleased(t *testing.T) {
 func TestTaggedAliasesOfRequestedClaimsAreNeverReleased(t *testing.T) {
 	t.Parallel()
 
-	genuine := map[string]any{"given": "g", "phone": "p", "s": "s", "email": "eve@example.com", "email_verified#fr": false}
+	genuine := map[string]any{
+		"given": "g", "phone": "p", "s": "s", "su": "su", "foo": "f", "email": "eve@example.com", "email_verified#fr": false,
+	}
 	aliases := map[string]any{
 		"given#name-de": "Mallory", "phone#number-fr": "+0", "s#ub": "mallory", "s#ub-fr": "mallory",
 		"email#verified-fr": true, "s#ub-x-y": "mallory",
+		// Continuations at the tag's first letter: su#bfr reads as sub#fr,
+		// foo#x-fr as the declared foo_x's tagged variant foo_x#fr.
+		"su#bfr": "mallory", "foo#x-fr": "Mallory",
 	}
 
 	user := maps.Clone(genuine)
 	maps.Copy(user, aliases)
 
-	e := newEnv(t)
+	e := newEnv(t, withConfig(func(c *oidcprovider.Config) { c.ClaimsSupported = []string{"foo_x"} }))
 	e.claims.setUser("eve", user)
 	e.approveAs("eve")
 
