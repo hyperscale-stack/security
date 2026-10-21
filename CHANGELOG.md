@@ -1032,6 +1032,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `1*SP` and returns `("", true)` for the scheme alone; the `httpsec` and
   `connectrpcsec` mappers recognize a Bearer credential ended by a tab.
   See [MIGRATION.md](MIGRATION.md).
+- `password`: only canonical stored hashes verify. Argon2id: `m`, `t`, `p`
+  in that order, decimal values without leading zeros, unpadded standard
+  base64 without any other character (CR and LF were skipped) and with
+  zero trailing bits (C2SP phc-strings) — else `ErrMalformedHash`. Bcrypt:
+  `$2a$`, `$2b$`, `$2y$` — `$2x$` (crypt_blowfish's buggy-hash marker) and
+  `$2$` answer `ErrUnsupportedAlgorithm`. See [MIGRATION.md](MIGRATION.md).
 
 ### Fixed
 

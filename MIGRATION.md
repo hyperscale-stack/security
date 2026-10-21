@@ -2814,3 +2814,34 @@ To migrate:
    for its IPv6 prefix.
 3. Code that parsed the address out of a dial error reads it from its own
    resolution instead.
+
+### `password`: only canonical hash encodings verify
+
+The argon2id parser accepted several encodings of one hash: parameters in
+any order, decimal values with leading zeros (`m=0064`), CR and LF inside
+the base64 values (which `encoding/base64` skips) and non-zero trailing
+bits. The bcrypt hasher accepted any `$2…$` prefix: `$2x$`, the marker
+crypt_blowfish gives the hashes of its sign-extension bug (x/crypto
+verified them as `$2a$`, wrongly for 8-bit passwords), and `$2$`, the
+format before `$2a$`. Only canonical encodings verify now (C2SP
+phc-strings).
+
+| Stored hash | Before | After |
+| --- | --- | --- |
+| argon2id `m=…,t=…,p=…`, canonical | verifies | verifies |
+| argon2id parameters in another order, leading zeros, CR/LF or other characters in the base64, non-zero trailing bits | verifies | `ErrMalformedHash`, `NeedsRehash` true |
+| bcrypt `$2a$`, `$2b$`, `$2y$` | verifies | verifies |
+| bcrypt `$2x$`, `$2$` | verifies (as `$2a$`) | `ErrUnsupportedAlgorithm`, `NeedsRehash` true |
+
+This library and every mainstream encoder (the argon2 reference, libsodium,
+PHP, passlib) write canonical hashes: only imported or hand-made hashes are
+affected. To migrate:
+
+1. Find the affected hashes: `NeedsRehash` is true for them, and `Verify`
+   answers the errors above.
+2. argon2id: re-encode them canonically — the parameters, salt and tag are
+   unchanged — before upgrading: parameters in the order `m,t,p`, decimals
+   without leading zeros, base64 without line breaks.
+3. bcrypt `$2x$` and `$2$`: the hash cannot be converted; reset the
+   password of these accounts (a `$2x$` hash of a password with 8-bit
+   characters did not verify correctly anyway).
