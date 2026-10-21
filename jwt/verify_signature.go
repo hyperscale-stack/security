@@ -75,7 +75,7 @@ func VerifySignature(ctx context.Context, token string, keys []PublicKey, allowe
 		return nil, err
 	}
 
-	payload, err := parsed.Verify(key.toJOSE())
+	payload, err := parsed.Verify(key.verificationKey())
 	if err != nil {
 		span.SetStatus(codes.Error, "signature")
 

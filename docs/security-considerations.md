@@ -127,6 +127,8 @@ protections.
   nothing; an Ed25519 key must be the canonical encoding of a point not of
   small order, RFC 8032 §5.1.3 — forgeries verify against the all-zero key
   and the identity point). A `kid` shared by several keys designates none.
+  RSASSA-PSS signatures must use a salt of the hash size (RFC 7518 §3.5;
+  go-jose alone accepts any).
 - **Claim smuggling** (RFC 7519 §4, §7.3, §10.1.1) — claims are decoded
   case-sensitively, by go-jose's decoder, into `StandardClaims` and into the
   caller's `claimsOut` alike. A claims set whose member names repeat —
@@ -211,7 +213,10 @@ keys by `kid` against a JWKS provider (static or remote).
   another curve, a public key, an HMAC secret shorter than its hash); KMS and
   HSM keys (`jose.OpaqueSigner`) are checked through their public half.
   Every token carries its key's `KeyID` as `kid` (RFC 7515 §4.1.4) — HMAC
-  tokens included, so HMAC keys rotate like the others.
+  tokens included, so HMAC keys rotate like the others. An opaque PS* signer
+  is checked at every signature: one whose salt is not the hash size —
+  go-jose's `cryptosigner.Opaque` over an in-process key — makes `Sign` fail
+  with `ErrInvalidKey`, so no token is issued that verifiers refuse.
   `MarshalJWKS` refuses an RSA key over 4096 bits too. The 4096-bit cap is
   go-jose's since v4.1.6: a larger published key breaks its consumers — this
   library's remote key sets and `oidc/client` ignore it, go-jose's

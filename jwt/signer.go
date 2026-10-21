@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"go.opentelemetry.io/otel"
@@ -38,7 +39,13 @@ type Signer interface {
 //     ed25519.PrivateKey for EdDSA (see [PrivateKey.Validate]);
 //   - a jose.OpaqueSigner — a KMS or HSM key, e.g. through go-jose's
 //     cryptosigner.Opaque — that offers the algorithm and whose public half
-//     passes [PublicKey.Validate], an RSA one of at most 4096 bits;
+//     passes [PublicKey.Validate], an RSA one of at most 4096 bits. For
+//     PS256 / PS384 / PS512 it must sign with a salt of the hash size (RFC
+//     7518 §3.5), which every verifier of this package requires: Sign
+//     checks each signature of such a signer and fails with [ErrInvalidKey]
+//     otherwise — go-jose's cryptosigner.Opaque over an in-process RSA key,
+//     which asks for the maximum salt outside FIPS 140-3 mode, does not
+//     qualify; AWS KMS, Google Cloud KMS and Azure Key Vault do;
 //   - a jose.JSONWebKey, or a pointer to one, holding one of the above;
 //   - for HS256 / HS384 / HS512, a []byte secret of at least 32 / 48 / 64
 //     bytes.
@@ -57,12 +64,15 @@ func NewSigner(active PrivateKey, opts ...Option) (Signer, error) {
 		o(cfg)
 	}
 
-	return &signer{key: active, typ: cfg.typ}, nil
+	return &signer{key: active, typ: cfg.typ, pss: opaquePSSCheck(active)}, nil
 }
 
 type signer struct {
 	key PrivateKey
 	typ string
+	// pss, for an opaque PS* signer, checks each signature it makes (see
+	// opaquePSSCheck); nil otherwise.
+	pss *pssVerifier
 }
 
 // Algorithm implements [Signer].
@@ -108,7 +118,29 @@ func (s *signer) Sign(ctx context.Context, claims any) (string, error) {
 		return "", fmt.Errorf("jwt: serialize: %w", err)
 	}
 
+	if err := s.checkSignature(out, signed.Signatures[0].Signature); err != nil {
+		return "", err
+	}
+
 	return out, nil
+}
+
+// checkSignature verifies, for an opaque PS* signer, the signature it made
+// over the signing input of token (RFC 7515 §5.1: header.payload): a salt
+// that is not the hash size (RFC 7518 §3.5) fails with ErrInvalidKey, and
+// the token is never returned — no verifier of this package would accept
+// it.
+func (s *signer) checkSignature(token string, signature []byte) error {
+	if s.pss == nil {
+		return nil
+	}
+
+	input := token[:strings.LastIndexByte(token, '.')]
+	if err := s.pss.VerifyPayload([]byte(input), signature, s.key.Algorithm.joseAlg()); err != nil {
+		return fmt.Errorf("%w: the opaque signer does not use a hash-size PSS salt (RFC 7518 §3.5)", ErrInvalidKey)
+	}
+
+	return nil
 }
 
 // options returns the JOSE header the signer writes besides alg: typ and,

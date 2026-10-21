@@ -347,6 +347,12 @@ PKCE. Not supported, and refused where a provider could select them:
   RSA algorithm, otherwise nothing: publish `alg` on RSA keys signing
   PS256/384/512. A JWK Set URL redirecting to another origin cannot be
   used, whatever `MaxRedirects`: configure the final URL.
+- **RSASSA-PSS salt** — PS256/384/512 signatures must use a salt of the
+  hash size (RFC 7518 §3.5): tokens of signers using another — go-jose's
+  `cryptosigner.Opaque` over an in-process key outside FIPS 140-3 mode,
+  Vault Transit with its default `salt_length=auto`, the OpenSSL tools
+  before 3.1, `rsa.SignPSS(…, nil)` — are refused, and `Sign` fails for
+  such an opaque signer.
 - **No JWS extension, nested JWT or JWE** — tokens whose header uses `crit`
   or `b64` are refused, and a nested JWT (`cty: JWT`, RFC 7519 §7.2 step 8)
   is refused because its payload is not a claims object.

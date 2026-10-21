@@ -57,7 +57,9 @@
 //     PrivateKey.Validate bind every key to one algorithm (RFC 8725 §3.1,
 //     RFC 7518 key sizes and curves). NewSigner refuses a key that cannot
 //     sign with its algorithm — KMS and HSM keys (jose.OpaqueSigner) are
-//     checked through their public half — and NewOAuth2AccessTokenSigner
+//     checked through their public half, and an opaque PS* signer at each
+//     signature: RSASSA-PSS salts are the hash size (RFC 7518 §3.5), as
+//     every verifier requires — and NewOAuth2AccessTokenSigner
 //     refuses claims missing an RFC 9068 §2.2 REQUIRED value.
 //   - VerifySignature checks a signature and nothing else, for callers that
 //     validate claims under their own rules (e.g. an OpenID Provider's

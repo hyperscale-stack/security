@@ -1217,6 +1217,13 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   each `oidc/client` login cost hours. Every module that depends on go-jose
   now requires v4.1.6, and the library refuses `jwk`, `x5c`, `jku` and
   `x5u` before go-jose parses a header (see Changed).
+- `jwt`: PS256, PS384 and PS512 signatures were verified with any salt
+  length (go-jose verifies RSASSA-PSS with `PSSSaltLengthAuto`); RFC 7518
+  §3.5 sets the salt to the hash size, which `Verifier` and
+  `VerifySignature` now require. A `NewSigner` built on an opaque (KMS,
+  HSM) PS* signer checks each signature it makes and fails with
+  `ErrInvalidKey` when its salt is not the hash size, instead of emitting a
+  token every verifier of the package refuses.
 - `jwt`: `PublicKey.Validate` accepted any 32-byte Ed25519 key. Against a
   small-order key a token nobody signed verified: R = B and S = 1 sign any
   message for the identity point, R = identity and S = 0 one message in
