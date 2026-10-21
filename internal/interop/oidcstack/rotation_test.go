@@ -36,7 +36,7 @@ func rotatedRing(t *testing.T, signing jwtsec.PrivateKey, published ...jwtsec.Pr
 // TestDocumentedRotationIsInvisibleToTheClient follows the rotation the
 // provider documents (KeyRing, OpenID Connect Core §10.1.1) with our
 // client: (1) publish the next key and wait for relying parties to refresh
-// their cached sets — an hour for our client (its key-set TTL); (2) sign
+// their cached sets — five minutes for our client (its key-set TTL); (2) sign
 // with it, the former key still published; (3) drop the former key once
 // what it signed has expired. Every login succeeds, and the client never
 // needs an unknown-kid refresh.
@@ -53,7 +53,7 @@ func TestDocumentedRotationIsInvisibleToTheClient(t *testing.T) {
 
 	// (1) The next key is published.
 	o.keys.set(o.base, rotatedRing(t, oldRS256(), newRS256()))
-	o.clock.advance(time.Hour + time.Minute)
+	o.clock.advance(5*time.Minute + time.Second)
 
 	_, err = o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err)
@@ -104,9 +104,9 @@ func TestAbruptRotationWithinTheRefreshInterval(t *testing.T) {
 
 // TestKeyWithdrawalWindow measures how long our client keeps accepting a
 // key the provider withdrew — a leaked key, say: ID Tokens forged with it
-// verify until the client's cached key set is an hour old, and fail after
-// (OpenID Connect Core §10.1.1). Building a new Client empties the cache at
-// once.
+// verify until the client's cached key set is five minutes old, and fail
+// after (OpenID Connect Core §10.1.1). Building a new Client empties the
+// cache at once.
 func TestKeyWithdrawalWindow(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +123,7 @@ func TestKeyWithdrawalWindow(t *testing.T) {
 		resp["id_token"] = resign(t, resp["id_token"].(string), "RS256", rootKey(), func(h map[string]any) { h["kid"] = "root-rs256" }, nil) //nolint:forcetypeassert // test
 	})
 
-	o.clock.advance(30 * time.Minute)
+	o.clock.advance(4 * time.Minute)
 
 	_, err = o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err, "within the cache lifetime the withdrawn key still verifies")
@@ -131,8 +131,8 @@ func TestKeyWithdrawalWindow(t *testing.T) {
 	_, err = o.login(t, o.rp(t, o.basic()), oidcclient.AuthOptions{})
 	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey, "a new Client fetches the current set")
 
-	o.clock.advance(31 * time.Minute)
+	o.clock.advance(time.Minute)
 
 	_, err = o.login(t, c, oidcclient.AuthOptions{})
-	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey, "after an hour the cached set is refreshed")
+	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey, "after five minutes the cached set is refreshed")
 }

@@ -295,6 +295,15 @@ PKCE. Not supported, and refused where a provider could select them:
   run time. One exception: a public client (`none`) requires the provider
   to advertise S256 in `code_challenge_methods_supported`, which some
   providers omit although they support it.
+- **A withdrawn provider key stays trusted for a while** — the provider's
+  JWK Set is cached five minutes: a key the provider withdrew (a leaked
+  one) keeps verifying ID Tokens until the next refresh. While the JWK Set
+  fetches fail, the cached keys serve for up to 24 hours, so an attacker
+  holding a withdrawn key and able to make those fetches fail (a network
+  position, a denial of service on the `jwks_uri`) keeps it trusted that
+  long — the availability trade-off of the `jwt` module's remote key sets.
+  Rebuilding the `Client` drops the cache at once (OpenID Connect Core
+  §10.1.1 sets no bound).
 - **A leaked state burns the pending login** — an authorization response is
   not authenticated: any request to the callback carrying the state,
   through the victim's own browser (which presents the binding cookie on a

@@ -75,7 +75,7 @@ Test names refer to `oidc/client` unless prefixed with `stack:`
 | Capability                   | Spec                       | Status                                                                                                                                                       | Tests                                                                                                 |
 | ---------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | Discovery                    | Discovery §4               | Required; the metadata issuer must equal the configured one byte for byte; templated multi-tenant issuers refused; WebFinger and static metadata not supported | `TestDiscoveryURL`, `TestIssuerMismatch`, `TestRequiredMetadata`, `TestStrictMetadataJSON`, rp: `TestProviderMetadataCorpus` |
-| JWK Set                      | Core §10.1.1, RFC 7517     | Cached one hour; an unknown `kid` refetches at most every 10 s; stale keys serve at most 24 h while the endpoint fails; never refetched on a bad signature | `TestKeySetTTL`, `TestUnknownKidIsRateLimited`, `TestKeySetStaleOnFailure`, `TestNoRefetchOnBadSignature`, stack: `TestDocumentedRotationIsInvisibleToTheClient`, `TestKeyWithdrawalWindow` |
+| JWK Set                      | Core §10.1.1, RFC 7517     | Cached five minutes; an unknown `kid` refetches at most every 10 s; stale keys serve at most 24 h while the endpoint fails; never refetched on a bad signature | `TestKeySetTTL`, `TestUnknownKidIsRateLimited`, `TestKeySetStaleOnFailure`, `TestNoRefetchOnBadSignature`, stack: `TestDocumentedRotationIsInvisibleToTheClient`, `TestKeyWithdrawalWindow` |
 | Outbound requests            | Discovery §4.1, §7.2       | Through `outbound`: https, public destinations, bounded time and size; no redirects for token and UserInfo; discovery and JWK Set redirects only with `MaxRedirects`, and never to another origin than the one requested | `TestDiscoveryHTTP`, `TestUserInfoTransport`, `TestDiscoveryRedirectStaysOnTheIssuerOrigin`, `TestKeySetRedirectStaysOnTheJWKSOrigin` |
 | Transaction stores           | —                          | `storage/memory`, `store/sql`, `store/redis`; atomic single consumption; integrity keyed by `Config.TransactionKeys`                                         | `TestMemoryStoreConformance`, `TestStoreWriterCannotForgeIntegrity`, `TestTransactionKeyRotation`, stack: `TestConcurrentCallbacksAcrossReplicas`, `TestRealBackendCallbackRace` |
 | Failures                     | RFC 9700 §4.5.3.2          | Fail closed: no identity, no token of a failed login                                                                                                         | stack: `TestProviderStorageFailuresReachTheClient`, `TestTokenResponseLostAfterCommit`, `TestJWKSOutage`, `TestDiscoveryOutage` |
@@ -199,17 +199,17 @@ a transaction altered in it fails its login (`ErrTransactionIntegrity`).
 
 ### Provider keys and rotation
 
-The client caches the provider's JWK Set for one hour, refetches it at most
+The client caches the provider's JWK Set for five minutes, refetches it at most
 every 10 seconds when an ID Token names an unknown `kid`, and keeps using the
 cached keys for at most 24 hours while the JWK Set endpoint fails. What it
 means for the provider's operators:
 
 | Event                                   | Effect on this client                                                                                          |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| A key is published before it signs      | Learned at the next refresh (at most one hour), or at the first ID Token naming it — rotation is invisible      |
+| A key is published before it signs      | Learned at the next refresh (at most five minutes), or at the first ID Token naming it — rotation is invisible  |
 | A key signs right after being published | Logins within 10 s of the previous refetch fail closed (`ErrUnknownSigningKey`), the next ones succeed          |
-| A key is withdrawn (leaked)             | ID Tokens it signs keep verifying until the cached set is an hour old; rebuild the `Client` to drop it at once |
-| The JWK Set endpoint is down            | Cached keys keep verifying for up to 24 hours; a key the cache lacks cannot be learned                          |
+| A key is withdrawn (leaked)             | ID Tokens it signs keep verifying until the cached set is five minutes old; rebuild the `Client` to drop it at once |
+| The JWK Set endpoint is down            | Cached keys keep verifying for up to 24 hours — a withdrawn key too, so an attacker holding it and able to make the fetches fail keeps it trusted that long; a key the cache lacks cannot be learned |
 
 `stack: TestDocumentedRotationIsInvisibleToTheClient`,
 `TestAbruptRotationWithinTheRefreshInterval` and `TestKeyWithdrawalWindow`

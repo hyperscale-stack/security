@@ -183,15 +183,15 @@ func TestKeySetTTL(t *testing.T) {
 
 	op.set(func(op *fakeOP) { op.jwks = []jose.JSONWebKey{keyRSAB("rsa-2").jwk()} })
 
-	op.clock.Advance(59 * time.Minute)
+	op.clock.Advance(5*time.Minute - time.Second)
 
 	_, err = op.login(t, c)
 	require.NoError(t, err, "still cached")
 
-	op.clock.Advance(time.Minute)
+	op.clock.Advance(time.Second)
 
 	_, err = op.login(t, c)
-	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey, "refreshed after an hour: rsa-1 is gone")
+	require.ErrorIs(t, err, oidcclient.ErrUnknownSigningKey, "refreshed after five minutes: rsa-1 is gone")
 }
 
 // TestKeySetStaleOnFailure checks that a failing JWK Set endpoint does not

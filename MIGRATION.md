@@ -3160,3 +3160,22 @@ To migrate:
    TTL (about 0.5 KB per transaction plus its `AppState`), map
    `memory.ErrFull` to `503 Service Unavailable` (as `examples/oidc-client`
    does), and rate-limit login starts — or use the SQL or Redis store.
+
+### `oidc/client`: the provider's JWK Set is cached five minutes
+
+A key the provider withdrew — a leaked one — kept verifying ID Tokens until
+the client's cached JWK Set was an hour old. The cache now lives five
+minutes, like the `jwt` module's remote key sets (`DefaultCacheTTL`).
+
+| Event | Before | After |
+| --- | --- | --- |
+| A withdrawn key keeps verifying | up to one hour | up to five minutes |
+| A newly published key is learned without an unknown-`kid` refetch | within one hour | within five minutes |
+| JWK Set requests | one per hour and `Client`, plus unknown-`kid` refetches | one per five minutes and `Client` with logins, plus unknown-`kid` refetches |
+| Cached keys while fetches fail | up to 24 hours | unchanged |
+
+To migrate:
+
+1. Nothing in the application.
+2. A provider with a strict rate limit on its `jwks_uri` sees up to twelve
+   requests an hour per `Client` instead of one.

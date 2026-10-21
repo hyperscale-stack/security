@@ -2015,9 +2015,11 @@ span catalog.
 - [ ] Start logins with a same-origin POST and rate limit them; exempt only
       the `form_post` callback routes from CSRF middleware.
 - [ ] Rotate an OpenID Provider's keys on its relying parties' timetable:
-      publish the next key at least an hour before it signs; after a leak,
-      withdraw the key and ask relying parties to rebuild their clients
-      (`oidc/client` keeps a withdrawn key for up to an hour).
+      publish the next key at least five minutes before it signs (more for
+      relying parties caching longer); after a leak, withdraw the key and
+      ask relying parties to rebuild their clients (`oidc/client` keeps a
+      withdrawn key for up to five minutes, up to 24 hours while its JWK
+      Set fetches fail).
 - [ ] Prefer providers that send the RFC 9207 `iss` parameter; never
       register a connection's redirect URI at another provider.
 - [ ] Serialize the refreshes of one grant across instances: providers

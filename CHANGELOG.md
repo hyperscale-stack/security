@@ -228,7 +228,7 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   audiences only if trusted), azp, exp/iat/nbf with a bounded skew, nonce,
   auth_time against `max_age`, acr against the requested `acr_values`, and
   at_hash. Keys come from the issuer's `jwks_uri` only, through a bounded
-  cache (1 h TTL, one rate-limited refresh for an unknown `kid`,
+  cache (5 min TTL, one rate-limited refresh for an unknown `kid`,
   single-flight, 24 h stale limit). Every JSON document is parsed strictly
   (duplicate or case-variant member names refused at every level). Token
   and UserInfo requests never follow redirects. `UserInfo` returns claims
@@ -1072,6 +1072,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   with a leaked state, a request to the callback through the victim's own
   browser burns the pending login. Its JSON encoding, the hand-off of the
   request to a front end, is unchanged.
+- `oidc/client` caches the provider's JWK Set for five minutes instead of
+  one hour — the TTL of the `jwt` module's remote key sets — so a key the
+  provider withdraws stops verifying ID Tokens within five minutes while
+  the JWK Set endpoint answers; the 24-hour staleness limit while fetches
+  fail is unchanged.
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in

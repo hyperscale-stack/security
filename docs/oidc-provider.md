@@ -319,15 +319,15 @@ Set publishes. Rotate without breaking a relying party:
    (`Config.IDTokenTTL`, one hour by default) and no `id_token_hint` needs it.
 
 How long step 1 waits depends on the relying parties' caches. The JWK Set
-answers with `Cache-Control: max-age=300`; `oidc/client` keeps a set for an
-hour and refetches it at most every 10 seconds on an unknown `kid`
+answers with `Cache-Control: max-age=300`; `oidc/client` keeps a set for five
+minutes and refetches it at most every 10 seconds on an unknown `kid`
 ([oidc-client.md](oidc-client.md#provider-keys-and-rotation)); go-oidc
-refetches on any unknown `kid`. Wait at least an hour — more if a relying
-party you know caches longer — between steps 1 and 2: a key that signs
+refetches on any unknown `kid`. Wait at least five minutes — more if a
+relying party you know caches longer — between steps 1 and 2: a key that signs
 before a relying party learned it fails that relying party's logins until
 it refetches (stack: `TestAbruptRotationWithinTheRefreshInterval`).
 Withdrawing a leaked key is not instantaneous either: `oidc/client` keeps
-accepting it until its cached set is an hour old (stack:
+accepting it until its cached set is five minutes old (stack:
 `TestKeyWithdrawalWindow`); ask the relying parties to rebuild their
 clients.
 
