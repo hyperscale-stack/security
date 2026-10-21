@@ -50,8 +50,8 @@ func testGrantContextRoundTrip(t *testing.T, s oauth2.Storage) {
 	mustRotate(t, s, chain[0], chain[1])
 	mustRotate(t, s, chain[1], chain[2])
 
-	for _, pair := range chain {
-		requireContext(t, s, pair)
+	for i, pair := range chain {
+		requireRecords(t, s, pair, i < len(chain)-1)
 	}
 
 	bare := sampleCode("ctx-bare")
@@ -66,7 +66,7 @@ func testGrantContextRoundTrip(t *testing.T, s oauth2.Storage) {
 	empty.Access.Issuer, empty.Access.ExtensionData = "", ""
 	empty.Refresh.Issuer, empty.Refresh.ExtensionData = "", ""
 	mustSave(t, s, empty)
-	requireContext(t, s, empty)
+	requireRecords(t, s, empty, false)
 }
 
 // testGrantContextLongestData stores the longest ExtensionData the server
@@ -92,8 +92,8 @@ func testGrantContextLongestData(t *testing.T, s oauth2.Storage) {
 
 	mustSave(t, s, first)
 	mustRotate(t, s, first, next)
-	requireContext(t, s, first)
-	requireContext(t, s, next)
+	requireRecords(t, s, first, true)
+	requireRecords(t, s, next, false)
 }
 
 // testRotationKeepsGrantContext rotates a token into a pair carrying
@@ -123,7 +123,7 @@ func testRotationKeepsGrantContext(t *testing.T, s oauth2.Storage) {
 
 	same := newPair("keep-1", "fam-keep")
 	mustRotate(t, s, first, same)
-	requireContext(t, s, same)
+	requireRecords(t, s, same, false)
 
 	// The context check comes right after the family check, before the
 	// revoked and the consumed ones (oauth2.RefreshTokenStore): a consumed
@@ -158,13 +158,13 @@ func testRefreshFamilyIssuedAt(t *testing.T, s oauth2.Storage) {
 	unset := newPair("start-unset", "fam-start-unset")
 	unset.Refresh.FamilyIssuedAt = time.Time{}
 	mustSave(t, s, unset)
-	requireContext(t, s, unset)
+	requireRecords(t, s, unset, false)
 
 	first, next := newPair("start-0", "fam-start"), newPair("start-1", "fam-start")
 	next.Refresh.FamilyIssuedAt = first.Refresh.FamilyIssuedAt
 
 	mustSave(t, s, first)
 	mustRotate(t, s, first, next)
-	requireContext(t, s, next)
-	requireContext(t, s, first)
+	requireRecords(t, s, next, false)
+	requireRecords(t, s, first, true)
 }

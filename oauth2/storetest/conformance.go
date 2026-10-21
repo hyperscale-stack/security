@@ -5,7 +5,9 @@
 // Package storetest provides a black-box conformance suite that every
 // [oauth2.Storage] implementation MUST pass. The in-memory, SQL and Redis
 // stores all run RunConformance against a fresh instance so behavioral
-// drift between backends is caught at test time.
+// drift between backends is caught at test time. Retention is checked over
+// time, not only on the next call: a run waits about 1.5 s, and the case
+// needs a backend whose time moves on its own (miniredis does not).
 //
 // The package imports "testing" deliberately: it is a test helper in the
 // spirit of net/http/httptest and testing/fstest, meant to be called from
@@ -40,7 +42,11 @@ type Factory func() oauth2.Storage
 // writes, reuse, idempotence, isolation, keys compared byte for byte —
 // sequentially and under races,
 // through the public API only, and drives the real authorization_code
-// grant to check that a replayed code revokes the tokens it issued. What
+// grant to check that a replayed code revokes the tokens it issued. Every
+// token lookup must return the full record it was saved with — client,
+// subject, scope, audience, issuer, extension data, family, timestamps to
+// the second, consumed state — and a consumed code, a rotated refresh token
+// and a revoked family must still be recognized about 1.5 s later. What
 // it cannot observe stays with each store's own tests: an injected backend
 // failure (I6, and a reuse whose revocation fails), and family state lost
 // by the backend (I8).
@@ -82,6 +88,8 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"GrantContextLongestData", testGrantContextLongestData},
 		{"RotationKeepsGrantContext", testRotationKeepsGrantContext},
 		{"RefreshTokenFamilyIssuedAt", testRefreshFamilyIssuedAt},
+		{"TokenRecordsRoundTrip", testTokenRecordsRoundTrip},
+		{"RetainedOverTime", testRetainedOverTime},
 	}
 
 	for _, c := range cases {
@@ -340,7 +348,7 @@ func testAccessLifecycle(t *testing.T, s oauth2.Storage) {
 	mustNoError(t, err, "lookup")
 	mustEqual(t, got.Subject, testSubject, "lookup lost the subject")
 	mustEqual(t, got.Audience, cc.Access.Audience, "lookup lost the audience")
-	requireContext(t, s, cc)
+	requireRecords(t, s, cc, false)
 
 	mustNoError(t, s.RevokeAccessToken(ctx(), cc.Access.TokenHash), "revoke")
 	requireUnusable(t, s, cc)
@@ -414,7 +422,7 @@ func testRefreshSaveLookup(t *testing.T, s oauth2.Storage) {
 	mustNoError(t, err, "lookup refresh token")
 	mustEqual(t, got.FamilyID, "fam-save", "lookup lost the family")
 	mustEqual(t, got.Scope, testScope, "lookup lost the scope")
-	requireContext(t, s, pair)
+	requireRecords(t, s, pair, false)
 }
 
 func testRefreshRotation(t *testing.T, s oauth2.Storage) {
@@ -426,10 +434,10 @@ func testRefreshRotation(t *testing.T, s oauth2.Storage) {
 
 	requireConsumed(t, s, first.Refresh.TokenHash)
 	requireUsable(t, s, next)
-	requireContext(t, s, next)
+	requireRecords(t, s, next, false)
 	// The consumed token keeps its own record: the Redis rotation script
 	// re-encodes it with cjson, the context must survive that byte-exact.
-	requireContext(t, s, first)
+	requireRecords(t, s, first, true)
 
 	// Rotation consumes the presented refresh token only: the access token
 	// issued alongside it lives on until it expires.
