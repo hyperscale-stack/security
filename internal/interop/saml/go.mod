@@ -7,7 +7,7 @@ replace github.com/hyperscale-stack/security/saml/sp => ../../../saml/sp
 replace github.com/hyperscale-stack/security => ../../../
 
 require (
-	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/beevik/etree v1.8.1
 	github.com/crewjam/saml v0.5.1
 	github.com/go-sql-driver/mysql v1.10.1
