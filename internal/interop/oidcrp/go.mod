@@ -3,7 +3,7 @@ module github.com/hyperscale-stack/security/internal/interop/oidcrp
 go 1.27.3
 
 require (
-	github.com/chromedp/cdproto v0.157.9
+	github.com/chromedp/cdproto v0.158.0
 	github.com/chromedp/chromedp v0.20.1
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client v0.0.0-00010101000000-000000000000
