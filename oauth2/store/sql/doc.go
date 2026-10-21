@@ -12,6 +12,8 @@
 //
 // The token-family guarantees of oauth2.Storage hold under these
 // conditions; outside them a revocation can be lost or hidden.
+// [Store.CheckDeployment] — which [Store.Migrate] runs — verifies the MySQL
+// ones the server reports: the engine, the key columns and the sql_mode.
 //
 //   - PostgreSQL: the store runs every transaction at READ COMMITTED,
 //     whatever the server default, so that its locking reads and writes act
@@ -19,9 +21,10 @@
 //     row, and the UPDATE consuming a code finds a concurrent consumption
 //     and reports a replay. synchronous_commit=off can lose an acknowledged
 //     revocation in a crash.
-//   - MySQL: the tables must use InnoDB (row locks), and lookups must run
-//     in autocommit mode — the default — so each one sees the latest
-//     commits.
+//   - MySQL: the tables must use InnoDB (transactions, row locks) —
+//     [Schema] names it, so a server whose default engine is MyISAM still
+//     gets InnoDB tables — and lookups must run in autocommit mode — the
+//     default — so each one sees the latest commits.
 //   - SQLite: one writer at a time. Set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option) so a
 //     concurrent writer waits instead of failing with SQLITE_BUSY; a busy
@@ -62,21 +65,33 @@
 //
 // # Cleanup
 //
-// The store ships no expiry job: rows stay until an operator deletes them.
-// A revocation never deletes tokens, and an exchanged authorization code
-// keeps its row, flagged consumed, so that a replay of the code is
-// recognized; a code never exchanged stays too. Every table carries
-// expires_at (Unix seconds), and a family record outlives its tokens — and
-// is kept for oauth2.FamilyRevocationRetention after a revocation. Delete
-// expired rows ("expires_at < now"; a code past it can no longer be
-// exchanged) table by table, in small batches by primary key and outside
-// long transactions (autocommit, or READ COMMITTED). Delete families in
-// statements of their own: a transaction deleting tokens then families
-// takes their locks in the reverse order of the store and can deadlock with
-// it. The DDL creates no index — MySQL has no CREATE INDEX IF NOT EXISTS —
-// so add one on expires_at through your migration tool: on MySQL, a range
-// delete on an unindexed expires_at takes next-key locks that block the
-// code and token writes of /authorize and /token.
+// Rows stay until [Store.PurgeExpired] deletes them: schedule it, every few
+// minutes for instance. A revocation never deletes tokens, and an exchanged
+// authorization code keeps its row, flagged consumed, so that a replay of
+// the code is recognized; a code never exchanged stays too. Every table
+// carries expires_at (Unix seconds), and a family record outlives its
+// tokens — and is kept for oauth2.FamilyRevocationRetention after a
+// revocation. PurgeExpired deletes the rows expired before the instant it
+// is given — a code past expires_at can no longer be exchanged — table by
+// table, families last, in batches of its own transactions at READ
+// COMMITTED; it re-checks each row's expiry as it deletes it, so a family a
+// concurrent revocation extends is kept. A job of your own follows the same
+// rules: small batches, outside long transactions, families in statements
+// of their own — a transaction deleting tokens then families takes their
+// locks in the reverse order of the store and can deadlock with it.
+//
+// The DDL creates no index — MySQL has no CREATE INDEX IF NOT EXISTS, and
+// Migrate building one on a populated table would block its writes at boot
+// — so add one on expires_at to each table through your migration tool:
+//
+//	CREATE INDEX oauth2_auth_codes_expires_at     ON oauth2_auth_codes (expires_at);
+//	CREATE INDEX oauth2_access_tokens_expires_at  ON oauth2_access_tokens (expires_at);
+//	CREATE INDEX oauth2_refresh_tokens_expires_at ON oauth2_refresh_tokens (expires_at);
+//	CREATE INDEX oauth2_token_families_expires_at ON oauth2_token_families (expires_at);
+//
+// (CREATE INDEX CONCURRENTLY on a busy PostgreSQL database). Without it each
+// purge batch scans its table and, on MySQL, waits for every row a
+// concurrent /token request holds.
 //
 // Never delete a family row before its expires_at. A missing row fails
 // closed for lookups — the store treats the tokens of an unknown family as

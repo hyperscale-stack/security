@@ -5,9 +5,8 @@
 package sqlstores_test
 
 import (
+	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -25,14 +24,90 @@ var mysql84FoundRows = backend{
 	name: "mysql84-client-found-rows", engine: engineMySQL, env: envMySQL84DSN, clientFoundRows: true,
 }
 
-// conformancePool returns a pool on dsn sized for one conformance case:
-// RunConformance builds a store per case on the parent test, so each pool
-// keeps a single idle connection once its case is over.
-func conformancePool(t *testing.T, driver, dsn string) *sql.DB {
+// conformancePoolSize is the number of connections a conformance case
+// races on: every one is open before the case starts.
+const conformancePoolSize = 8
+
+// conformancePools returns the pool opener of a RunConformance run: each
+// call returns a pool on dsn whose conformancePoolSize connections are open
+// and idle before the case starts, so the racers of the concurrency cases
+// overlap for real instead of queuing on connection setup (with one warm
+// connection, a check-then-act consumption passes them). RunConformance
+// builds every case's store on the parent test, which keeps the pools
+// until it ends: each call closes the pool of the previous case, so a run
+// holds conformancePoolSize connections, not one set per case. That relies
+// on RunConformance running its cases one after the other, as it does.
+func conformancePools(t *testing.T) func(driver, dsn string) *sql.DB {
 	t.Helper()
 
-	db := open(t, driver, dsn, 8)
-	db.SetMaxIdleConns(1)
+	var previous *sql.DB
+
+	return func(driver, dsn string) *sql.DB {
+		if previous != nil {
+			_ = previous.Close()
+		}
+
+		previous = warmPool(t, driver, dsn, conformancePoolSize)
+
+		return previous
+	}
+}
+
+// warmConnAttempts and warmConnTimeout bound the opening of each connection
+// of a warmed pool: a connect that stalls — seen once through Docker
+// Desktop's port forwarding — is tried again, and a server that never
+// answers fails the case with a clear error instead of a hang.
+const (
+	warmConnAttempts = 3
+	warmConnTimeout  = 10 * time.Second
+)
+
+// openConn opens a connection of db, each attempt bounded by
+// warmConnTimeout, and returns the last error after warmConnAttempts.
+func openConn(t *testing.T, db *sql.DB) (*sql.Conn, error) {
+	t.Helper()
+
+	var err error
+
+	for range warmConnAttempts {
+		ctx, cancel := context.WithTimeout(t.Context(), warmConnTimeout)
+
+		var c *sql.Conn
+
+		c, err = db.Conn(ctx)
+
+		cancel()
+
+		if err == nil {
+			return c, nil
+		}
+	}
+
+	return nil, err
+}
+
+// warmPool returns a pool of size connections on dsn, every one of them
+// opened — each held until all are, so that they are distinct — and
+// returned to the pool idle.
+func warmPool(t *testing.T, driver, dsn string, size int) *sql.DB {
+	t.Helper()
+
+	db := open(t, driver, dsn, size)
+	conns := make([]*sql.Conn, 0, size)
+
+	for i := range size {
+		c, err := openConn(t, db)
+		require.NoError(t, err, "opening connection %d of %d of the warmed pool (%d attempts of %s each)",
+			i+1, size, warmConnAttempts, warmConnTimeout)
+
+		conns = append(conns, c)
+	}
+
+	for _, c := range conns {
+		require.NoError(t, c.Close())
+	}
+
+	require.Equal(t, size, db.Stats().Idle, "idle connections of the warmed pool")
 
 	return db
 }
@@ -46,10 +121,12 @@ func TestOAuth2Conformance(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			b.server(t)
 
+			pool := conformancePools(t)
+
 			storetest.RunConformance(t, func() oauth2.Storage {
 				driver, dsn := b.namespace(t)
 
-				s, err := oauth2sql.New(conformancePool(t, driver, dsn), oauth2Dialect(b.engine))
+				s, err := oauth2sql.New(pool(driver, dsn), oauth2Dialect(b.engine))
 				require.NoError(t, err)
 				require.NoError(t, s.Migrate(t.Context()))
 
@@ -120,21 +197,21 @@ const upgradeSection = "### `oauth2/store/sql`: MySQL compares keys byte for byt
 var sqlBlock = regexp.MustCompile("(?s)```sql\n(.*?)```")
 
 // upgradeBlocks returns the SQL blocks of the upgrade section of
-// MIGRATION.md, each as its statements: comment lines dropped, split at
-// the semicolons ending a line.
+// MIGRATION.md, each as its statements.
 func upgradeBlocks(t *testing.T) [][]string {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "MIGRATION.md"))
-	require.NoError(t, err)
+	return sectionBlocks(t, upgradeSection)
+}
 
-	doc := string(raw)
-	start := strings.Index(doc, "\n"+upgradeSection+"\n")
-	require.GreaterOrEqual(t, start, 0, "MIGRATION.md has no section %q", upgradeSection)
+// sqlBlocks returns the SQL blocks of section — MIGRATION.md from the
+// heading on, up to the next heading of its level — each as its
+// statements: comment lines dropped, split at the semicolons ending a line.
+func sqlBlocks(t *testing.T, section, heading string) [][]string {
+	t.Helper()
 
-	section := doc[start+1:]
-	if end := strings.Index(section[len(upgradeSection):], "\n### "); end >= 0 {
-		section = section[:len(upgradeSection)+end]
+	if end := strings.Index(section[len(heading):], "\n### "); end >= 0 {
+		section = section[:len(heading)+end]
 	}
 
 	var blocks [][]string
@@ -276,9 +353,11 @@ func TestOAuth2MySQLUpgrade(t *testing.T) {
 			})
 
 			t.Run("conformance", func(t *testing.T) {
+				pool := conformancePools(t)
+
 				storetest.RunConformance(t, func() oauth2.Storage {
 					driver, dsn := b.namespace(t)
-					db := conformancePool(t, driver, dsn)
+					db := pool(driver, dsn)
 					execAll(t, db, legacyMySQLSchema...)
 					execAll(t, db, upgrade...)
 

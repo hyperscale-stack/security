@@ -5,6 +5,7 @@
 package sqlstore
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -41,6 +42,26 @@ type Dialect interface {
 	// bytes — a code or token hash, a token-family ID: the only columns
 	// the statements compare. It must compare them byte for byte.
 	keyType(length int) string
+	// tableOptions follows the column list of every CREATE TABLE of
+	// [Schema]: the storage engine and character set the dialect needs,
+	// "" when it needs none.
+	tableOptions() string
+	// namedMigrationLock is the session-level named lock [Store.Migrate]
+	// takes around the creation of the tables and its deployment check, on
+	// an engine whose DDL cannot run in a transaction; "" for none.
+	namedMigrationLock() string
+	// checkDeployment verifies the requirements of the package
+	// documentation the database reports (see [Store.CheckDeployment]).
+	checkDeployment(ctx context.Context, q querier) error
+	// purgeStatements are the statements [Store.PurgeExpired] runs, one
+	// per table — codes, access tokens, refresh tokens, then families —
+	// each deleting at most a batch of the rows expired before a second.
+	purgeStatements() []string
+	// purgeArgs are the arguments of a purge statement: the second rows
+	// must have expired before, and the batch size.
+	purgeArgs(before int64, limit int) []any
+	// purgeTxOptions are the options of a purge batch's transaction.
+	purgeTxOptions() *sql.TxOptions
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -70,8 +91,10 @@ const (
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The tables must be
-// InnoDB: the store relies on its row locks. Its key columns are
-// VARBINARY (see [Schema]).
+// InnoDB — the store relies on its transactions and row locks — and
+// [Schema] creates them so (ENGINE=InnoDB DEFAULT CHARSET=utf8mb4); their
+// key columns are VARBINARY. [Store.CheckDeployment] verifies both, and
+// a strict sql_mode.
 var MySQL Dialect = mysql{}
 
 // SQLite is the SQLite dialect (? placeholders). SQLite has no row locks:
@@ -131,6 +154,26 @@ func (postgres) migrationLock() string {
 // hashes are 64 characters.
 func (postgres) keyType(length int) string { return varchar(length) }
 
+func (postgres) tableOptions() string { return "" }
+
+func (postgres) purgeStatements() []string               { return purgeSubqueries }
+func (postgres) purgeArgs(before int64, limit int) []any { return subqueryArgs(before, limit) }
+
+// purgeTxOptions pins READ COMMITTED: the outer DELETE then re-checks the
+// expiry of a row a concurrent transaction changed, where REPEATABLE READ
+// or SERIALIZABLE would abort the batch with a serialization failure.
+func (postgres) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
+// checkDeployment checks nothing: the store pins READ COMMITTED itself,
+// and synchronous_commit — off, it can lose an acknowledged revocation in a
+// crash — can be set per role, session or transaction, so the value one
+// pooled connection reports proves nothing about the others.
+func (postgres) checkDeployment(context.Context, querier) error { return nil }
+
+func (postgres) namedMigrationLock() string { return "" }
+
 type mysql struct{}
 
 func (mysql) Name() string           { return "mysql" }
@@ -152,10 +195,44 @@ func (mysql) keyType(length int) string { return "VARBINARY(" + strconv.Itoa(len
 func (mysql) lockFamily() string  { return lockFamilyForUpdate }
 func (mysql) lockRefresh() string { return lockRefreshForUpdate }
 
+// tableOptions names the engine and the character set: a table created
+// with the server's default engine would be MyISAM on a server configured
+// so, without transactions or row locks.
+func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" }
+
+func (mysql) checkDeployment(ctx context.Context, q querier) error { return checkMySQL(ctx, q) }
+
+// namedMigrationLock serializes the Migrate calls of a deployment: MySQL
+// commits every DDL statement on its own, so no transaction can hold a
+// lock across them, and concurrent CREATE TABLE IF NOT EXISTS of one
+// table can fail with a metadata-lock deadlock (1213).
+func (mysql) namedMigrationLock() string { return migrationLockName }
+
+// purgeStatements are single-table DELETEs with LIMIT, which MySQL accepts
+// (unlike LIMIT in an IN subquery): the statement locks and re-checks each
+// row it deletes on its latest version.
+func (mysql) purgeStatements() []string {
+	return []string{
+		`DELETE FROM oauth2_auth_codes WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_access_tokens WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_refresh_tokens WHERE expires_at < ? LIMIT ?`,
+		`DELETE FROM oauth2_token_families WHERE expires_at < ? LIMIT ?`,
+	}
+}
+
+func (mysql) purgeArgs(before int64, limit int) []any { return []any{before, limit} }
+
+// purgeTxOptions pins READ COMMITTED: at the server's default, REPEATABLE
+// READ, a batch locks every record it scans and the gaps between them,
+// blocking the inserts of /authorize and /token until it commits.
+func (mysql) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
 func (mysql) txOptions() *sql.TxOptions { return nil }
 
-// migrationLock is empty: MySQL commits every DDL statement on its own,
-// and serializes the creation of a table on the metadata lock of its name.
+// migrationLock is empty: MySQL commits every DDL statement on its own, so
+// Migrate takes a named lock instead (see namedMigrationLock).
 func (mysql) migrationLock() string { return "" }
 
 // dialectSQLite is the dialect identifier for SQLite.
@@ -171,6 +248,21 @@ func (sqlite) insertFamily() string { return insertFamilyOnConflict }
 // keyType is VARCHAR: SQLite compares text byte for byte under its default
 // BINARY collation.
 func (sqlite) keyType(length int) string { return varchar(length) }
+
+func (sqlite) tableOptions() string { return "" }
+
+func (sqlite) purgeStatements() []string               { return purgeSubqueries }
+func (sqlite) purgeArgs(before int64, limit int) []any { return subqueryArgs(before, limit) }
+
+// purgeTxOptions are the defaults: SQLite's single writer serializes the
+// batches with every other write.
+func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
+
+// checkDeployment checks nothing: SQLite has one engine, and a missing busy
+// timeout fails operations closed (SQLITE_BUSY).
+func (sqlite) checkDeployment(context.Context, querier) error { return nil }
+
+func (sqlite) namedMigrationLock() string { return "" }
 
 // varchar is the VARCHAR(length) column type.
 func varchar(length int) string { return "VARCHAR(" + strconv.Itoa(length) + ")" }

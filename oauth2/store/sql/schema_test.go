@@ -21,7 +21,8 @@ import (
 // hashes and the token-family IDs, the only columns the statements
 // compare — which are VARBINARY: MySQL and MariaDB compare binary strings
 // byte for byte, text under a collation that may ignore case, accents or
-// trailing spaces.
+// trailing spaces; and for the options of every table, which name InnoDB
+// and utf8mb4 rather than leave them to the server's defaults.
 func TestSchemaPerDialect(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +42,12 @@ func TestSchemaPerDialect(t *testing.T) {
 	require.Len(t, mysql, len(portable))
 
 	for i, stmt := range mysql {
-		assert.Equal(t, portable[i], strings.ReplaceAll(stmt, "VARBINARY(", "VARCHAR("), "only the key columns differ")
+		const options = ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+
+		require.True(t, strings.HasSuffix(stmt, options), "MySQL tables name their engine: %s", stmt)
+		assert.Equal(t, portable[i], strings.ReplaceAll(strings.TrimSuffix(stmt, options)+")", "VARBINARY(", "VARCHAR("),
+			"only the key columns and the table options differ")
+		assert.NotContains(t, portable[i], "ENGINE")
 	}
 
 	ddl := strings.Join(mysql, "\n")

@@ -130,6 +130,10 @@ func (s *Store) Save(_ context.Context, tx *oidcclient.Transaction) error {
 
 // Consume implements oidcclient.TransactionStore under the store's mutex.
 func (s *Store) Consume(_ context.Context, stateHash, bindingHash string, now time.Time) (*oidcclient.Transaction, error) {
+	if err := validateKeys(stateHash, bindingHash); err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -153,6 +157,19 @@ func (s *Store) Consume(_ context.Context, stateHash, bindingHash string, now ti
 	delete(s.txs, stateHash)
 
 	return &tx, nil
+}
+
+// validateKeys refuses the keys oidcclient.ValidateStoreKey refuses.
+func validateKeys(stateHash, bindingHash string) error {
+	if err := oidcclient.ValidateStoreKey(stateHash); err != nil {
+		return fmt.Errorf("memory: consume: state hash: %w", err)
+	}
+
+	if err := oidcclient.ValidateStoreKey(bindingHash); err != nil {
+		return fmt.Errorf("memory: consume: binding hash: %w", err)
+	}
+
+	return nil
 }
 
 // Len returns the number of transactions the store retains, expired ones

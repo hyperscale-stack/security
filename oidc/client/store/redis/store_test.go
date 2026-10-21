@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -340,4 +341,29 @@ func (h replyHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 
 		return next(ctx, cmd)
 	}
+}
+
+// TestConsumeValidatesKeysBeforeIO: with a closed client, a malformed key
+// is refused as invalid — the refusal comes before any I/O — while a
+// well-formed one reaches the client and fails there.
+func TestConsumeValidatesKeysBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	client := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
+	require.NoError(t, client.Close())
+
+	store, err := redisstore.New(client)
+	require.NoError(t, err)
+
+	now := time.Now()
+	good := hash("state")
+
+	_, err = store.Consume(t.Context(), strings.ToUpper(good), hash("binding"), now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed state hash")
+
+	_, err = store.Consume(t.Context(), good, good[:63], now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed binding hash")
+
+	_, err = store.Consume(t.Context(), good, hash("binding"), now)
+	require.ErrorIs(t, err, redis.ErrClosed, "well-formed keys reach the closed client")
 }

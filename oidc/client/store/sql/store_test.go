@@ -159,16 +159,18 @@ func TestDialectNames(t *testing.T) {
 
 // TestSchemaIsPortable pins a DDL every supported engine accepts:
 // PostgreSQL has no implicit integer/boolean cast and MySQL has no CREATE
-// INDEX IF NOT EXISTS, so the schema is the same for every dialect.
+// INDEX IF NOT EXISTS, so the schema is the same for every dialect but for
+// MySQL's table options, which name InnoDB and utf8mb4 rather than leave
+// them to the server's defaults.
 func TestSchemaIsPortable(t *testing.T) {
 	t.Parallel()
 
 	want := sqlstore.Schema(sqlstore.SQLite)
 	require.Len(t, want, 1)
-
-	for _, d := range []sqlstore.Dialect{sqlstore.Postgres, sqlstore.MySQL} {
-		assert.Equal(t, want, sqlstore.Schema(d), d.Name())
-	}
+	assert.Equal(t, want, sqlstore.Schema(sqlstore.Postgres))
+	assert.Equal(t, want, sqlstore.Schema(nil))
+	assert.NotContains(t, want[0], "ENGINE")
+	assert.Equal(t, []string{want[0] + " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"}, sqlstore.Schema(sqlstore.MySQL))
 
 	assert.NotContains(t, strings.ToUpper(want[0]), "BOOLEAN")
 	assert.NotContains(t, strings.ToUpper(want[0]), "CREATE INDEX")
@@ -241,4 +243,27 @@ func TestPurgeExpired(t *testing.T) {
 	n, err = store.PurgeExpired(t.Context(), at)
 	require.NoError(t, err)
 	assert.Zero(t, n)
+}
+
+// TestConsumeValidatesKeysBeforeIO: on a closed database, a malformed key
+// is refused as invalid — the refusal comes before any I/O — while a
+// well-formed one reaches the database and fails there.
+func TestConsumeValidatesKeysBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	store, db := open(t, "file:"+filepath.Join(t.TempDir(), "closed.db"), 1)
+	require.NoError(t, db.Close())
+
+	now := time.Now()
+	good := hash("state")
+
+	_, err := store.Consume(t.Context(), strings.ToUpper(good), hash("binding"), now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed state hash")
+
+	_, err = store.Consume(t.Context(), good, "", now)
+	require.ErrorIs(t, err, oidcclient.ErrInvalidTransaction, "malformed binding hash")
+
+	_, err = store.Consume(t.Context(), good, hash("binding"), now)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, oidcclient.ErrInvalidTransaction, "well-formed keys reach the closed database")
 }

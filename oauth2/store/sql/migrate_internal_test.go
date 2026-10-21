@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -60,6 +61,9 @@ func lockingStore(t *testing.T, lock string) (*Store, *sql.DB) {
 	d := NewMockDialect(t)
 	d.EXPECT().migrationLock().Return(lock)
 	d.EXPECT().keyType(mock.Anything).RunAndReturn(sqlite{}.keyType).Maybe()
+	d.EXPECT().tableOptions().Return("").Maybe()
+	d.EXPECT().namedMigrationLock().Return("")
+	d.EXPECT().checkDeployment(mock.Anything, db).Return(nil).Maybe()
 
 	return &Store{db: db, dialect: d}, db
 }
@@ -191,4 +195,29 @@ func TestMigrateReportsAFailedBegin(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	require.ErrorContains(t, store.Migrate(t.Context()), "sqlstore: migrate: begin: ")
+}
+
+// TestMigrateEndsWithTheDeploymentCheck: once the tables exist, Migrate
+// runs the dialect's deployment check and fails with what it reports —
+// after the tables were created, which it never undoes.
+func TestMigrateEndsWithTheDeploymentCheck(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "check.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	unmet := fmt.Errorf("%w: table oauth2_auth_codes uses the MyISAM engine, not InnoDB", ErrDeploymentRequirement)
+
+	d := NewMockDialect(t)
+	d.EXPECT().namedMigrationLock().Return("")
+	d.EXPECT().migrationLock().Return("")
+	d.EXPECT().keyType(mock.Anything).RunAndReturn(sqlite{}.keyType)
+	d.EXPECT().tableOptions().Return("")
+	d.EXPECT().checkDeployment(mock.Anything, db).Return(unmet).Once()
+
+	store := &Store{db: db, dialect: d}
+
+	require.ErrorIs(t, store.Migrate(t.Context()), unmet)
+	assert.Equal(t, schemaTables, tables(t, db))
 }

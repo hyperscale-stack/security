@@ -32,7 +32,8 @@
 //   - Every instance uses the same database, reaching the primary: a read
 //     replica could report a consumed transaction or a recorded assertion as
 //     absent.
-//   - MySQL tables must use InnoDB.
+//   - MySQL tables must use InnoDB (crash safety): Schema names it, and
+//     CheckDeployment, which Migrate runs, refuses another engine.
 //   - SQLite: one writer at a time; set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option).
 //   - Every column holds ASCII (hex digests, ASCII-only JSON, integers): no
@@ -61,18 +62,21 @@
 //
 // # Cleanup
 //
-// The store ships no expiry job. Both tables carry expires_at (Unix
-// seconds): delete the rows past it, in small batches by primary key, from
-// a scheduled job:
+// Both tables carry expires_at (Unix seconds), and rows stay until
+// PurgeExpired deletes those expired before the instant it is given — in
+// batches of their own transactions, at READ COMMITTED on PostgreSQL and
+// MySQL: schedule it, every few minutes for instance. A row deleted after
+// its expiry changes nothing: an expired transaction is refused anyway, and
+// an assertion is never accepted after its replay entry's expiry. The DDL
+// creates no index (MySQL has no CREATE INDEX IF NOT EXISTS): add one on
+// expires_at through your migration tool, else each purge batch scans its
+// table:
 //
-//	DELETE FROM samlsp_transactions    WHERE expires_at < ?
-//	DELETE FROM samlsp_used_assertions WHERE expires_at < ?
+//	CREATE INDEX samlsp_transactions_expires_at    ON samlsp_transactions (expires_at);
+//	CREATE INDEX samlsp_used_assertions_expires_at ON samlsp_used_assertions (expires_at);
 //
-// A row deleted after its expiry changes nothing: an expired transaction is
-// refused anyway, and an assertion is never accepted after its replay
-// entry's expiry. The DDL creates no index (MySQL has no CREATE INDEX IF NOT
-// EXISTS): add one on expires_at through your migration tool. BeginLogin
-// inserts a row per unauthenticated login attempt, so rate-limit it.
+// BeginLogin inserts a row per unauthenticated login attempt, so
+// rate-limit it.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/saml/sp

@@ -55,6 +55,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 		{"ExpiryDecidedBeforeBinding", testExpiredWrongBinding},
 		{"SaveNeverOverwrites", testSaveNeverOverwrites},
 		{"SaveRefusesInvalid", testSaveInvalid},
+		{"ConsumeRefusesInvalidKeys", testConsumeInvalidKeys},
 		{"TransactionsAreIsolated", testIsolation},
 		{"ConcurrentConsume", testConcurrentConsume},
 		{"ConcurrentConsumeMixedBindings", testConcurrentMixedBindings},
@@ -285,6 +286,45 @@ func testSaveInvalid(t *testing.T, s oidcclient.TransactionStore) {
 	}
 
 	mustErrorIs(t, s.Save(ctx(), nil), oidcclient.ErrInvalidTransaction, "Save(nil)")
+}
+
+// malformedKeys returns variants of the store key key that
+// Transaction.Validate refuses, by the defect they carry.
+func malformedKeys(key string) map[string]string {
+	return map[string]string{
+		"empty":          "",
+		"short":          key[:63],
+		"long":           key + "0",
+		"upper-case":     strings.ToUpper(key),
+		"non-hex":        "g" + key[1:],
+		"trailing space": key[:63] + " ",
+		"NUL":            key[:63] + "\x00",
+		"multi-byte":     key[:62] + "é",
+	}
+}
+
+// testConsumeInvalidKeys calls Consume with keys Transaction.Validate
+// refuses: the store refuses them with ErrInvalidTransaction before any
+// I/O — no store answers a key it would never have saved, even one a
+// case-insensitive collation would match — and the stored transaction
+// stays consumable with its own keys.
+func testConsumeInvalidKeys(t *testing.T, s oidcclient.TransactionStore) {
+	tx := sample("invalid-keys")
+	mustSave(t, s, tx)
+
+	for name, bad := range malformedKeys(tx.StateHash) {
+		got, err := s.Consume(ctx(), bad, tx.BindingHash, tx.CreatedAt)
+		mustErrorIs(t, err, oidcclient.ErrInvalidTransaction, "Consume with a state hash "+name)
+		mustTrue(t, got == nil, "Consume with a state hash "+name+": no transaction returned")
+	}
+
+	for name, bad := range malformedKeys(tx.BindingHash) {
+		got, err := s.Consume(ctx(), tx.StateHash, bad, tx.CreatedAt)
+		mustErrorIs(t, err, oidcclient.ErrInvalidTransaction, "Consume with a binding hash "+name)
+		mustTrue(t, got == nil, "Consume with a binding hash "+name+": no transaction returned")
+	}
+
+	mustConsume(t, s, tx)
 }
 
 func testIsolation(t *testing.T, s oidcclient.TransactionStore) {

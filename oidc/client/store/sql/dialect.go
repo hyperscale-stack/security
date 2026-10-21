@@ -5,6 +5,7 @@
 package sqlstore
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -30,6 +31,20 @@ type Dialect interface {
 	// "" when the engine serializes the creation of a table itself and
 	// Migrate runs its statement on its own.
 	migrationLock() string
+	// tableOptions follows the column list of the CREATE TABLE of
+	// [Schema]: the storage engine and character set the dialect needs,
+	// "" when it needs none.
+	tableOptions() string
+	// namedMigrationLock is the session-level named lock [Store.Migrate]
+	// takes around the creation of the tables and its deployment check, on
+	// an engine whose DDL cannot run in a transaction; "" for none.
+	namedMigrationLock() string
+	// checkDeployment verifies the requirements of the package
+	// documentation the database reports (see [Store.CheckDeployment]).
+	checkDeployment(ctx context.Context, q querier) error
+	// purgeTxOptions are the options of the [Store.PurgeExpired]
+	// transaction.
+	purgeTxOptions() *sql.TxOptions
 }
 
 // migrationLockKey is the PostgreSQL advisory lock [Store.Migrate] takes:
@@ -54,7 +69,9 @@ const selectTransaction = `SELECT state_hash, binding_hash, connection_id, issue
 var Postgres Dialect = postgres{}
 
 // MySQL is the MySQL / MariaDB dialect (? placeholders). The table must be
-// InnoDB: Consume relies on its row locks.
+// InnoDB — Consume relies on its row locks — and [Schema] creates it so
+// (ENGINE=InnoDB DEFAULT CHARSET=utf8mb4); [Store.CheckDeployment]
+// verifies it.
 var MySQL Dialect = mysql{}
 
 // SQLite is the SQLite dialect (? placeholders). SQLite has no row locks:
@@ -105,6 +122,17 @@ func (postgres) migrationLock() string {
 	return "SELECT pg_advisory_xact_lock(" + migrationLockKey + ")"
 }
 
+func (postgres) tableOptions() string { return "" }
+
+func (postgres) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
+
+// checkDeployment checks nothing: the store pins READ COMMITTED itself.
+func (postgres) checkDeployment(context.Context, querier) error { return nil }
+
+func (postgres) namedMigrationLock() string { return "" }
+
 type mysql struct{}
 
 func (mysql) Name() string              { return "mysql" }
@@ -112,9 +140,28 @@ func (mysql) rebind(q string) string    { return q }
 func (mysql) lockRow() string           { return selectTransaction + " FOR UPDATE" }
 func (mysql) txOptions() *sql.TxOptions { return nil }
 
-// migrationLock is empty: MySQL commits every DDL statement on its own,
-// and serializes the creation of a table on the metadata lock of its name.
+// migrationLock is empty: MySQL commits every DDL statement on its own, so
+// Migrate takes a named lock instead (see namedMigrationLock).
 func (mysql) migrationLock() string { return "" }
+
+// tableOptions names the engine and the character set: a table created
+// with the server's default engine would be MyISAM on a server configured
+// so, without transactions, row locks or crash safety.
+func (mysql) tableOptions() string { return " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" }
+
+func (mysql) checkDeployment(ctx context.Context, q querier) error { return checkMySQL(ctx, q) }
+
+// namedMigrationLock serializes the Migrate calls of a deployment: MySQL
+// commits every DDL statement on its own, so no transaction can hold a
+// lock across them, and concurrent CREATE TABLE IF NOT EXISTS of one
+// table can fail with a metadata-lock deadlock (1213).
+func (mysql) namedMigrationLock() string { return migrationLockName }
+
+// purgeTxOptions pins READ COMMITTED: at REPEATABLE READ the purge locks
+// the gaps it scans, blocking the inserts of Save until it commits.
+func (mysql) purgeTxOptions() *sql.TxOptions {
+	return &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+}
 
 type sqlite struct{}
 
@@ -131,3 +178,12 @@ func (sqlite) txOptions() *sql.TxOptions { return nil }
 // of the table, and a statement prepared before a concurrent change of the
 // schema is prepared again.
 func (sqlite) migrationLock() string { return "" }
+
+func (sqlite) tableOptions() string { return "" }
+
+func (sqlite) purgeTxOptions() *sql.TxOptions { return nil }
+
+// checkDeployment checks nothing: SQLite has one engine.
+func (sqlite) checkDeployment(context.Context, querier) error { return nil }
+
+func (sqlite) namedMigrationLock() string { return "" }

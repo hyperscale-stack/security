@@ -152,6 +152,20 @@ func (t *Transaction) validateTimes() error {
 	return nil
 }
 
+// ValidateStoreKey reports whether key is a store key: a StateHash or a
+// BindingHash, 64 lowercase hex digits. Every error matches
+// ErrInvalidTransaction. Consume calls it on both its keys before any I/O,
+// so that a store never answers a key it would never have saved — not even
+// one a case-insensitive or space-padding collation would take for a saved
+// one.
+func ValidateStoreKey(key string) error {
+	if !isLowerHex(key, hashHexLength) {
+		return fmt.Errorf("%w: a store key must be 64 lowercase hex digits", ErrInvalidTransaction)
+	}
+
+	return nil
+}
+
 // TransactionStore persists pending logins. An implementation MUST be safe
 // for concurrent use and shared by every instance that may serve the
 // callback. Two operations make the protocol guarantees:
@@ -162,7 +176,8 @@ func (t *Transaction) validateTimes() error {
 //     receives it, even under concurrency and across instances.
 //
 // Both refuse, before any I/O, what Transaction.Validate refuses, with an
-// error matching ErrInvalidTransaction.
+// error matching ErrInvalidTransaction: Save the transaction, Consume a
+// stateHash or a bindingHash ValidateStoreKey refuses.
 type TransactionStore interface {
 	// Save persists tx under tx.StateHash.
 	Save(ctx context.Context, tx *Transaction) error

@@ -16,6 +16,8 @@
 #                                and browser-helper tests, opt-in on their
 #                                own)
 #   oauth2/store/redis           the oauth2 store on Redis
+#   saml/sp/store/redis          the SAML Redis store's key lifetimes under
+#                                clock skew, on Redis
 #
 # Every variable below must name a disposable server: the tests create a
 # namespace of their own (schema, database or key prefix) and drop it
@@ -109,6 +111,7 @@ suite internal/interop/sqlstores ./...
 suite internal/interop/oidcstack .
 suite internal/interop/saml . '^(TestKeycloakLive|TestCaptureKeycloakFixture|TestE2EHelperProcess)$'
 suite oauth2/store/redis ./...
+suite saml/sp/store/redis ./...
 
 if [ -n "$failed" ]; then
 	echo "test-backends: failed:$failed" >&2

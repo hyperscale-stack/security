@@ -16,10 +16,16 @@
 //   - tx:{id}: a transaction, as a hash with the fields b (binding digest),
 //     p (opaque payload), e (expiry, Unix seconds), i (integrity MAC), n
 //     (the nonce of the saving call) and, once consumed, c (the nonce of the
-//     consuming call). The key expires at the transaction expiry
-//     (PEXPIREAT: the Redis clock decides).
+//     consuming call). The key lives until the transaction expiry.
 //   - as:{key}: a consumed assertion, holding the nonce of the recording
 //     call, until its retention expiry.
+//
+// A key's lifetime is sent to Redis as a duration (PEXPIRE, SET … PX):
+// the time left until the record's expiry on the SP's clock — the one
+// WithClock names, time.Now by default — and at least a second. Redis's
+// clock never decides whether a replay mark is still due: with absolute
+// instants, a Redis clock ahead of the SP's by more than a mark's
+// retention would delete the mark as it is written.
 //
 // Every script touches a single key, so Redis Cluster is supported. Values
 // are never re-encoded by the scripts (no cjson round trip).
@@ -41,8 +47,13 @@
 //   - Durability is the server's: a consumption acknowledged by a primary
 //     that fails before persisting or replicating it can be lost in a
 //     failover. Choose the persistence settings accordingly.
-//   - Clocks of the SP instances and of Redis should be synchronized: the
-//     expiries are absolute instants.
+//   - Clocks: the offset between the SP's clock and Redis's plays no part
+//     (lifetimes are durations), and the SP instances' mutual offset is
+//     covered by the replay retention margin. Redis's clock must advance
+//     steadily, and its replicas' clocks match the primary's: Redis turns
+//     a lifetime into an instant on its own clock and replicates expiries
+//     as instants, so a clock step or a skewed replica promoted in a
+//     failover still shortens retention.
 //   - Give the SP an ACL limited to its key prefix: each transaction
 //     carries a MAC under samlsp.Config.TransactionKeys, so Redis is trusted
 //     for availability and single consumption only. A transaction saved

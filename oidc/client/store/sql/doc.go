@@ -24,12 +24,13 @@
 //
 //   - PostgreSQL: Consume runs at READ COMMITTED whatever the server
 //     default (see [Postgres]).
-//   - MySQL: the table must use InnoDB (row locks); utf8mb4 is not
+//   - MySQL: the table must use InnoDB (row locks, crash safety) —
+//     [Schema] names it, and [Store.CheckDeployment], which
+//     [Store.Migrate] runs, refuses another engine; utf8mb4 is not
 //     required — every column holds ASCII. Nor is a binary collation: the
-//     keys are 64 lowercase hex digits — validated at Save; oidcclient
-//     passes the canonical hex(SHA-256(state)) to Consume, and the binding
-//     hash is compared in Go, in constant time — so no collation takes one
-//     key for another.
+//     keys are 64 lowercase hex digits — validated by Save and by Consume
+//     (oidcclient.ValidateStoreKey), and the binding hash is compared in
+//     Go, in constant time — so no collation takes one key for another.
 //   - SQLite: one writer at a time. Set a busy timeout (with
 //     modernc.org/sqlite, the _pragma=busy_timeout(5000) DSN option) so a
 //     concurrent consumer waits instead of failing with SQLITE_BUSY; a busy
@@ -48,11 +49,15 @@
 // Consume deletes the transactions it reaches; an abandoned login keeps
 // its row until [Store.PurgeExpired] deletes it, so schedule that call.
 // The DDL creates no index — MySQL has no CREATE INDEX IF NOT EXISTS — so
-// add one on expires_at through your migration tool: without it, the purge
-// scans the table and, on MySQL, locks every row it scans, holding back the
-// logins starting or completing meanwhile. A transaction lives minutes,
-// so the table stays small when the purge runs every few minutes; the
-// purge is one DELETE, not batched.
+// add one on expires_at through your migration tool:
+//
+//	CREATE INDEX oidc_client_transactions_expires_at ON oidc_client_transactions (expires_at);
+//
+// Without it the purge scans the table and, on MySQL, waits for every row
+// a login completing meanwhile holds; it runs at READ COMMITTED, so it does
+// not lock the gaps it scans, which would hold back the logins starting. A
+// transaction lives minutes, so the table stays small when the purge runs
+// every few minutes; the purge is one DELETE, not batched.
 //
 // Allowed dependencies:
 //   - github.com/hyperscale-stack/security/oidc/client

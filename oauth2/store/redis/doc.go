@@ -29,14 +29,18 @@
 // # Deployment requirements
 //
 // The token-family guarantees of oauth2.Storage hold under these
-// conditions:
+// conditions. New refuses a Redis Cluster or Ring client; Store.CheckDeployment
+// verifies, through INFO, the version, the eviction policy and the absence
+// of cluster mode — call it at boot (the user needs +info).
 //
 //   - Redis 6.0 or later: the rotation and code-consumption scripts use
 //     SET … KEEPTTL, which an older server refuses at the script's first
 //     write — failing closed.
 //   - A standalone server, or the primary of a Sentinel deployment. Redis
 //     Cluster is not supported: the scripts touch keys of different hash
-//     slots (CROSSSLOT).
+//     slots (CROSSSLOT); nor is a client-side Ring, which would spread them
+//     over shards. New refuses both clients; a proxy sharding keys behind
+//     one endpoint reports no cluster mode, and fails closed at runtime.
 //   - Every command reaches the primary: no replica reads, and no
 //     client-side caching on the store's client. Either could answer from
 //     before a revocation.

@@ -106,3 +106,24 @@ func TestTransactionValidate(t *testing.T) {
 		assert.NoError(t, tx.Validate())
 	})
 }
+
+// TestValidateStoreKey accepts exactly 64 lowercase hex digits; every
+// refusal matches ErrInvalidTransaction.
+func TestValidateStoreKey(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, oidcclient.ValidateStoreKey(strings.Repeat("0123456789abcdef", 4)))
+
+	for name, key := range map[string]string{
+		"empty":          "",
+		"63 digits":      strings.Repeat("a", 63),
+		"65 digits":      strings.Repeat("a", 65),
+		"upper-case":     strings.Repeat("A", 64),
+		"non-hex":        strings.Repeat("g", 64),
+		"trailing space": strings.Repeat("a", 63) + " ",
+		"NUL":            strings.Repeat("a", 63) + "\x00",
+		"multi-byte":     strings.Repeat("a", 62) + "é",
+	} {
+		assert.ErrorIs(t, oidcclient.ValidateStoreKey(key), oidcclient.ErrInvalidTransaction, name)
+	}
+}

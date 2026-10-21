@@ -579,6 +579,29 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   loopback-issuer setting to both configurations, sets `AdvertiseJWKSURI`
   and gives the server its OpenID Connect scopes followed by the
   deployment's own.
+- `CheckDeployment(ctx)` and `ErrDeploymentRequirement` on
+  `oauth2/store/sql`, `oidc/client/store/sql`, `saml/sp/store/sql` and
+  `oauth2/store/redis`: the deployment requirements of each package
+  documentation that the server reports — on MySQL, InnoDB tables, binary
+  key columns and a strict `sql_mode` (oauth2); on Redis, version 6.0 or
+  later, `maxmemory-policy noeviction` and no cluster mode (through `INFO`,
+  which needs `+info` in a restricted ACL). Every requirement not met is
+  reported; a server error (NOPERM) is returned as such. Call it at boot
+  when the schema is applied by your own migration tool.
+- `PurgeExpired(ctx, now)` on `oauth2/store/sql` and `saml/sp/store/sql`:
+  deletes the rows expired before `now` in batches of 1000, each a READ
+  COMMITTED transaction (PostgreSQL, MySQL), oauth2 families last, never a
+  family a concurrent revocation extends. Add the `expires_at` indexes the
+  package documentation lists.
+- `oidcclient.ValidateStoreKey`, the check every `TransactionStore.Consume`
+  runs on its keys before any I/O (64 lowercase hex digits).
+- `saml/sp/store/redis.WithClock`: the clock the store measures its key
+  lifetimes on (give it `samlsp.Config.Now` when that one is injected).
+- `storetest.RunConformance` (oauth2) compares the full token records of
+  every lookup and rechecks, 1.5 s later, a consumed code, a rotated refresh
+  token and revoked families (`TokenRecordsRoundTrip`, `RetainedOverTime`);
+  the OIDC suite checks that `Consume` refuses malformed keys
+  (`ConsumeRefusesInvalidKeys`).
 
 ### Changed
 
@@ -1148,6 +1171,26 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   and validates its configured redirect URI with `ValidateRedirectURI` at
   startup, and `e2e/oidc` runs the relying party on `127.0.0.1` and the
   provider on `localhost`.
+- **The SQL stores' `Migrate` checks the deployment (breaking on
+  non-compliant MySQL deployments)**: it still only creates missing tables,
+  then runs `CheckDeployment` and fails with `ErrDeploymentRequirement` on
+  a MyISAM or missing table, on `VARCHAR` key columns of the oauth2 store
+  and on a non-strict `sql_mode` for the oauth2 store. The MySQL DDL names
+  `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`. On MySQL and MariaDB, `Migrate`
+  creates the tables and checks them under a named lock per store module
+  (`GET_LOCK`, released before it returns, waited for as long as its context
+  allows), like the advisory lock it takes on PostgreSQL: concurrent
+  `CREATE TABLE IF NOT EXISTS` of one table could fail with a metadata-lock
+  deadlock. See [MIGRATION.md](MIGRATION.md).
+- **`oauth2/store/redis.New` refuses a `*redis.ClusterClient` or a
+  `*redis.Ring`** (breaking): the store's multi-key scripts cannot work
+  with their sharding; Cluster clients used to fail at runtime (CROSSSLOT)
+  and Ring clients intermittently. See [MIGRATION.md](MIGRATION.md).
+- `oidc/client/store/sql.PurgeExpired` runs its DELETE in a READ COMMITTED
+  transaction on PostgreSQL and MySQL: at MySQL's default isolation an
+  unindexed purge locked the gaps it scanned, blocking the logins starting
+  meanwhile. A MySQL server logging statements (`binlog_format=STATEMENT`)
+  now refuses it: use ROW or MIXED.
 
 ### Fixed
 
@@ -1436,6 +1479,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   `unsupported_response_type`; RFC 6749 §4.1.1 makes the parameter
   REQUIRED, and §4.1.2.1 answers a missing one with `invalid_request` — an
   empty occurrence included (§3.1).
+- `oidcclient.TransactionStore.Consume` validates its keys in the memory,
+  SQL and Redis stores, as the interface documents: on MySQL a malformed
+  state hash — upper-case, space-padded — matched the canonical one under
+  the column's collation.
+- Test gaps of the stores: the real-backend oauth2 conformance runs warm
+  eight connections before each case, so that the concurrency cases race
+  for real (a check-then-act code consumption passed on PostgreSQL), and
+  each locking layer of the SQL token rotation — family lock, token lock,
+  single-row consumption — has a test of its own.
 
 ### Removed
 
@@ -2295,3 +2347,15 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   encodings, so a non-canonical encoding (y ≥ p, whose decoding RFC 8032
   §5.1.3 makes fail) was used as a key. PS* signatures are now verified with
   a hash-size salt and such keys are ignored, as in the `jwt` module.
+- **SQL stores on MySQL use InnoDB**: the MySQL DDL of the three SQL
+  stores named no storage engine, so on a server whose default engine is
+  MyISAM `Migrate` created tables without transactions or row locks. The
+  oauth2 store then lost the atomicity of its writes (`oauth2.Storage` I3):
+  a rotation cut short left the presented refresh token consumed without
+  its replacement, and a consumption acknowledged before a crash could be
+  lost. The DDL now names InnoDB, and `Migrate` refuses other engines.
+- **The SAML Redis store's replay marks no longer depend on Redis's
+  clock**: it set key expiries as absolute instants computed on the SP's
+  clock, so with Redis ahead of the SP by more than a mark's retention the
+  mark was deleted as written and the same assertion accepted again (SAML
+  2.0 Profiles §4.1.4.5). Key lifetimes are now sent as durations.

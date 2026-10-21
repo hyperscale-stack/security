@@ -417,3 +417,37 @@ func TestSQLFamilyLockWithoutRecordFailsClosed(t *testing.T) {
 		"SELECT COUNT(*) FROM oauth2_refresh_tokens WHERE token_hash = ? AND consumed = 0", first.Refresh.TokenHash)
 	assert.Equal(t, 1, consumed, "the refused rotation consumed nothing")
 }
+
+// TestSQLRotationStopsWhenItConsumesNoRow pins the last locking layer of a
+// rotation (I-25): the UPDATE consuming the presented token must affect
+// exactly the row read unconsumed under lock. A trigger silently skipping
+// that UPDATE — what a lock that did not hold would leave, a concurrent
+// rotation having consumed the token in between — makes it affect no row:
+// the rotation fails, its transaction rolls back, nothing is persisted and
+// the presented token stays as it was.
+func TestSQLRotationStopsWhenItConsumesNoRow(t *testing.T) {
+	t.Parallel()
+
+	store, db := openSQLite(t)
+	ctx := t.Context()
+
+	first, next := testPair("noop-0", "fam-noop", time.Hour), testPair("noop-1", "fam-noop", time.Hour)
+	require.NoError(t, store.SaveTokenPair(ctx, first))
+
+	_, err := db.ExecContext(ctx, `CREATE TRIGGER lose_consumption BEFORE UPDATE OF consumed ON oauth2_refresh_tokens
+		BEGIN SELECT RAISE(IGNORE); END`)
+	require.NoError(t, err)
+
+	err = store.RotateRefreshToken(ctx, first.Refresh.TokenHash, next)
+	require.EqualError(t, err, "sqlstore: consume refresh token: 0 rows affected")
+
+	_, err = store.LookupAccessToken(ctx, next.Access.TokenHash)
+	require.EqualError(t, err, "oauth2: invalid_grant: access token not found", "the replacement is not persisted")
+
+	_, err = store.LookupRefreshToken(ctx, next.Refresh.TokenHash)
+	require.EqualError(t, err, "oauth2: invalid_grant: refresh token not found", "the replacement is not persisted")
+
+	rt, err := store.LookupRefreshToken(ctx, first.Refresh.TokenHash)
+	require.NoError(t, err)
+	require.False(t, rt.Consumed, "the presented token is not consumed, its family not revoked")
+}

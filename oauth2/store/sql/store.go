@@ -42,6 +42,14 @@ import (
 //
 // Revocation therefore never touches token rows: they stay until an
 // operator deletes expired rows (see the package documentation).
+//
+// A rotation rests on three layers, each enough to keep two rotations of
+// one token from both succeeding, and each pinned by a test of its own:
+// the family row lock (the family upsert takes it already on MySQL, the
+// SELECT … FOR UPDATE on PostgreSQL), the presented token's row lock,
+// which makes a concurrent consumption a detected reuse, and the UPDATE
+// consuming the token, which must affect exactly that row — the last line
+// should a lock not hold.
 type Store struct {
 	db      *sql.DB
 	dialect Dialect

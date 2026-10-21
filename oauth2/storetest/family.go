@@ -67,38 +67,6 @@ func familyContext(family string) (issuer, data string) {
 	return testIssuer, trickyData + family
 }
 
-// requireContext asserts that the lookups of pair's tokens return the
-// issuer and extension data it was saved with, byte-exact.
-func requireContext(t *testing.T, s oauth2.Storage, pair *oauth2.TokenPair) {
-	t.Helper()
-
-	at, err := s.LookupAccessToken(ctx(), pair.Access.TokenHash)
-	mustNoError(t, err, "lookup access token "+pair.Access.TokenHash)
-	mustEqual(t, at.Issuer, pair.Access.Issuer, "access token issuer")
-	mustEqual(t, at.ExtensionData, pair.Access.ExtensionData, "access token extension data")
-	mustEqual(t, at.Token, "", "the raw access token is never kept")
-
-	if pair.Refresh == nil {
-		return
-	}
-
-	rt, err := s.LookupRefreshToken(ctx(), pair.Refresh.TokenHash)
-	mustNoError(t, err, "lookup refresh token "+pair.Refresh.TokenHash)
-	mustEqual(t, rt.Issuer, pair.Refresh.Issuer, "refresh token issuer")
-	mustEqual(t, rt.ExtensionData, pair.Refresh.ExtensionData, "refresh token extension data")
-	mustEqual(t, rt.Token, "", "the raw refresh token is never kept")
-	requireFamilyIssuedAt(t, rt, pair.Refresh.FamilyIssuedAt)
-}
-
-// requireFamilyIssuedAt asserts that rt carries want as FamilyIssuedAt, to
-// the second — the zero time as the zero time, never as the Unix epoch.
-func requireFamilyIssuedAt(t *testing.T, rt *oauth2.RefreshToken, want time.Time) {
-	t.Helper()
-
-	mustEqual(t, rt.FamilyIssuedAt.IsZero(), want.IsZero(), "refresh token FamilyIssuedAt set")
-	mustEqual(t, rt.FamilyIssuedAt.Unix(), want.Unix(), "refresh token FamilyIssuedAt")
-}
-
 // accessOnly returns a pair carrying an access token alone: a
 // client_credentials token when family is empty, a non-rotating Profile20
 // refresh otherwise.
