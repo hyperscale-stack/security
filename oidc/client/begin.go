@@ -36,8 +36,10 @@ type AuthOptions struct {
 	// LoginHint is passed as login_hint (at most 1024 bytes of UTF-8,
 	// without control characters).
 	LoginHint string
-	// IDTokenHint is passed as id_token_hint.
-	IDTokenHint string
+	// IDTokenHint is passed as id_token_hint: an ID Token the provider
+	// issued earlier, such as Identity.Tokens.IDToken. It never prints,
+	// logs nor encodes (see Secret).
+	IDTokenHint Secret
 	// Prompt values are passed space-separated as prompt; "none" cannot
 	// be combined with another value.
 	Prompt []string
@@ -82,12 +84,10 @@ type AuthRequest struct {
 	// Binding is the browser-binding secret of the login. The user agent
 	// that started the login MUST keep it — the net/http helpers put it in
 	// an HttpOnly __Host- cookie — and present it at the callback. It never
-	// leaves the Relying Party and the user agent: never log it. fmt,
-	// log/slog and encoding/json leave it out — it is tagged json:"-" for
-	// the encodings that do not go through MarshalJSON — but other
-	// reflection-based encoders (encoding/gob, encoding/xml, YAML) write
-	// it: persist it explicitly, only where a secret belongs.
-	Binding string `json:"-"`
+	// leaves the Relying Party and the user agent: it is a Secret, which
+	// never prints, logs nor encodes; Reveal it only to hand it to the user
+	// agent.
+	Binding Secret `json:"-"`
 	// ExpiresAt is when the login expires.
 	ExpiresAt time.Time
 }
@@ -154,7 +154,7 @@ func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, err
 		CreatedAt:    created,
 		ExpiresAt:    created.Add(c.cfg.TransactionTTL),
 	}
-	tx.Integrity = integrityFor(c.cfg.TransactionKeys[0], secret, tx)
+	tx.Integrity = integrityFor([]byte(c.cfg.TransactionKeys[0].Reveal()), secret, tx)
 
 	if err := c.cfg.Store.Save(ctx, tx); err != nil {
 		return nil, fmt.Errorf("oidcclient: save login transaction: %w", err)
@@ -163,7 +163,7 @@ func (c *Client) Begin(ctx context.Context, opts AuthOptions) (*AuthRequest, err
 	return &AuthRequest{
 		URL:       c.authorizationURL(state, secret, opts),
 		State:     state,
-		Binding:   binding,
+		Binding:   NewSecret(binding),
 		ExpiresAt: tx.ExpiresAt,
 	}, nil
 }
@@ -195,7 +195,7 @@ func (c *Client) authorizationURL(state string, secret []byte, opts AuthOptions)
 	}
 
 	setNonEmpty(params, "login_hint", opts.LoginHint)
-	setNonEmpty(params, "id_token_hint", opts.IDTokenHint)
+	setNonEmpty(params, "id_token_hint", opts.IDTokenHint.Reveal())
 	setNonEmpty(params, "prompt", strings.Join(opts.Prompt, " "))
 	setNonEmpty(params, "acr_values", strings.Join(opts.ACRValues, " "))
 	setNonEmpty(params, "ui_locales", strings.Join(opts.UILocales, " "))
@@ -248,7 +248,7 @@ func (o AuthOptions) validate(endpointParams map[string]struct{}) error {
 		return fmt.Errorf("%w: LoginHint must be at most 1024 bytes of UTF-8 without control characters", ErrInvalidAuthRequest)
 	}
 
-	if o.IDTokenHint != "" && !isASCII(o.IDTokenHint, visibleASCII, maxIDTokenHintLength) {
+	if hint := o.IDTokenHint.Reveal(); hint != "" && !isASCII(hint, visibleASCII, maxIDTokenHintLength) {
 		return fmt.Errorf("%w: IDTokenHint must be a compact JWT", ErrInvalidAuthRequest)
 	}
 

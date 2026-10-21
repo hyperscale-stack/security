@@ -50,8 +50,8 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		"client with control":           func(c *oidcclient.Config) { c.ClientID = "client\n1" },
 		"no auth method":                func(c *oidcclient.Config) { c.AuthMethod = "" },
 		"unsupported auth method":       func(c *oidcclient.Config) { c.AuthMethod = "private_key_jwt" },
-		"basic without secret":          func(c *oidcclient.Config) { c.ClientSecret = "" },
-		"post without secret":           func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost; c.ClientSecret = "" },
+		"basic without secret":          func(c *oidcclient.Config) { c.ClientSecret = oidcclient.Secret{} },
+		"post without secret":           func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost; c.ClientSecret = oidcclient.Secret{} },
 		"none with secret":              func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone },
 		"empty redirect":                func(c *oidcclient.Config) { c.RedirectURL = "" },
 		"relative redirect":             func(c *oidcclient.Config) { c.RedirectURL = testCallbackPath },
@@ -82,13 +82,13 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		"invalid outbound policy":       func(c *oidcclient.Config) { c.Outbound.MaxRedirects = -1 },
 		"no transaction key":            func(c *oidcclient.Config) { c.TransactionKeys = nil },
 		"short transaction key": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{make([]byte, oidcclient.MinTransactionKeySize-1)}
+			c.TransactionKeys = secretKeys(make([]byte, oidcclient.MinTransactionKeySize-1))
 		},
 		"empty transaction key after a valid one": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, nil}
+			c.TransactionKeys = secretKeys(testTransactionKey, nil)
 		},
 		"too many transaction keys": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+			c.TransactionKeys = secretKeys(testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey)
 		},
 	}
 
@@ -116,7 +116,7 @@ func TestNewAcceptsBoundaries(t *testing.T) {
 		"redirect with app query":     func(c *oidcclient.Config) { c.RedirectURL += "?tenant=acme" },
 		"one hour ttl":                func(c *oidcclient.Config) { c.TransactionTTL = time.Hour },
 		"five minutes skew":           func(c *oidcclient.Config) { c.ClockSkew = 5 * time.Minute },
-		"public client":               func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
+		"public client":               func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = oidcclient.Secret{} },
 		"post client":                 func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodClientSecretPost },
 		"form post":                   func(c *oidcclient.Config) { c.ResponseMode = oidcclient.ResponseModeFormPost },
 		"single algorithm":            func(c *oidcclient.Config) { c.Algorithms = []oidcclient.Algorithm{oidcclient.ES256} },
@@ -125,9 +125,9 @@ func TestNewAcceptsBoundaries(t *testing.T) {
 		"duplicated scopes":           func(c *oidcclient.Config) { c.Scopes = []string{"email", "openid", "email"} },
 		"trusted audience":            func(c *oidcclient.Config) { c.TrustedAudiences = []string{"https://api.example.com"} },
 		"four transaction keys": func(c *oidcclient.Config) {
-			c.TransactionKeys = [][]byte{testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey}
+			c.TransactionKeys = secretKeys(testTransactionKey, testTransactionKey, testTransactionKey, testTransactionKey)
 		},
-		"long transaction key": func(c *oidcclient.Config) { c.TransactionKeys = [][]byte{make([]byte, 64)} },
+		"long transaction key": func(c *oidcclient.Config) { c.TransactionKeys = secretKeys(make([]byte, 64)) },
 	}
 
 	for name, tweak := range cases {
@@ -170,12 +170,12 @@ func TestNewCopiesConfigSlices(t *testing.T) {
 
 	plain := newFakeOP(t)
 	key := bytes.Clone(testTransactionKey)
-	keys := [][]byte{key}
+	keys := secretKeys(key)
 	keyed := plain.client(t, func(cfg *oidcclient.Config) { cfg.TransactionKeys = keys })
 	ar, code := plain.begin(t, keyed, oidcclient.AuthOptions{})
 
-	key[0] ^= 0xff
-	keys[0] = bytes.Repeat([]byte{0x33}, oidcclient.MinTransactionKeySize)
+	key[0] ^= 0xff // a Secret holds its own copy of the key bytes
+	keys[0] = oidcclient.NewSecret(string(bytes.Repeat([]byte{0x33}, oidcclient.MinTransactionKeySize)))
 
 	_, err = keyed.Complete(context.Background(), callbackFor(ar, code))
 	require.NoError(t, err, "the Client kept its own copy of TransactionKeys and of their bytes")

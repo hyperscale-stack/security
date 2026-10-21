@@ -43,8 +43,9 @@ type Callback struct {
 	// Params are the response parameters (url.ParseQuery or r.PostForm).
 	Params url.Values `json:"-"`
 	// Binding is the browser-binding secret the user agent presented (the
-	// AuthRequest.Binding of the login, read from its cookie).
-	Binding string `json:"-"`
+	// AuthRequest.Binding of the login, read from its cookie):
+	// NewSecret(cookie.Value).
+	Binding Secret `json:"-"`
 }
 
 // String implements fmt.Stringer without the binding secret, the parameter
@@ -129,7 +130,7 @@ func (c *Client) Complete(ctx context.Context, cb Callback) (*Identity, error) {
 		return nil, err
 	}
 
-	secret, ok := decodeSecret(cb.Binding)
+	secret, ok := decodeSecret(cb.Binding.Reveal())
 	if !ok {
 		return nil, fmt.Errorf("%w: missing or malformed binding", ErrBindingMismatch)
 	}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	oidcclient "github.com/hyperscale-stack/security/oidc/client"
 	"github.com/hyperscale-stack/security/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,9 +34,9 @@ func limitedServer(t *testing.T, maxPending, perMinute int) http.Handler {
 
 	handler, err := newServer(t.Context(), config{
 		BaseURL:              base,
-		Connections:          []connectionConfig{{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: "acme-secret"}},
+		Connections:          []connectionConfig{{ID: "acme", Issuer: acme.issuer(), ClientID: "rp-acme", ClientSecret: oidcclient.NewSecret("acme-secret")}},
 		Outbound:             outbound.Policy{AllowedPrefixes: outbound.LoopbackPrefixes(), RootCAs: pool},
-		TransactionKeys:      [][]byte{[]byte("an example transaction key of 32+ bytes")},
+		TransactionKeys:      []oidcclient.Secret{oidcclient.NewSecret("an example transaction key of 32+ bytes")},
 		MaxPendingLogins:     maxPending,
 		LoginStartsPerMinute: perMinute,
 	})

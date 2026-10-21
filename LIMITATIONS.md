@@ -683,10 +683,9 @@ PKCE. Not supported, and refused where a provider could select them:
 ## Logging
 
 - **What `fmt` cannot redact** — the types that hold secrets
-  (`oidcclient.Config` and `*Client`, `oauth2.DefaultClient`, the `jwtsec`
-  keys, signers and key sets, `session.Codec` and `session.Session`, the
-  `basic`, `bearer` and `session` authentications, `security.AttemptKey`…)
-  print redacted with
+  (`oauth2.DefaultClient`, the `jwtsec` keys, signers and key sets,
+  `session.Codec` and `session.Session`, the `basic`, `bearer` and
+  `session` authentications, `security.AttemptKey`…) print redacted with
   every `fmt` verb and in `slog` output — as do the `grpcsec` and
   `connectrpcsec` carriers, which print metadata key counts only — but fmt
   prints some values without
@@ -694,15 +693,19 @@ PKCE. Not supported, and refused where a provider could select them:
   value held in an unexported field of your own types, and — for the verbs
   a pointer does not take (`%s`, `%q`…) — what a nested pointer points to.
   Log these types directly or through exported fields, with `%v`.
+  `oidc/client` holds every credential in an `oidcclient.Secret`, which
+  stays redacted even there; what such a path still prints of its values is
+  not a credential: a `Callback`'s parameters (the authorization code,
+  useless without the PKCE verifier derived from the binding secret, and
+  the state), an `AuthRequest`'s URL and state, an `Identity`'s claims.
 - **JSON** — `slog`'s JSON handler calls `LogValue` for attribute values
   only: a value nested in another one (a struct field, a map) is encoded
-  with `encoding/json`. `oidcclient.Config`, `AuthRequest` and `Callback`,
-  and `session.Session`, encode without their secrets, but
-  `oidcclient.Identity` and `Tokens` encode their tokens — deliberately, so
-  that applications can persist them — and `UserInfo` its claims: log these
-  as attributes of their own. Other reflection-based encoders
-  (`encoding/gob`, `encoding/xml`, YAML) write every exported field, an
-  `AuthRequest`'s binding secret included.
+  with `encoding/json`. `oidcclient` values and `session.Session` encode
+  without their secrets — an `oidcclient.Secret` encodes `REDACTED` — but
+  `oidcclient.Identity` encodes its claims and `UserInfo` its claims
+  (personal data): log these as attributes of their own. Other
+  reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML) write
+  every exported field; an `oidcclient.Secret` has none.
 - **Credentials and tokens in flight are not redacted yet** — the `oauth2`
   records (`AuthorizationCode`, `AccessToken`, `RefreshToken`, the
   `GrantResponse` holding them) print the raw code and tokens they carry

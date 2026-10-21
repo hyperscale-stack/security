@@ -792,7 +792,8 @@ To migrate:
    (`openssl rand -hex 32`). It is a secret like a session key: keep it in
    your secret store, never in code or logs.
 2. Give the same keys to every instance that may serve a callback, and set
-   `Config.TransactionKeys: [][]byte{key}` on every `oidcclient.Client`
+   `Config.TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))}`
+   on every `oidcclient.Client`
    (`examples/oidc-client` reads `OIDC_TRANSACTION_KEYS`, hex keys separated
    by commas).
 3. Deploy knowing that the logins in progress at that moment fail once with
@@ -918,7 +919,7 @@ like `Config`:
 | `Config` | an error (`json: unsupported type: func…`) | `{"ConnectionID":…,"Issuer":…,"ClientID":…,"ClientSecret":"REDACTED","AuthMethod":…,"RedirectURL":…,"ResponseMode":…,"TransactionKeys":<count>}` |
 | a struct **embedding** `AuthRequest` or `Callback` | its own fields and the embedded ones | the promoted `MarshalJSON`: the embedded value's redacted document alone — the struct's other fields are not written; when another type embedded at the same depth also has a `MarshalJSON`, neither is promoted and the exported fields are written, the secrets excluded |
 | `json.Unmarshal` into `AuthRequest`, `Callback` | every field read | `AuthRequest.Binding` and `Callback`'s `URL`, `Params` and `Binding` are tagged `json:"-"`: never read nor written by a reflective encoding |
-| `Identity`, `Tokens` | tokens and claims | unchanged, deliberately: JSON is how applications persist them |
+| `Identity`, `Tokens` | tokens and claims | claims unchanged; tokens `REDACTED` since they are `oidcclient.Secret` values (see "every secret is an `oidcclient.Secret`" below) |
 | `UserInfo` | its claims | unchanged; `fmt` now prints its subject only |
 | `*Client` | `{}` | unchanged |
 
@@ -934,10 +935,11 @@ To migrate:
    another embedded type with a `MarshalJSON`, as flattened fields without
    the secrets: name the field (`Login oidcclient.AuthRequest`) instead of
    embedding it.
-4. Other reflection-based encoders (`encoding/gob`, `encoding/xml`, YAML)
-   still write the binding secret: do not use them on these types.
-5. Keep logging an `Identity` or `Tokens` as an attribute of its own: nested
-   in another logged value, `slog`'s JSON handler writes their tokens.
+4. Other reflection-based encoders never write the binding secret either:
+   it is an `oidcclient.Secret`, which `encoding/gob` refuses and
+   `encoding/xml` writes empty.
+5. Keep logging an `Identity` as an attribute of its own: nested in another
+   logged value, `slog`'s JSON handler writes its claims (personal data).
 
 ### `oidc/client`: an authorization request never repeats a parameter
 
@@ -1831,6 +1833,7 @@ separator, and the three hint lists are bounded:
 To migrate: nothing for clients sending ordinary values. A client sending
 more than 2048 bytes in one of these hints sends fewer: they never fail a
 request (OIDC Core §3.1.2.1, §15.1).
+
 ### `oauth2`: request sizes and parameters are bounded
 
 The endpoints parsed requests of any size up to the 10 MB `net/http` form
@@ -3012,3 +3015,47 @@ To migrate:
    keys through the metadata (RFC 9068 §4), lose them.
 2. List the scopes clients may request in `ServerConfig.ScopesSupported`
    (optional, RECOMMENDED by RFC 8414 §2).
+
+### `oidc/client`: every secret is an `oidcclient.Secret`
+
+`fmt` prints a value it reaches through an unexported field of another
+value by reflection, without calling any of its methods: an application
+struct holding an `oidcclient.Config`, `AuthRequest`, `Callback`,
+`Identity` or `Tokens` in an unexported field — or a dereferenced
+`*Client` (`fmt.Sprintf("%+v", *client)`) — printed the client secret, the
+transaction keys, the binding secret or the tokens, and so did `slog`'s
+text handler, which prints such a struct with `fmt`. Every secret of the
+package's API is now an `oidcclient.Secret`: `NewSecret(s)` builds one,
+`Reveal()` returns its value, and every other rendering — every `fmt` verb,
+`slog`, `encoding/json`, and a `Secret` reached through an unexported field,
+whose value sits behind a pointer fmt prints as an address — shows
+`REDACTED` (`""` when empty). `encoding/gob` refuses a `Secret` and
+`encoding/xml` writes it empty; a `Secret` does not decode from JSON.
+
+| Field | Before | After |
+| --- | --- | --- |
+| `Config.ClientSecret` | `string` | `Secret` — `oidcclient.NewSecret(secret)` |
+| `Config.TransactionKeys` | `[][]byte` | `[]Secret` — `oidcclient.NewSecret(string(key))` per key |
+| `AuthRequest.Binding` | `string` | `Secret` — `ar.Binding.Reveal()` to hand it to the user agent |
+| `Callback.Binding` | `string` | `Secret` — `oidcclient.NewSecret(cookie.Value)` |
+| `Tokens.AccessToken`, `RefreshToken`, `IDToken` | `string` | `Secret` — `Reveal()` to call an API or store them |
+| `AuthOptions.IDTokenHint` | `string` | `Secret` — `IDTokenHint: id.Tokens.IDToken` needs no conversion |
+| `json.Marshal` of an `Identity` or `Tokens` | tokens written, for persistence | tokens `"REDACTED"`; `json.Unmarshal` of such a document into an `Identity` fails |
+| `fmt` of a `Config`, `AuthRequest`, `Callback`, `Identity`, `Tokens` or `Client` reached through an unexported field, `%+v` of `*client` | secrets printed | secrets printed as an address |
+
+To migrate:
+
+1. Wrap the configured secrets: `ClientSecret: oidcclient.NewSecret(secret)`
+   and `TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))}`.
+   A public client leaves `ClientSecret` zero (`oidcclient.Secret{}`).
+2. With `Begin`/`Complete` instead of the net/http helpers, put
+   `ar.Binding.Reveal()` in the user agent's cookie and pass
+   `oidcclient.NewSecret(cookie.Value)` as `Callback.Binding`.
+3. Read the tokens with `Reveal()` where they are used (`Authorization:
+   Bearer`, a refresh request) and pass `id.Tokens.IDToken` as
+   `AuthOptions.IDTokenHint` unchanged.
+4. An application persisting an `Identity` or its `Tokens` as JSON stores
+   the revealed tokens explicitly, in storage fit for credentials: the
+   encoding of `Identity` and `Tokens` now writes them `REDACTED`.
+5. Compare two `Secret`s with `crypto/subtle.ConstantTimeCompare` on their
+   revealed values, never with `==` (which compares their identity).

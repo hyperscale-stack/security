@@ -196,7 +196,7 @@ func TestTokenResponseSubstitution(t *testing.T) {
 		earlier, err := o.login(t, c, oidcclient.AuthOptions{})
 		require.NoError(t, err)
 
-		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["access_token"] = earlier.Tokens.AccessToken })
+		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["access_token"] = earlier.Tokens.AccessToken.Reveal() })
 
 		_, err = o.login(t, c, oidcclient.AuthOptions{})
 		require.ErrorIs(t, err, oidcclient.ErrAccessTokenHash)
@@ -209,7 +209,7 @@ func TestTokenResponseSubstitution(t *testing.T) {
 		other, err := o.login(t, o.rp(t, conn("other", o.base, otherID, secret, oidcclient.AuthMethodClientSecretBasic)), oidcclient.AuthOptions{})
 		require.NoError(t, err)
 
-		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["id_token"] = other.Tokens.IDToken })
+		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["id_token"] = other.Tokens.IDToken.Reveal() })
 
 		_, err = o.login(t, o.rp(t, o.basic()), oidcclient.AuthOptions{})
 		require.ErrorIs(t, err, oidcclient.ErrIDTokenAudience)
@@ -223,7 +223,7 @@ func TestTokenResponseSubstitution(t *testing.T) {
 		earlier, err := o.login(t, c, oidcclient.AuthOptions{})
 		require.NoError(t, err)
 
-		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["id_token"] = earlier.Tokens.IDToken })
+		o.tamperTokenResponse(o.base, func(resp map[string]any) { resp["id_token"] = earlier.Tokens.IDToken.Reveal() })
 
 		_, err = o.login(t, c, oidcclient.AuthOptions{})
 		require.ErrorIs(t, err, oidcclient.ErrIDTokenNonce)
@@ -246,7 +246,7 @@ func TestTokenResponseSubstitution(t *testing.T) {
 		b, err := o.login(t, o.rp(t, conn("shared-b", o.base+tenantB, sharedID, secret, oidcclient.AuthMethodClientSecretBasic)), oidcclient.AuthOptions{})
 		require.NoError(t, err)
 
-		o.tamperTokenResponse(o.base+tenantA, func(resp map[string]any) { resp["id_token"] = b.Tokens.IDToken })
+		o.tamperTokenResponse(o.base+tenantA, func(resp map[string]any) { resp["id_token"] = b.Tokens.IDToken.Reveal() })
 
 		_, err = o.login(t, o.rp(t, conn("shared-a", o.base+tenantA, sharedID, secret, oidcclient.AuthMethodClientSecretBasic)), oidcclient.AuthOptions{})
 		require.ErrorIs(t, err, oidcclient.ErrIDTokenIssuer, "the signature verifies: iss is the only guard")
@@ -294,7 +294,7 @@ func TestIDTokenUsedAsAnotherToken(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, o.base+o.paths(o.base).UserInfo, nil)
 	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+own.Tokens.IDToken)
+	req.Header.Set("Authorization", "Bearer "+own.Tokens.IDToken.Reveal())
 
 	resp, err := o.srv.Client().Do(req)
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestIDTokenUsedAsAnotherToken(t *testing.T) {
 	tenant, err := o.login(t, o.rp(t, o.tenant(tenantA, tenantAID)), oidcclient.AuthOptions{})
 	require.NoError(t, err)
 
-	for name, hint := range map[string]string{
+	for name, hint := range map[string]oidcclient.Secret{
 		"the at+jwt access token":   own.Tokens.AccessToken,
 		"another client's ID Token": other.Tokens.IDToken,
 		"another issuer's ID Token": tenant.Tokens.IDToken,

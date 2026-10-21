@@ -43,12 +43,12 @@ func TestCompleteQuery(t *testing.T) {
 	assert.Equal(t, testNow.Add(5*time.Minute), id.ExpiresAt)
 	assert.True(t, id.AuthTime.IsZero())
 	assert.Equal(t, "return=/home", id.AppState)
-	assert.Equal(t, testAccessToken, id.Tokens.AccessToken)
+	assert.Equal(t, testAccessToken, id.Tokens.AccessToken.Reveal())
 	assert.Equal(t, "Bearer", id.Tokens.TokenType)
-	assert.Equal(t, "rt-1", id.Tokens.RefreshToken)
+	assert.Equal(t, "rt-1", id.Tokens.RefreshToken.Reveal())
 	assert.Equal(t, "openid profile", id.Tokens.Scope)
 	assert.Equal(t, testNow.Add(time.Hour), id.Tokens.Expiry)
-	assert.NotEmpty(t, id.Tokens.IDToken)
+	assert.NotEmpty(t, id.Tokens.IDToken.Reveal())
 
 	var claims struct {
 		Email string `json:"email"`
@@ -109,10 +109,10 @@ func TestCompleteBinding(t *testing.T) {
 
 	cases := map[string]func(victim, attacker *oidcclient.AuthRequest) string{
 		"missing":                 func(*oidcclient.AuthRequest, *oidcclient.AuthRequest) string { return "" },
-		"malformed":               func(v, _ *oidcclient.AuthRequest) string { return v.Binding[:42] },
-		"padded":                  func(v, _ *oidcclient.AuthRequest) string { return v.Binding + "=" },
-		"non-canonical encoding":  func(v, _ *oidcclient.AuthRequest) string { return nonCanonical(v.Binding) },
-		"another login's binding": func(_, a *oidcclient.AuthRequest) string { return a.Binding },
+		"malformed":               func(v, _ *oidcclient.AuthRequest) string { return v.Binding.Reveal()[:42] },
+		"padded":                  func(v, _ *oidcclient.AuthRequest) string { return v.Binding.Reveal() + "=" },
+		"non-canonical encoding":  func(v, _ *oidcclient.AuthRequest) string { return nonCanonical(v.Binding.Reveal()) },
+		"another login's binding": func(_, a *oidcclient.AuthRequest) string { return a.Binding.Reveal() },
 	}
 
 	for name, bindingOf := range cases {
@@ -127,7 +127,7 @@ func TestCompleteBinding(t *testing.T) {
 			attacker, _ := op.begin(t, c, oidcclient.AuthOptions{})
 
 			cb := callbackFor(victim, code)
-			cb.Binding = bindingOf(victim, attacker)
+			cb.Binding = oidcclient.NewSecret(bindingOf(victim, attacker))
 
 			id, err := c.Complete(context.Background(), cb)
 			require.ErrorIs(t, err, oidcclient.ErrBindingMismatch)

@@ -336,15 +336,24 @@ func TestCapabilities(t *testing.T) {
 		"confidential, no pkce": {metadata: func(m map[string]any) { delete(m, "code_challenge_methods_supported") }, ok: true},
 		"public client, no pkce": {
 			metadata: func(m map[string]any) { delete(m, "code_challenge_methods_supported") },
-			config:   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
 		},
 		"public client, plain only": {
 			metadata: func(m map[string]any) { m["code_challenge_methods_supported"] = []string{"plain"} },
-			config:   func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
 		},
 		"public client with S256": {
-			config: func(c *oidcclient.Config) { c.AuthMethod = oidcclient.AuthMethodNone; c.ClientSecret = "" },
-			ok:     true,
+			config: func(c *oidcclient.Config) {
+				c.AuthMethod = oidcclient.AuthMethodNone
+				c.ClientSecret = oidcclient.Secret{}
+			},
+			ok: true,
 		},
 		"only HMAC advertised": {metadata: func(m map[string]any) { m["id_token_signing_alg_values_supported"] = []string{"HS256", "none"} }},
 		"no common algorithm": {

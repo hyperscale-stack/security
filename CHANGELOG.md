@@ -1027,6 +1027,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   every 64 writes instead of keeping them for the process lifetime.
   `memory.New` takes options; `memory.WithClock` gives it the
   ServiceProvider's clock (`time.Now` by default).
+- **`oidcclient.Secret`** (breaking): every secret of the `oidc/client`
+  API — `Config.ClientSecret`, `Config.TransactionKeys` (now `[]Secret`),
+  `AuthRequest.Binding`, `Callback.Binding`, `Tokens.AccessToken`,
+  `RefreshToken` and `IDToken`, `AuthOptions.IDTokenHint` — is a `Secret`:
+  `NewSecret(s)` builds one, `Reveal()` reads it, and it prints, logs and
+  encodes as `REDACTED` everywhere, `encoding/json` included: `Identity`
+  and `Tokens` no longer encode their tokens, which applications persist by
+  revealing them (see MIGRATION.md).
 
 - A typed-nil dependency — an interface holding a nil pointer,
   `bearer.VerifierFunc(nil)` — now panics at construction in
@@ -1536,8 +1544,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   redacted, transaction keys counted), whose encoding used to fail on its
   `func` fields only by accident. `UserInfo` printed its claims (personal
   data) with `%s` and `%q`; it now prints and logs its subject only.
-  `Identity` and `Tokens` still encode their tokens, deliberately, so that
-  applications can persist them (see MIGRATION.md).
+  `Identity` and `Tokens` encoded their tokens, for persistence, until they
+  became `oidcclient.Secret` values (see Changed).
 - `oidcclient.AuthOptions.ExtraParams` compared its names with the
   reserved parameters exactly: `Request`, `STATE`, `Nonce`, `request.uri`…
   passed, and a provider that ignores case (ASP.NET) or rewrites `.` as `_`
@@ -2214,3 +2222,11 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   servers could not tell it from the client's `client_credentials` token
   (RFC 9068 §2.2, RFC 9700 §4.15). It now answers `server_error` (cause
   `oauth2.ErrSubjectIsClient`), nothing minted or persisted.
+- `oidc/client` secrets printed in clear through `fmt` when an `oidcclient`
+  value sat in an unexported field of another value, or when a `Client` was
+  dereferenced (`%+v` of `*client`): fmt prints such values by reflection,
+  without calling their redacting methods, so a `Config`'s client secret
+  and transaction keys, an `AuthRequest`'s or `Callback`'s binding secret
+  and the tokens of an `Identity` reached logs — `slog`'s text handler
+  included. They are now `oidcclient.Secret` values (see Changed), which
+  print as an address there and `REDACTED` everywhere else, with every verb.

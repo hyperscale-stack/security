@@ -273,13 +273,13 @@ func loginWith(t *testing.T, plan rpPlan, module, issuer, secret string) (string
 	cfg := oidcclient.Config{
 		ConnectionID: "conformance", Issuer: issuer, ClientID: "hyperscale-rp", AuthMethod: plan.method,
 		RedirectURL: rpRedirectURI, Scopes: []string{"profile", "email", "address", "phone"},
-		ResponseMode: plan.mode, Store: clientmemory.New(), TransactionKeys: [][]byte{key},
+		ResponseMode: plan.mode, Store: clientmemory.New(), TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))},
 		Outbound: outbound.Policy{RootCAs: pool, AllowedPrefixes: outbound.LoopbackPrefixes()},
 		Now:      clk.now,
 	}
 
 	if plan.method != oidcclient.AuthMethodNone {
-		cfg.ClientSecret = secret
+		cfg.ClientSecret = oidcclient.NewSecret(secret)
 	}
 
 	client, err := oidcclient.New(ctx, cfg)

@@ -69,7 +69,7 @@ type verifiedTimes struct {
 
 // verifyLogin validates the ID Token of tokens and builds the Identity.
 func (c *Client) verifyLogin(ctx context.Context, tokens Tokens, tx *Transaction, nonce string) (*Identity, error) {
-	alg, payload, err := c.verifyIDToken(ctx, tokens.IDToken)
+	alg, payload, err := c.verifyIDToken(ctx, tokens.IDToken.Reveal())
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (c *Client) verifyLogin(ctx context.Context, tokens Tokens, tx *Transaction
 		return nil, err
 	}
 
-	if claims.ATHash != nil && subtle.ConstantTimeCompare([]byte(*claims.ATHash), []byte(accessTokenHash(alg, tokens.AccessToken))) != 1 {
+	if claims.ATHash != nil && subtle.ConstantTimeCompare([]byte(*claims.ATHash), []byte(accessTokenHash(alg, tokens.AccessToken.Reveal()))) != 1 {
 		return nil, ErrAccessTokenHash
 	}
 

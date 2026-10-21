@@ -68,7 +68,7 @@ func TestTokenClientAuthentication(t *testing.T) {
 		})
 		c := op.client(t, func(cfg *oidcclient.Config) {
 			cfg.ClientID = "client:1"
-			cfg.ClientSecret = "a b:c%d+é"
+			cfg.ClientSecret = oidcclient.NewSecret("a b:c%d+é")
 		})
 
 		_, err := op.login(t, c)
@@ -106,7 +106,7 @@ func TestTokenClientAuthentication(t *testing.T) {
 		op.set(func(op *fakeOP) { op.authMethod = oidcclient.AuthMethodNone })
 		c := op.client(t, func(cfg *oidcclient.Config) {
 			cfg.AuthMethod = oidcclient.AuthMethodNone
-			cfg.ClientSecret = ""
+			cfg.ClientSecret = oidcclient.Secret{}
 		})
 
 		_, err := op.login(t, c)

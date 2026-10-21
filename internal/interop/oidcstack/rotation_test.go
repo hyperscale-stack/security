@@ -65,7 +65,7 @@ func TestDocumentedRotationIsInvisibleToTheClient(t *testing.T) {
 	id, err := o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err)
 
-	header, _ := jwsParts(t, id.Tokens.IDToken)
+	header, _ := jwsParts(t, id.Tokens.IDToken.Reveal())
 	assert.Equal(t, "root-rs256-2", header["kid"])
 	assert.Equal(t, 2, o.hits(jwks), "no unknown-kid refresh was needed")
 

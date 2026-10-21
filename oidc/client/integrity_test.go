@@ -131,7 +131,7 @@ func TestStoreWriterCannotForgeIntegrity(t *testing.T) {
 				c := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = store })
 
 				ar, code := op.begin(t, c, step.opts)
-				store.binding = ar.Binding
+				store.binding = ar.Binding.Reveal()
 
 				id, err := c.Complete(context.Background(), callbackFor(ar, code))
 				require.ErrorIs(t, err, oidcclient.ErrTransactionIntegrity)
@@ -150,7 +150,7 @@ func TestStoreWriterCannotForgeIntegrity(t *testing.T) {
 			c := op.client(t, func(cfg *oidcclient.Config) { cfg.Store = store })
 
 			ar, code := op.begin(t, c, step.opts)
-			store.binding = ar.Binding
+			store.binding = ar.Binding.Reveal()
 
 			id, err := c.Complete(context.Background(), callbackFor(ar, code))
 			require.NoError(t, err, "the forgery with the real key is the package's own MAC")
@@ -190,8 +190,10 @@ func TestTransactionKeyRotation(t *testing.T) {
 
 			op := newFakeOP(t)
 			store := memory.New()
-			starting := op.client(t, func(cfg *oidcclient.Config) { cfg.Store, cfg.TransactionKeys = store, tc.begin })
-			completing := op.client(t, func(cfg *oidcclient.Config) { cfg.Store, cfg.TransactionKeys = store, tc.complete })
+			starting := op.client(t, func(cfg *oidcclient.Config) { cfg.Store, cfg.TransactionKeys = store, secretKeys(tc.begin...) })
+			completing := op.client(t, func(cfg *oidcclient.Config) {
+				cfg.Store, cfg.TransactionKeys = store, secretKeys(tc.complete...)
+			})
 
 			ar, code := op.begin(t, starting, oidcclient.AuthOptions{})
 

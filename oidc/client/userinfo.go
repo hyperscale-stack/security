@@ -78,7 +78,7 @@ func (c *Client) UserInfo(ctx context.Context, id *Identity) (*UserInfo, error) 
 		return nil, fmt.Errorf("%w: %w", ErrUserInfo, err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+id.Tokens.AccessToken)
+	req.Header.Set("Authorization", "Bearer "+id.Tokens.AccessToken.Reveal())
 	req.Header.Set("Accept", mediaJSON)
 
 	resp, err := c.send.Do(req) //nolint:gosec // G107/G704: endpoint from validated metadata, outbound policy enforced
@@ -124,7 +124,7 @@ func (c *Client) checkUserInfoRequest(id *Identity) error {
 		return fmt.Errorf("%w: no identity", ErrUserInfo)
 	case id.ConnectionID != c.cfg.ConnectionID || id.Issuer != c.md.Issuer:
 		return fmt.Errorf("%w: identity of another connection", ErrUserInfo)
-	case id.Subject == "" || id.Tokens.AccessToken == "":
+	case id.Subject == "" || id.Tokens.AccessToken.Reveal() == "":
 		return fmt.Errorf("%w: identity without subject or access token", ErrUserInfo)
 	case c.md.UserInfoEndpoint == "":
 		return fmt.Errorf("%w: the provider has no UserInfo endpoint", ErrUserInfo)

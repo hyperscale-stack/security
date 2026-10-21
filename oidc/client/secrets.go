@@ -129,9 +129,9 @@ func integrityFor(serverKey, secret []byte, tx *Transaction) string {
 
 // verifyIntegrity reports whether tx.Integrity is the MAC of tx under one
 // of the transaction keys, comparing in constant time.
-func verifyIntegrity(keys [][]byte, secret []byte, tx *Transaction) bool {
+func verifyIntegrity(keys []Secret, secret []byte, tx *Transaction) bool {
 	for _, key := range keys {
-		if hmac.Equal([]byte(integrityFor(key, secret, tx)), []byte(tx.Integrity)) {
+		if hmac.Equal([]byte(integrityFor([]byte(key.Reveal()), secret, tx)), []byte(tx.Integrity)) {
 			return true
 		}
 	}

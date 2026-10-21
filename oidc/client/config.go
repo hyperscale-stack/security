@@ -5,7 +5,6 @@
 package oidcclient
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -110,8 +109,9 @@ type Config struct {
 	ClientID string
 
 	// ClientSecret is the client secret, required for the client_secret_*
-	// methods and forbidden for AuthMethodNone.
-	ClientSecret string
+	// methods and forbidden for AuthMethodNone: NewSecret(secret). It never
+	// prints, logs nor encodes (see Secret).
+	ClientSecret Secret
 
 	// AuthMethod is the token endpoint authentication method. It has no
 	// default: choose it explicitly.
@@ -142,7 +142,7 @@ type Config struct {
 	// integrity MAC. REQUIRED: 1 to MaxTransactionKeys keys of at least
 	// MinTransactionKeySize bytes from a cryptographic source, secret like
 	// a session key and shared by every instance that may serve the
-	// callback. TransactionKeys[0] protects the transactions Begin stores;
+	// callback: NewSecret(string(key)). TransactionKeys[0] protects the transactions Begin stores;
 	// Complete accepts any of the keys. The MAC key of a transaction
 	// derives from both a transaction key and the login's binding secret,
 	// so whoever can write to the Store — even from the browser of a login
@@ -152,7 +152,7 @@ type Config struct {
 	// instance, then move it first, then remove the old key once
 	// TransactionTTL has elapsed. A key removed earlier fails the logins it
 	// protected with ErrTransactionIntegrity.
-	TransactionKeys [][]byte
+	TransactionKeys []Secret
 
 	// TransactionTTL bounds the time between Begin and the callback, in
 	// whole seconds: DefaultTransactionTTL when zero, at most
@@ -242,7 +242,7 @@ func (c Config) normalized() (Config, *url.URL, error) {
 	}
 
 	out.TrustedAudiences = slices.Clone(c.TrustedAudiences)
-	out.TransactionKeys = cloneKeys(c.TransactionKeys)
+	out.TransactionKeys = slices.Clone(c.TransactionKeys)
 	out.Outbound.AllowedPrefixes = slices.Clone(c.Outbound.AllowedPrefixes)
 	out.applyDefaults()
 
@@ -277,11 +277,11 @@ func (c Config) validateClient() error {
 
 	switch c.AuthMethod {
 	case AuthMethodClientSecretBasic, AuthMethodClientSecretPost:
-		if c.ClientSecret == "" {
+		if c.ClientSecret.Reveal() == "" {
 			return fmt.Errorf("%w: %s requires ClientSecret", ErrInvalidConfig, c.AuthMethod)
 		}
 	case AuthMethodNone:
-		if c.ClientSecret != "" {
+		if c.ClientSecret.Reveal() != "" {
 			return fmt.Errorf("%w: a public client (none) has no ClientSecret", ErrInvalidConfig)
 		}
 	default:
@@ -317,13 +317,13 @@ func (c Config) validateFlow() error {
 // validateTransactionKeys checks Config.TransactionKeys: 1 to
 // MaxTransactionKeys keys of at least MinTransactionKeySize bytes. The
 // errors never carry key material.
-func validateTransactionKeys(keys [][]byte) error {
+func validateTransactionKeys(keys []Secret) error {
 	if len(keys) == 0 || len(keys) > MaxTransactionKeys {
 		return fmt.Errorf("%w: TransactionKeys must hold 1 to %d keys", ErrInvalidConfig, MaxTransactionKeys)
 	}
 
 	for _, key := range keys {
-		if len(key) < MinTransactionKeySize {
+		if len(key.Reveal()) < MinTransactionKeySize {
 			return fmt.Errorf("%w: every TransactionKeys entry must be at least %d bytes", ErrInvalidConfig, MinTransactionKeySize)
 		}
 	}
@@ -331,23 +331,12 @@ func validateTransactionKeys(keys [][]byte) error {
 	return nil
 }
 
-// cloneKeys returns a deep copy of keys: the Client never shares key
-// bytes with its caller.
-func cloneKeys(keys [][]byte) [][]byte {
-	out := make([][]byte, len(keys))
-	for i, key := range keys {
-		out[i] = bytes.Clone(key)
-	}
-
-	return out
-}
-
 // String implements fmt.Stringer with the identifying fields only: the
 // client secret and the transaction keys are redacted.
 func (c Config) String() string {
 	return fmt.Sprintf("oidcclient.Config{ConnectionID: %q, Issuer: %q, ClientID: %q, ClientSecret: %s, AuthMethod: %s, "+
 		"RedirectURL: %q, ResponseMode: %s, TransactionKeys: %d REDACTED}",
-		c.ConnectionID, c.Issuer, c.ClientID, redacted(c.ClientSecret), c.AuthMethod, c.RedirectURL, c.ResponseMode,
+		c.ConnectionID, c.Issuer, c.ClientID, c.ClientSecret.String(), c.AuthMethod, c.RedirectURL, c.ResponseMode,
 		len(c.TransactionKeys))
 }
 
@@ -360,7 +349,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("connection_id", c.ConnectionID),
 		slog.String("issuer", c.Issuer),
 		slog.String("client_id", c.ClientID),
-		slog.String("client_secret", redacted(c.ClientSecret)),
+		slog.String("client_secret", c.ClientSecret.String()),
 		slog.String("auth_method", string(c.AuthMethod)),
 		slog.String("redirect_url", c.RedirectURL),
 		slog.String("response_mode", string(c.ResponseMode)),
@@ -370,36 +359,20 @@ func (c Config) LogValue() slog.Value {
 
 // MarshalJSON implements json.Marshaler like String: the identifying
 // fields, the client secret redacted and the transaction keys counted.
-// Without it, encoding/json would write the secret and the keys of a
-// Config that held no func.
 func (c Config) MarshalJSON() ([]byte, error) {
-	clientSecret := ""
-	if c.ClientSecret != "" {
-		clientSecret = redactedMark
-	}
-
-	return json.Marshal(struct { //nolint:wrapcheck // strings and an int only: never fails
+	return json.Marshal(struct { //nolint:wrapcheck // strings, a Secret and an int only: never fails
 		ConnectionID    string
 		Issuer          string
 		ClientID        string
-		ClientSecret    string
+		ClientSecret    Secret
 		AuthMethod      AuthMethod
 		RedirectURL     string
 		ResponseMode    ResponseMode
 		TransactionKeys int
 	}{
-		c.ConnectionID, c.Issuer, c.ClientID, clientSecret, c.AuthMethod, c.RedirectURL, c.ResponseMode,
+		c.ConnectionID, c.Issuer, c.ClientID, c.ClientSecret, c.AuthMethod, c.RedirectURL, c.ResponseMode,
 		len(c.TransactionKeys),
 	})
-}
-
-// redacted renders a secret as REDACTED, or as "" when it is empty.
-func redacted(secret string) string {
-	if secret == "" {
-		return `""`
-	}
-
-	return redactedMark
 }
 
 // validateIssuer checks an issuer identifier (OpenID Connect Core §2:

@@ -86,7 +86,7 @@ type connectionConfig struct {
 	ID           string
 	Issuer       string
 	ClientID     string
-	ClientSecret string
+	ClientSecret oidcclient.Secret
 	ResponseMode string // "" (query) or "form_post"
 }
 
@@ -100,7 +100,7 @@ type config struct {
 	Outbound outbound.Policy
 	// TransactionKeys protect the pending logins
 	// (oidcclient.Config.TransactionKeys): secret, shared by every instance.
-	TransactionKeys [][]byte
+	TransactionKeys []oidcclient.Secret
 	// MaxPendingLogins bounds the logins in progress the store keeps
 	// (defaultMaxPendingLogins when not positive).
 	MaxPendingLogins int
@@ -147,7 +147,7 @@ func loadConfig() (config, error) {
 			ID:           id,
 			Issuer:       os.Getenv(prefix + "ISSUER"),
 			ClientID:     os.Getenv(prefix + "CLIENT_ID"),
-			ClientSecret: os.Getenv(prefix + "CLIENT_SECRET"),
+			ClientSecret: oidcclient.NewSecret(os.Getenv(prefix + "CLIENT_SECRET")),
 			ResponseMode: os.Getenv(prefix + "RESPONSE_MODE"),
 		})
 	}
@@ -211,7 +211,7 @@ var errKeyNotHex = errors.New("not hex-encoded")
 // transactionKeys decodes OIDC_TRANSACTION_KEYS: hex-encoded keys separated
 // by commas. Unset, it draws one random key — for a single development
 // instance only: the logins in progress do not survive a restart.
-func transactionKeys(raw string) ([][]byte, error) {
+func transactionKeys(raw string) ([]oidcclient.Secret, error) {
 	if strings.TrimSpace(raw) == "" {
 		key := make([]byte, oidcclient.MinTransactionKeySize)
 		_, _ = rand.Read(key) // crypto/rand.Read never fails
@@ -219,10 +219,10 @@ func transactionKeys(raw string) ([][]byte, error) {
 		log.Print("oidc-client: OIDC_TRANSACTION_KEYS is not set: using a random per-process transaction key " +
 			"(logins in progress fail on a restart and cannot span instances)")
 
-		return [][]byte{key}, nil
+		return []oidcclient.Secret{oidcclient.NewSecret(string(key))}, nil
 	}
 
-	var keys [][]byte
+	var keys []oidcclient.Secret
 
 	for part := range strings.SplitSeq(raw, ",") {
 		key, err := hex.DecodeString(strings.TrimSpace(part))
@@ -231,7 +231,7 @@ func transactionKeys(raw string) ([][]byte, error) {
 			return nil, fmt.Errorf("OIDC_TRANSACTION_KEYS: key %d: %w", len(keys)+1, errKeyNotHex)
 		}
 
-		keys = append(keys, key)
+		keys = append(keys, oidcclient.NewSecret(string(key)))
 	}
 
 	return keys, nil
@@ -332,7 +332,7 @@ func newServer(ctx context.Context, cfg config) (http.Handler, error) {
 
 	for _, c := range cfg.Connections {
 		method := oidcclient.AuthMethodClientSecretBasic
-		if c.ClientSecret == "" {
+		if c.ClientSecret.Reveal() == "" {
 			method = oidcclient.AuthMethodNone
 		}
 

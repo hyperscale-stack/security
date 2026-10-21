@@ -1401,8 +1401,8 @@ are attacker-influenced.
   browser. The store is trusted for availability and single consumption
   only. The transaction keys are secrets like a session key: 32 bytes or
   more from a cryptographic source, shared by every instance serving
-  callbacks, never logged (`Config` and `*Client` redact them with every
-  `fmt` verb and in `slog`). Rotate them in three steps — add the new key last on every
+  callbacks, never logged (they are `oidcclient.Secret` values, which never
+  print, log nor encode). Rotate them in three steps — add the new key last on every
   instance, move it first, remove the old one once `TransactionTTL` has
   elapsed: the first key protects new transactions, every key is accepted.
 - **Single use** — `TransactionStore.Consume` removes the transaction
@@ -1505,13 +1505,12 @@ are attacker-influenced.
   (discovery and JWK Set requests only within the origin requested);
   `UserInfo` sends an identity's access token only to the UserInfo
   endpoint of the connection that issued it, and returns claims only when
-  their `sub` is the identity's. Every `fmt` verb and `slog` redact
-  secrets (`%p` of a non-pointer value excepted: fmt prints the fields
-  before any method), and so does `encoding/json` for `Config`,
-  `AuthRequest` and `Callback` — which matters to `slog`'s JSON handler,
-  which encodes a nested value with `encoding/json`. `Identity` and
-  `Tokens` deliberately encode their tokens (applications persist them),
-  `UserInfo` its claims: never log them nested in another value.
+  their `sub` is the identity's. Every credential is an
+  `oidcclient.Secret`: every `fmt` verb, `slog` and `encoding/json` render
+  it `REDACTED` — also when fmt reaches it by reflection through an
+  unexported field, where it prints as an address — and `Reveal()` is the
+  only way to its value. `Identity` encodes its claims and `UserInfo` its
+  claims (personal data): never log them nested in another value.
 - **Caveats** — sending `acr_values` makes `acr` required, among the
   requested values; a public client (`none`) requires the provider to
   advertise S256. `github.com/coreos/go-oidc` was evaluated and rejected:

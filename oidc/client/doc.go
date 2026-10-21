@@ -72,6 +72,11 @@
 //     Never route callbacks by the state value.
 //   - Nothing is returned before the ID Token is fully validated: tokens of
 //     a failed login are never exposed (RFC 9700 §4.5.3.2).
+//   - Every credential — the client secret, the transaction keys, the
+//     binding secret, the tokens — is a [Secret]: it prints, logs and
+//     encodes as REDACTED with every fmt verb, log/slog and encoding/json,
+//     also when fmt reaches it through an unexported field of another
+//     value; Secret.Reveal is the only way to its value.
 //   - JSON — the ID Token's JOSE header included — is parsed strictly:
 //     duplicate member names, two names that differ only by case, invalid
 //     UTF-8 and unpaired surrogate escapes are refused at every nesting

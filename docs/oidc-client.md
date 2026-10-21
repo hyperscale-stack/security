@@ -90,12 +90,13 @@ client, err := oidcclient.New(ctx, oidcclient.Config{
 	ConnectionID:    "acme",
 	Issuer:          "https://login.acme.example",
 	ClientID:        "my-client",
-	ClientSecret:    secret,
+	ClientSecret:    oidcclient.NewSecret(secret),
 	AuthMethod:      oidcclient.AuthMethodClientSecretBasic,
 	RedirectURL:     "https://app.example/oidc/acme/callback",
 	Scopes:          []string{"profile", "email"},
-	Store:           store,          // sqlstore or redisstore with several instances
-	TransactionKeys: [][]byte{key},  // 32+ secret bytes, shared by every instance
+	Store:           store, // sqlstore or redisstore with several instances
+	// 32+ secret bytes, shared by every instance
+	TransactionKeys: []oidcclient.Secret{oidcclient.NewSecret(string(key))},
 })
 
 mux.HandleFunc("POST /login/acme", func(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +157,11 @@ at several issuers defeats the distinct redirect URIs).
   compares the URL the browser used) or call `Complete` with the public URL.
 - After a successful callback, create a fresh session (a new ID) and
   answer 303 to a clean URL, so the code leaves the browser history.
+- Every credential — client secret, transaction keys, binding secret,
+  tokens — is an `oidcclient.Secret`: it prints, logs and encodes as
+  `REDACTED` wherever it sits (`TestSecretsNeverPrint`), and `Reveal()`
+  returns it where it is used. An application persisting tokens reveals
+  them explicitly: `Identity` and `Tokens` encode them `REDACTED`.
 - Show users a generic message on failure: `AuthorizationError` and
   `TokenError` carry the provider's untrusted text, and errors of `New` may
   name an allowed destination's address. Provider-controlled text an error

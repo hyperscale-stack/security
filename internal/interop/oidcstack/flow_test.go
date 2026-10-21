@@ -61,7 +61,7 @@ func TestCodeFlowAgainstOurProvider(t *testing.T) {
 			assert.Equal(t, []string{"pwd"}, id.AMR)
 			assert.WithinDuration(t, o.clock.now(), id.AuthTime, 2*time.Second)
 
-			_, claims := jwsParts(t, id.Tokens.IDToken)
+			_, claims := jwsParts(t, id.Tokens.IDToken.Reveal())
 			assert.Contains(t, claims, "at_hash", "the client verified at_hash")
 			assert.Contains(t, claims, "nonce")
 
@@ -104,7 +104,7 @@ func TestCodeFlowSigningAlgorithms(t *testing.T) {
 			id, err := o.login(t, c, oidcclient.AuthOptions{})
 			require.NoError(t, err)
 
-			header, _ := jwsParts(t, id.Tokens.IDToken)
+			header, _ := jwsParts(t, id.Tokens.IDToken.Reveal())
 			assert.Equal(t, string(alg), header["alg"])
 			assert.Equal(t, "root-"+name, header["kid"])
 		})
@@ -349,15 +349,15 @@ func TestRefreshOfAClientLogin(t *testing.T) {
 
 	id, err := o.login(t, c, oidcclient.AuthOptions{})
 	require.NoError(t, err)
-	assert.Empty(t, id.Tokens.RefreshToken, "no consent dialog, no offline access")
+	assert.Empty(t, id.Tokens.RefreshToken.Reveal(), "no consent dialog, no offline access")
 
 	id, err = o.login(t, c, oidcclient.AuthOptions{Prompt: []string{"consent"}})
 	require.NoError(t, err)
-	require.NotEmpty(t, id.Tokens.RefreshToken)
+	require.NotEmpty(t, id.Tokens.RefreshToken.Reveal())
 
 	o.clock.advance(time.Minute)
 
-	refreshed := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken)
+	refreshed := o.refresh(t, basicID, basicSecret, id.Tokens.RefreshToken.Reveal())
 	require.Equal(t, http.StatusOK, refreshed.status, refreshed.body)
 
 	raw, ok := refreshed.json["id_token"].(string)
@@ -367,7 +367,7 @@ func TestRefreshOfAClientLogin(t *testing.T) {
 	require.NoError(t, err)
 
 	var before, after map[string]any
-	_, before = jwsParts(t, id.Tokens.IDToken)
+	_, before = jwsParts(t, id.Tokens.IDToken.Reveal())
 	require.NoError(t, json.Unmarshal(verified.Payload, &after))
 
 	for _, claim := range []string{"iss", "sub", "aud", "auth_time", "amr"} {

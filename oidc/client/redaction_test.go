@@ -95,15 +95,15 @@ func TestSecretsAreRedacted(t *testing.T) {
 	c := op.client(t)
 	ar, code := op.begin(t, c, oidcclient.AuthOptions{})
 
-	assertRedacted(t, *ar, ar.Binding)
-	assertRedacted(t, ar, ar.Binding)
+	assertRedacted(t, *ar, ar.Binding.Reveal())
+	assertRedacted(t, ar, ar.Binding.Reveal())
 	assert.Contains(t, logged(*ar), "REDACTED")
 
 	cb := callbackFor(ar, code)
 	require.Contains(t, cb.URL.RawQuery, code, "the received URL carries the response in query mode")
 
-	assertRedacted(t, cb, ar.Binding, code, ar.State)
-	assertRedacted(t, &cb, ar.Binding, code, ar.State)
+	assertRedacted(t, cb, ar.Binding.Reveal(), code, ar.State)
+	assertRedacted(t, &cb, ar.Binding.Reveal(), code, ar.State)
 	assert.Contains(t, logged(cb), testRedirectURL, "the URL is logged without its query")
 	assert.Contains(t, logged(oidcclient.Callback{}), `URL: ""`, "a callback without URL")
 
@@ -111,7 +111,7 @@ func TestSecretsAreRedacted(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, v := range []any{id.Tokens, &id.Tokens, *id, id} {
-		assertRedacted(t, v, id.Tokens.AccessToken, id.Tokens.IDToken)
+		assertRedacted(t, v, id.Tokens.AccessToken.Reveal(), id.Tokens.IDToken.Reveal())
 	}
 
 	assert.Contains(t, logged(id), id.Subject, "an identity stays recognizable")
@@ -164,7 +164,9 @@ func TestConfigRedactsSecrets(t *testing.T) {
 		assert.Contains(t, logged(v), testConnection, "the identifying fields stay readable")
 	}
 
-	public := op.config(func(c *oidcclient.Config) { c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, "" })
+	public := op.config(func(c *oidcclient.Config) {
+		c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, oidcclient.Secret{}
+	})
 	assert.Contains(t, public.String(), `ClientSecret: ""`, "a public client has no secret to redact")
 
 	var none *oidcclient.Client
@@ -225,7 +227,7 @@ func TestLoginSecretsStayOutOfJSON(t *testing.T) {
 	cb := callbackFor(ar, code)
 
 	for _, v := range []any{*ar, ar} {
-		assertEncodedRedacted(t, v, ar.Binding)
+		assertEncodedRedacted(t, v, ar.Binding.Reveal())
 
 		b, err := json.Marshal(v)
 		require.NoError(t, err)
@@ -234,7 +236,7 @@ func TestLoginSecretsStayOutOfJSON(t *testing.T) {
 	}
 
 	for _, v := range []any{cb, &cb} {
-		assertEncodedRedacted(t, v, ar.Binding, code, ar.State)
+		assertEncodedRedacted(t, v, ar.Binding.Reveal(), code, ar.State)
 
 		b, err := json.Marshal(v)
 		require.NoError(t, err)
@@ -258,7 +260,9 @@ func TestLoginSecretsStayOutOfJSON(t *testing.T) {
 			testConnection, op.issuer, testClientID, testRedirectURL), string(b))
 	}
 
-	public := op.config(func(c *oidcclient.Config) { c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, "" })
+	public := op.config(func(c *oidcclient.Config) {
+		c.AuthMethod, c.ClientSecret = oidcclient.AuthMethodNone, oidcclient.Secret{}
+	})
 	b, err = json.Marshal(public)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"ClientSecret":""`, "a public client has no secret to redact")
@@ -276,7 +280,7 @@ func TestLoginSecretsStayOutOfJSON(t *testing.T) {
 func TestEmbeddingPromotesTheRedactedEncoding(t *testing.T) {
 	t.Parallel()
 
-	ar := oidcclient.AuthRequest{URL: "https://op.example/authorize", State: "s", Binding: "secret-binding"}
+	ar := oidcclient.AuthRequest{URL: "https://op.example/authorize", State: "s", Binding: oidcclient.NewSecret("secret-binding")}
 
 	type loginState struct {
 		oidcclient.AuthRequest
@@ -319,7 +323,7 @@ func TestEmbeddingPromotesTheRedactedEncoding(t *testing.T) {
 	require.NoError(t, err)
 
 	cb := oidcclient.Callback{
-		Mode: oidcclient.ResponseModeQuery, URL: received, Binding: "callback-binding",
+		Mode: oidcclient.ResponseModeQuery, URL: received, Binding: oidcclient.NewSecret("callback-binding"),
 		Params: url.Values{"code": {"code-xyz"}, "state": {"state-xyz"}},
 	}
 
@@ -352,10 +356,11 @@ type stamp struct{ At string }
 
 func (s stamp) MarshalJSON() ([]byte, error) { return json.Marshal(s.At) }
 
-// TestIdentityAndTokensStayJSONSerialisable pins the documented exception:
-// an Identity — its Tokens included — encodes and decodes in full, so that
-// an application can persist it (the golang.org/x/oauth2 convention).
-func TestIdentityAndTokensStayJSONSerialisable(t *testing.T) {
+// TestIdentityEncodesWithoutItsTokens checks that an Identity encodes to
+// JSON with its tokens REDACTED (they are Secrets) and its other fields as
+// they are, and that the document does not decode back into an Identity:
+// an application persists tokens by revealing them explicitly.
+func TestIdentityEncodesWithoutItsTokens(t *testing.T) {
 	t.Parallel()
 
 	op := newFakeOP(t)
@@ -365,11 +370,23 @@ func TestIdentityAndTokensStayJSONSerialisable(t *testing.T) {
 	b, err := json.Marshal(id)
 	require.NoError(t, err)
 
+	var doc struct {
+		Subject string
+		Claims  json.RawMessage
+		Tokens  map[string]any
+	}
+
+	require.NoError(t, json.Unmarshal(b, &doc))
+	assert.Equal(t, id.Subject, doc.Subject)
+	assert.JSONEq(t, string(id.Claims), string(doc.Claims), "claims are not secrets")
+	assert.Equal(t, "REDACTED", doc.Tokens["AccessToken"])
+	assert.Equal(t, "REDACTED", doc.Tokens["RefreshToken"])
+	assert.Equal(t, "REDACTED", doc.Tokens["IDToken"])
+	assert.Equal(t, "Bearer", doc.Tokens["TokenType"])
+	assert.NotContains(t, string(b), id.Tokens.IDToken.Reveal())
+
 	var back oidcclient.Identity
-	require.NoError(t, json.Unmarshal(b, &back))
-	assert.Equal(t, id.Tokens, back.Tokens)
-	assert.Equal(t, id.Subject, back.Subject)
-	assert.JSONEq(t, string(id.Claims), string(back.Claims))
+	require.Error(t, json.Unmarshal(b, &back), "a redacted document never decodes back into credentials")
 }
 
 // TestUserInfoIsRedacted checks that UserInfo prints and logs its subject

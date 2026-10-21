@@ -25,12 +25,12 @@ import (
 // can assert the same value. With pairwise subject identifiers the same
 // person has a different Subject for every client.
 //
-// Tokens holds credentials. fmt and log/slog print Identity without them,
-// but encoding/json writes them — deliberately, so that an application can
-// persist an Identity (the golang.org/x/oauth2 convention for tokens). An
-// Identity nested in a value that log/slog's JSON handler logs (a struct
-// field, a map) is therefore written in full, tokens and claims included:
-// log it as an attribute of its own, which LogValue redacts.
+// Tokens holds credentials, as Secrets: fmt, log/slog and encoding/json
+// print an Identity without them, wherever it sits — an application
+// persisting tokens reveals them explicitly (Secret.Reveal). Its claims are
+// not secrets: an Identity nested in a value that log/slog's JSON handler
+// logs (a struct field, a map) is written with them; log it as an
+// attribute of its own, which LogValue reduces to its identifiers.
 type Identity struct {
 	// ConnectionID is the Config.ConnectionID of the Client.
 	ConnectionID string
@@ -88,20 +88,20 @@ func (id *Identity) DecodeClaims(v any) error {
 	return nil
 }
 
-// Tokens are the tokens of a login. They are credentials: String, GoString,
-// Format and LogValue redact them, but encoding/json writes them —
-// deliberately, for persistence — including when log/slog's JSON handler
-// encodes Tokens nested in another value.
+// Tokens are the tokens of a login. They are credentials, held as Secrets:
+// they never print, log nor encode — encoding/json writes them REDACTED.
+// Reveal them to use them (an API call, the application's own token
+// storage).
 type Tokens struct {
 	// AccessToken authorizes calls to the provider's APIs and UserInfo.
-	AccessToken string
+	AccessToken Secret
 	// TokenType is the token_type, Bearer.
 	TokenType string
-	// RefreshToken is the refresh token, "" when none was issued. The
+	// RefreshToken is the refresh token, empty when none was issued. The
 	// application redeems it itself.
-	RefreshToken string
+	RefreshToken Secret
 	// IDToken is the compact ID Token the Identity was validated from.
-	IDToken string
+	IDToken Secret
 	// Scope is the granted scope when the response states it.
 	Scope string
 	// Expiry is when the access token expires, zero when unstated.

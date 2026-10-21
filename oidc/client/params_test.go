@@ -125,7 +125,7 @@ func TestBeginSendsEveryParameterOnce(t *testing.T) {
 
 	ar, err := c.Begin(context.Background(), oidcclient.AuthOptions{
 		LoginHint:   "jane@example.com",
-		IDTokenHint: "eyJ.x.y",
+		IDTokenHint: oidcclient.NewSecret("eyJ.x.y"),
 		Prompt:      []string{"login"},
 		MaxAge:      &maxAge,
 		ACRValues:   []string{"urn:mfa"},
