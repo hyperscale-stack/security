@@ -478,6 +478,12 @@ PKCE. Not supported, and refused where a provider could select them:
   the user meant to start a login: the application must start logins only
   from a same-origin gesture (see
   [docs/saml-sp.md](docs/saml-sp.md#5-sessions-and-logout)).
+  `examples/saml-sp` refuses a login whose `Sec-Fetch-Site` is missing,
+  `cross-site` or `same-site`: browsers without Fetch Metadata (Safari and
+  iOS before 16.4) cannot sign in to it, it needs an https or loopback
+  origin, and `none` still admits a login forced through a link opened
+  from another application (a mail client); only a CSRF-protected POST
+  closes that.
 - **Login CSRF through a leaked in-flight request** — the IdP redirect URL
   carries the request ID and the RelayState handle. Whoever learns it
   while the login is pending (`TransactionTTL`) can sign the victim in as
@@ -518,7 +524,7 @@ PKCE. Not supported, and refused where a provider could select them:
   SP switches.
 - **Interoperability** — CI runs the SP against crewjam/saml's IdP and
   replays 15 pinned Keycloak responses (26.7.4 and 26.0.7). Live runs
-  against Keycloak 26.7.4 and the browser suite (Chrome 154) are opt-in;
+  against Keycloak 26.7.4 and the browser suite (Chrome 155) are opt-in;
   no other IdP (AD FS, Entra ID, Okta, Shibboleth) and no other browser
   engine is tested. See
   [docs/saml-sp.md](docs/saml-sp.md#interoperability-evidence).

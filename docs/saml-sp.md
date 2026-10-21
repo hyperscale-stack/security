@@ -311,9 +311,10 @@ CREATE TABLE external_identity (
     login of a connection whose IdP signs her in as the attacker, typically
     the attacker's own tenant. `BeginLogin` cannot tell: the victim's
     browser started that login. **The application must start logins only
-    from a same-origin user gesture**: a GET whose `Sec-Fetch-Site` is
-    `same-origin` or `none` (a link of the site, the address bar), or a POST
-    carrying a CSRF token. Refuse `cross-site` and `same-site`.
+    from a same-origin user gesture**: a GET whose `Sec-Fetch-Site` (Fetch
+    Metadata §2.3) is `same-origin` or `none` (a link of the site, the
+    address bar), or a POST carrying a CSRF token. Refuse `cross-site`,
+    `same-site` and a missing header.
   - *A leaked in-flight request*: the IdP redirect URL carries the request
     ID and the RelayState handle. Whoever learns it while the login is
     pending (browser history, a proxy log) can sign in at the IdP as
@@ -326,19 +327,27 @@ CREATE TABLE external_identity (
     log full IdP redirect URLs, and show the signed-in account after a
     login.
 
-  `examples/saml-sp` gates its login this way and also accepts a request
-  without `Sec-Fetch-Site`, which browsers older than Fetch Metadata do not
-  send. That trade-off keeps those browsers working and leaves them open to
-  forced initiation. A strict deployment refuses a missing header too, or
-  starts logins with a CSRF-protected POST. The browser suite (BR8) shows
-  the example refusing a login forced from another site and from a sibling
-  host. It also shows a header-less forced login completing, because the
-  library leaves intent to the application.
+  `examples/saml-sp` gates its login this way and refuses a request
+  without `Sec-Fetch-Site` (403): it cannot be told from a login forced in
+  a browser that sends no Fetch Metadata. The gate has three consequences:
+  - browsers without Fetch Metadata — Safari and iOS web views before
+    16.4 — cannot sign in; serve them a CSRF-protected POST instead if
+    they matter;
+  - browsers send the header only to potentially trustworthy URLs (Fetch
+    Metadata §3): the site must be served over https (or http on a
+    loopback host), otherwise every login is refused;
+  - `none` also covers a navigation the user started outside any page,
+    such as a link opened from a mail client: a login forced through an
+    emailed link remains possible. Only a CSRF-protected POST closes it.
+
+  The browser suite (BR8) shows the example refusing a login forced from
+  another site, from a sibling host and from a browser without Fetch
+  Metadata, while a click on the site still signs in.
 
 ```go
 mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "none": // add "" to admit browsers without Fetch Metadata
+	case "same-origin", "none": // a missing header is refused: it may be a forced login
 	default:
 		http.Error(w, "start the sign-in from this site", http.StatusForbidden)
 		return
@@ -636,20 +645,21 @@ to the cookie, login or ACS code of `saml/sp`.
 | BR5 | tampered, swapped, missing and URL RelayStates are refused, consume nothing and never leave the site |
 | BR6 | a login started on another host than the ACS fails |
 | BR7 | an IdP-initiated response is unsolicited |
-| BR8 | the example's `Sec-Fetch-Site` gate refuses a login forced from another site or from a sibling host, and a click on the site still signs in; without Fetch Metadata, a forced login completes |
+| BR8 | the example's `Sec-Fetch-Site` gate refuses a login forced from another site, from a sibling host, or from a browser without Fetch Metadata (no header), and a click on the site still signs in |
 | BE1 | logout is local: the next login is silent |
 | BE2 | twelve hostile return targets never leave the site |
 
 ### Interoperability evidence
 
 Recorded on 2026-10-12, re-run on 2026-10-13 after the security audit
-fixes:
+fixes; the browser suite was re-run on 2026-10-21 after the example's
+login gate changed:
 
 | Peer | Version | How | Result |
 | --- | --- | --- | --- |
 | crewjam/saml IdP | v0.5.1 | CI, in process | pass |
 | Keycloak (Apache Santuario) | 26.7.4 (`sha256:82a77884…`) | live, K1–K8 | 17/17 subtests pass |
-| Chrome | 154.0.8037.98 | Tales v0.1.0-rc.23, `make e2e` | 16 scenarios pass |
+| Chrome | 155.0.8059.85 | Tales v0.1.0-rc.23, `make e2e-saml` | 16 scenarios pass |
 | PostgreSQL | 16 (`sha256:ca0bd484…`) | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |
 | MySQL | 8.0 (`sha256:7dcddc01…`), with and without `clientFoundRows`, and as a latin1 database under `sql_mode=''` | CI (`make test-backends`): conformance suite, races (10 rounds, 16 contenders, race detector) and a non-ASCII `AppState` round trip | pass |
 | Redis | 7.4 (`sha256:4fa24486…`), `noeviction` | CI (`make test-backends`): conformance suite and races (10 rounds, 16 contenders, race detector) | pass |

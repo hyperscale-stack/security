@@ -1083,10 +1083,12 @@ IdP to send one assertion carrying a persistent NameID:
   navigations — Fetch Metadata's `Sec-Fetch-Site` is `same-origin` or
   `none` (typed URL, bookmark); refuse `cross-site` and `same-site` — or
   from a CSRF-protected POST. `examples/saml-sp` does the former and
-  accepts requests without the header, so browsers older than Fetch
-  Metadata keep working but stay exposed; a strict deployment refuses a
-  missing header too. The browser suite (BR8) shows both
-  ([guide](saml-sp.md#5-sessions-and-logout)).
+  also refuses a request without the header, which a login forced in a
+  browser without Fetch Metadata would be: those browsers (Safari and iOS
+  before 16.4) cannot sign in to it, the header reaches only https (or
+  loopback) sites (Fetch Metadata §3), and `none` still admits a login
+  forced through a link opened from another application. The browser suite
+  (BR8) shows the refusals ([guide](saml-sp.md#5-sessions-and-logout)).
 - **The ACS location is checked** (Core §3.2.2, Bindings §3.5.5.2): the
   request must have been received at the connection's ACS URL — the same
   escaped path, the same host (`r.Host`, never a forwarding header), no

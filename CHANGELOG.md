@@ -2019,3 +2019,8 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   characters such as a zero-width space, while it refused an empty one: a
   misbehaving IdP could collapse users onto one account. Such a NameID is
   now refused with `ErrInvalidAssertion`; values are still never trimmed.
+- `examples/saml-sp` admitted a login start without `Sec-Fetch-Site`, so a
+  page could force a login — into an account the attacker controls — in a
+  browser that sends no Fetch Metadata. The example now answers such a
+  request 403, like a `cross-site` or `same-site` one; browsers without
+  Fetch Metadata (Safari and iOS before 16.4) cannot sign in to it.
