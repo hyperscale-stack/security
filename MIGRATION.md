@@ -2716,3 +2716,26 @@ To migrate:
    refuses an unknown grant-context member). During a rolling deployment
    the end-user authorizes again; after a rollback, the refresh tokens of
    the plain grants issued since the upgrade stop working.
+
+### `session`: a session without a subject never reaches the `PrincipalLoader`; typed-nil principals are refused
+
+`session.Authenticator` handed every decoded session to the
+`PrincipalLoader` and checked its principal with `== nil`. A loader
+returning a typed nil — `return users[sub], roles, nil` over a map of
+pointers, for a user deleted since sign-in — authenticated the request
+as a principal that panics on its first use. The `PrincipalLoader`
+contract also asked loaders to refuse a session without subject; a loader
+that mapped it to a guest principal authenticated it.
+
+| | Before | After |
+| --- | --- | --- |
+| Loader returns a typed nil principal | authenticated (then a panic) | refused, `ErrInvalidCredentials` (401) |
+| Session without a `"sub"` string — `Login(ctx, c, nil)` —, with `"sub": ""` or a non-string `"sub"` | passed to the loader | refused before the loader, `ErrInvalidCredentials` |
+
+To migrate:
+
+1. Keep the subject under `"sub"` — `Manager.Login` writes it from the
+   principal: sessions whose subject lives under another key, or whose
+   subject is empty, no longer authenticate.
+2. Keep subject-less sessions (a sign-in form's) on a `Manager` no
+   `Extractor` reads, as `VerifyCSRF`'s documentation shows.

@@ -1271,6 +1271,14 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   one unauthenticated request with an unknown user-id panicked (and, under
   `grpcsec`, crashed the server). A typed nil is now an unknown user:
   verified against the dummy hash and refused like any unknown account.
+- `session.Authenticator` authenticated a typed-nil principal — a
+  `PrincipalLoader` returning `users[sub], roles, nil` over a map of
+  pointers for a deleted user —, which `voter.Authenticated` granted and
+  which panicked on its first use: the deleted user's cookie kept access
+  until it expired. A typed nil is refused (`ErrInvalidCredentials`), and a
+  session without a `"sub"` string is refused before the loader is called,
+  as the `PrincipalLoader` contract required. See
+  [MIGRATION.md](MIGRATION.md).
 
 ### Removed
 

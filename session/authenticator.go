@@ -29,11 +29,11 @@ type PrincipalLoader interface {
 	// scopes one security.ScopePrefix + scope authority each
 	// ("scope:read"): that is what voter.HasRole and voter.HasScope match.
 	//
-	// A session without a subject — opened with Manager.Login(ctx, c, nil)
-	// — MUST be refused with security.ErrInvalidCredentials, never mapped
-	// to a principal (anonymous or guest): the Authenticator would return
-	// an authenticated value that voter.Authenticated grants. Keep such
-	// sessions (a sign-in form's) on a Manager no Extractor reads.
+	// The Authenticator never calls Load for a session without a subject —
+	// no "sub" string value, as Manager.Login(ctx, c, nil) opens —: it
+	// refuses it with security.ErrInvalidCredentials. Keep such sessions (a
+	// sign-in form's) on a Manager no Extractor reads. Return a principal,
+	// never a nil one — a typed nil included —, which is refused.
 	//
 	// Returning an error fails authentication, and its sentinel tells the
 	// transports how to answer: wrap security.ErrInvalidCredentials for a
@@ -72,7 +72,11 @@ func (a *Authenticator) Supports(auth security.Authentication) bool {
 	return ok
 }
 
-// Authenticate implements [security.Authenticator].
+// Authenticate implements [security.Authenticator]. It refuses with
+// [security.ErrInvalidCredentials], before calling the [PrincipalLoader], a
+// session whose "sub" value is not a non-empty string — opened with
+// Manager.Login(ctx, c, nil), or by a principal without subject —, and
+// after it a nil principal, a typed nil included.
 func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authentication) (security.Authentication, error) {
 	in, ok := auth.(Authentication)
 	if !ok {
@@ -81,12 +85,19 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 
 	// A failure returns the anonymous authentication, never its input: the
 	// pending value holds the decoded session.
+	if sub, _ := in.session.Values["sub"].(string); sub == "" {
+		return security.Anonymous(), fmt.Errorf("session: no subject: %w", security.ErrInvalidCredentials)
+	}
+
 	principal, authorities, err := a.loader.Load(ctx, in.session.Values)
 	if err != nil {
 		return security.Anonymous(), fmt.Errorf("session: load principal: %w", err)
 	}
 
-	if principal == nil {
+	// A typed nil — `return users[sub], roles, nil` over a map of pointers
+	// — counts as nil: it would authenticate a principal that panics on its
+	// first use.
+	if isNil(principal) {
 		return security.Anonymous(), fmt.Errorf("session: loader returned nil principal: %w", security.ErrInvalidCredentials)
 	}
 
