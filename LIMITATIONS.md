@@ -184,10 +184,13 @@ matrix. Not supported, and never advertised:
   code exchange and refresh whose access-token audience is the requesting
   client's ID, or the ID of a client registered at the token's issuer that
   declares the `authorization_code` grant (such a client receives ID Tokens
-  whose `aud` is its client ID). `client_credentials` and legacy `password`
-  tokens never reach the provider: their audience is checked only through
-  the code exchanges and refreshes of the same issuer. Keep every
-  `IssuerResolver` audience apart from the client IDs of relying parties.
+  whose `aud` is its client ID). The first tokens of the `client_credentials`
+  and legacy `password` grants never reach the provider (a refresh does):
+  their audience is checked only through the code exchanges and refreshes
+  of the same issuer. A client that declares `refresh_token` but no longer
+  `authorization_code` still refreshes the OpenID grants it holds, yet is
+  not counted. Keep every `IssuerResolver` audience apart from the client
+  IDs of relying parties.
 - **Claim-name aliasing beyond case variants** — the provider compares claim
   names ignoring case (simple and full case mappings), the diacritics
   lodash's `camelCase` strips from Latin letters, and every character but
@@ -197,10 +200,13 @@ matrix. Not supported, and never advertised:
   compatibility normalization (NFKC: fullwidth `ｓｕｂ`), stripping other
   diacritics (`ṡ`, beyond Latin-1 and Latin Extended-A), under
   locale-sensitive collation, or reading confusable letters (Cyrillic `ѕ`)
-  as Latin ones is not covered, nor is a tagged name of an undeclared claim
-  whose key extends a known claim's (`named#ech` and `name#de-CH`: equal
-  only under camelCase followed by a case-insensitive comparison; both are
-  dropped when released together). An application claim missing from
+  as Latin ones is not covered. The continuation rule also over-refuses: a
+  tagged variant whose claim name followed by the first letters of its tag
+  spells another known claim is never released — declaring `emails` drops
+  `email#sv`; declaring `named` drops the standard `name#de-CH` and still
+  releases `named#ech`, which a camelCase relying party comparing
+  case-insensitively reads as `name#de-CH`. Keep application claim names
+  from extending standard ones. An application claim missing from
   `Config.ClaimsSupported` is released under another spelling when requested
   alone, and dropped together with such a variant — an end-user can suppress
   it: declare every claim relying parties decide on.

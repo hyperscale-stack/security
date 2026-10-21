@@ -164,7 +164,10 @@ func (p *Provider) checkAudience(ctx context.Context, iss oauth2.TokenIssuance) 
 // declaring the authorization_code grant. A client that cannot receive ID
 // Tokens there — a resource server registered for introspection only, a
 // client_credentials client, a client of another issuer — may be the
-// audience. An empty audience names none.
+// audience. So may, by this rule, a client that declares refresh_token but
+// no longer authorization_code, although it keeps refreshing the OpenID
+// grants it holds: keep audiences apart from such clients' IDs too. An
+// empty audience names none.
 func (p *Provider) audienceNamesRP(ctx context.Context, aud, issuer string, requester oauth2.Client) (bool, error) {
 	switch {
 	case aud == "":

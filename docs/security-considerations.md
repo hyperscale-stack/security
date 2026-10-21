@@ -849,8 +849,9 @@ is, never for the protocol rules:
   Token's audience is the client ID, and every code exchange and refresh
   whose access-token audience is the requesting client's ID, or that of a
   client registered at the issuer that declares `authorization_code`, is
-  refused (`server_error`) — `client_credentials` and `password` tokens are
-  checked only through the exchanges of the same issuer, so keep every
+  refused (`server_error`) — the first tokens of `client_credentials` and
+  `password` grants are checked only through the exchanges of the same
+  issuer, so keep every
   `IssuerResolver` audience apart from relying parties' client IDs; JWT
   access tokens are typed `at+jwt`. Resource servers require that type —
   `jwtsec.BearerVerifier` refuses a verifier without
