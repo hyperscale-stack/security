@@ -26,8 +26,11 @@ import (
 const gosamlMaxTokens = 3*(2*MaxResponseElements+4096) + 1
 
 // verifyResponse runs gosaml2 (and goxmldsig) over the pre-checked bytes
-// with the connection's trusted certificates and returns the decoded,
-// verified response: every value comes from the digested canonical bytes.
+// with the connection's trusted certificates and returns the decoded
+// response: every value of a signed element comes from the digested
+// canonical bytes. With an Assertion-only signature, the Response envelope
+// is decoded from unsigned bytes and the post-checks use it for refusals
+// only.
 //
 // When a signature has no KeyInfo (or had one without certificate, cut by
 // the pre-check) and the connection trusts several certificates, goxmldsig

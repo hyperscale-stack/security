@@ -66,14 +66,29 @@ Trust comes from the connection only: the pinned IdP entity ID and its 1 to
   Response is signed (`ErrInvalidSignature`: that signature covers it).
   Without `KeyInfo`, the three most recent valid certificates are tried,
   the one that verified the connection's last such signature first.
-- Every value is read from the verified, canonical bytes (gosaml2 and
+- Every value of the assertion — issuer, subject and `NameID`, bearer
+  confirmation, conditions and audiences, authentication statement,
+  attributes — is read from the verified, canonical bytes (gosaml2 and
   goxmldsig), never from the raw document. A comment injected into a
   `NameID` cannot truncate it; the corpus and the Keycloak wrapping tests
   check this on real Apache Santuario output.
+- The Response envelope (`Version`, `Issuer`, `Destination`,
+  `InResponseTo`, `IssueInstant`) is decoded by gosaml2 as well, but a
+  signature covers it only when the Response is signed. When only the
+  Assertion is signed, these values are unsigned: they only ever add
+  refusals, never grant anything.
+- The structural pre-check reads from the raw document only: the
+  top-level `Status` (a non-Success one ends the login as a `*StatusError`,
+  whose fields are unsigned unless the Response is signed), the Response
+  `InResponseTo` (compared, refusal only), whether each signature has a
+  `KeyInfo` and whether it carries a certificate (certificate selection,
+  and the cut of a certificate-less `KeyInfo`), and whether a
+  `ProxyRestriction` has a `Count` attribute (its value is the verified
+  one).
 
 | Value | Read from | Must equal |
 | --- | --- | --- |
-| Response `Issuer` and Assertion `Issuer` (one each, required) | the verified response | the connection's IdP entity ID; the `Format`, if any, is `entity` |
+| Response `Issuer` and Assertion `Issuer` (one each, required) | the decoded response: the Assertion's verified, the Response's signed only when the Response is | the connection's IdP entity ID; the `Format`, if any, is `entity` |
 | `Destination` | Response (compared when present, required when the Response is signed) | the connection's ACS URL |
 | Received location | the HTTP request: escaped path, `r.Host`, query string | the ACS URL's path and host, without a query string (Core §3.2.2, Bindings §3.5.5.2) |
 | `Origin`, or `Referer` without `Origin` | the HTTP request, when `Connection.ResponseOrigins` is set | one of those origins |
@@ -201,7 +216,16 @@ Keycloak run hit this with a freshly generated realm key.
   assertion.
 - Retention is the last instant the assertion could be accepted, plus a
   one-minute margin: `min(SubjectConfirmationData NotOnOrAfter + skew,
-  rounded up to the second; transaction expiry) + 1 minute`.
+  rounded up to the second; transaction expiry) + 1 minute`. Profiles
+  §4.1.4.5 asks to keep the ID for as long as the assertion "would be
+  considered valid based on the NotOnOrAfter" of its bearer confirmation;
+  here it is considered valid only until its transaction expires too: the
+  signed `InResponseTo` must name the transaction's request, and the
+  expiry is covered by the transaction MAC and judged on the SP's clock.
+  Capping at that expiry therefore leaves no window — a replay is refused
+  by the replay cache before it and by the expiry after it, even by a store
+  that lost the consumption — and keeps an IdP's multi-year `NotOnOrAfter`
+  from growing the cache (`TestCompleteLogin_ReplayRetentionLeavesNoGap`).
 - Purging is per store:
   - `saml/sp/storage/memory` (development, tests and single-instance
     demos) sweeps the expired records every 64 writes on its clock — give

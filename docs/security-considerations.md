@@ -923,8 +923,13 @@ mapping, the deployment and rollover runbooks, and the test evidence.
   verified as one without `KeyInfo`.
 - **What is verified is what is used.** gosaml2 and goxmldsig verify the
   signature and decode the identity from the verified canonical bytes; no
-  identity data is read from the raw document, so a comment injected in a
-  `NameID` (the CVE-2017-11427 class) cannot truncate it. Before
+  identity value is read from the raw document (only whether a
+  `ProxyRestriction` carries a `Count`, whose value is the verified one),
+  so a comment injected in a `NameID` (the CVE-2017-11427 class) cannot
+  truncate it. The Response envelope (`Issuer`, `Destination`,
+  `InResponseTo`, `IssueInstant`) and the `Status` are signed only when
+  the Response is; unsigned, they only add refusals
+  ([guide](saml-sp.md#31-signatures-and-what-is-read-from-where)). Before
   verification, a structural profile pins the single `Assertion` as a child
   of the `Response`, unique `ID`s and the placement of every signature, so
   signature-wrapping attacks have nothing to wrap (see
