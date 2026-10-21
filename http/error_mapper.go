@@ -66,7 +66,8 @@ type ErrorMapper interface {
 // A throttled attempt — [security.ErrTooManyAttempts] — is answered 429 Too
 // Many Requests (RFC 6585 §4) with Cache-Control: no-store and, when the
 // [*security.TooManyAttemptsError] knows the delay, a Retry-After field in
-// whole seconds rounded up (RFC 9110 §10.2.3). Its credentials were not
+// whole seconds rounded up (RFC 9110 §10.2.3) — the first one of the error
+// chain when several authenticators throttled. Its credentials were not
 // checked: a Bearer challenge carries no error code.
 //
 // An empty scheme means "Bearer" and an empty realm [DefaultRealm].

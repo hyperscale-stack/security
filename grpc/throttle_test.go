@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -120,6 +121,12 @@ func TestInterceptorsSupplyTheClientAddress(t *testing.T) {
 		{"Unix socket peer", peer.NewContext(context.Background(), &peer.Peer{Addr: &net.UnixAddr{Name: "@", Net: "unix"}}),
 			netip.Addr{}, false},
 		{"no peer", context.Background(), netip.Addr{}, false},
+		// Review m3 (mutant G10): a peer without address must not panic —
+		// grpc-go recovers no panic.
+		{"peer without address", peer.NewContext(context.Background(), &peer.Peer{}), netip.Addr{}, false},
+		// Review m4: forwarded metadata is client input, never trusted.
+		{"forwarded metadata ignored", metadata.NewIncomingContext(tcpPeer("203.0.113.7"),
+			metadata.Pairs("x-forwarded-for", "192.0.2.66", "x-real-ip", "192.0.2.67")), netip.MustParseAddr("203.0.113.7"), true},
 		{"set upstream", security.WithClientAddr(tcpPeer("203.0.113.7"), netip.MustParseAddr("192.0.2.44")),
 			netip.MustParseAddr("192.0.2.44"), true},
 	}

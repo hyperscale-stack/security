@@ -41,8 +41,8 @@ type ErrorMapper interface {
 // gRPC clients commonly retry Unavailable: authenticators wrap
 // [security.ErrUnavailable] only for a transient dependency failure, and an
 // error wrapping no security sentinel is an internal error. A throttled
-// attempt ([security.ErrTooManyAttempts]) is ResourceExhausted — gRPC has
-// no standard field for its retry delay.
+// attempt ([security.ErrTooManyAttempts]) is ResourceExhausted; its retry
+// delay is not sent.
 func DefaultErrorMapper() ErrorMapper { return defaultErrorMapper{} }
 
 type defaultErrorMapper struct{}

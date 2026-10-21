@@ -39,13 +39,17 @@ func TestDefaultErrorMapperAnswersAThrottleResourceExhausted(t *testing.T) {
 		{"basic", "Basic", throttled, "60", nil},
 		{"delay unknown", "", security.ErrTooManyAttempts, "", []string{bearerAPI}},
 		{"joined", "", errors.Join(security.ErrInvalidCredentials, throttled), "60", []string{bearerAPI}},
+		// Review m3 (mutant K10): an unknown delay sends no Retry-After.
+		{"zero delay", "", &security.TooManyAttemptsError{}, "", []string{bearerAPI}},
+		{"negative delay", "", &security.TooManyAttemptsError{RetryAfter: -time.Second}, "", []string{bearerAPI}},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			// A bearer token was sent: still no RFC 6750 error code.
+			// The mapper alone, without the interceptors' bearer flag: the
+			// interceptor test below covers a request carrying a token.
 			ctx := context.Background()
 			got := connectrpcsec.DefaultErrorMapper(c.scheme, "").Map(ctx, c.err)
 
@@ -124,16 +128,19 @@ func TestInterceptorSuppliesTheClientAddress(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		peer     string
-		upstream *netip.Addr
-		want     netip.Addr
-		found    bool
+		name      string
+		peer      string
+		upstream  *netip.Addr
+		forwarded bool
+		want      netip.Addr
+		found     bool
 	}{
-		{"IPv4 peer", "203.0.113.7:443", nil, netip.MustParseAddr("203.0.113.7"), true},
-		{"IPv6 peer", "[2001:db8::7]:443", nil, netip.MustParseAddr("2001:db8::7"), true},
-		{"no peer", "", nil, netip.Addr{}, false},
-		{"set upstream", "203.0.113.7:443", new(netip.MustParseAddr("192.0.2.44")), netip.MustParseAddr("192.0.2.44"), true},
+		{"IPv4 peer", "203.0.113.7:443", nil, false, netip.MustParseAddr("203.0.113.7"), true},
+		{"IPv6 peer", "[2001:db8::7]:443", nil, false, netip.MustParseAddr("2001:db8::7"), true},
+		{"no peer", "", nil, false, netip.Addr{}, false},
+		{"set upstream", "203.0.113.7:443", new(netip.MustParseAddr("192.0.2.44")), false, netip.MustParseAddr("192.0.2.44"), true},
+		// Review m4: forwarded headers are client input, never trusted.
+		{"forwarded headers ignored", "203.0.113.7:443", nil, true, netip.MustParseAddr("203.0.113.7"), true},
 	}
 
 	for _, c := range cases {
@@ -150,6 +157,11 @@ func TestInterceptorSuppliesTheClientAddress(t *testing.T) {
 			req := connect.NewRequest(&struct{}{})
 			req.Header().Set("Authorization", "Bearer letmein")
 
+			if c.forwarded {
+				req.Header().Set("X-Forwarded-For", "192.0.2.66")
+				req.Header().Set("Forwarded", "for=192.0.2.68")
+			}
+
 			_, err := connectrpcsec.NewAuthenticationInterceptor(
 				security.NewEngine(security.NewManager(unary), tokenExtractor{}),
 			).WrapUnary((&recordingUnary{}).fn)(ctx, peerRequest{Request: req, peer: c.peer})
@@ -157,6 +169,10 @@ func TestInterceptorSuppliesTheClientAddress(t *testing.T) {
 
 			conn := peerConn{fakeStreamingHandlerConn: newStreamConn(nil), peer: c.peer}
 			conn.reqHdr.Set("Authorization", "Bearer letmein")
+
+			if c.forwarded {
+				conn.reqHdr.Set("X-Forwarded-For", "192.0.2.66")
+			}
 
 			err = connectrpcsec.NewAuthenticationInterceptor(
 				security.NewEngine(security.NewManager(stream), tokenExtractor{}),

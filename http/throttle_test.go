@@ -53,6 +53,10 @@ func TestMiddlewareAnswersAThrottledAttemptWith429(t *testing.T) {
 			bearerRequest(), "1", []string{bearerAPI}},
 		{"joined with another refusal", errors.Join(security.ErrInvalidCredentials, throttled), nil,
 			bearerRequest(), "2", []string{bearerAPI}},
+		// Review m3 (mutant H10): an unknown delay sends no Retry-After —
+		// "0" would mean "retry now".
+		{"zero delay", &security.TooManyAttemptsError{}, nil, bearerRequest(), "", []string{bearerAPI}},
+		{"negative delay", &security.TooManyAttemptsError{RetryAfter: -time.Second}, nil, bearerRequest(), "", []string{bearerAPI}},
 	}
 
 	for _, c := range cases {
@@ -106,15 +110,19 @@ func TestMiddlewareSuppliesTheClientAddress(t *testing.T) {
 		name       string
 		remoteAddr string
 		upstream   *netip.Addr
+		forwarded  bool
 		want       netip.Addr
 		found      bool
 	}{
-		{"IPv4 peer", "203.0.113.7:51234", nil, netip.MustParseAddr("203.0.113.7"), true},
-		{"IPv6 peer", "[2001:db8::7]:443", nil, netip.MustParseAddr("2001:db8::7"), true},
-		{"IPv4-mapped peer", "[::ffff:198.51.100.2]:80", nil, netip.MustParseAddr("198.51.100.2"), true},
-		{"unparsable peer", "pipe", nil, netip.Addr{}, false},
-		{"set upstream", "203.0.113.7:51234", new(netip.MustParseAddr("192.0.2.44")), netip.MustParseAddr("192.0.2.44"), true},
-		{"unknown upstream", "203.0.113.7:51234", new(netip.Addr{}), netip.Addr{}, true},
+		{"IPv4 peer", "203.0.113.7:51234", nil, false, netip.MustParseAddr("203.0.113.7"), true},
+		{"IPv6 peer", "[2001:db8::7]:443", nil, false, netip.MustParseAddr("2001:db8::7"), true},
+		{"IPv4-mapped peer", "[::ffff:198.51.100.2]:80", nil, false, netip.MustParseAddr("198.51.100.2"), true},
+		{"unparsable peer", "pipe", nil, false, netip.Addr{}, false},
+		{"set upstream", "203.0.113.7:51234", new(netip.MustParseAddr("192.0.2.44")), false, netip.MustParseAddr("192.0.2.44"), true},
+		{"unknown upstream", "203.0.113.7:51234", new(netip.Addr{}), false, netip.Addr{}, true},
+		// Review m4: forwarded headers are client input — trusting them by
+		// default would let a client choose its source.
+		{"forwarded headers ignored", "203.0.113.7:51234", nil, true, netip.MustParseAddr("203.0.113.7"), true},
 	}
 
 	for _, c := range cases {
@@ -126,6 +134,12 @@ func TestMiddlewareSuppliesTheClientAddress(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = c.remoteAddr
+
+			if c.forwarded {
+				req.Header.Set("X-Forwarded-For", "192.0.2.66")
+				req.Header.Set("X-Real-IP", "192.0.2.67")
+				req.Header.Set("Forwarded", "for=192.0.2.68")
+			}
 
 			if c.upstream != nil {
 				req = req.WithContext(security.WithClientAddr(req.Context(), *c.upstream))

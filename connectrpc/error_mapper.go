@@ -56,8 +56,9 @@ type ErrorMapper interface {
 // A Bearer resource challenges every refusal (RFC 6750 §3); another scheme
 // the Unauthenticated and PermissionDenied answers. A throttled attempt
 // ([security.ErrTooManyAttempts]) also carries Cache-Control: no-store and,
-// when the [*security.TooManyAttemptsError] knows the delay, Retry-After in
-// whole seconds rounded up (RFC 6585 §4, RFC 9110 §10.2.3). A Basic challenge also
+// when the [*security.TooManyAttemptsError] knows the delay — the first one
+// of the error chain —, Retry-After in whole seconds rounded up (RFC 6585
+// §4, RFC 9110 §10.2.3). A Basic challenge also
 // carries charset="UTF-8" (RFC 7617 §2.1). Whether the request carried a
 // bearer token is told by the interceptors; without them no RFC 6750 code
 // is sent. An empty scheme means "Bearer" and an
