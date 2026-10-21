@@ -46,7 +46,8 @@ type PasswordUser interface {
 // For an unknown user, return (nil, nil) or an error wrapping
 // [security.ErrInvalidCredentials]: the [Authenticator] then verifies the
 // password against its dummy hash, so the response does not reveal whether
-// the account exists. A store that is temporarily unavailable SHOULD be
+// the account exists. A typed nil (a nil *User returned as a PasswordUser)
+// counts as an unknown user. A store that is temporarily unavailable SHOULD be
 // reported with an error wrapping [security.ErrUnavailable]: the
 // [Authenticator] then answers 503 / Unavailable (retryable) instead of
 // refusing the credentials. Any other error is a refusal

@@ -1266,6 +1266,12 @@ legacy packages (`authentication/`, `authorization/`, the in-tree
   which every `BeginLogin` then failed (the stores keep expiries to the
   second); it now refuses it with `ErrInvalidConfig`.
 
+- `basic.Authenticator` dereferenced a typed-nil user — a `UserLoader`
+  returning `m[name], nil` over a map of pointers for an unknown name —, so
+  one unauthenticated request with an unknown user-id panicked (and, under
+  `grpcsec`, crashed the server). A typed nil is now an unknown user:
+  verified against the dummy hash and refused like any unknown account.
+
 ### Removed
 
 - The legacy v0 packages: `authentication/`, `authentication/credential/`,

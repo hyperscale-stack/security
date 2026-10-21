@@ -253,8 +253,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, auth security.Authenti
 func (a *Authenticator) check(ctx context.Context, username, pw string) (PasswordUser, string, error) {
 	user, loadErr := a.loader.LoadByUsername(ctx, username)
 
+	// A typed nil — `return m[name], nil` over a map of pointers — is an
+	// unknown user, never dereferenced.
 	stored, hasPassword := "", false
-	if loadErr == nil && user != nil {
+	if loadErr == nil && !isNil(user) {
 		stored = user.GetPasswordHash()
 		hasPassword = stored != ""
 	}
@@ -333,7 +335,7 @@ func refusal(loadErr error, user PasswordUser, hasPassword, match bool, verifyEr
 		// error stays in the chain for observability; the typed username
 		// does not (it can be a password typed in the wrong field).
 		return fmt.Errorf("basic: load user: %w (%w)", loadErr, security.ErrInvalidCredentials)
-	case user == nil:
+	case isNil(user):
 		return fmt.Errorf("basic: user not found: %w", security.ErrInvalidCredentials)
 	case !hasPassword:
 		return fmt.Errorf("basic: account without a password hash: %w", security.ErrInvalidCredentials)
