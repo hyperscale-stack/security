@@ -27,7 +27,7 @@ require (
 	github.com/hyperscale-stack/security/oidc/client/store/redis v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/client/store/sql v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/stretchr/testify v1.12.1
 )
@@ -41,7 +41,7 @@ require (
 	github.com/hyperscale-stack/security/bearer v0.0.0-00010101000000-000000000000 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
