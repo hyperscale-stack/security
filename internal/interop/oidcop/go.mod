@@ -8,7 +8,7 @@ require (
 	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 )
 
 require (
