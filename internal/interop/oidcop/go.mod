@@ -8,12 +8,12 @@ require (
 	github.com/hyperscale-stack/security/oauth2 v0.0.0-00010101000000-000000000000
 	github.com/hyperscale-stack/security/oidc/provider v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 )
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/hyperscale-stack/security v0.0.0-00010101000000-000000000000 // indirect
